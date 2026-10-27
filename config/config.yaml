@@ -1,0 +1,215 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Bank Nifty Trade Assistant — configuration
+#
+#  THE RULE: exactly ONE LOT per trade, always, whatever it costs.
+#  There is no position sizing, no affordability gate, and no signal is ever
+#  rejected for being expensive. Risk is controlled by the STOP on each trade
+#  and by absolute rupee limits on the day and on cumulative drawdown.
+#
+#  Every number here is a STARTING POINT. Calibrate with the replay harness
+#  (`python -m onelot.replay`) before running live.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# PAPER = full pipeline with simulated fills. LIVE = same, but the journal
+# records real money. Neither mode ever places an order.
+mode: PAPER
+
+account:
+  # OPTIONAL — nothing depends on it. With one fixed lot the engine never
+  # needs your account size, and the risk limits below are absolute rupees.
+  # Set it only if you want percentage figures and a concentration warning
+  # on the dashboard. Leave at 0 to keep it private.
+  capital_inr: 0
+
+instrument:
+  underlying_symbol: BANKNIFTY
+  index_security_id: 25              # NIFTY BANK on IDX_I
+  exchange_segment_index: IDX_I
+  exchange_segment_fno: NSE_FNO
+  expiry_selection: nearest_monthly  # BankNifty weeklies are discontinued
+  # null => read from the daily scrip master. NEVER hardcode: SEBI has
+  # revised Bank Nifty's lot size more than once. A non-null value here is
+  # treated as an assertion and logged loudly if it disagrees.
+  lot_size_override: null
+  tick_size: 0.05
+  freeze_qty: 900
+
+session:
+  timezone: Asia/Kolkata
+  market_open: "09:15"
+  market_close: "15:30"
+  first_entry_after: "09:30"         # skip the opening auction noise
+  no_new_entry_after: "14:45"        # leave the trade room to work
+  eod_advisory: "15:10"
+  mandatory_squareoff: "15:15"       # ahead of closing illiquidity
+  clock_drift_tolerance_sec: 5
+
+data:
+  # ── historical corpus (Backtest Lab) ──────────────────────────────────
+  #   auto  = Dhan when credentials + Data API are present, else Yahoo
+  #   dhan  = Dhan only: 5 years of 1-minute bars for every instrument
+  #   yahoo = keyless: 2m/5m/15m ~60 days, 60m ~2 years, daily unlimited
+  provider: auto
+  history_start: "2017-01-01"
+  corpus_resolutions: ["1d", "60m", "15m", "5m", "2m"]
+
+  chain_poll_interval_sec: 5.0       # Dhan option chain limit is 1 per 3s
+  chain_db_flush_interval_sec: 60
+  socket_ping_interval_sec: 5
+  socket_dead_after_sec: 12          # socket liveness, NOT tick silence
+  quote_stale_after_sec: 20          # data freshness, a separate signal
+  rest_failover_max_rps: 1.0
+  warmup_sessions: 5                 # prior sessions of 5m bars to seed
+  bar_interval_min: 5
+  bar_settle_delay_sec: 2            # evaluate at close + delay, never mid-bar
+
+  # ── free failsafe data source ──────────────────────────────────────────
+  # Yahoo Finance (^NSEBANK) as a NO-CREDENTIAL backup for INDEX data only.
+  # It cannot supply an option chain, greeks or live option quotes, so it can
+  # never replace Dhan for trading decisions. What it does:
+  #   * backfills daily and 5-minute index history without touching your
+  #     Dhan quota (warm-up and regime training)
+  #   * cross-checks Dhan's index level, which catches a stuck or wrong feed
+  # Polling is deliberately rare — this is a safety net, not a data feed.
+  fallback_source: yfinance          # yfinance | none
+  fallback_poll_interval_sec: 300    # 5 minutes; do not lower without reason
+  fallback_divergence_pct: 0.005     # warn if Dhan and Yahoo differ by >0.5%
+
+strategy:
+  # ── where the live DIRECTION comes from ───────────────────────────────
+  #   gates = the built-in Bank Nifty gate stack (regime, EMA trend, RSI
+  #           band, chop filter, IV percentile)
+  #   lab   = a Backtest Lab strategy evaluated on the closed index bars.
+  #           Health, session, contract selection, net R/R and the risk
+  #           governor still gate it; the Lab strategy supplies only the
+  #           direction and the stop. Promote a strategy here ONLY after it
+  #           has passed the research gate in the Lab.
+  live:
+    source: gates
+    lab_strategy: ema_cross
+    lab_timeframe: "5m"
+    lab_params: {}
+  regime:
+    enabled: true
+    # rule_based: EMA21 vs EMA50 plus slope. ~15 lines, no dependencies,
+    #   nothing to fit, nothing to persist, no look-ahead surface.
+    # hmm: 3-state Gaussian model. Needs `pip install -r requirements-hmm.txt`.
+    #   Richer, but heavier and far easier to fool yourself with.
+    engine: rule_based
+    n_states: 3
+    train_lookback_days: 750
+    min_state_confidence: 0.60
+    fallback: rule_based
+  intraday_chop:
+    # This is also the extreme-volatility guard. A stop is wide in rupees
+    # exactly when ATR is high, so capping ATR percentile here is what keeps
+    # a single one-lot trade from risking an absurd amount.
+    adx_min: 20.0
+    atr_percentile_min: 20.0
+    atr_percentile_max: 90.0
+  trend:
+    ema_period: 21
+  momentum:
+    rsi_period: 14
+    ce_band: [55.0, 65.0]
+    pe_band: [35.0, 45.0]
+  volatility:
+    ivp_max: 45.0
+    ivp_lookback_days: 252
+    ivp_min_history_days: 60
+    # strict   = block signals until history is sufficient (safest)
+    # degraded = rank over whatever exists, flagged loudly on the alert
+    # off      = skip the gate entirely
+    # `degraded` is the practical default: `strict` means no signals at all
+    # for the first ~60 sessions while ATM IV history accumulates.
+    ivp_mode: degraded
+  contract:
+    # Sufficiently in-the-money, by rule. High delta means the option tracks
+    # the index closely and time value is a smaller share of the premium.
+    delta_min: 0.60
+    delta_max: 0.70
+    # Liquidity sanity gate: spread <= max(spread_abs_floor, spread_pct_max x mid).
+    # spread_abs_floor is a FLOOR for cheap options, not a ceiling — the real
+    # cost of the spread is already priced into rr_net via ask-in / bid-out.
+    spread_abs_floor: 1.00
+    spread_pct_max: 0.020
+    min_bid_qty_lots: 2
+    min_open_interest: 50000
+    min_volume: 1000
+    greek_cross_check_tol: 0.08
+  theta:
+    expected_hold_hours: 1.5
+    max_theta_burn_pct: 0.10
+  exits:
+    atr_period: 5
+    sl_atr_mult: 1.5
+    rr_target_gross: 2.5             # target = entry + 2.5R
+    rr_net_min: 2.0                  # GATE: net-of-cost R/R must clear this
+    trail_activate_r: 1.0            # trail only after +1R; never trails down
+    time_stop_minutes: 45
+  guardian:
+    adx_period: 14
+    adx_hold_min: 25.0
+    # The index has NO VOLUME. VWAP and volume divergence run on the
+    # current-month FUTURES, which is what actually trades.
+    vwap_source: futures
+    divergence_volume_drop_pct: 0.20
+  signal:
+    ttl_seconds: 75
+    cooldown_minutes: 15
+    dedup_window_minutes: 30
+
+risk:
+  # One lot per trade. Always. Whatever it costs.
+  lots_per_trade: 1
+
+  # ── absolute rupee limits ────────────────────────────────────────────────
+  # Rupees, not percentages: with a fixed lot the loss on a trade is a rupee
+  # amount set by the market, and this way the engine never needs to know
+  # your account size.
+  #
+  # Sizing them: run `python -m onelot.cost_preview` to see the rupee risk of a
+  # typical one-lot trade at current levels, then decide how many such losses
+  # you are willing to take in a day and in total.
+  daily_loss_limit_inr: 6000
+  max_drawdown_inr: 18000            # cumulative, peak-to-trough; manual reset
+
+  max_trades_per_day: 2
+  max_consecutive_losses: 2
+  max_open_positions: 1
+
+  # Advisory only — warns, never blocks. Requires account.capital_inr to be set.
+  deployment_warn_pct: 0.50
+
+execution_assumptions:
+  slippage_ticks_entry: 2            # you buy the ask, plus drift
+  slippage_ticks_exit: 2             # you sell the bid, minus drift
+  slippage_gate_pct: 0.03
+  slippage_gate_spread_mult: 1.5     # tolerance = max(pct, mult x spread)
+
+storage:
+  db_url: null                       # null => SQLite at data/onelot.db (WAL)
+  retention_days_quotes: 30
+  retention_days_chain: 90
+
+api:
+  host: "127.0.0.1"
+  port: 8787
+  allow_non_loopback: false          # opt-in required to expose on the LAN
+
+dashboard:
+  refresh_ms: 1000
+  sound_enabled: true
+  theme: shonen                      # shonen | plain
+
+notify:
+  os_toast: true
+  dashboard: true
+  telegram: false                    # not implemented in this build
+  webhook: false
+
+logging:
+  level: INFO
+  dir: logs
+  max_bytes: 10485760
+  backup_count: 10

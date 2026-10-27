@@ -1,0 +1,28 @@
+# Quick start
+
+```bash
+scripts/start_mac.sh --mock        # macOS/Linux — synthetic market, no credentials
+scripts\start_win.bat --mock       # Windows
+```
+
+Open http://127.0.0.1:8787/ (add `--lan` to reach it from your phone or another laptop).
+
+1. **Settings** → paste Dhan client ID + free-tier token → Save → **Test entitlements**.
+2. **Home** → your funds, holdings, positions, ledger and trade book (cached; press Refresh).
+3. **Backtest Lab** → OPTIONS · NIFTY BANK options · EMA Cross · 12m → **Run backtest**.
+   Then **Walk-forward**. Only out-of-sample numbers count.
+4. **Data** → coverage of the local corpus; backfill from Yahoo now, from Dhan (1-minute, 5 years) once the Data API is active.
+5. **News & Sentiment** → post scores manually or from your scorer (`POST /api/sentiment`).
+6. **Live Desk** → the Bank Nifty option engine (needs the Data API and a restart without `--mock`).
+
+Shell:
+
+```bash
+.venv/bin/python -m onelot preflight
+.venv/bin/python -m onelot backfill
+.venv/bin/python -m onelot backtest --strategy supertrend_vol --instrument BANKNIFTY_FUT --timeframe 5m
+.venv/bin/python -m onelot research --instruments BANKNIFTY_OPT --timeframes 5m,15m
+.venv/bin/python -m pytest -q
+```
+
+Stop with `scripts/stop_mac.sh` / `scripts\stop_win.bat` or Ctrl-C.

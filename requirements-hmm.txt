@@ -1,0 +1,11 @@
+# OPTIONAL: the Hidden Markov regime engine.
+#
+# The default regime engine is rule_based -- ~15 lines, no dependencies,
+# nothing to fit, nothing to persist. Install these only if you set
+#     strategy.regime.engine: hmm
+# in config/config.yaml and want to A/B the two.
+#
+#   pip install -r requirements-hmm.txt
+scipy>=1.11,<2
+scikit-learn>=1.4,<2
+hmmlearn>=0.3.2,<0.4

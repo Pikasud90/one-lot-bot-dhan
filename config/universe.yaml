@@ -1,0 +1,57 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Instrument universe for the Backtest Lab and the data corpus.
+#
+#  Every entry is a PRICE SERIES (what the strategy reads) plus the tradeable
+#  instruments derived from it. The one-lot rule is applied per category:
+#     STOCK     -> 1 share
+#     FUTURES   -> 1 lot of the near-month future
+#     OPTIONS   -> 1 lot of a delta-selected CE (long signal) / PE (short signal)
+#     CURRENCY  -> 1 lot of the near-month currency future
+#  Lot sizes below are FALLBACKS; the Dhan scrip master overrides them whenever
+#  it is reachable (SEBI revises index lot sizes; never trust a constant).
+#  Dhan security IDs for indices are likewise resolved from the scrip master.
+#  Yahoo symbols are for the keyless corpus; Dhan takes over once the Data API
+#  subscription is active.
+# ─────────────────────────────────────────────────────────────────────────────
+
+indices:
+  - {key: BANKNIFTY,  label: "NIFTY BANK",          yahoo: "^NSEBANK",  dhan_security_id: "25",  exchange: NSE, fno: true,  lot_size: 35,  strike_step: 100}
+  - {key: NIFTY,      label: "NIFTY 50",            yahoo: "^NSEI",     dhan_security_id: "13",  exchange: NSE, fno: true,  lot_size: 75,  strike_step: 50}
+  - {key: FINNIFTY,   label: "NIFTY FIN SERVICE",   yahoo: "NIFTY_FIN_SERVICE.NS", dhan_security_id: "27", exchange: NSE, fno: true, lot_size: 65, strike_step: 50}
+  - {key: MIDCPNIFTY, label: "NIFTY MIDCAP SELECT", yahoo: "^NSEMDCP50", dhan_security_id: "442", exchange: NSE, fno: true, lot_size: 140, strike_step: 25}
+  - {key: SENSEX,     label: "S&P BSE SENSEX",      yahoo: "^BSESN",    dhan_security_id: "51",  exchange: BSE, fno: true,  lot_size: 20,  strike_step: 100}
+  - {key: INDIAVIX,   label: "INDIA VIX",           yahoo: "^INDIAVIX", dhan_security_id: "21",  exchange: NSE, fno: false}
+
+stocks:
+  # NSE cash; 1 share per trade. `fno: true` also creates _FUT / _OPT instruments.
+  - {key: RELIANCE,   label: "Reliance Industries", yahoo: "RELIANCE.NS",   dhan_security_id: "2885",  fno: true,  lot_size: 500,  strike_step: 10,  sector: Energy}
+  - {key: HDFCBANK,   label: "HDFC Bank",           yahoo: "HDFCBANK.NS",   dhan_security_id: "1333",  fno: true,  lot_size: 550,  strike_step: 10,  sector: Banks}
+  - {key: ICICIBANK,  label: "ICICI Bank",          yahoo: "ICICIBANK.NS",  dhan_security_id: "4963",  fno: true,  lot_size: 700,  strike_step: 10,  sector: Banks}
+  - {key: SBIN,       label: "State Bank of India", yahoo: "SBIN.NS",       dhan_security_id: "3045",  fno: true,  lot_size: 750,  strike_step: 5,   sector: Banks}
+  - {key: INFY,       label: "Infosys",             yahoo: "INFY.NS",       dhan_security_id: "1594",  fno: true,  lot_size: 400,  strike_step: 20,  sector: IT}
+  - {key: TCS,        label: "Tata Consultancy",    yahoo: "TCS.NS",        dhan_security_id: "11536", fno: true,  lot_size: 175,  strike_step: 50,  sector: IT}
+  - {key: AXISBANK,   label: "Axis Bank",           yahoo: "AXISBANK.NS",   dhan_security_id: "5900",  fno: true,  lot_size: 625,  strike_step: 10,  sector: Banks}
+  - {key: KOTAKBANK,  label: "Kotak Mahindra Bank", yahoo: "KOTAKBANK.NS",  dhan_security_id: "1922",  fno: true,  lot_size: 400,  strike_step: 20,  sector: Banks}
+  - {key: LT,         label: "Larsen & Toubro",     yahoo: "LT.NS",         dhan_security_id: "11483", fno: true,  lot_size: 175,  strike_step: 20,  sector: Infra}
+  - {key: ITC,        label: "ITC",                 yahoo: "ITC.NS",        dhan_security_id: "1660",  fno: true,  lot_size: 1600, strike_step: 5,   sector: FMCG}
+  - {key: BAJFINANCE, label: "Bajaj Finance",       yahoo: "BAJFINANCE.NS", dhan_security_id: "317",   fno: true,  lot_size: 750,  strike_step: 10,  sector: Financials}
+  - {key: BHARTIARTL, label: "Bharti Airtel",       yahoo: "BHARTIARTL.NS", dhan_security_id: "10604", fno: true,  lot_size: 475,  strike_step: 10,  sector: Telecom}
+  - {key: TATASTEEL,  label: "Tata Steel",          yahoo: "TATASTEEL.NS",  dhan_security_id: "3499",  fno: true,  lot_size: 5500, strike_step: 1,   sector: Metals}
+  - {key: MARUTI,     label: "Maruti Suzuki",       yahoo: "MARUTI.NS",     dhan_security_id: "10999", fno: true,  lot_size: 50,   strike_step: 100, sector: Auto}
+  - {key: SUNPHARMA,  label: "Sun Pharma",          yahoo: "SUNPHARMA.NS",  dhan_security_id: "3351",  fno: true,  lot_size: 350,  strike_step: 10,  sector: Pharma}
+
+currency:
+  # NSE currency derivatives, session 09:00-17:00 IST. Spot FX from Yahoo drives
+  # the signals; one lot of the near-month future is the trade.
+  - {key: USDINR, label: "USD/INR", yahoo: "USDINR=X", lot_size: 1000,   tick_size: 0.0025}
+  - {key: EURINR, label: "EUR/INR", yahoo: "EURINR=X", lot_size: 1000,   tick_size: 0.0025}
+  - {key: GBPINR, label: "GBP/INR", yahoo: "GBPINR=X", lot_size: 1000,   tick_size: 0.0025}
+  - {key: JPYINR, label: "JPY/INR", yahoo: "JPYINR=X", lot_size: 100000, tick_size: 0.0025, price_per: 100}
+  - {key: EURUSD, label: "EUR/USD", yahoo: "EURUSD=X", lot_size: 1000,   tick_size: 0.0001, quote_ccy: USD}
+
+sessions:
+  equity:   {open: "09:15", close: "15:30", square_off: "15:15", first_entry: "09:30", last_entry: "14:45"}
+  currency: {open: "09:00", close: "17:00", square_off: "16:45", first_entry: "09:15", last_entry: "16:00"}
+
+# Market index used for relative filters (gap fade, market bias) on stocks.
+market_index: NIFTY

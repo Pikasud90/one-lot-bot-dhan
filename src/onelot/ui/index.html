@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>One Lot Desk</title>
+<meta name="description" content="Signal-only Dhan trade desk: live Bank Nifty signals, one-lot backtest lab, account ledger, news and sentiment.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.35.2/plotly.min.js" defer></script>
+</head>
+<body>
+<div class="shell">
+
+  <header class="top">
+    <div class="brand">
+      <div class="brand-mark">1</div>
+      <div>
+        <div class="brand-name">ONE LOT <span>DESK</span></div>
+        <div class="brand-sub"><span class="kana">ワンロット</span> · signal-only · places no orders · you execute</div>
+      </div>
+    </div>
+    <nav class="tabs" id="tabs">
+      <a href="#home" data-tab="home">Home</a>
+      <a href="#live" data-tab="live">Live Desk</a>
+      <a href="#lab" data-tab="lab">Backtest Lab</a>
+      <a href="#data" data-tab="data">Data</a>
+      <a href="#news" data-tab="news">News &amp; Sentiment</a>
+      <a href="#settings" data-tab="settings">Settings</a>
+    </nav>
+    <div class="badges" id="badges"></div>
+  </header>
+
+  <div id="toasts" class="toasts"></div>
+  <div id="warnings"></div>
+
+  <!-- ───────────────────────────── HOME ───────────────────────────── -->
+  <section data-tab="home" class="tab">
+    <div class="row between">
+      <h1 class="h1">Portfolio <small>cached — refreshed only when you ask or after a trade</small></h1>
+      <div class="actions">
+        <span class="muted" id="acct-age"></span>
+        <button class="btn" id="acct-refresh">Refresh from Dhan</button>
+      </div>
+    </div>
+    <div id="acct-notice"></div>
+    <div class="tiles" id="acct-tiles"></div>
+    <div class="grid2">
+      <div class="card"><h2>Profile &amp; entitlements</h2><div id="acct-profile"></div></div>
+      <div class="card"><h2>Paper journal (this desk)</h2><div id="home-journal"></div></div>
+    </div>
+    <div class="card"><h2>Open positions (broker)</h2><div class="scroll" id="acct-positions"></div></div>
+    <div class="card"><h2>Holdings</h2><div class="scroll" id="acct-holdings"></div></div>
+    <div class="grid2">
+      <div class="card"><h2>Ledger — last 30 days</h2><div class="scroll" id="acct-ledger"></div></div>
+      <div class="card"><h2>Trade book — last 30 days</h2><div class="scroll" id="acct-trades"></div></div>
+    </div>
+  </section>
+
+  <!-- ──────────────────────────── LIVE DESK ────────────────────────── -->
+  <section data-tab="live" class="tab">
+    <div class="card signal none" id="signalCard">
+      <h2>Active signal</h2>
+      <div id="signalBody"><div class="muted">No active signal.</div></div>
+    </div>
+    <div class="grid4">
+      <div class="card"><h2>Market</h2><div id="market"></div></div>
+      <div class="card"><h2>Regime &amp; volatility</h2><div id="regime"></div></div>
+      <div class="card"><h2>Risk governor</h2><div id="risk"></div>
+        <div class="actions mt">
+          <button class="btn danger" id="haltBtn">Panic halt</button>
+          <button class="btn" id="resetBtn">Clear halt</button>
+        </div>
+      </div>
+      <div class="card"><h2>Data health</h2><div id="health"></div></div>
+    </div>
+    <div class="card"><h2>Open positions (this desk)</h2>
+      <div class="scroll" id="positions"><div class="muted">Flat.</div></div></div>
+    <div class="grid3">
+      <div class="card"><h2>Why no signal — 24h gate rejections</h2><div class="scroll" id="gates"></div></div>
+      <div class="card"><h2>Journal (net of all costs)</h2><div id="journal"></div></div>
+      <div class="card"><h2>Alerts</h2><div class="feed" id="feed"></div></div>
+    </div>
+  </section>
+
+  <!-- ──────────────────────────── BACKTEST LAB ─────────────────────── -->
+  <section data-tab="lab" class="tab">
+    <div class="lab-layout">
+      <div class="card lab-form">
+        <h2>Set up a backtest <small>one unit per trade, always</small></h2>
+        <label>Category
+          <div class="chips" id="lab-cats"></div></label>
+        <label>Instrument
+          <select id="lab-instrument"></select>
+          <div class="hint" id="lab-inst-hint"></div></label>
+        <label>Strategy
+          <select id="lab-strategy"></select>
+          <div class="hint" id="lab-strat-hint"></div></label>
+        <div class="row2">
+          <label>Timeframe <select id="lab-tf"></select></label>
+          <label>Slippage % / side <input type="number" id="lab-slip" step="0.01" value="0.03"></label>
+        </div>
+        <div class="row2">
+          <label>From <input type="date" id="lab-start"></label>
+          <label>To <input type="date" id="lab-end"></label>
+        </div>
+        <details open class="params"><summary>Strategy parameters <span class="muted" id="lab-ind"></span></summary>
+          <div class="param-grid" id="lab-params-strategy"></div></details>
+        <details class="params"><summary>Exits &amp; risk</summary>
+          <div class="param-grid" id="lab-params-exits"></div></details>
+        <details class="params"><summary>Filters &amp; session</summary>
+          <div class="param-grid" id="lab-params-filters"></div></details>
+        <div class="row2">
+          <label>Cost stress × <input type="number" id="lab-costx" step="0.5" value="1"></label>
+          <label>Optimizer trials <input type="number" id="lab-trials" step="5" value="40"></label>
+        </div>
+        <div class="actions mt">
+          <button class="btn primary" id="lab-run">Run backtest</button>
+          <button class="btn" id="lab-opt">Optimize</button>
+          <button class="btn" id="lab-wf">Walk-forward</button>
+          <button class="btn ghost" id="lab-reset">Reset params</button>
+        </div>
+        <div class="hint mt" id="lab-status"></div>
+      </div>
+
+      <div class="lab-results">
+        <div class="card">
+          <div class="row between"><h2>Runs</h2><button class="btn ghost small" id="lab-runs-refresh">refresh</button></div>
+          <div class="scroll runs" id="lab-runs"></div>
+        </div>
+        <div id="lab-result"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────── DATA ──────────────────────────── -->
+  <section data-tab="data" class="tab">
+    <div class="grid2">
+      <div class="card">
+        <h2>Backfill the corpus</h2>
+        <p class="muted">Yahoo is keyless (2m/5m/15m ≈ 60 days, 60m ≈ 2 years, daily unlimited). Once the Dhan Data API is active, pick <b>dhan</b> for five years of 1-minute bars.</p>
+        <div class="row2">
+          <label>Provider <select id="data-provider"><option value="">auto</option><option value="yahoo">yahoo</option><option value="dhan">dhan</option></select></label>
+          <label>Resolutions <input type="text" id="data-res" placeholder="default plan"></label>
+        </div>
+        <label>Series (blank = all) <input type="text" id="data-series" placeholder="BANKNIFTY NIFTY RELIANCE USDINR"></label>
+        <label class="inline"><input type="checkbox" id="data-full"> re-download everything</label>
+        <div class="actions mt"><button class="btn primary" id="data-run">Start backfill</button>
+          <button class="btn ghost" id="data-quality">Quality report (5m)</button></div>
+        <div class="scroll mt" id="data-jobs"></div>
+      </div>
+      <div class="card"><h2>Coverage</h2><div class="scroll" id="data-coverage"></div></div>
+    </div>
+    <div class="card" id="data-quality-card" hidden><h2>Quality</h2><div class="scroll" id="data-quality-out"></div></div>
+  </section>
+
+  <!-- ──────────────────────────── NEWS & SENTIMENT ─────────────────── -->
+  <section data-tab="news" class="tab">
+    <div class="grid2">
+      <div class="card">
+        <h2>Sentiment board <small>latest score per scope</small></h2>
+        <div class="tiles small" id="sent-board"></div>
+        <h3>Post a score</h3>
+        <div class="row2">
+          <label>Scope <select id="sent-scope"><option>MARKET</option><option>INDEX</option><option>STOCK</option><option>SECTOR</option></select></label>
+          <label>Symbol <input type="text" id="sent-symbol" placeholder="BANKNIFTY"></label>
+        </div>
+        <div class="row2">
+          <label>Score (−1 … +1) <input type="number" id="sent-score" step="0.05" min="-1" max="1" value="0"></label>
+          <label>Confidence (0 … 1) <input type="number" id="sent-conf" step="0.05" min="0" max="1" value="0.5"></label>
+        </div>
+        <div class="row2">
+          <label>Horizon <select id="sent-horizon"><option>intraday</option><option>swing</option><option>positional</option></select></label>
+          <label>Source <input type="text" id="sent-source" placeholder="manual / my-scorer"></label>
+        </div>
+        <label>Note <input type="text" id="sent-note"></label>
+        <div class="actions mt"><button class="btn primary" id="sent-add">Post sentiment</button></div>
+        <h3>Recent scores</h3><div class="scroll" id="sent-list"></div>
+      </div>
+      <div class="card">
+        <h2>News feed</h2>
+        <label>Headline <input type="text" id="news-headline"></label>
+        <label>Body <textarea id="news-body" rows="3"></textarea></label>
+        <div class="row2">
+          <label>Source <input type="text" id="news-source"></label>
+          <label>URL <input type="text" id="news-url"></label>
+        </div>
+        <div class="row2">
+          <label>Symbols <input type="text" id="news-symbols" placeholder="BANKNIFTY HDFCBANK"></label>
+          <label>Sentiment (optional) <input type="number" id="news-sent" step="0.05" min="-1" max="1"></label>
+        </div>
+        <div class="actions mt"><button class="btn primary" id="news-add">Add news</button></div>
+        <h3>Latest</h3><div class="feed tall" id="news-list"></div>
+        <details class="mt"><summary>API for your scorer</summary>
+          <pre class="code" id="news-curl"></pre></details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────── SETTINGS ──────────────────────── -->
+  <section data-tab="settings" class="tab">
+    <div class="grid2">
+      <div class="card">
+        <h2>Dhan credentials</h2>
+        <p class="muted">Stored in <code id="env-path"></code> (mode 0600), never shown back, never logged. Dhan's Data API entitlement is on the <b>account</b>, so either token works for everything once the plan is active; the second slot just lets you keep the paid one separate.</p>
+        <div id="cred-status" class="mt"></div>
+        <label>Client ID <input type="text" id="cred-client" autocomplete="off" placeholder="1100…"></label>
+        <label>Access token (free tier / test) <input type="password" id="cred-token" autocomplete="off"></label>
+        <label>Data API token (paid, optional) <input type="password" id="cred-data-token" autocomplete="off"></label>
+        <div class="actions mt">
+          <button class="btn primary" id="cred-save">Save credentials</button>
+          <button class="btn" id="cred-test">Test entitlements</button>
+        </div>
+        <div class="scroll mt" id="cred-test-out"></div>
+        <h3>Generating tokens on Dhan</h3>
+        <ol class="muted small-list">
+          <li>web.dhan.co → My Profile → <b>Access DhanHQ APIs</b> → Generate access token (24 h validity; renew daily).</li>
+          <li><b>Postback URL:</b> optional, only used for order updates. This desk never places orders, so leave it blank — or point it at <code id="postback-hint"></code> (recorded, never acted upon).</li>
+          <li>Do not grant anything you don't need; the desk only READS.</li>
+        </ol>
+      </div>
+      <div class="card">
+        <h2>Desk configuration <small>read-only here; edit config/config.yaml</small></h2>
+        <div id="cfg-view"></div>
+        <div class="actions mt"><button class="btn" id="notify-test">Send a test notification</button></div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="foot">
+    Decision-support only. Not investment advice. Every figure is an estimate until reconciled with a contract note.
+    <span id="conn"></span>
+  </footer>
+</div>
+
+<script>window.ONELOT_TOKEN = "__API_TOKEN__";</script>
+<script src="/static/app.js" defer></script>
+</body>
+</html>

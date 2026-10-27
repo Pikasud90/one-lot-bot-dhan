@@ -1,0 +1,87 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Indian statutory charges, per product.
+#
+#  !! READ THIS BEFORE TRUSTING ANY NET-P&L NUMBER THIS SYSTEM SHOWS YOU !!
+#
+#  These rates are the author's best understanding as of `effective_from`.
+#  Rates change with budgets and exchange circulars. Reconcile every line
+#  against a REAL Dhan contract note (docs/05_COST_RECONCILIATION.md) and
+#  then set `verified_against_contract_note: true`. Until you do, the engine
+#  runs but stamps every signal COSTS_UNVERIFIED and warns on every startup.
+#
+#  All rates are FRACTIONS of turnover (0.001 = 0.1%). GST applies to
+#  brokerage + exchange charge + SEBI fee + IPFT, never to STT or stamp duty.
+#  Rate glossary (verify):
+#    STT      options: 0.1% of premium on SELL; futures: 0.02% on SELL;
+#             equity intraday: 0.025% on SELL; delivery: 0.1% both sides;
+#             currency: nil.
+#    Exchange NSE options 0.03503% of premium; NSE futures 0.00173%;
+#             NSE equity 0.00297%; NSE currency futures 0.00035% (VERIFY),
+#             NSE currency options 0.0311% of premium (VERIFY).
+#    SEBI     Rs 10 per crore everywhere.
+#    IPFT     NSE: Rs 10/crore (equity, futures), Rs 50/crore (options premium).
+#    Stamp    buy side: equity intraday 0.003%, delivery 0.015%,
+#             futures 0.002%, options 0.003%, currency 0.0001%.
+# ─────────────────────────────────────────────────────────────────────────────
+effective_from: "2025-04-01"
+verified_against_contract_note: false
+currency: INR
+
+# Default product (the live Bank Nifty engine): NSE index options.
+brokerage:
+  mode: flat                 # flat | min_of
+  per_order_inr: 20.0
+  pct_of_turnover: 0.0003
+  cap_inr: 20.0
+
+taxes:
+  stt_buy_pct: 0.0
+  stt_sell_pct: 0.0010
+  stt_exercise_pct: 0.00125
+  exchange_txn_pct: 0.0003503
+  sebi_turnover_pct: 0.0000010
+  ipft_pct: 0.0000050
+  stamp_duty_pct: 0.00003
+  gst_pct: 0.18
+
+products:
+  index_options:
+    brokerage: {mode: flat, per_order_inr: 20.0, pct_of_turnover: 0.0003, cap_inr: 20.0}
+    taxes: {stt_buy_pct: 0.0, stt_sell_pct: 0.0010, stt_exercise_pct: 0.00125,
+            exchange_txn_pct: 0.0003503, sebi_turnover_pct: 0.0000010, ipft_pct: 0.0000050,
+            stamp_duty_pct: 0.00003, gst_pct: 0.18}
+  stock_options:
+    brokerage: {mode: flat, per_order_inr: 20.0, pct_of_turnover: 0.0003, cap_inr: 20.0}
+    taxes: {stt_buy_pct: 0.0, stt_sell_pct: 0.0010, stt_exercise_pct: 0.00125,
+            exchange_txn_pct: 0.0003503, sebi_turnover_pct: 0.0000010, ipft_pct: 0.0000050,
+            stamp_duty_pct: 0.00003, gst_pct: 0.18}
+  index_futures:
+    brokerage: {mode: flat, per_order_inr: 20.0, pct_of_turnover: 0.0003, cap_inr: 20.0}
+    taxes: {stt_buy_pct: 0.0, stt_sell_pct: 0.0002, stt_exercise_pct: 0.0,
+            exchange_txn_pct: 0.0000173, sebi_turnover_pct: 0.0000010, ipft_pct: 0.0000010,
+            stamp_duty_pct: 0.00002, gst_pct: 0.18}
+  stock_futures:
+    brokerage: {mode: flat, per_order_inr: 20.0, pct_of_turnover: 0.0003, cap_inr: 20.0}
+    taxes: {stt_buy_pct: 0.0, stt_sell_pct: 0.0002, stt_exercise_pct: 0.0,
+            exchange_txn_pct: 0.0000173, sebi_turnover_pct: 0.0000010, ipft_pct: 0.0000010,
+            stamp_duty_pct: 0.00002, gst_pct: 0.18}
+  equity_intraday:
+    brokerage: {mode: min_of, per_order_inr: 20.0, pct_of_turnover: 0.0003, cap_inr: 20.0}
+    taxes: {stt_buy_pct: 0.0, stt_sell_pct: 0.00025, stt_exercise_pct: 0.0,
+            exchange_txn_pct: 0.0000297, sebi_turnover_pct: 0.0000010, ipft_pct: 0.0000010,
+            stamp_duty_pct: 0.00003, gst_pct: 0.18}
+  equity_delivery:
+    brokerage: {mode: min_of, per_order_inr: 20.0, pct_of_turnover: 0.0003, cap_inr: 20.0}
+    taxes: {stt_buy_pct: 0.0010, stt_sell_pct: 0.0010, stt_exercise_pct: 0.0,
+            exchange_txn_pct: 0.0000297, sebi_turnover_pct: 0.0000010, ipft_pct: 0.0000010,
+            stamp_duty_pct: 0.00015, gst_pct: 0.18}
+  currency_futures:
+    brokerage: {mode: flat, per_order_inr: 20.0, pct_of_turnover: 0.0003, cap_inr: 20.0}
+    taxes: {stt_buy_pct: 0.0, stt_sell_pct: 0.0, stt_exercise_pct: 0.0,
+            exchange_txn_pct: 0.0000035, sebi_turnover_pct: 0.0000010, ipft_pct: 0.0000010,
+            stamp_duty_pct: 0.000001, gst_pct: 0.18}
+  currency_options:
+    brokerage: {mode: flat, per_order_inr: 20.0, pct_of_turnover: 0.0003, cap_inr: 20.0}
+    taxes: {stt_buy_pct: 0.0, stt_sell_pct: 0.0, stt_exercise_pct: 0.0,
+            exchange_txn_pct: 0.000311, sebi_turnover_pct: 0.0000010, ipft_pct: 0.0000050,
+            stamp_duty_pct: 0.000001, gst_pct: 0.18}

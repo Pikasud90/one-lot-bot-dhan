@@ -1,0 +1,27 @@
+# ── Core runtime ───────────────────────────────────────────────────────────
+pydantic>=2.7,<3
+pydantic-settings>=2.3,<3
+PyYAML>=6.0,<7
+python-dotenv>=1.0,<2
+
+# ── Numerics ───────────────────────────────────────────────────────────────
+numpy>=1.26,<3
+pandas>=2.2,<3
+
+# ── Storage (SQLite, ships with Python) ────────────────────────────────────
+SQLAlchemy>=2.0,<3
+
+# ── Engine API + built-in dashboard ────────────────────────────────────────
+fastapi>=0.110,<1
+uvicorn[standard]>=0.29,<1
+httpx>=0.27,<1
+
+# ── Broker ─────────────────────────────────────────────────────────────────
+dhanhq>=2.0,<3
+
+# ── Free failsafe data source (index history + sanity cross-check) ─────────
+yfinance>=0.2.40
+
+# ── OS-native notifications ────────────────────────────────────────────────
+windows-toasts>=1.1.1 ; sys_platform == "win32"
+plyer>=2.1 ; sys_platform == "win32"
