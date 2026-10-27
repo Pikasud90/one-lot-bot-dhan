@@ -7,6 +7,7 @@
 <meta name="description" content="Signal-only Dhan trade desk: live Bank Nifty signals, one-lot backtest lab, account ledger, news and sentiment.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<script>try{var t=JSON.parse(localStorage.getItem("onelot.theme"));if(t==="night"||t==="day")document.documentElement.dataset.theme=t;}catch(e){}</script>
 <link rel="stylesheet" href="/static/styles.css">
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js" defer></script>
 </head>
@@ -29,7 +30,8 @@
       <a href="#news" data-tab="news">News &amp; Sentiment</a>
       <a href="#settings" data-tab="settings">Settings</a>
     </nav>
-    <div class="badges" id="badges"></div>
+    <div class="badges"><span id="badges" class="row"></span>
+      <button class="theme-btn" id="theme-toggle" title="Switch between the day and night themes">☾ Night</button></div>
   </header>
 
   <div id="toasts" class="toasts"></div>
@@ -38,7 +40,7 @@
   <!-- ───────────────────────────── HOME ───────────────────────────── -->
   <section data-tab="home" class="tab">
     <div class="row between">
-      <h1 class="h1">Portfolio <small>cached — refreshed only when you ask or after a trade</small></h1>
+      <h1 class="h1">Portfolio <small>free Trading API · cached — refreshed only when you ask or after a trade</small></h1>
       <div class="actions">
         <span class="muted" id="acct-age"></span>
         <button class="btn" id="acct-refresh">Refresh from Dhan</button>
@@ -51,7 +53,7 @@
       <div class="card"><h2>Paper journal (this desk)</h2><div id="home-journal"></div></div>
     </div>
     <div class="card"><h2>Open positions (broker)</h2><div class="scroll" id="acct-positions"></div></div>
-    <div class="card"><h2>Holdings</h2><div class="scroll" id="acct-holdings"></div></div>
+    <div class="card"><h2>Holdings <small>marked at Dhan's last traded price as of the last refresh</small></h2><div class="scroll" id="acct-holdings"></div></div>
     <div class="grid2">
       <div class="card"><h2>Ledger — last 30 days</h2><div class="scroll" id="acct-ledger"></div></div>
       <div class="card"><h2>Trade book — last 30 days</h2><div class="scroll" id="acct-trades"></div></div>

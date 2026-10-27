@@ -12,7 +12,11 @@ The desk never calls an order, super-order, forever-order, EDIS or kill-switch e
 
 Error codes the adapter maps: `DH-901 / 807–810` → token expired; `DH-902 / 806` → Data API not
 subscribed; `DH-904 / 805 / HTTP 429` → rate limited (retried through the shared limiter, then
-raised). Limits respected: option chain 1 request / 3 s, quotes 1 / s, non-trading reads 20 / s
+raised). **A free-plan token gets HTTP 401 from every Data-API endpoint** with one of two
+bodies — `{"data": {"806": "Data APIs not Subscribed"}, "status": "failed"}` or
+`{"errorCode": "DH-902", "errorMessage": "This API requires a Data APIs Plan…"}` (captured
+live 2026-10-27). The adapter reads the body before blaming the token, so this surfaces as
+`NO_DATA_API`, not `TOKEN_EXPIRED`. Limits respected: option chain 1 request / 3 s, quotes 1 / s, non-trading reads 20 / s
 (we use 2 / s), 100 000 data requests / day.
 
 ## Generating tokens
@@ -26,8 +30,10 @@ raised). Limits respected: option chain 1 request / 3 s, quotes 1 / s, non-tradi
 3. Paste the client ID and the token into **Settings → Dhan credentials** in the web app, or
    into `.env` (`DHAN_CLIENT_ID`, `DHAN_ACCESS_TOKEN`). The app writes `.env` with mode 0600
    and registers the values with the log redactor; nothing is echoed back.
-4. Press **Test entitlements**. Expect: trading tier all OK; data tier failing with
-   `NO_DATA_API` until the plan is bought.
+4. Press **Test entitlements**. Expect: trading tier all OK (verified against a live free-tier
+   account on 2026-10-27: profile, funds, holdings, positions, 30-day ledger, trade book);
+   `scrip_master` OK (public CSV); the remaining data checks `NO_DATA_API` until the plan is
+   bought. If you see `TOKEN_EXPIRED` on the *trading* tier, the token really is bad.
 5. After buying the Data API: generate a token (either slot — the entitlement is on the
    account), paste it as the **Data API token** if you want to keep it separate, test again,
    then restart without `--mock` for live data.
@@ -50,6 +56,19 @@ is no technical difference between the tokens on Dhan's side once the plan is ac
   `.env` so the mutation token is stable, and remember anyone on the LAN can *read* the desk.
 * Token-shaped strings (JWTs) are scrubbed from logs by pattern even if a new secret is never
   registered.
+
+## Payload quirks seen on a real account
+
+* `/ledger` comes back **newest first**, every number as a string (`"23101.69"`), dates as
+  `Oct 27, 2026`. The Home tab sorts by voucher date and takes the running balance from the
+  newest voucher, not the last row.
+* `/holdings` carries `lastTradedPrice` (as of the fetch), so the Home tab marks holdings and
+  shows P&L without the Data API.
+* `/trades` can contain non-market rows (IPO allotment, corporate action) with
+  `customSymbol: ""`, `securityId: "0"`, `tradedPrice: 0`; the trade book labels them instead
+  of showing a blank symbol.
+* `/positions` lists CNC sells from holdings as `positionType: SHORT` with `netQty < 0` for the
+  day; they are not short positions in the F&O sense.
 
 ## Checking what works right now
 

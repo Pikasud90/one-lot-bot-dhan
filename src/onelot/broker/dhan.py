@@ -89,6 +89,35 @@ def _i(v: Any) -> int | None:
     return int(f) if f is not None else None
 
 
+_DATA_HELP = ("Dhan's live feed, historical bars and option chain need the paid Data API "
+              "add-on (Rs 499 + GST per month), separate from the free trading API.")
+
+
+def _error_fields(body: Any) -> tuple[str, str, str]:
+    """(status, code, message) from either Dhan error envelope.
+
+    Dhan answers in two shapes:
+      {"errorType": "Invalid_Access", "errorCode": "DH-902", "errorMessage": "..."}
+      {"data": {"806": "Data APIs not Subscribed"}, "status": "failed"}
+    The second one hides the code as a KEY inside `data`.
+    """
+    if not isinstance(body, dict):
+        return "", "", ""
+    status = str(_first(body, "status", default="") or "").lower()
+    code = str(_first(body, "errorCode", "error_code", "errorType", default="") or "")
+    msg = str(_first(body, "errorMessage", "error_message", "remarks", default="") or "")
+    inner = body.get("data")
+    if not code and status in ("failed", "failure") and isinstance(inner, dict) and inner:
+        k, v = next(iter(inner.items()))
+        code, msg = str(k), str(v)
+    return status, code, msg
+
+
+def _is_entitlement(code: str, msg: str) -> bool:
+    m = msg.lower()
+    return code in _DATA_ENTITLEMENT_CODES or "not subscribed" in m or "data api" in m
+
+
 def _first(d: dict, *keys, default=None):
     """Tolerate key-name variation across API versions rather than KeyError."""
     for k in keys:
@@ -158,11 +187,7 @@ class DhanAdapter:
             raise RateLimitError(f"{endpoint}: HTTP 429 after {attempt} attempts")
 
         if resp.status_code in (401, 403):
-            # v1 defect E3: tokens expire and v1 would just emit a wall of 401s.
-            raise TokenExpiredError(
-                f"{endpoint}: HTTP {resp.status_code} — the Dhan access token is "
-                "invalid or expired. Generate a new one and update .env."
-            )
+            raise self._auth_error(endpoint, resp)
 
         try:
             data = resp.json()
@@ -189,9 +214,7 @@ class DhanAdapter:
                 return self._get(endpoint, params, bucket, attempt + 1, max_attempts)
             raise RateLimitError(f"{endpoint}: HTTP 429 after {attempt} attempts")
         if resp.status_code in (401, 403):
-            raise TokenExpiredError(
-                f"{endpoint}: HTTP {resp.status_code} — the Dhan access token is invalid or "
-                "expired. Generate a new one (web.dhan.co -> My Profile -> Access DhanHQ APIs).")
+            raise self._auth_error(endpoint, resp)
         try:
             data = resp.json()
         except ValueError:
@@ -201,13 +224,34 @@ class DhanAdapter:
         return self._unwrap(endpoint, data, bucket, attempt, max_attempts,
                             retry=lambda: self._get(endpoint, params, bucket, attempt + 1, max_attempts))
 
+    @staticmethod
+    def _auth_error(endpoint: str, resp: httpx.Response) -> Exception:
+        """Classify a 401/403.
+
+        v1 defect E3 was a wall of 401s on an expired token. The opposite
+        mistake is just as misleading: Dhan ALSO answers 401 when a free-plan
+        token calls a Data-API endpoint ({"data": {"806": "Data APIs not
+        Subscribed"}} or errorCode DH-902). Read the body before blaming
+        the token -- a user with a valid token was told to regenerate it.
+        """
+        try:
+            body = resp.json()
+        except ValueError:
+            body = {}
+        _status, code, msg = _error_fields(body)
+        if _is_entitlement(code, msg):
+            return DataEntitlementError(
+                f"{endpoint}: {msg or 'Data API subscription required'} "
+                f"(HTTP {resp.status_code}, code {code or '?'}). {_DATA_HELP}")
+        return TokenExpiredError(
+            f"{endpoint}: HTTP {resp.status_code} — {msg or 'the Dhan access token is invalid or expired'}. "
+            "Generate a new one (web.dhan.co -> My Profile -> Access DhanHQ APIs) and update .env.")
+
     def _unwrap(self, endpoint: str, data: Any, bucket: str, attempt: int, max_attempts: int,
                 retry) -> Any:
         """Map Dhan's error envelope to typed exceptions; return the payload."""
         if isinstance(data, dict):
-            status = str(_first(data, "status", default="")).lower()
-            err_code = str(_first(data, "errorCode", "error_code", "errorType", default=""))
-            err_msg = str(_first(data, "errorMessage", "error_message", "remarks", default=""))
+            status, err_code, err_msg = _error_fields(data)
             if err_code.upper().startswith("RL") or err_code in ("DH-904", "805") or "rate" in err_msg.lower():
                 delay = self.limiter.note_rate_limited(bucket, attempt)
                 if attempt < max_attempts:
@@ -217,14 +261,10 @@ class DhanAdapter:
                 raise RateLimitError(f"{endpoint}: {err_code} {err_msg}")
             if err_code in _TOKEN_CODES or "invalid token" in err_msg.lower() or "expired" in err_msg.lower():
                 raise TokenExpiredError(f"{endpoint}: {err_code} {err_msg or 'token rejected'}")
-            if (err_code in _DATA_ENTITLEMENT_CODES or "not subscribed" in err_msg.lower()
-                    or "data api" in err_msg.lower()):
+            if _is_entitlement(err_code, err_msg):
                 raise DataEntitlementError(
-                    f"{endpoint}: {err_msg or 'Data API subscription required'}. "
-                    "Dhan's live feed, historical bars and option chain need the paid Data API "
-                    "add-on (Rs 499 + GST per month), separate from the free trading API."
-                )
-            if status == "failure" or (err_code and err_code.startswith("DH-")):
+                    f"{endpoint}: {err_msg or 'Data API subscription required'}. {_DATA_HELP}")
+            if status in ("failure", "failed") or (err_code and err_code.startswith("DH-")):
                 raise BrokerError(f"{endpoint}: {err_code} {err_msg}")
             if "data" in data:
                 return data["data"]
@@ -366,6 +406,7 @@ class DhanAdapter:
               lambda: self.historical_intraday(
                   index_c, 5, dt.datetime.combine(today - dt.timedelta(days=5), dt.time(9, 0), tzinfo=IST),
                   dt.datetime.combine(today, dt.time(16, 0), tzinfo=IST)), "data")
+        result["notes"] = list(dict.fromkeys(result["notes"]))  # dedupe, keep order
         return result
 
     # ── reference data ────────────────────────────────────────────────────

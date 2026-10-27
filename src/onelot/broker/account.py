@@ -37,6 +37,17 @@ def _f(v: Any) -> float:
         return 0.0
 
 
+def _voucher_date(v: Any) -> dt.date | None:
+    """Dhan ledger dates look like 'Oct 27, 2026'; tolerate ISO too."""
+    s = str(v or "").strip()
+    for fmt in ("%b %d, %Y", "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return dt.datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
 class AccountService:
     def __init__(self, engine: Engine, adapter=None, stale_after: dt.timedelta = dt.timedelta(hours=12),
                  ledger_days: int = 30, trades_days: int = 30) -> None:
@@ -141,10 +152,31 @@ class AccountService:
         open_pos = [p for p in positions if isinstance(p, dict) and int(_f(p.get("netQty"))) != 0]
         realised = sum(_f(p.get("realizedProfit")) for p in positions if isinstance(p, dict))
         unreal = sum(_f(p.get("unrealizedProfit")) for p in positions if isinstance(p, dict))
-        invested = sum(_f(h.get("avgCostPrice")) * _f(h.get("totalQty")) for h in holdings if isinstance(h, dict))
+        hold_rows = [h for h in holdings if isinstance(h, dict)] if isinstance(holdings, list) else []
+        invested = sum(_f(h.get("avgCostPrice")) * _f(h.get("totalQty")) for h in hold_rows)
+        # Dhan's holdings carry lastTradedPrice (as of the last fetch): mark the
+        # book without touching the paid Data API.
+        priced = [h for h in hold_rows if _f(h.get("lastTradedPrice")) > 0]
+        value = sum(_f(h.get("lastTradedPrice")) * _f(h.get("totalQty")) for h in priced) if priced else None
+        priced_cost = sum(_f(h.get("avgCostPrice")) * _f(h.get("totalQty")) for h in priced) if priced else None
+        holdings_pnl = (value - priced_cost) if value is not None else None
+        # Dhan returns the ledger NEWEST first; never trust the list order --
+        # take the row with the latest voucher date (ties: first seen).
         last_bal = None
-        if ledger and isinstance(ledger, list) and isinstance(ledger[-1], dict):
-            last_bal = _f(ledger[-1].get("runbal"))
+        last_date = None
+        debits = credits = 0.0
+        if isinstance(ledger, list):
+            rows = [r for r in ledger if isinstance(r, dict)]
+            for r in rows:
+                debits += _f(r.get("debit"))
+                credits += _f(r.get("credit"))
+            dated = [(_voucher_date(r.get("voucherdate")), i, r) for i, r in enumerate(rows)]
+            dated = [x for x in dated if x[0] is not None]
+            if dated:
+                d, _i, r = max(dated, key=lambda x: (x[0], -x[1]))
+                last_bal, last_date = _f(r.get("runbal")), d.isoformat()
+            elif rows:
+                last_bal = _f(rows[0].get("runbal"))
         return {
             "client_id_suffix": (str(profile.get("dhanClientId") or "")[-4:] or None),
             "token_validity": profile.get("tokenValidity"),
@@ -155,10 +187,15 @@ class AccountService:
             "withdrawable_balance": _f(funds.get("withdrawableBalance")),
             "utilized_amount": _f(funds.get("utilizedAmount")),
             "collateral": _f(funds.get("collateralAmount")),
-            "holdings_count": len(holdings) if isinstance(holdings, list) else 0,
+            "holdings_count": len(hold_rows),
             "holdings_invested": invested,
+            "holdings_value": value,
+            "holdings_pnl": holdings_pnl,
             "open_positions": len(open_pos),
             "positions_realized": realised,
             "positions_unrealized": unreal,
             "ledger_running_balance": last_bal,
+            "ledger_last_date": last_date,
+            "ledger_debits": debits,
+            "ledger_credits": credits,
         }

@@ -35,10 +35,26 @@ function table(cols, rows, opts = {}) {
   return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 function plotReady() { return typeof window.Plotly !== "undefined"; }
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const PLOT_LAYOUT = () => ({
-  paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)", font: { color: "#8c9cb8", family: "JetBrains Mono, monospace", size: 11 },
-  margin: { l: 56, r: 16, t: 30, b: 36 }, xaxis: { gridcolor: "#1f2b45" }, yaxis: { gridcolor: "#1f2b45" }, showlegend: false,
+  paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)", font: { color: cssVar("--plot-font"), family: "JetBrains Mono, monospace", size: 12 },
+  margin: { l: 62, r: 18, t: 34, b: 40 }, xaxis: { gridcolor: cssVar("--grid") }, yaxis: { gridcolor: cssVar("--grid") }, showlegend: false,
 });
+
+/* ── theme (day by default; the choice is per browser) ───────────────── */
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t; store.set("theme", t);
+  $("theme-toggle").textContent = t === "night" ? "☀ Day" : "☾ Night";
+  if (!plotReady()) return;
+  document.querySelectorAll(".plot").forEach(el => {
+    if (!el.data) return;
+    const patch = { "font.color": cssVar("--plot-font"), "xaxis.gridcolor": cssVar("--grid"), "yaxis.gridcolor": cssVar("--grid") };
+    if (el.layout && el.layout.yaxis2) patch["yaxis2.gridcolor"] = cssVar("--grid");
+    Plotly.relayout(el, patch);
+  });
+}
+$("theme-toggle").onclick = () => applyTheme(document.documentElement.dataset.theme === "night" ? "day" : "night");
+applyTheme(store.get("theme", "day") === "night" ? "night" : "day");
 
 /* ── tabs ─────────────────────────────────────────────────────────────── */
 const tabLoaders = {};
@@ -93,10 +109,13 @@ function renderAccount(a) {
     tile("Utilised", rup(s.utilized_amount), "margin blocked") +
     tile("Collateral", rup(s.collateral)) +
     tile("Holdings", s.holdings_count ?? "–", "invested " + rup(s.holdings_invested)) +
+    tile("Holdings value", rup(s.holdings_value), s.holdings_pnl === null || s.holdings_pnl === undefined ? "no LTP in payload" :
+      `<span class="${cls(s.holdings_pnl)}">P&L ${rup(s.holdings_pnl)} (${pct(s.holdings_invested ? s.holdings_pnl / s.holdings_invested * 100 : null)})</span>`) +
     tile("Open positions", s.open_positions ?? "–", "broker net qty ≠ 0") +
     tile("Realised today", rup(s.positions_realized), "", cls(s.positions_realized)) +
-    tile("Unrealised", rup(s.positions_unrealized), "", cls(s.positions_unrealized)) +
-    tile("Ledger balance", rup(s.ledger_running_balance), "last voucher");
+    tile("Unrealised", rup(s.positions_unrealized), "open positions", cls(s.positions_unrealized)) +
+    tile("Ledger balance", rup(s.ledger_running_balance), s.ledger_last_date ? "as of " + esc(s.ledger_last_date) : "latest voucher") +
+    tile("30-day flows", `<span class="pos" style="font-size:.8em">+${rup(s.ledger_credits).replace("₹", "")}</span><span class="neg" style="font-size:.8em"> / −${rup(s.ledger_debits).replace("₹", "")}</span>`, "ledger credits / debits, ₹");
   const prof = (p.profile && p.profile.data) || {};
   $("acct-profile").innerHTML = kv("Client", s.client_id_suffix ? "…" + s.client_id_suffix : "–") +
     kv("Token valid till", esc(prof.tokenValidity || "–")) +
@@ -113,20 +132,31 @@ function renderAccount(a) {
   ], pos, { empty: "No positions at the broker." });
   const hold = (p.holdings && p.holdings.data) || [];
   $("acct-holdings").innerHTML = table([
-    { l: "Symbol", k: "tradingSymbol" }, { l: "Exch", k: "exchange" }, { l: "Qty", n: 1, f: r => fmt(r.totalQty, 0) },
+    { l: "Symbol", k: "tradingSymbol" }, { l: "Qty", n: 1, f: r => fmt(r.totalQty, 0) },
     { l: "Available", n: 1, f: r => fmt(r.availableQty, 0) }, { l: "Avg cost", n: 1, f: r => fmt(r.avgCostPrice) },
-    { l: "Invested", n: 1, f: r => rup((r.avgCostPrice || 0) * (r.totalQty || 0)) },
+    { l: "LTP", n: 1, f: r => +r.lastTradedPrice > 0 ? fmt(r.lastTradedPrice) : "–" },
+    { l: "Invested", n: 1, f: r => rup((+r.avgCostPrice || 0) * (+r.totalQty || 0)) },
+    { l: "Value", n: 1, f: r => +r.lastTradedPrice > 0 ? rup(+r.lastTradedPrice * (+r.totalQty || 0)) : "–" },
+    { l: "P&L", n: 1, f: r => +r.lastTradedPrice > 0 ? rup((+r.lastTradedPrice - +r.avgCostPrice) * (+r.totalQty || 0)) : "–",
+      c: r => +r.lastTradedPrice > 0 ? cls((+r.lastTradedPrice - +r.avgCostPrice) * (+r.totalQty || 0)) : "" },
+    { l: "P&L %", n: 1, f: r => +r.lastTradedPrice > 0 && +r.avgCostPrice > 0 ? pct((+r.lastTradedPrice / +r.avgCostPrice - 1) * 100) : "–",
+      c: r => +r.lastTradedPrice > 0 ? cls(+r.lastTradedPrice - +r.avgCostPrice) : "" },
   ], hold, { empty: "No holdings." });
-  const led = ((p.ledger && p.ledger.data) || []).slice().reverse();
+  const when = (v) => { const t = Date.parse(v || ""); return Number.isNaN(t) ? 0 : t; };
+  const led = ((p.ledger && p.ledger.data) || []).map((r, i) => [r, i]).sort((a, b) => (when(b[0].voucherdate) - when(a[0].voucherdate)) || (a[1] - b[1])).map(x => x[0]);
   $("acct-ledger").innerHTML = table([
     { l: "Date", k: "voucherdate" }, { l: "Narration", f: r => esc(String(r.narration || r.voucherdesc || "").slice(0, 60)) },
-    { l: "Debit", n: 1, f: r => rup(r.debit), c: () => "neg" }, { l: "Credit", n: 1, f: r => rup(r.credit), c: () => "pos" },
+    { l: "Debit", n: 1, f: r => +r.debit ? rup(r.debit) : "<span class='dim'>–</span>", c: r => +r.debit ? "neg" : "" },
+    { l: "Credit", n: 1, f: r => +r.credit ? rup(r.credit) : "<span class='dim'>–</span>", c: r => +r.credit ? "pos" : "" },
     { l: "Balance", n: 1, f: r => rup(r.runbal) },
   ], led, { empty: "No ledger entries in the window." });
-  const tr = (p.trades && p.trades.data) || [];
+  const tr = ((p.trades && p.trades.data) || []).slice().sort((a, b) => when(b.exchangeTime || b.createTime) - when(a.exchangeTime || a.createTime));
   $("acct-trades").innerHTML = table([
-    { l: "Time", f: r => tsf(r.exchangeTime || r.createTime) }, { l: "Symbol", f: r => esc(r.customSymbol || r.tradingSymbol) },
-    { l: "Side", k: "transactionType" }, { l: "Qty", n: 1, f: r => fmt(r.tradedQuantity, 0) }, { l: "Price", n: 1, f: r => fmt(r.tradedPrice) },
+    { l: "Time", f: r => tsf(r.exchangeTime || r.createTime) },
+    { l: "Symbol", f: r => r.customSymbol || r.tradingSymbol ? esc(r.customSymbol || r.tradingSymbol)
+        : (r.isin ? "ISIN " + esc(r.isin) : `<span class="dim">non-market entry (allotment / corporate action)</span>`) },
+    { l: "Seg", f: r => esc((r.exchangeSegment || "") + (r.productType ? " · " + r.productType : "")) },
+    { l: "Side", k: "transactionType" }, { l: "Qty", n: 1, f: r => fmt(r.tradedQuantity, 0) }, { l: "Price", n: 1, f: r => +r.tradedPrice ? fmt(r.tradedPrice) : "<span class='dim'>–</span>" },
     { l: "Charges", n: 1, f: r => rup((+r.brokerageCharges || 0) + (+r.stt || 0) + (+r.exchangeTransactionCharges || 0) + (+r.sebiTax || 0) + (+r.stampDuty || 0) + (+r.serviceTax || 0)) },
   ], tr, { empty: "No trades in the window." });
 }
@@ -470,31 +500,31 @@ function drawEquity(id, eq, cap) {
   if (!eq.length) { el.innerHTML = `<div class="muted" style="padding:12px">No equity (no trades).</div>`; return; }
   const x = eq.map(e => e[0]), y = eq.map(e => e[1] - cap); let peak = -Infinity; const dd = y.map(v => { peak = Math.max(peak, v); return v - peak; });
   Plotly.newPlot(el, [
-    { x, y, type: "scatter", mode: "lines", name: "P&L", line: { color: "#22d3ee", width: 2 }, fill: "tozeroy", fillcolor: "rgba(34,211,238,.08)" },
-    { x, y: dd, type: "scatter", mode: "lines", name: "Drawdown", line: { color: "#ff5370", width: 1 }, fill: "tozeroy", fillcolor: "rgba(255,83,112,.15)", yaxis: "y2" },
-  ], { ...PLOT_LAYOUT(), title: { text: "Cumulative net P&L (₹) and drawdown", font: { size: 12 } }, yaxis: { title: "₹", gridcolor: "#1f2b45", domain: [0.35, 1] }, yaxis2: { title: "DD ₹", gridcolor: "#1f2b45", domain: [0, 0.3] } }, { responsive: true, displaylogo: false });
+    { x, y, type: "scatter", mode: "lines", name: "P&L", line: { color: cssVar("--cyan"), width: 2 }, fill: "tozeroy", fillcolor: "rgba(34,211,238,.10)" },
+    { x, y: dd, type: "scatter", mode: "lines", name: "Drawdown", line: { color: cssVar("--bad"), width: 1 }, fill: "tozeroy", fillcolor: "rgba(255,83,112,.15)", yaxis: "y2" },
+  ], { ...PLOT_LAYOUT(), title: { text: "Cumulative net P&L (₹) and drawdown", font: { size: 13 } }, yaxis: { title: "₹", gridcolor: cssVar("--grid"), domain: [0.35, 1] }, yaxis2: { title: "DD ₹", gridcolor: cssVar("--grid"), domain: [0, 0.3] } }, { responsive: true, displaylogo: false });
 }
 function drawPrice(id, ch) {
   const el = $(id); if (!plotReady()) { el.innerHTML = ""; return; }
   const c = ch.candles || []; if (!c.length) { el.innerHTML = `<div class="muted" style="padding:12px">No bars for the chart.</div>`; return; }
   const t = c.map(b => new Date(b[0] * 1000));
   const traces = [{ x: t, open: c.map(b => b[1]), high: c.map(b => b[2]), low: c.map(b => b[3]), close: c.map(b => b[4]), type: "candlestick", name: "underlying",
-    increasing: { line: { color: "#35d07f" } }, decreasing: { line: { color: "#ff5370" } } }];
+    increasing: { line: { color: cssVar("--ok") } }, decreasing: { line: { color: cssVar("--bad") } } }];
   const tr = ch.trades || [];
   if (tr.length) {
     traces.push({ x: tr.map(x => new Date(x.entry_ts * 1000)), y: tr.map(x => x.entry), mode: "markers", type: "scatter", name: "entry",
-      marker: { symbol: tr.map(x => x.side === "LONG" ? "triangle-up" : "triangle-down"), size: 11, color: tr.map(x => x.side === "LONG" ? "#22d3ee" : "#ffb020"), line: { width: 1, color: "#fff" } },
+      marker: { symbol: tr.map(x => x.side === "LONG" ? "triangle-up" : "triangle-down"), size: 12, color: tr.map(x => x.side === "LONG" ? cssVar("--cyan") : cssVar("--accent2")), line: { width: 1, color: cssVar("--panel") } },
       text: tr.map(x => `${x.side} in ${fmt(x.entry)} → ${fmt(x.exit)} (${x.reason}) net ₹${fmt(x.net_pnl, 0)} / ${fmt(x.r, 2)}R`), hoverinfo: "text" });
     traces.push({ x: tr.map(x => new Date(x.exit_ts * 1000)), y: tr.map(x => x.exit), mode: "markers", type: "scatter", name: "exit",
-      marker: { symbol: "x", size: 9, color: tr.map(x => x.net_pnl > 0 ? "#35d07f" : "#ff5370") }, hoverinfo: "skip" });
+      marker: { symbol: "x", size: 10, color: tr.map(x => x.net_pnl > 0 ? cssVar("--ok") : cssVar("--bad")) }, hoverinfo: "skip" });
   }
-  Plotly.newPlot(el, traces, { ...PLOT_LAYOUT(), title: { text: "Underlying with entries (▲▼) and exits (×)", font: { size: 12 } },
-    xaxis: { gridcolor: "#1f2b45", rangeslider: { visible: false }, rangebreaks: [{ bounds: ["sat", "mon"] }, { bounds: [15.5, 9.25], pattern: "hour" }] } }, { responsive: true, displaylogo: false });
+  Plotly.newPlot(el, traces, { ...PLOT_LAYOUT(), title: { text: "Underlying with entries (▲▼) and exits (×)", font: { size: 13 } },
+    xaxis: { gridcolor: cssVar("--grid"), rangeslider: { visible: false }, rangebreaks: [{ bounds: ["sat", "mon"] }, { bounds: [15.5, 9.25], pattern: "hour" }] } }, { responsive: true, displaylogo: false });
 }
 function drawMonthly(id, m) {
   const el = $(id); if (!plotReady() || !m.length) { el.innerHTML = ""; return; }
-  Plotly.newPlot(el, [{ x: m.map(x => x.month), y: m.map(x => x.pnl), type: "bar", marker: { color: m.map(x => x.pnl >= 0 ? "#35d07f" : "#ff5370") } }],
-    { ...PLOT_LAYOUT(), title: { text: "Monthly net P&L (₹)", font: { size: 12 } } }, { responsive: true, displaylogo: false });
+  Plotly.newPlot(el, [{ x: m.map(x => x.month), y: m.map(x => x.pnl), type: "bar", marker: { color: m.map(x => x.pnl >= 0 ? cssVar("--ok") : cssVar("--bad")) } }],
+    { ...PLOT_LAYOUT(), title: { text: "Monthly net P&L (₹)", font: { size: 13 } } }, { responsive: true, displaylogo: false });
 }
 function renderOpt(r) {
   const a = r.artifacts || {}, cfg = r.config || {}, el = $("lab-result");

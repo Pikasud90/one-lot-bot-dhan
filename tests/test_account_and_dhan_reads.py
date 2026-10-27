@@ -31,8 +31,13 @@ PROFILE = {"dhanClientId": "1100001234", "tokenValidity": "28/10/2026 15:37", "a
            "ddpi": "Active", "mtf": "Deactive", "dataPlan": "Deactive", "dataValidity": None}
 FUNDS = {"dhanClientId": "1100001234", "availabelBalance": 98765.5, "sodLimit": 100000, "collateralAmount": 0,
          "receiveableAmount": 0, "utilizedAmount": 1234.5, "blockedPayoutAmount": 0, "withdrawableBalance": 97000}
-LEDGER = [{"narration": "Opening", "voucherdate": "Oct 01, 2026", "debit": "0", "credit": "100000", "runbal": "100000"},
-          {"narration": "Brokerage", "voucherdate": "Oct 02, 2026", "debit": "23.6", "credit": "0", "runbal": "99976.4"}]
+# Dhan returns the ledger NEWEST first, with every number as a string.
+LEDGER = [{"narration": "Brokerage", "voucherdate": "Oct 02, 2026", "debit": "23.6", "credit": "0.00", "runbal": "99976.4"},
+          {"narration": "Opening", "voucherdate": "Oct 01, 2026", "debit": "0.00", "credit": "100000", "runbal": "100000"}]
+# The two 401 bodies a FREE-plan token gets from Data-API endpoints (captured live, 2026-10-27).
+NO_DATA_806 = {"data": {"806": "Data APIs not Subscribed"}, "status": "failed"}
+NO_DATA_902 = {"errorType": "Invalid_Access", "errorCode": "DH-902",
+               "errorMessage": "This API requires a Data APIs Plan. Current plan: Free Plan"}
 TRADES_P0 = [{"orderId": "1", "tradingSymbol": "SBIN", "transactionType": "BUY", "tradedQuantity": 1, "tradedPrice": 800.0,
               "brokerageCharges": 0.24, "stt": 0, "exchangeTransactionCharges": 0.02, "sebiTax": 0.0, "stampDuty": 0.02,
               "serviceTax": 0.05, "exchangeTime": "2026-10-20 10:15:00"}]
@@ -45,8 +50,8 @@ def good_handler(request: httpx.Request) -> httpx.Response:
     if p.endswith("/fundlimit"):
         return httpx.Response(200, json=FUNDS)
     if p.endswith("/holdings"):
-        return httpx.Response(200, json=[{"tradingSymbol": "SBIN", "exchange": "NSE", "totalQty": 1, "availableQty": 1,
-                                          "avgCostPrice": 780.0, "securityId": "3045"}])
+        return httpx.Response(200, json=[{"tradingSymbol": "SBIN", "exchange": "ALL", "totalQty": "2", "availableQty": "1",
+                                          "avgCostPrice": "780.0", "lastTradedPrice": "800.0", "securityId": "3045"}])
     if p.endswith("/positions"):
         return httpx.Response(200, json=[{"tradingSymbol": "BANKNIFTY-Oct2026-50000-CE", "netQty": 35, "buyAvg": 500,
                                           "sellAvg": 0, "realizedProfit": 0, "unrealizedProfit": 1750, "productType": "INTRADAY",
@@ -101,6 +106,26 @@ class TestFreeTierReads:
         with pytest.raises(DataEntitlementError):
             a2.historical_daily(_index_contract(), dt.date(2026, 10, 1), dt.date(2026, 10, 10))
 
+    def test_401_with_entitlement_body_is_not_a_token_problem(self):
+        """Live finding: a valid free-plan token gets HTTP 401 from Data-API
+        endpoints. Blaming the token sent the user to regenerate a good one."""
+        a = make_adapter(lambda r: httpx.Response(401, json=NO_DATA_806))
+        with pytest.raises(DataEntitlementError) as ei:
+            a.expiry_list_raw(25, "IDX_I")
+        assert "806" in str(ei.value) and "Rs 499" in str(ei.value)
+        a2 = make_adapter(lambda r: httpx.Response(401, json=NO_DATA_902))
+        with pytest.raises(DataEntitlementError):
+            a2.historical_daily(_index_contract(), dt.date(2026, 10, 1), dt.date(2026, 10, 10))
+        # a bare 401 (no body) is still a token problem
+        a3 = make_adapter(lambda r: httpx.Response(401, text="Unauthorized"))
+        with pytest.raises(TokenExpiredError):
+            a3.profile()
+
+    def test_failed_envelope_with_code_as_key_on_200(self):
+        a = make_adapter(lambda r: httpx.Response(200, json=NO_DATA_806))
+        with pytest.raises(DataEntitlementError):
+            a.expiry_list_raw(25, "IDX_I")
+
     def test_rate_limit_retries_then_raises(self):
         calls = {"n": 0}
 
@@ -114,11 +139,12 @@ class TestFreeTierReads:
             a.profile()
         assert calls["n"] == 3
 
-    def test_preflight_separates_trading_from_data_tier(self):
+    @pytest.mark.parametrize("body", [NO_DATA_806, NO_DATA_902])
+    def test_preflight_separates_trading_from_data_tier(self, body):
         def h(req):
             if req.url.path.endswith(("/profile", "/fundlimit", "/holdings", "/positions", "/ledger")) or "/trades/" in req.url.path:
                 return good_handler(req)
-            return httpx.Response(200, json={"errorCode": "DH-902", "errorMessage": "Data APIs not subscribed"})
+            return httpx.Response(401, json=body)  # exactly what the free plan gets
 
         a = make_adapter(h)
         a._download_scrip_master = lambda limit=None: [{"SEM_SMST_SECURITY_ID": "25"}]
@@ -128,6 +154,10 @@ class TestFreeTierReads:
         assert tiers["profile"] == "trading" and tiers["expiry_list"] == "data"
         assert res["profile"]["data_plan"] == "Deactive"
         assert any("NOT active" in n for n in res["notes"])
+        failed = {k: v for k, v in res["checks"].items() if not v["ok"]}
+        assert failed and all(v["error"] == "NO_DATA_API" for v in failed.values())
+        assert not any("regenerate" in n for n in res["notes"])  # the token is fine
+        assert len(res["notes"]) == len(set(res["notes"]))  # deduped
 
 
 def _index_contract():
@@ -157,8 +187,11 @@ class TestAccountService:
         s = snap["summary"]
         assert s["available_balance"] == 98765.5
         assert s["open_positions"] == 1 and s["positions_unrealized"] == 1750
-        assert s["holdings_count"] == 1 and s["holdings_invested"] == 780.0
-        assert s["ledger_running_balance"] == 99976.4
+        assert s["holdings_count"] == 1 and s["holdings_invested"] == 1560.0
+        assert s["holdings_value"] == 1600.0 and s["holdings_pnl"] == pytest.approx(40.0)
+        assert s["ledger_running_balance"] == 99976.4  # newest voucher, not last row
+        assert s["ledger_last_date"] == "2026-10-02"
+        assert s["ledger_debits"] == pytest.approx(23.6) and s["ledger_credits"] == pytest.approx(100000)
         assert s["data_plan"] == "Deactive" and s["client_id_suffix"] == "1234"
         assert snap["stale"] is False
 
@@ -197,6 +230,13 @@ class TestAccountService:
                   "holdings": {"data": []}, "profile": {"data": {}}, "ledger": {"data": "not-a-list"}}
         s = AccountService._summary(panels)
         assert s["available_balance"] == 12.5 and s["open_positions"] == 1 and s["positions_unrealized"] == -10
+        assert s["holdings_value"] is None and s["ledger_running_balance"] is None
+
+    def test_ledger_order_does_not_matter(self):
+        oldest_first = list(reversed(LEDGER))
+        a = AccountService._summary({"ledger": {"data": oldest_first}})
+        b = AccountService._summary({"ledger": {"data": LEDGER}})
+        assert a["ledger_running_balance"] == b["ledger_running_balance"] == 99976.4
 
     def test_json_round_trip_of_cached_payloads(self, engine):
         svc = AccountService(engine, adapter=make_adapter(good_handler))

@@ -30,6 +30,9 @@ are reference only.
 Everything runs in **one Python process** (`python -m onelot run`) on macOS and Windows,
 with SQLite in WAL mode. No Docker, no external services.
 
+The web app opens in a bright **Day** theme sized for reading at arm's length; the **☾ Night**
+button in the header switches to the dark desk and the choice is remembered per browser.
+
 ---
 
 ## Quick start
@@ -51,8 +54,8 @@ First run creates `.venv` and installs everything. Then:
 
 1. **Settings → Dhan credentials**: paste your client ID and the free-tier access token, Save,
    then **Test entitlements**. The report shows two tiers: *trading* (profile, funds, holdings,
-   positions, ledger, trade book — must all pass) and *data* (expiry list, option chain,
-   historical bars — pass only with the Data API plan).
+   positions, ledger, trade book — must all pass; verified live on a free-tier account) and
+   *data* (expiry list, option chain, historical bars — `NO_DATA_API` until the plan is bought).
 2. **Home** now shows your ledger and funds. Press Refresh whenever you want; it never polls.
 3. **Data**: the Yahoo corpus is already loaded on this machine (406 k bars: 26 series × 2m/5m/15m/60m/1d).
    Run a backfill any time to top it up.
