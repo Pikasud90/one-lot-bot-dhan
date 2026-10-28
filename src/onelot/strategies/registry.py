@@ -4,15 +4,19 @@ from __future__ import annotations
 
 from .base import Strategy
 from .benchmark import RandomEntry
+from .cpr_breakout import CPRBreakout
 from .donchian_breakout import DonchianBreakout
 from .ema_cross import EMACross
+from .ema_pullback import EMAPullback
 from .gap_fade import GapFade
 from .intraday_momentum import IntradayMomentum
 from .mean_reversion import MeanReversion
+from .nr7_breakout import NR7Breakout
 from .orb import OpeningRangeBreakout
 from .squeeze import SqueezeBreakout
 from .supertrend_adx import SupertrendADX
 from .supertrend_vol import SupertrendVol
+from .turtle_soup import TurtleSoup
 from .vwap_pullback import VWAPPullback
 
 # Order = how they appear in the Lab's dropdown: the operator's theses first,
@@ -23,6 +27,7 @@ REGISTRY: dict[str, type[Strategy]] = {
         SupertrendADX, OpeningRangeBreakout, VWAPPullback,         # classic intraday setups
         SqueezeBreakout, DonchianBreakout, MeanReversion,          # volatility / trend / reversion
         IntradayMomentum, GapFade,                                 # documented anomalies
+        CPRBreakout, NR7Breakout, EMAPullback, TurtleSoup,         # classic books, re-implemented
     )
 }
 
@@ -39,6 +44,10 @@ SUITABLE: dict[str, tuple[str, ...]] = {
     "mean_reversion": ("STOCK", "FUTURES"),
     "intraday_momentum": ("FUTURES", "OPTIONS"),
     "gap_fade": ("STOCK",),
+    "cpr_breakout": ("OPTIONS", "FUTURES", "STOCK"),
+    "nr7_breakout": ("FUTURES", "STOCK", "OPTIONS"),
+    "ema_pullback": ("STOCK", "FUTURES", "OPTIONS", "CURRENCY"),
+    "turtle_soup": ("STOCK", "FUTURES", "CURRENCY"),
 }
 
 # Indicators each strategy draws on (shown in the Lab next to the tunable parameters).
@@ -53,6 +62,10 @@ INDICATORS: dict[str, tuple[str, ...]] = {
     "mean_reversion": ("RSI(2)", "EMA20/50", "ATR(14)"),
     "intraday_momentum": ("opening-window return", "ATR(14)"),
     "gap_fade": ("opening gap vs NIFTY gap", "daily ATR", "session VWAP"),
+    "cpr_breakout": ("prior-day CPR (P/BC/TC)", "ADX(14)", "ATR(14)", "relative volume"),
+    "nr7_breakout": ("daily range NR-N", "prior-day high/low", "ATR(14)", "RSI(14)"),
+    "ema_pullback": ("ADX/DI(14)", "EMA pullback", "swing low/high", "ATR(14)"),
+    "turtle_soup": ("N-bar low/high", "RSI(14)", "ATR(14)"),
 }
 
 

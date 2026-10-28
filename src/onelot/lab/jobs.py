@@ -52,6 +52,7 @@ class JobRunner:
         self.engine = engine
         self.pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="lab")
         self._stop_flags: dict[int, threading.Event] = {}
+        self._run_flags: dict[int, threading.Event] = {}
 
     # ── backtests ─────────────────────────────────────────────────────────
     def submit_backtest(self, config: dict, label: str = "") -> int:
@@ -67,13 +68,13 @@ class JobRunner:
             conn.execute(update(backtest_runs).where(backtest_runs.c.id == rid)
                          .values(progress=float(frac), message=msg[:200]))
 
-    def _run_backtest(self, rid: int, cfgd: dict) -> None:
+    def _run_backtest(self, rid: int, cfgd: dict, cache: DataCache | None = None) -> None:
         with self.engine.begin() as conn:
             conn.execute(update(backtest_runs).where(backtest_runs.c.id == rid)
                          .values(status="RUNNING", progress=0.01))
         try:
-            cfg = BacktestConfig(**cfgd)
-            res = run_backtest(cfg, DataCache(self.engine),
+            cfg = BacktestConfig(**{k: v for k, v in cfgd.items() if not k.startswith("_")})
+            res = run_backtest(cfg, cache or DataCache(self.engine),
                                progress=lambda f, m: self._progress(rid, 0.05 + 0.85 * f, m),
                                keep_bars=True)
             rows = []
@@ -112,6 +113,80 @@ class JobRunner:
                     status="FAILED", message=f"{type(exc).__name__}: {exc}"[:500],
                     finished_at=utcnow(), artifacts={"traceback": traceback.format_exc()[-4000:]}))
 
+    # ── sweeps (every strategy x instrument x timeframe, each a saved run) ──
+    def submit_sweep(self, combos: list[dict], label: str = "", base: dict | None = None) -> int:
+        payload = {"combos": combos, "n": len(combos), "base": base or {}}
+        with self.engine.begin() as conn:
+            rid = conn.execute(backtest_runs.insert().values(
+                created_at=utcnow(), kind="sweep", label=label or f"sweep of {len(combos)} runs",
+                config=payload, status="QUEUED", progress=0.0)).inserted_primary_key[0]
+        flag = threading.Event()
+        self._run_flags[int(rid)] = flag
+        self.pool.submit(self._run_sweep, int(rid), payload, flag)
+        return int(rid)
+
+    def stop_run(self, rid: int) -> bool:
+        flag = self._run_flags.get(rid)
+        if flag is None:
+            return False
+        flag.set()
+        return True
+
+    def _run_sweep(self, rid: int, payload: dict, flag: threading.Event) -> None:
+        from .sweep import leaderboard, summarise
+
+        combos, base = payload["combos"], payload.get("base") or {}
+        with self.engine.begin() as conn:
+            conn.execute(update(backtest_runs).where(backtest_runs.c.id == rid)
+                         .values(status="RUNNING", progress=0.01, message=f"0/{len(combos)}"))
+        cache = DataCache(self.engine)
+        results: list[dict] = []
+        stopped = False
+        try:
+            for i, combo in enumerate(combos):
+                if flag.is_set():
+                    stopped = True
+                    break
+                cfg = BacktestConfig.from_settings(combo["strategy"], combo["instrument_key"],
+                                                   timeframe=combo["timeframe"], params=combo.get("params") or {},
+                                                   **base)
+                cfgd = {**cfg.__dict__, "_sweep_id": rid}
+                with self.engine.begin() as conn:
+                    child = conn.execute(backtest_runs.insert().values(
+                        created_at=utcnow(), kind="single",
+                        label=f"sweep#{rid} {cfg.strategy} {cfg.instrument_key} {cfg.timeframe}",
+                        config=cfgd, status="QUEUED", progress=0.0)).inserted_primary_key[0]
+                self._run_backtest(int(child), dict(cfgd), cache=cache)
+                with self.engine.connect() as conn:
+                    row = conn.execute(select(backtest_runs.c.status, backtest_runs.c.metrics, backtest_runs.c.message)
+                                       .where(backtest_runs.c.id == child)).first()
+                m = (row[1] or {}) if row else {}
+                results.append({"run_id": int(child), "status": row[0] if row else "?", **combo,
+                                "trades": m.get("trades"), "net_pnl": m.get("net_pnl"),
+                                "profit_factor": m.get("profit_factor"), "expectancy_r": m.get("expectancy_r"),
+                                "message": (row[2] or "")[:120] if row else ""})
+                self._progress(rid, (i + 1) / len(combos), f"{i + 1}/{len(combos)} {cfg.strategy} {cfg.instrument_key} {cfg.timeframe}")
+            board = leaderboard(self.engine, sweep_id=rid, min_trades=10, limit=1000)
+            summary = summarise(board)
+            metrics = {"combos": len(combos), "done": len(results),
+                       "failed": sum(1 for r in results if r["status"] != "DONE"),
+                       "ranked": summary["ranked"], "positive": summary["positive"], "stopped": stopped}
+            with self.engine.begin() as conn:
+                conn.execute(update(backtest_runs).where(backtest_runs.c.id == rid).values(
+                    status="DONE", progress=1.0, finished_at=utcnow(), metrics=metrics,
+                    artifacts=_clean({"results": results, "leaderboard": board[:200],
+                                      "best_by_instrument": summary["best_by_instrument"],
+                                      "best_by_strategy": summary["best_by_strategy"]}),
+                    message=("stopped after " if stopped else "done: ") + f"{len(results)}/{len(combos)}"))
+        except Exception as exc:  # noqa: BLE001
+            log.exception("sweep %s failed", rid)
+            with self.engine.begin() as conn:
+                conn.execute(update(backtest_runs).where(backtest_runs.c.id == rid).values(
+                    status="FAILED", message=f"{type(exc).__name__}: {exc}"[:500], finished_at=utcnow(),
+                    artifacts=_clean({"results": results})))
+        finally:
+            self._run_flags.pop(rid, None)
+
     # ── optimisation / walk-forward ───────────────────────────────────────
     def submit_optimize(self, config: dict, space: dict, trials: int = 40, kind: str = "optimize",
                         wf: dict | None = None, label: str = "") -> int:
@@ -145,14 +220,17 @@ class JobRunner:
                     metrics = _clean(res.best_metrics)
                 else:
                     days = trading_days(cache, cache.spec(base.instrument_key).series_key, base.timeframe)
-                    wf = walk_forward(base, space, ev, days, int((wf_cfg or {}).get("is_days", 40)),
-                                      int((wf_cfg or {}).get("oos_days", 10)), n_trials=trials,
-                                      progress=lambda f, m: self._progress(rid, f, m))
+                    wf_cfg = wf_cfg or {}
+                    wf = walk_forward(base, space, ev, days, wf_cfg.get("is_days"), wf_cfg.get("oos_days"),
+                                      n_trials=trials, progress=lambda f, m: self._progress(rid, f, m))
+                    if not wf.folds:
+                        raise RuntimeError("walk-forward produced no folds: " + wf.plan.get("note", ""))
                     out = {"folds": _clean(wf.folds), "oos_metrics": _clean(wf.oos_metrics),
                            "default_oos_metrics": _clean(wf.default_oos_metrics),
-                           "chosen_params": wf.chosen_params,
+                           "chosen_params": wf.chosen_params, "plan": _clean(wf.plan),
                            "best_params": wf.chosen_params[-1] if wf.chosen_params else {}}
                     metrics = _clean(wf.oos_metrics)
+                    metrics["folds"] = len(wf.folds)
             with self.engine.begin() as conn:
                 conn.execute(update(backtest_runs).where(backtest_runs.c.id == rid).values(
                     status="DONE", progress=1.0, finished_at=utcnow(), metrics=metrics,

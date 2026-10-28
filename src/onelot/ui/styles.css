@@ -221,3 +221,95 @@ tr.sel{background:var(--bad-bg)}
   .tile b{font-size:22px}
   .h1{font-size:32px}
 }
+
+/* ── mascots ────────────────────────────────────────────────────────── */
+.mascot{width:36px;height:36px;vertical-align:middle;flex:none}
+.mascot.sm{width:28px;height:28px} .mascot.lg{width:84px;height:84px} .mascot.xl{width:120px;height:120px}
+.brand-mark .mascot{width:44px;height:44px;color:#fff;transform:skew(10deg)}
+.empty{display:flex;align-items:center;gap:18px;padding:26px 22px;color:var(--muted);font-size:16px}
+.empty-inline{display:flex;align-items:center;gap:10px;color:var(--muted)}
+.bounce{animation:bob 2.2s ease-in-out infinite}
+@keyframes bob{50%{transform:translateY(-4px)}}
+
+/* ── live desk ──────────────────────────────────────────────────────── */
+.card.strip{padding:14px 18px}
+.desk-cols{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;align-items:start}
+@media(max-width:1100px){.desk-cols{grid-template-columns:1fr}}
+.desk-cols>.card{margin-bottom:0}
+.ctx{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
+.ctx .tile{min-width:150px;flex:1 1 150px;padding:10px 12px}
+.ctx .tile b{font-size:21px}
+.ctx .tile.manual{border-style:dashed}
+.acc{display:flex;flex-direction:column;gap:8px}
+.acc-row{border:1px solid var(--line);background:var(--panel2)}
+.acc-row.open{background:var(--panel);box-shadow:var(--shadow)}
+.acc-head{display:grid;grid-template-columns:minmax(150px,1.3fr) minmax(110px,.9fr) minmax(160px,1.6fr) 96px 22px;gap:10px;align-items:center;padding:10px 12px;cursor:pointer;user-select:none}
+.acc-head:hover{background:var(--panel3)}
+.acc-name b{font:21px/1 var(--display);letter-spacing:.05em;display:block}
+.acc-name .dim{font-size:12px}
+.acc-price{font-family:var(--mono);font-size:15px;font-weight:700;text-align:right}
+.acc-price span{display:block;font-size:12.5px;font-weight:600}
+.acc-strats{display:flex;gap:4px;flex-wrap:wrap}
+.schip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 7px;background:var(--panel3);border:1px solid var(--line);white-space:nowrap}
+.schip.long{background:var(--ok-bg);color:var(--ok);border-color:transparent}
+.schip.short{background:var(--bad-bg);color:var(--bad);border-color:transparent}
+.schip.err{background:var(--warn-bg);color:var(--warn)}
+.state-badge{position:relative;isolation:isolate;text-align:center;font:800 12px/1 var(--ui);letter-spacing:.1em;padding:7px 6px;color:var(--muted)}
+.state-badge::before{content:"";position:absolute;inset:0;z-index:-1;transform:skew(-12deg);background:var(--panel3)}
+.state-badge.st-BUY{color:#fff} .state-badge.st-BUY::before{background:var(--ok)}
+.state-badge.st-SELL{color:#fff} .state-badge.st-SELL::before{background:var(--bad)}
+.state-badge.st-HOLD{color:#fff} .state-badge.st-HOLD::before{background:var(--accent2)}
+.state-badge.st-HALTED{color:var(--bad)} .state-badge.st-HALTED::before{background:var(--bad-bg)}
+.acc-caret{color:var(--dim);transition:.2s;text-align:center}
+.acc-row.open .acc-caret{transform:rotate(180deg)}
+.acc-body{display:none;padding:4px 12px 14px;border-top:1px dashed var(--line)}
+.acc-row.open .acc-body{display:block}
+.acc-body h4{font:16px/1 var(--display);letter-spacing:.07em;color:var(--accent2);margin:12px 0 6px}
+.acc-body .grid4{gap:10px 16px;margin-bottom:6px}
+.acc-body .kv{font-size:13.5px;padding:4px 0}
+.hs{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--dim);margin-right:6px;vertical-align:middle}
+.hs.ok{background:var(--ok)} .hs.warn{background:var(--warn)} .hs.bad{background:var(--bad)}
+.sigcard{border-left:5px solid var(--ok);margin-bottom:14px}
+.sigcard.sell{border-left-color:var(--bad)}
+.sigcard.blocked{border-left-color:var(--warn)}
+.sigcard pre{white-space:pre-wrap;font-family:var(--ui);font-size:15px;line-height:1.45;margin:8px 0;background:var(--panel2);padding:10px 12px;border:1px solid var(--line)}
+.pos-advice{font-weight:800;letter-spacing:.08em}
+.legacy>summary{cursor:pointer;list-style:none}
+.legacy>summary::-webkit-details-marker{display:none}
+.legacy>summary h2{margin:0}
+.legacy>summary::after{content:"▾  show";float:right;color:var(--muted);font-size:13px;font-weight:700}
+.legacy[open]>summary::after{content:"▴  hide"}
+
+/* ── lab sub-tabs, leaderboard, help ───────────────────────────────── */
+.subtabs{display:flex;gap:4px;margin-bottom:12px;border-bottom:2px solid var(--line)}
+.subtabs a{font:19px/1 var(--display);letter-spacing:.08em;padding:9px 14px 7px;cursor:pointer;color:var(--muted);border-bottom:3px solid transparent;margin-bottom:-2px}
+.subtabs a.active{color:var(--text);border-bottom-color:var(--accent)}
+.sub{display:none} .sub.active{display:block}
+.help p,.help li{font-size:15px;line-height:1.5}
+.help h3{margin-top:18px}
+tr.lead:hover{background:var(--cyan-bg);cursor:pointer}
+td.oos{color:var(--ok);font-weight:700}
+.heat{border-collapse:collapse;font-size:12.5px}
+.heat td,.heat th{padding:5px 7px;text-align:center;border:1px solid var(--panel)}
+.heat th{position:static;background:transparent}
+.heat td{color:#0b1326;font-family:var(--mono)}
+.plan{font-size:13.5px;color:var(--muted);margin:4px 0 10px}
+
+/* ── pulse ──────────────────────────────────────────────────────────── */
+.pulse{display:grid;grid-template-columns:200px 1fr;gap:14px;align-items:stretch}
+@media(max-width:700px){.pulse{grid-template-columns:1fr}}
+.gauge{display:flex;flex-direction:column;justify-content:center;align-items:center;background:var(--panel2);border:1px solid var(--line);padding:14px}
+.gauge b{font-family:var(--mono);font-size:44px;line-height:1}
+.gauge .lbl{font:22px/1 var(--display);letter-spacing:.1em;margin-top:6px}
+.gauge .bar{width:100%;height:10px;margin-top:10px;background:linear-gradient(90deg,var(--bad),var(--warn) 50%,var(--ok))}
+.gauge .bar i{display:block;width:3px;height:16px;margin-top:-3px;background:var(--text);transform:translateX(-1px)}
+.pulse .tiles{margin:0}
+
+/* ── overflow discipline: wide tables never widen the desk cards ────── */
+.desk-cols>.card,.acc,.acc-row,.acc-body,.acc-head,.acc-strats{min-width:0}
+.acc-body table td,.acc-body table th{white-space:normal}
+.acc-body table{table-layout:auto}
+.acc-body .tbl{overflow-x:auto}
+.acc-head .acc-strats{overflow:hidden}
+.card{min-width:0;overflow:hidden}
+.sigcard .sig-nums{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}

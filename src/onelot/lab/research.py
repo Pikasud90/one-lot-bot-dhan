@@ -64,6 +64,15 @@ SPACES: dict[str, dict[str, dict]] = {
     "gap_fade": {"min_rel_gap": {"choices": [0.5, 0.75, 1.0]}, "min_gap": {"choices": [0.0, 0.3, 0.5]},
                  "confirm": {"choices": ["none", "red_bar", "below_vwap"]}, "stop_datr": {"choices": [0.5, 0.75, 1.0]},
                  "target_r": {"choices": [0.0, 1.5, 2.5]}},
+    "cpr_breakout": {"cpr_width_max_pct": {"choices": [0.3, 0.5, 0.8]}, "buffer_atr": {"choices": [0.0, 0.1, 0.2]},
+                     "adx_min": {"choices": [10, 15, 20]}, "stop_mode": {"choices": ["cpr", "atr"]}, **EXITS},
+    "nr7_breakout": {"nr_n": {"choices": [4, 7]}, "buffer_atr": {"choices": [0.0, 0.05, 0.15]},
+                     "stop_mode": {"choices": ["atr", "pd_mid"]}, "stop_atr": {"choices": [0.75, 1.0, 1.5]}, **EXITS},
+    "ema_pullback": {"adx_min": {"choices": [20, 25, 30]}, "ema_len": {"choices": [10, 20, 30]},
+                     "touch_bars": {"choices": [2, 3, 5]}, "swing_bars": {"choices": [3, 5, 8]}, **EXITS},
+    "turtle_soup": {"lookback": {"choices": [10, 20, 30]}, "min_prior_age": {"choices": [3, 4, 6]},
+                    "min_break_atr": {"choices": [0.0, 0.1, 0.25]}, "target_r": {"choices": [1.0, 1.5, 2.0]},
+                    "max_bars": {"choices": [12, 24, 36]}},
     "benchmark_random": {"entry_prob": {"choices": [0.01, 0.02]}, **EXITS},
 }
 

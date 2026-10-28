@@ -1,5 +1,6 @@
-/* One Lot Desk — thin client over the engine API. No framework, no build step.
-   Tabs: home (account, cached), live (SSE), lab (backtests), data, news, settings. */
+/* One Lot Desk — thin client over the engine API. No framework, no build step, works offline.
+   Tabs: home (account, cached) · live (multi-instrument desk + legacy Bank Nifty engine, SSE)
+         lab (backtests, leaderboard, sweeps) · data (corpus + EDA) · news (pulse, scores) · settings */
 (() => {
 "use strict";
 const TOKEN = window.ONELOT_TOKEN || "";
@@ -7,24 +8,31 @@ const $ = (id) => document.getElementById(id);
 const fmt = (v, d = 2) => (v === null || v === undefined || Number.isNaN(Number(v))) ? "–" : Number(v).toFixed(d);
 const rup = (v) => (v === null || v === undefined || Number.isNaN(Number(v))) ? "–"
   : (Number(v) < 0 ? "−" : "") + "₹" + Math.abs(Number(v)).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+const rup2 = (v) => (v === null || v === undefined || Number.isNaN(Number(v))) ? "–"
+  : (Number(v) < 0 ? "−" : "") + "₹" + Math.abs(Number(v)).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const cls = (v) => v > 0 ? "pos" : (v < 0 ? "neg" : "");
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m]));
 const kv = (k, v, c = "") => `<div class="kv"><span>${esc(k)}</span><span class="${c}">${v}</span></div>`;
 const pct = (v, d = 1) => (v === null || v === undefined || Number.isNaN(Number(v))) ? "–" : Number(v).toFixed(d) + "%";
+const spct = (v, d = 2) => (v === null || v === undefined || Number.isNaN(Number(v))) ? "–" : (Number(v) > 0 ? "+" : "") + Number(v).toFixed(d) + "%";
 const tsf = (s) => s ? String(s).replace("T", " ").slice(0, 16) : "–";
+const hhmm = (s) => s ? String(s).slice(11, 16) : "–";
+const tile = (l, v, i = "", c = "") => `<div class="tile"><small>${l}</small><b class="${c}">${v}</b><i>${i}</i></div>`;
 const store = { get(k, d) { try { return JSON.parse(localStorage.getItem("onelot." + k)) ?? d; } catch (e) { return d; } },
                 set(k, v) { try { localStorage.setItem("onelot." + k, JSON.stringify(v)); } catch (e) {} } };
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const C = () => window.Charts;
 
 function toast(msg, kind = "") {
   const d = document.createElement("div"); d.className = "toast " + kind; d.textContent = msg;
-  $("toasts").appendChild(d); setTimeout(() => d.remove(), 5000);
+  $("toasts").appendChild(d); setTimeout(() => d.remove(), 6000);
 }
 async function api(url, body, method) {
   const opt = { method: method || (body ? "POST" : "GET"), headers: { "x-onelot-token": TOKEN } };
   if (body) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
   const r = await fetch(url, opt);
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) { const m = (j && j.detail) ? (typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail)) : r.status; toast("Request failed: " + m, "bad"); throw new Error(m); }
+  if (!r.ok) { toast((j && (j.detail || j.error)) || `${r.status} ${url}`, "bad"); throw new Error(j.detail || r.status); }
   return j;
 }
 function table(cols, rows, opts = {}) {
@@ -34,24 +42,12 @@ function table(cols, rows, opts = {}) {
     cols.map(c => `<td class="${c.n ? "n" : ""} ${c.c ? c.c(r) : ""}">${c.f ? c.f(r) : esc(r[c.k])}</td>`).join("") + "</tr>").join("");
   return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
-function plotReady() { return typeof window.Plotly !== "undefined"; }
-const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-const PLOT_LAYOUT = () => ({
-  paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)", font: { color: cssVar("--plot-font"), family: "JetBrains Mono, monospace", size: 12 },
-  margin: { l: 62, r: 18, t: 34, b: 40 }, xaxis: { gridcolor: cssVar("--grid") }, yaxis: { gridcolor: cssVar("--grid") }, showlegend: false,
-});
 
-/* ── theme (day by default; the choice is per browser) ───────────────── */
+/* ── theme ────────────────────────────────────────────────────────────── */
 function applyTheme(t) {
   document.documentElement.dataset.theme = t; store.set("theme", t);
   $("theme-toggle").textContent = t === "night" ? "☀ Day" : "☾ Night";
-  if (!plotReady()) return;
-  document.querySelectorAll(".plot").forEach(el => {
-    if (!el.data) return;
-    const patch = { "font.color": cssVar("--plot-font"), "xaxis.gridcolor": cssVar("--grid"), "yaxis.gridcolor": cssVar("--grid") };
-    if (el.layout && el.layout.yaxis2) patch["yaxis2.gridcolor"] = cssVar("--grid");
-    Plotly.relayout(el, patch);
-  });
+  if (C()) C().retheme();
 }
 $("theme-toggle").onclick = () => applyTheme(document.documentElement.dataset.theme === "night" ? "day" : "night");
 applyTheme(store.get("theme", "day") === "night" ? "night" : "day");
@@ -66,18 +62,30 @@ function showTab(name) {
 }
 window.addEventListener("hashchange", () => showTab(location.hash.slice(1) || "home"));
 
-/* ── header badges + warnings (from the live stream) ─────────────────── */
-let latest = null;
+/* ── header badges + warnings ─────────────────────────────────────────── */
+let latest = null, acctSummary = null;
+function tokenBadge() {
+  const tv = acctSummary && acctSummary.token_validity;        // "28/10/2026 20:00" IST
+  if (!tv) return "";
+  const m = String(tv).match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/);
+  if (!m) return "";
+  const exp = new Date(`${m[3]}-${m[2]}-${m[1]}T${m[4]}:${m[5]}:00+05:30`);
+  const left = (exp - Date.now()) / 3600000;
+  if (left <= 0) return bd("token EXPIRED", "bad");
+  return bd(`token ${left < 1 ? Math.round(left * 60) + "m" : Math.round(left) + "h"} left`, left < 2 ? "warn" : "ok");
+}
+const bd = (t, c = "") => `<span class="badge ${c}"><span>${esc(t)}</span></span>`;
 function renderBadges(s) {
-  const st = s.status || {}, h = s.health || {}, risk = s.risk || {};
+  const st = s.status || {}, h = s.health || {}, risk = s.risk || {}, d = s.desk || {};
   const b = [];
-  const bd = (t, c = "") => `<span class="badge ${c}"><span>${esc(t)}</span></span>`;
   b.push(bd(st.mode || "?", st.mode === "LIVE" ? "bad" : "ok"));
-  b.push(bd(st.broker || "?"));
+  b.push(bd("feed " + (st.broker || "?"), st.broker === "mock" ? "warn" : "ok"));
+  if (d.source) b.push(bd(`desk ${d.source.name}${d.source.delayed ? " ~15m" : " live"}`, d.source.delayed ? "warn" : "ok"));
   const hs = h.state || "?";
   b.push(bd(hs, hs === "HEALTHY" ? "ok" : (hs === "DEAD" ? "bad" : "warn")));
   b.push(bd(risk.state || "?", risk.state === "HALTED" ? "bad" : "ok"));
   if (st.session && !st.session.entries_allowed) b.push(bd("entries closed", "warn"));
+  b.push(tokenBadge());
   $("badges").innerHTML = b.join("");
 }
 function renderWarnings(s) {
@@ -89,20 +97,23 @@ function renderWarnings(s) {
 /* ═══════════════════════════════ HOME ═══════════════════════════════ */
 let acctLoaded = false;
 async function loadAccount(refresh) {
-  const snap = refresh ? await api("/api/account/refresh", {}) .then(r => r.snapshot) : await api("/api/account");
+  const snap = refresh ? await api("/api/account/refresh", {}).then(r => r.snapshot) : await api("/api/account");
   renderAccount(snap); acctLoaded = true;
 }
 function renderAccount(a) {
   const s = a.summary || {}, p = a.panels || {};
-  $("acct-age").textContent = a.fetched_at ? ("cached " + tsf(a.fetched_at) + (a.stale ? " · stale" : "")) : "never fetched";
+  acctSummary = s;
+  if (latest) renderBadges(latest);
+  $("acct-age").textContent = a.fetched_at ? ("data as of " + tsf(a.fetched_at) + (a.stale ? " · stale" : "")) : "never fetched";
   if (!a.configured) {
-    $("acct-notice").innerHTML = `<div class="notice">No Dhan credentials yet. Add your client ID and a free-tier access token under
+    $("acct-notice").innerHTML = `<div class="notice"><svg class="mascot sm"><use href="#m-ichi"/></svg> No Dhan credentials yet. Add your client ID and a free-tier access token under
       <a href="#settings">Settings</a>; the ledger, funds, holdings and positions work without the paid Data API.</div>`;
-  } else {
-    const errs = Object.entries(p).filter(([, v]) => v && v.error).map(([k, v]) => `${k}: ${v.error}`);
-    $("acct-notice").innerHTML = errs.length ? `<div class="warnbar"><b>Some panels could not be fetched</b><ul>${errs.map(e => `<li>${esc(e)}</li>`).join("")}</ul></div>` : "";
-  }
-  const tile = (l, v, i = "", c = "") => `<div class="tile"><small>${l}</small><b class="${c}">${v}</b><i>${i}</i></div>`;
+  } else if (a.last_error) {
+    const why = a.token_expired ? "The access token has expired — generate a new one on web.dhan.co and paste it in <a href='#settings'>Settings</a>."
+      : (a.offline ? "Dhan could not be reached (offline?)." : "The last refresh failed.");
+    $("acct-notice").innerHTML = `<div class="warnbar"><b>Showing the last good data${a.fetched_at ? " from " + tsf(a.fetched_at) : ""}.</b> ${why}
+      <div class="hint">${esc(a.last_error.panel)} · ${tsf(a.last_error.at)} · ${esc(String(a.last_error.message).slice(0, 160))}</div></div>`;
+  } else $("acct-notice").innerHTML = "";
   $("acct-tiles").innerHTML =
     tile("Available balance", rup(s.available_balance), "fund limit") +
     tile("Withdrawable", rup(s.withdrawable_balance)) +
@@ -160,17 +171,22 @@ function renderAccount(a) {
     { l: "Charges", n: 1, f: r => rup((+r.brokerageCharges || 0) + (+r.stt || 0) + (+r.exchangeTransactionCharges || 0) + (+r.sebiTax || 0) + (+r.stampDuty || 0) + (+r.serviceTax || 0)) },
   ], tr, { empty: "No trades in the window." });
 }
-function renderHomeJournal(s) {
-  const m = (s && s.journal) || {};
-  $("home-journal").innerHTML = (m.trades | 0) === 0 ? `<div class="muted">No closed paper trades yet.</div>` :
-    kv("Trades", m.trades) + kv("Win rate", pct((m.win_rate || 0) * 100)) + kv("Net P&L", rup(m.net_pnl), cls(m.net_pnl)) +
-    kv("Expectancy", fmt(m.expectancy_r, 2) + "R") + kv("Max drawdown", rup(m.max_drawdown), "neg") +
-    kv("Sharpe", m.sharpe == null ? (m.sharpe_note || "–") : fmt(m.sharpe, 2));
+async function renderHomeJournal() {
+  try {
+    const j = await api("/api/desk/journal?limit=50");
+    const t = j.trades || [];
+    if (!t.length) { $("home-journal").innerHTML = `<div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sleep"/></svg> No closed desk trades yet.</div>`; return; }
+    const net = t.reduce((a, x) => a + (x.net_pnl || 0), 0), wins = t.filter(x => x.net_pnl > 0).length;
+    $("home-journal").innerHTML = kv("Trades", t.length) + kv("Win rate", pct(wins / t.length * 100)) + kv("Net P&L", rup(net), cls(net)) +
+      kv("Costs", rup(t.reduce((a, x) => a + (x.costs || 0), 0)), "neg") +
+      `<div class="scroll mt">` + table([{ l: "Closed", f: r => tsf(r.closed_at) }, { l: "Instrument", k: "instrument_key" }, { l: "Side", k: "side" },
+        { l: "Net", n: 1, f: r => rup(r.net_pnl), c: r => cls(r.net_pnl) }, { l: "Why", k: "exit_reason" }], t.slice(0, 8)) + `</div>`;
+  } catch (e) {}
 }
-tabLoaders.home = () => { if (!acctLoaded) loadAccount(false).catch(() => {}); if (latest) renderHomeJournal(latest); };
+tabLoaders.home = () => { if (!acctLoaded) loadAccount(false).catch(() => {}); renderHomeJournal(); };
 $("acct-refresh").onclick = async () => { $("acct-refresh").disabled = true; try { await loadAccount(true); toast("Account refreshed", "ok"); } finally { $("acct-refresh").disabled = false; } };
 
-/* ═══════════════════════════════ LIVE ═══════════════════════════════ */
+/* ═══════════════════ LIVE: legacy Bank Nifty engine ═════════════════ */
 let lastSignalId = null, audioCtx = null;
 function beep() {
   try {
@@ -212,8 +228,8 @@ function renderSignal(s) {
     </div>${warn}
     <div class="actions">
       <label class="inline">Your actual fill <input type="number" step="0.05" id="fill" placeholder="${fmt(sig.entry_eff)}" style="width:120px"></label>
-      <button class="btn take" id="takeBtn"><span>Trade taken</span></button>
-      <button class="btn" id="skipBtn"><span>Skipped</span></button>
+      <button class="btn take" id="takeBtn">Trade taken</button>
+      <button class="btn" id="skipBtn">Skipped</button>
     </div>
     <div class="hint">Enter the price you actually filled at — the stop travels with your fill so your risk stays 1R.</div>`;
   $("takeBtn").onclick = async () => {
@@ -232,7 +248,7 @@ function renderPositions(s) {
       <td class="n">${fmt(p.effective_stop)}</td><td class="n">${fmt(p.target)}</td><td class="n">${p.trail_active ? fmt(p.trail_stop) : "–"}</td>
       <td>${esc(p.state)}</td><td class="${p.degraded_data ? "neg" : "pos"}">${p.degraded_data ? "NO QUOTE" : "ok"}</td>
       <td><input type="number" step="0.05" id="x_${p.position_id}" placeholder="exit" style="width:90px;display:inline-block;margin:0">
-        <button class="btn small" data-close="${p.position_id}"><span>Close</span></button></td></tr>`).join("") + `</tbody></table>`;
+        <button class="btn small" data-close="${p.position_id}">Close</button></td></tr>`).join("") + `</tbody></table>`;
   el.querySelectorAll("[data-close]").forEach(b => b.onclick = async () => {
     const v = $("x_" + b.dataset.close).value;
     if (!v) { toast("Enter the price you actually exited at.", "warn"); return; }
@@ -264,7 +280,6 @@ function renderJournal(s) {
   $("journal").innerHTML = (m.trades | 0) === 0 ? `<div class="muted">No closed trades yet.</div>` :
     kv("Trades", m.trades) + kv("Win rate", pct((m.win_rate || 0) * 100)) + kv("Net P&L", rup(m.net_pnl), cls(m.net_pnl)) +
     kv("Gross P&L", rup(m.gross_pnl)) + kv("Total costs", rup(m.total_costs), "neg") +
-    kv("Costs / gross", m.costs_pct_of_gross != null ? pct(m.costs_pct_of_gross * 100) : "–") +
     kv("Expectancy", fmt(m.expectancy_r, 2) + "R") + kv("Max drawdown", rup(m.max_drawdown), "neg") +
     `<div class="mt"><a href="/api/journal.csv" download>Download CSV</a></div>`;
 }
@@ -287,33 +302,176 @@ function renderFeed(items) {
     const c = ["SIGNAL", "EXIT", "CRITICAL"].includes(n.level) ? "neg" : (n.level === "WARNING" ? "warn" : "muted");
     d.innerHTML = `<span class="lvl ${c}">${esc(n.level)}</span> <b>${esc(n.title)}</b><br><span class="muted">${esc((n.body || "").split("\n")[0])}</span>`;
     el.prepend(d);
-    if (["EXIT", "CRITICAL"].includes(n.level)) toast(n.title, "bad");
+    if (n.level === "SIGNAL") { beep(); toast(n.title, "warn"); desk.force = true; }
+    if (["EXIT", "CRITICAL"].includes(n.level)) { toast(n.title, "bad"); desk.force = true; }
   });
   while (el.children.length > 80) el.removeChild(el.lastChild);
 }
-function applyStream(payload) {
-  latest = payload.state;
-  renderBadges(latest); renderWarnings(latest); renderSignal(latest); renderPositions(latest);
-  renderPanels(latest); renderJournal(latest); renderFeed(payload.notifications);
-  if (document.querySelector('[data-tab="home"]').classList.contains("active")) renderHomeJournal(latest);
+
+/* ═══════════════════ LIVE: the multi-instrument desk ════════════════ */
+const desk = { rendered: 0, force: true, sig: {}, open: store.get("desk.open", {}) };
+function hdot(state) { return `<span class="hs ${state === "OK" ? "ok" : (state === "CLOSED" || state === "LAGGING" ? "warn" : (state === "NO DATA" ? "" : "bad"))}"></span>`; }
+function sigNum(l, v, c = "") { return `<div class="sig-num"><small>${l}</small><b class="${c}">${v}</b></div>`; }
+function signalCard(s) {
+  const e = s.economics || {}, sell = s.direction === "short", o = e.option || {};
+  const title = s.kind === "INDEX" ? `BUY ${esc(s.label)} ${o.strike ? fmt(o.strike, 0) : ""} ${esc(o.opt_type || "")} <span class="num" style="font-size:15px">${esc(e.unit_label)}</span>`
+    : `${sell ? "SELL" : "BUY"} ${esc(s.label)} <span class="num" style="font-size:15px">1 share</span>`;
+  return `<div class="card sigcard ${sell ? "sell" : ""} ${s.risk_allowed ? "" : "blocked"}" data-sig="${s.id}">
+    <div class="row between"><div class="sig-title">${title}</div><span class="countdown" data-exp="${esc(s.expires_at)}">…</span></div>
+    <div class="sig-sub">${esc(s.strategy_label || s.strategy)} · ${esc(s.timeframe)} · signal bar ${hhmm(s.bar_ts)} · strength ${fmt(s.strength, 0)}${e.synthetic ? " · <span class='warn'>premium synthetic</span>" : ""}</div>
+    <div class="sig-nums">
+      ${sigNum(s.kind === "INDEX" ? "Est. premium" : "Entry", rup2(e.entry_price))}
+      ${sigNum(s.kind === "INDEX" ? "Premium at stop" : "Stop", rup2(e.stop_price), "neg")}
+      ${sigNum(s.kind === "INDEX" ? "Premium at target" : "Target", e.target_price != null ? rup2(e.target_price) : "trail", "pos")}
+      ${sigNum("Risk ₹ (incl. charges)", rup(e.risk_inr), "neg")}
+      ${sigNum("Net reward ₹", e.reward_inr != null ? rup(e.reward_inr) : "–", "pos")}
+      ${sigNum("Net R/R", fmt(e.rr_net))}
+      ${sigNum("Outlay", rup(e.outlay))}
+      ${s.kind === "INDEX" ? sigNum("Underlying stop / target", `${fmt(e.underlying_stop, 0)} / ${e.underlying_target != null ? fmt(e.underlying_target, 0) : "–"}`) : ""}
+    </div>
+    <pre>${esc(s.text)}</pre>
+    ${s.risk_allowed ? "" : `<div class="warnbar"><b>Blocked by the risk governor:</b> ${esc(s.risk_reason)} — shown for information; do not take it.</div>`}
+    <div class="actions">
+      <label class="inline">Your actual fill <input type="number" step="0.05" id="dfill_${s.id}" placeholder="${fmt(e.entry_price)}" style="width:130px"></label>
+      <button class="btn take" data-take="${s.id}">Trade taken</button>
+      <button class="btn" data-skip="${s.id}">Skipped</button>
+    </div></div>`;
 }
+function positionsTable(ps) {
+  if (!ps.length) return `<div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sleep"/></svg> Flat. Moo is napping until you take a signal.</div>`;
+  return `<table><thead><tr><th>Instrument</th><th>Side</th><th class="n">Entry</th><th class="n">Underlying now</th><th class="n">Stop</th><th class="n">Target</th>
+    <th class="n">R now</th><th class="n">Unrealised</th><th>Advice</th><th class="n">Held</th><th></th></tr></thead><tbody>` +
+    ps.map(p => `<tr><td><b>${esc(p.label)}</b> <span class="dim">${esc(p.strategy)} ${esc(p.timeframe)}${p.option && p.option.strike ? ` · ${fmt(p.option.strike, 0)} ${esc(p.option.opt_type)}` : ""}</span></td>
+      <td>${esc(p.side.replace("_", " "))}</td><td class="n">${fmt(p.entry_price)}</td><td class="n">${fmt(p.last_underlying)}</td>
+      <td class="n">${fmt(p.stop_underlying)}${p.trail_active ? " <span class='dim'>trail</span>" : ""}</td><td class="n">${p.target_underlying != null ? fmt(p.target_underlying) : "–"}</td>
+      <td class="n ${cls(p.r_now)}">${fmt(p.r_now, 2)}R</td><td class="n ${cls(p.unrealized)}">${rup(p.unrealized)}</td>
+      <td class="${p.exit_advice ? "neg pos-advice" : "muted"}">${p.exit_advice ? "EXIT · " + esc(p.exit_advice.replace("_", " ")) : "hold"}</td><td class="n">${p.bars_held} bars</td>
+      <td><input type="number" step="0.05" id="dx_${p.id}" placeholder="exit price" style="width:110px;display:inline-block;margin:0">
+        <button class="btn small danger" data-dclose="${p.id}">Closed</button></td></tr>`).join("") + `</tbody></table>`;
+}
+function accRow(r, isOpen) {
+  const L = r.last || {}, R = r.regime || {}, H = r.health || {}, K = r.risk || {};
+  const chips = (r.strategies || []).map(s => `<span class="schip ${s.verdict !== "none" ? s.verdict : ""} ${s.error ? "err" : ""}" title="${esc(s.reason || "")}">${esc(s.name)}@${esc(s.timeframe)}</span>`).join("");
+  const risk = (latest && latest.risk) || {}, LM = risk.limits || {};
+  const body = `
+    <div class="grid4">
+      <div><h4>Market</h4>${kv("Last", fmt(L.price))}${kv("Day change", spct(L.change_pct), cls(L.change_pct))}${kv("Prev close", fmt(L.prev_close))}
+        ${kv("Last bar", hhmm(L.bar_ts))}${kv("Tracked as", esc(r.tracked))}${kv("Unit", esc(r.unit))}${r.note ? `<div class="hint">${esc(r.note)}</div>` : ""}</div>
+      <div><h4>Regime &amp; volatility</h4>${kv("Regime", esc(R.regime || "–"))}${kv("Trend (EMA20/50)", esc(R.trend || "–"), R.trend === "up" ? "pos" : R.trend === "down" ? "neg" : "")}
+        ${kv("ADX(14)", fmt(R.adx, 1))}${kv("ATR(14)", fmt(R.atr))}${kv("ATR percentile", fmt(R.atr_pct, 0))}${kv("RSI(14)", fmt(R.rsi, 1))}${kv("VWAP", fmt(R.vwap))}${kv("NIFTY bias", fmt(R.mkt_bias, 0))}</div>
+      <div><h4>Risk governor</h4>${kv("Desk state", esc(risk.state || "–"), risk.state === "HALTED" ? "neg" : "pos")}${kv("Trades today (this)", `${K.trades_today || 0}`)}
+        ${kv("Trades today (all)", `${risk.trades_taken || 0}/${LM.max_trades_per_day || "–"}`)}${kv("Open (all)", `${risk.open_positions || 0}/${LM.max_open_positions || "–"}`)}
+        ${kv("Realised today (all)", rup(risk.realized_pnl), cls(risk.realized_pnl))}${kv("Daily loss limit", rup(LM.daily_loss_limit))}${kv("Consecutive losses", `${K.consecutive_losses || 0}`)}
+        ${risk.halt_reason ? `<div class="hint warn">${esc(risk.halt_reason)}</div>` : ""}</div>
+      <div><h4>Data health</h4>${kv("State", hdot(H.state) + esc(H.state || "–"))}${kv("Source", esc(H.source || "–") + (H.delayed ? " (delayed ~15m)" : ""))}${kv("Resolution", `${H.resolution_min || "–"}m`)}
+        ${kv("Bars held", H.bars || 0)}${kv("Bar age", L.age_sec != null ? Math.round(L.age_sec / 60) + " min" : "–")}<div class="hint">${esc(H.note || "")}${H.last_error ? "<br>" + esc(H.last_error) : ""}</div></div>
+    </div>
+    <h4>Strategies running</h4>
+    <div class="tbl">${table([{ l: "Strategy", f: s => `<b>${esc(s.label)}</b> <span class="dim">${esc(s.name)}</span>` }, { l: "TF", k: "timeframe" }, { l: "Last bar", f: s => hhmm(s.last_bar_ts) },
+      { l: "Verdict", f: s => `<span class="schip ${s.verdict !== "none" ? s.verdict : ""}">${esc(s.verdict)}</span>`, }, { l: "Why", f: s => esc(s.error || s.reason || "") },
+      { l: "Strength", n: 1, f: s => fmt(s.strength, 0) }, { l: "Signals today", n: 1, k: "signals_today" }], r.strategies || [])}</div>
+    ${(r.recent || []).length ? `<h4>Recent signals</h4>` + table([{ l: "When", f: x => tsf(x.created_at) }, { l: "Side", k: "side" }, { l: "Strategy", f: x => `${esc(x.strategy)} ${esc(x.timeframe)}` }, { l: "Status", k: "status" }], r.recent) : ""}`;
+  return `<div class="acc-row ${isOpen ? "open" : ""}" data-key="${esc(r.key)}">
+    <div class="acc-head" data-toggle="${esc(r.key)}">
+      <div class="acc-name"><b>${esc(r.label)}</b><span class="dim">${r.kind === "INDEX" ? "index · options" : "stock"} · ${esc(r.unit)}</span></div>
+      <div class="acc-price">${fmt(L.price)}<span class="${cls(L.change_pct)}">${spct(L.change_pct)}</span></div>
+      <div class="acc-strats">${chips}</div>
+      <div class="state-badge st-${esc(r.state)}">${esc(r.state)}</div>
+      <div class="acc-caret">▾</div>
+    </div>
+    <div class="acc-body">${body}</div></div>`;
+}
+function renderDesk(d) {
+  if (!d) { $("desk-source").textContent = "Live Desk not running (see Settings / log)"; return; }
+  if (d.booting) { $("desk-source").textContent = "Live Desk starting — first bars arriving…"; return; }
+  const now = Date.now();
+  if (!desk.force && now - desk.rendered < 4000) return;
+  desk.rendered = now; desk.force = false;
+  const src = d.source || {}, ses = d.session || {};
+  $("desk-source").textContent = `${src.name} · ${src.resolution} bars${src.delayed ? " · delayed ~15 min" : " · live"} · poll ${src.poll_seconds}s · ` +
+    `${ses.open ? "market open" : (ses.trading_day ? "market closed" : "holiday / weekend")} · ${ses.entries_allowed ? "entries allowed" : "no new entries"} · updated ${hhmm(d.updated_at)}` +
+    (src.last_error ? ` · ⚠ ${src.last_error.slice(0, 80)}` : "");
+  const risk = d.risk || {};
+  $("desk-risk-line").textContent = `risk ${risk.state || "–"} · realised ${rup(risk.realized_pnl)} · ${risk.trades_taken || 0} trade(s) today`;
+  // positions (re-render only when something changed)
+  const psig = JSON.stringify((d.positions || []).map(p => [p.id, p.exit_advice, p.stop_underlying, p.last_underlying, p.unrealized]));
+  if (desk.sig.pos !== psig) {
+    desk.sig.pos = psig;
+    $("desk-positions").innerHTML = positionsTable(d.positions || []);
+    $("desk-positions").querySelectorAll("[data-dclose]").forEach(b => b.onclick = async () => {
+      const v = $("dx_" + b.dataset.dclose).value;
+      if (!v) { toast("Enter the price you actually exited at.", "warn"); return; }
+      const r = await api(`/api/desk/position/${b.dataset.dclose}/close`, { exit_price: Number(v), reason: "MANUAL" });
+      toast(`Closed: net ${rup(r.net_pnl)}`, r.net_pnl >= 0 ? "ok" : "bad"); desk.force = true; renderHomeJournal();
+    });
+  }
+  const ssig = JSON.stringify((d.signals || []).map(s => s.id));
+  if (desk.sig.sig !== ssig) {
+    desk.sig.sig = ssig;
+    $("desk-signals").innerHTML = (d.signals || []).map(signalCard).join("");
+    $("desk-signals").querySelectorAll("[data-take]").forEach(b => b.onclick = async () => {
+      const f = $("dfill_" + b.dataset.take).value;
+      const r = await api(`/api/desk/signal/${b.dataset.take}/ack`, { action: "TAKE", fill_price: f ? Number(f) : null, source: "dashboard" });
+      toast(r.message, r.accepted ? "ok" : "warn"); desk.force = true;
+    });
+    $("desk-signals").querySelectorAll("[data-skip]").forEach(b => b.onclick = async () => {
+      await api(`/api/desk/signal/${b.dataset.skip}/ack`, { action: "SKIP", source: "dashboard" }); desk.force = true;
+    });
+  }
+  $("desk-context").innerHTML = (d.context || []).map(c => `<div class="tile ${c.manual ? "manual" : ""}" title="${esc(c.note || "")}"><small>${esc(c.label)}</small>
+    <b>${c.last != null ? fmt(c.last, c.key === "USDINR" ? 3 : 2) : "–"} <span class="${cls(c.change_pct)}" style="font-size:14px">${spct(c.change_pct)}</span></b>
+    <i>${c.last != null ? `${esc(c.source || "")} · ${hhmm(c.as_of)}` : (c.manual ? "manual slot — POST /api/desk/context" : "no data")}</i></div>`).join("");
+  const draw = (el, rows) => {
+    const have = new Map([...el.querySelectorAll(".acc-row")].map(x => [x.dataset.key, x]));
+    rows.forEach(r => {
+      const sig = JSON.stringify([r.state, r.last, r.health && r.health.state, r.strategies, r.signal && r.signal.id, r.position && [r.position.id, r.position.exit_advice, r.position.stop_underlying], r.risk, r.regime]);
+      const open = !!desk.open[r.key];
+      const ex = have.get(r.key);
+      if (ex && ex.dataset.sig === sig) { ex.classList.toggle("open", open); return; }
+      const tmp = document.createElement("div"); tmp.innerHTML = accRow(r, open);
+      const node = tmp.firstElementChild; node.dataset.sig = sig;
+      if (ex) ex.replaceWith(node); else el.appendChild(node);
+    });
+  };
+  draw($("desk-indices"), d.indices || []); draw($("desk-stocks"), d.stocks || []);
+  $("desk-idx-count").textContent = `${(d.indices || []).length} tracked · ${(d.indices || []).reduce((a, r) => a + (r.strategies || []).length, 0)} strategies`;
+  $("desk-stk-count").textContent = `${(d.stocks || []).length} tracked · ${(d.stocks || []).reduce((a, r) => a + (r.strategies || []).length, 0)} strategies`;
+}
+document.addEventListener("click", (e) => {
+  const h = e.target.closest("[data-toggle]"); if (!h) return;
+  const k = h.dataset.toggle; desk.open[k] = !desk.open[k]; store.set("desk.open", desk.open);
+  h.parentElement.classList.toggle("open", desk.open[k]);
+});
 setInterval(() => {
+  document.querySelectorAll("[data-exp]").forEach(el => {
+    const left = Math.max(0, Math.round((new Date(el.dataset.exp) - Date.now()) / 1000));
+    el.textContent = left ? `valid ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : "expired";
+    el.classList.toggle("urgent", left < 60);
+  });
   if (!latest || !latest.active_signal) return;
   latest.signal_seconds_remaining = Math.max(0, (latest.signal_seconds_remaining || 0) - 1);
   const el = $("cd"); if (el) { const v = Math.round(latest.signal_seconds_remaining); el.textContent = v + "s"; el.classList.toggle("urgent", v < 20); }
 }, 1000);
-setInterval(renderGates, 30000);
+
+/* ── stream ──────────────────────────────────────────────────────────── */
+function applyStream(payload) {
+  latest = payload.state;
+  renderBadges(latest); renderWarnings(latest); renderSignal(latest); renderPositions(latest);
+  renderPanels(latest); renderJournal(latest); renderFeed(payload.notifications);
+  if (document.querySelector('[data-tab="live"]').classList.contains("active")) renderDesk(latest.desk);
+}
 function connect() {
   const es = new EventSource("/api/stream");
   es.onmessage = e => { $("conn").textContent = " · live"; try { applyStream(JSON.parse(e.data)); } catch (err) {} };
   es.onerror = () => { $("conn").textContent = " · reconnecting…"; es.close(); setTimeout(connect, 3000); };
 }
+setInterval(renderGates, 30000);
 $("haltBtn").onclick = () => { if (confirm("Halt trading? No new signals will fire until you clear it.")) api("/api/risk/halt", {}); };
 $("resetBtn").onclick = () => { if (confirm("Clear the halt and resume signalling?")) api("/api/risk/reset", {}); };
-tabLoaders.live = renderGates;
+tabLoaders.live = () => { renderGates(); desk.force = true; if (latest) renderDesk(latest.desk); };
 
 /* ═══════════════════════════════ LAB ════════════════════════════════ */
-const lab = { strategies: [], instruments: [], cat: store.get("lab.cat", "OPTIONS"), runs: [], selected: null, poll: null };
+const lab = { strategies: [], instruments: [], focus: [], focusTfs: [], cat: store.get("lab.cat", "DESK"), runs: [], waiting: null, poll: null, shown: null };
 const COMMON_EXITS = new Set(["stop_atr_min", "stop_atr_max", "min_risk_pct", "stop_datr_min", "max_risk_pct", "target_r", "trail_atr_mult",
   "trail_atr_period", "trail_activate_r", "partial_r", "partial_frac", "breakeven_after_partial", "max_bars", "exit_time"]);
 const COMMON_FILTERS = new Set(["allow_long", "allow_short", "entry_start", "entry_end", "min_strength", "market_filter", "regime_filter",
@@ -323,21 +481,26 @@ const mins = (tf) => tf === "1d" ? 375 : parseInt(tf, 10);
 
 async function loadLab() {
   if (!lab.strategies.length) {
-    const [s, i] = await Promise.all([api("/api/lab/strategies"), api("/api/lab/instruments")]);
+    const [s, i, f] = await Promise.all([api("/api/lab/strategies"), api("/api/lab/instruments"), api("/api/lab/focus")]);
     lab.strategies = s.strategies; lab.instruments = i.instruments.filter(x => x.tradeable);
-    renderCats(); renderInstruments(); renderStrategies(); onStrategyChange();
+    lab.focus = f.instruments; lab.focusTfs = f.timeframes;
+    renderCats(); renderInstruments(); renderStrategies(); onStrategyChange(); renderSweepForm();
   }
   refreshRuns();
 }
 function renderCats() {
-  const cats = ["OPTIONS", "FUTURES", "STOCK", "CURRENCY"];
-  $("lab-cats").innerHTML = cats.map(c => `<span class="chip ${c === lab.cat ? "active" : ""}" data-cat="${c}">${c}</span>`).join("");
+  const cats = [["DESK", "Desk watchlist"], ["OPTIONS", "Options"], ["FUTURES", "Futures"], ["STOCK", "Stocks"], ["CURRENCY", "Currency"]];
+  $("lab-cats").innerHTML = cats.map(([c, l]) => `<span class="chip ${c === lab.cat ? "active" : ""}" data-cat="${c}">${l}</span>`).join("");
   $("lab-cats").querySelectorAll(".chip").forEach(ch => ch.onclick = () => { lab.cat = ch.dataset.cat; store.set("lab.cat", lab.cat); renderCats(); renderInstruments(); onStrategyChange(); });
 }
+function labList() {
+  if (lab.cat === "DESK") { const order = new Map(lab.focus.map((k, i) => [k, i])); return lab.instruments.filter(i => order.has(i.key)).sort((a, b) => order.get(a.key) - order.get(b.key)); }
+  return lab.instruments.filter(i => i.category === lab.cat);
+}
 function renderInstruments() {
-  const list = lab.instruments.filter(i => i.category === lab.cat);
+  const list = labList();
   const prev = store.get("lab.inst." + lab.cat, null);
-  $("lab-instrument").innerHTML = list.map(i => `<option value="${i.key}" ${i.key === prev ? "selected" : ""}>${esc(i.label)}</option>`).join("");
+  $("lab-instrument").innerHTML = list.map(i => `<option value="${i.key}" ${i.key === prev ? "selected" : ""}>${esc(i.label)}${lab.cat === "DESK" ? ` (${i.category.toLowerCase()})` : ""}</option>`).join("");
   onInstrumentChange();
 }
 function currentInstrument() { return lab.instruments.find(i => i.key === $("lab-instrument").value); }
@@ -352,15 +515,16 @@ function onInstrumentChange() {
     (inst.category === "OPTIONS" ? ` · <span class="warn">premiums are Black-76 synthetic</span>` : "") +
     (inst.has_volume ? "" : " · no volume → volume filters neutral");
   const allowed = TF_CANDIDATES.filter(tf => tf === "1d" ? !!cov["1d"] : bases.some(b => mins(tf) % mins(b) === 0 && mins(tf) >= mins(b)));
-  const prevTf = store.get("lab.tf", "5m");
+  const prevTf = store.get("lab.tf", "15m");
   $("lab-tf").innerHTML = (allowed.length ? allowed : ["5m"]).map(tf => `<option ${tf === prevTf ? "selected" : ""}>${tf}</option>`).join("");
   if (cov["1d"]) { const c = Object.values(cov); const first = c.map(x => x.first).sort()[0]; $("lab-start").min = first; }
   renderStrategies();
 }
 function renderStrategies() {
   const prev = store.get("lab.strategy", $("lab-strategy").value || "ema_cross");
+  const inst = currentInstrument(), cat = inst ? inst.category : lab.cat;
   $("lab-strategy").innerHTML = lab.strategies.map(s => {
-    const sug = (s.suitable_for || []).includes(lab.cat) ? " ★" : "";
+    const sug = (s.suitable_for || []).includes(cat) ? " ★" : "";
     return `<option value="${s.name}" ${s.name === prev ? "selected" : ""}>${esc(s.label)}${sug}</option>`; }).join("");
 }
 function currentStrategy() { return lab.strategies.find(s => s.name === $("lab-strategy").value); }
@@ -405,52 +569,78 @@ function labBody() {
   const tf = $("lab-tf").value; store.set("lab.tf", tf);
   return { strategy: $("lab-strategy").value, instrument_key: $("lab-instrument").value, timeframe: tf, params: collectParams(),
     start: $("lab-start").value || null, end: $("lab-end").value || null, slippage_pct: parseFloat($("lab-slip").value) || 0.03,
-    cost_multiplier: parseFloat($("lab-costx").value) || 1 };
+    cost_multiplier: parseFloat($("lab-costx").value) || 1, sentiment_mode: $("lab-sent").value || "off" };
 }
 $("lab-instrument").onchange = onInstrumentChange;
 $("lab-strategy").onchange = () => onStrategyChange(false);
-$("lab-reset").onclick = () => onStrategyChange(true);
-$("lab-run").onclick = async () => { const r = await api("/api/lab/backtest", labBody()); toast("Backtest #" + r.run_id + " queued", "ok"); lab.selected = r.run_id; startPoll(); };
-$("lab-opt").onclick = async () => { const b = labBody(); b.kind = "optimize"; b.trials = parseInt($("lab-trials").value, 10) || 40; const r = await api("/api/lab/optimize", b); toast("Optimizer #" + r.run_id + " queued", "ok"); lab.selected = r.run_id; startPoll(); };
-$("lab-wf").onclick = async () => { const b = labBody(); b.kind = "walkforward"; b.trials = parseInt($("lab-trials").value, 10) || 40; const r = await api("/api/lab/optimize", b); toast("Walk-forward #" + r.run_id + " queued", "ok"); lab.selected = r.run_id; startPoll(); };
-$("lab-runs-refresh").onclick = refreshRuns;
-
+$("lab-reset").onclick = () => { onStrategyChange(true); toast("Parameters reset to defaults", "ok"); };
+async function submit(kind) {
+  const body = labBody();
+  let r;
+  if (kind === "single") r = await api("/api/lab/backtest", body);
+  else {
+    const win = ($("lab-wfwin").value || "").split("/").map(x => parseInt(x, 10)).filter(x => !Number.isNaN(x));
+    r = await api("/api/lab/optimize", { ...body, kind, trials: parseInt($("lab-trials").value, 10) || 40,
+      is_days: kind === "walkforward" && win.length === 2 ? win[0] : null, oos_days: kind === "walkforward" && win.length === 2 ? win[1] : null });
+  }
+  lab.waiting = r.run_id; lab.shown = null;
+  $("lab-status").innerHTML = `run <b>#${r.run_id}</b> queued… <span class="muted">(results are saved; see Runs)</span>`;
+  showSub("result");
+  $("lab-result").innerHTML = `<div class="card empty"><svg class="mascot lg bounce"><use href="#m-ichi"/></svg><div><b>Run #${r.run_id} is working…</b><br><span class="muted" id="lab-progress">queued</span></div></div>`;
+  startPoll();
+}
+$("lab-run").onclick = () => submit("single").catch(() => {});
+$("lab-opt").onclick = () => submit("optimize").catch(() => {});
+$("lab-wf").onclick = () => submit("walkforward").catch(() => {});
 function startPoll() { if (lab.poll) return; lab.poll = setInterval(refreshRuns, 2000); refreshRuns(); }
 async function refreshRuns() {
-  const j = await api("/api/lab/runs?limit=40"); lab.runs = j.runs;
-  const busy = lab.runs.some(r => r.status === "QUEUED" || r.status === "RUNNING");
+  const r = await api("/api/lab/runs?limit=80"); lab.runs = r.runs;
+  renderRuns(); renderSweeps();
+  const busy = lab.runs.some(x => x.status === "RUNNING" || x.status === "QUEUED");
   if (!busy && lab.poll) { clearInterval(lab.poll); lab.poll = null; }
-  $("lab-status").innerHTML = busy ? `<span class="warn">working…</span> ` + lab.runs.filter(r => r.status === "RUNNING").map(r => `#${r.id} ${esc(r.message || "")}`).join(" · ") : "";
-  $("lab-runs").innerHTML = table([
-    { l: "#", k: "id", n: 1 }, { l: "Kind", k: "kind" }, { l: "Label", f: r => esc(r.label || "") },
-    { l: "Status", f: r => r.status === "RUNNING" ? `RUNNING <div class="progress"><i style="width:${Math.round((r.progress || 0) * 100)}%"></i></div>` : esc(r.status), c: r => r.status === "FAILED" ? "neg" : (r.status === "DONE" ? "pos" : "warn") },
-    { l: "Trades", n: 1, f: r => r.metrics ? fmt(r.metrics.trades, 0) : "–" },
-    { l: "Net ₹", n: 1, f: r => r.metrics ? rup(r.metrics.net_pnl) : "–", c: r => r.metrics ? cls(r.metrics.net_pnl) : "" },
-    { l: "PF", n: 1, f: r => r.metrics ? fmt(r.metrics.profit_factor) : "–" },
-    { l: "Exp R", n: 1, f: r => r.metrics ? fmt(r.metrics.expectancy_r, 3) : "–" },
-    { l: "When", f: r => tsf(r.created_at) },
-  ], lab.runs, { rowClass: r => "click" + (r.id === lab.selected ? " sel" : ""), empty: "No runs yet — set up a backtest on the left." });
-  $("lab-runs").querySelectorAll("tr.click").forEach(tr => tr.onclick = () => { lab.selected = lab.runs[+tr.dataset.i].id; refreshRuns(); showRun(lab.selected); });
-  const sel = lab.runs.find(r => r.id === lab.selected);
-  if (sel && sel.status === "DONE" && $("lab-result").dataset.run !== String(sel.id)) showRun(sel.id);
-  if (sel && sel.status === "FAILED") $("lab-result").innerHTML = `<div class="card"><h2>Run #${sel.id} failed</h2><div class="neg">${esc(sel.message)}</div></div>`;
+  if (busy && !lab.poll) lab.poll = setInterval(refreshRuns, 2000);
+  if (lab.waiting) {
+    const w = lab.runs.find(x => x.id === lab.waiting);
+    if (w && (w.status === "RUNNING" || w.status === "QUEUED")) { const p = $("lab-progress"); if (p) p.textContent = `${Math.round((w.progress || 0) * 100)}% · ${w.message || ""}`; }
+    if (w && w.status === "DONE") { lab.waiting = null; $("lab-status").innerHTML = `run <b>#${w.id}</b> done · ${esc(w.message || "")}`; showRun(w.id); }
+    if (w && w.status === "FAILED") { lab.waiting = null; $("lab-status").innerHTML = `<span class="neg">run #${w.id} failed</span>`; $("lab-result").innerHTML = `<div class="card"><div class="empty"><svg class="mascot lg"><use href="#m-cow-sweat"/></svg><div><b>Run #${w.id} failed.</b><br>${esc(w.message)}</div></div></div>`; }
+  }
+}
+function renderRuns() {
+  const rows = lab.runs.filter(x => x.kind !== "sweep" || true);
+  $("lab-runs").innerHTML = table([{ l: "#", k: "id", n: 1 }, { l: "Kind", f: x => esc(x.kind) }, { l: "Label", f: x => esc(x.label || "") },
+    { l: "Status", f: x => x.status === "RUNNING" ? `RUNNING <div class="progress"><i style="width:${Math.round((x.progress || 0) * 100)}%"></i></div>` : esc(x.status), c: x => x.status === "FAILED" ? "neg" : (x.status === "DONE" ? "pos" : "") },
+    { l: "Trades", n: 1, f: x => x.metrics && x.metrics.trades != null ? x.metrics.trades : (x.metrics && x.metrics.done != null ? `${x.metrics.done}/${x.metrics.combos}` : "–") },
+    { l: "Net ₹", n: 1, f: x => x.metrics && x.metrics.net_pnl != null ? rup(x.metrics.net_pnl) : "–", c: x => x.metrics ? cls(x.metrics.net_pnl) : "" },
+    { l: "PF", n: 1, f: x => x.metrics && x.metrics.profit_factor != null ? fmt(x.metrics.profit_factor) : "–" },
+    { l: "Exp R", n: 1, f: x => x.metrics && x.metrics.expectancy_r != null ? fmt(x.metrics.expectancy_r, 3) : "–" },
+    { l: "When", f: x => tsf(x.created_at) }], rows, { empty: "No runs yet.", rowClass: x => "click" + (x.id === lab.shown ? " sel" : "") });
+  $("lab-runs").querySelectorAll("tr.click").forEach(tr => tr.onclick = () => { const run = rows[+tr.dataset.i]; if (run.status === "DONE" || run.status === "FAILED") { showSub("result"); showRun(run.id); } });
 }
 async function showRun(id) {
   const r = await api(`/api/lab/runs/${id}`);
+  lab.shown = id; renderRuns();
   const el = $("lab-result"); el.dataset.run = String(id);
+  if (r.status === "FAILED") { el.innerHTML = `<div class="card"><div class="empty"><svg class="mascot lg"><use href="#m-cow-sweat"/></svg><div><b>Run #${id} failed.</b><br>${esc(r.message || "")}</div></div></div>`; return; }
   if (r.status !== "DONE") { el.innerHTML = `<div class="card"><h2>Run #${id}</h2><div class="muted">${esc(r.status)} ${esc(r.message || "")}</div></div>`; return; }
-  if (r.kind === "single") renderBacktest(r); else renderOpt(r);
+  if (r.kind === "single") renderBacktest(r); else if (r.kind === "sweep") renderSweepResult(r); else renderOpt(r);
 }
-function tile(l, v, i = "", c = "") { return `<div class="tile"><small>${l}</small><b class="${c}">${v}</b><i>${i}</i></div>`; }
+function verdictOf(m) {
+  if ((m.trades || 0) < 20) return ["meh", "TOO FEW TRADES", "m-cow"];
+  if (m.profit_factor >= 1.2 && m.expectancy_r > 0.05) return ["good", "POSITIVE", "m-cow-cheer"];
+  if (m.profit_factor > 1) return ["meh", "MARGINAL", "m-cow"];
+  return ["bad", "NEGATIVE", "m-cow-sweat"];
+}
 function renderBacktest(r) {
   const m = r.metrics || {}, a = r.artifacts || {}, cfg = r.config || {}, tp = m.thirty_pct_rule || {};
   const el = $("lab-result");
-  const verdict = (m.trades || 0) < 20 ? ["meh", "TOO FEW TRADES"] : (m.profit_factor >= 1.2 && m.expectancy_r > 0.05 ? ["good", "POSITIVE"] : (m.profit_factor > 1 ? ["meh", "MARGINAL"] : ["bad", "NEGATIVE"]));
+  const [vc, vt, vm] = verdictOf(m);
+  const sent = cfg.sentiment_mode && cfg.sentiment_mode !== "off" ? ` · sentiment ${esc(cfg.sentiment_mode)} (${m.sentiment_blocked_long || 0}/${m.sentiment_blocked_short || 0} blocked, ${m.sentiment_scores_used || 0} scores)` : "";
   el.innerHTML = `
     <div class="card">
       <div class="row between"><h2>#${r.id} · ${esc(cfg.strategy)} on ${esc(cfg.instrument_key)} · ${esc(cfg.timeframe)}
-        <small>${esc(m.category)} · unit ${m.unit} · ${esc(m.pricing)}${m.costs_unverified ? " · costs unverified" : ""}</small></h2>
-        <span class="verdict ${verdict[0]}">${verdict[1]}</span></div>
+        <small>${esc(m.category)} · unit ${m.unit} · ${esc(m.pricing)}${m.costs_unverified ? " · costs unverified" : ""}${sent}</small></h2>
+        <span class="row"><svg class="mascot"><use href="#${vm}"/></svg><span class="verdict ${vc}">${vt}</span></span></div>
       <div class="tiles">
         ${tile("Net P&L", rup(m.net_pnl), "after all charges", cls(m.net_pnl))}
         ${tile("Trades", fmt(m.trades, 0), `${m.long_trades || 0} long / ${m.short_trades || 0} short`)}
@@ -460,14 +650,15 @@ function renderBacktest(r) {
         ${tile("Max drawdown", rup(m.max_drawdown_inr), pct(m.max_drawdown_pct) + " of ref capital", "neg")}
         ${tile("Sharpe", fmt(m.sharpe), m.sharpe_note || `sortino ${fmt(m.sortino)}`)}
         ${tile("Costs", rup(m.costs), `${pct(m.cost_share_pct, 0)} of gross moves`)}
-        ${tile("Longest losing run", fmt(m.max_consec_losses, 0), `avg hold ${fmt(m.avg_bars_held, 1)} bars`)}
-        ${tile("Setups → signals", `${(m.setups_long || 0) + (m.setups_short || 0)} → ${(m.signals_long || 0) + (m.signals_short || 0)}`, `${m.candidates || 0} candidates filled`)}
       </div>
-      ${tp.payoff !== undefined ? `<div class="notice"><b>30% rule</b> · payoff ${fmt(tp.payoff)} (need ≥ ${fmt(tp.payoff_needed_for_30pct)}) · break-even win rate ${pct(tp.breakeven_win_rate)} ·
-        PF at a 30% win rate <b class="${tp.pf_at_30pct_win_rate >= 1.1 ? "pos" : "neg"}">${fmt(tp.pf_at_30pct_win_rate)}</b> — ${esc(tp.verdict)}</div>` : ""}
-      <div id="plot-eq" class="plot"></div>
+      ${tp.payoff !== undefined ? `<div class="notice"><b>30 % rule</b> · payoff ${fmt(tp.payoff)} (need ≥ ${fmt(tp.payoff_needed_for_30pct)}) · break-even win rate ${pct(tp.breakeven_win_rate)} ·
+        PF at a 30 % win rate <b class="${tp.pf_at_30pct_win_rate >= 1.1 ? "pos" : "neg"}">${fmt(tp.pf_at_30pct_win_rate)}</b> — ${esc(tp.verdict)}</div>` : ""}
+      <h3>Underlying with entries (▲▼ B/S) and exits (● R) <small>scroll to zoom · click a trade below to focus it</small></h3>
       <div id="plot-px" class="plot tall"></div>
-      <div id="plot-month" class="plot" style="height:220px"></div>
+      <div class="grid2">
+        <div><h3>Cumulative net P&L (₹) and drawdown</h3><div id="plot-eq" class="plot"></div></div>
+        <div><h3>Monthly net P&L (₹)</h3><div id="plot-month" class="plot"></div></div>
+      </div>
     </div>
     <div class="grid2">
       <div class="card"><h2>By exit reason</h2><div class="scroll">${bdTable(a.breakdowns && a.breakdowns.exit_reason, "exit_reason")}</div>
@@ -475,11 +666,16 @@ function renderBacktest(r) {
       <div class="card"><h2>By hour</h2><div class="scroll">${bdTable(a.breakdowns && a.breakdowns.hour, "hour")}</div>
         <h2 class="mt">By weekday</h2><div class="scroll">${bdTable(a.breakdowns && a.breakdowns.weekday, "weekday")}</div></div>
     </div>
-    <div class="card"><h2>Trades <small>${(r.trades || []).length}</small></h2><div class="scroll" style="max-height:420px;overflow:auto">${tradesTable(r.trades || [])}</div></div>
-    <div class="card"><details><summary class="muted">Configuration</summary><pre class="code">${esc(JSON.stringify(cfg, null, 2))}</pre></details></div>`;
-  drawEquity("plot-eq", a.equity || [], cfg.reference_capital);
-  drawPrice("plot-px", a.chart || {});
-  drawMonthly("plot-month", a.monthly || []);
+    <div class="card"><h2>Trades <small>${(r.trades || []).length} · click a row to focus it on the chart</small></h2><div class="scroll" style="max-height:420px;overflow:auto" id="lab-trades">${tradesTable(r.trades || [])}</div></div>
+    <div class="card"><details><summary class="muted">Configuration · ${Object.keys(cfg.params || {}).length ? "custom parameters" : "default parameters"}</summary><pre class="code">${esc(JSON.stringify(cfg, null, 2))}</pre></details></div>`;
+  const ch = a.chart || {};
+  if (C()) {
+    C().candles($("plot-px"), ch.candles || [], ch.trades || [], { fit: "last" });
+    C().equity($("plot-eq"), a.equity || [], cfg.reference_capital || 100000);
+    C().bars($("plot-month"), (a.monthly || []).map(x => x.month), (a.monthly || []).map(x => x.pnl));
+  }
+  const ctr = ch.trades || [];
+  $("lab-trades").querySelectorAll("tr").forEach((tr, i) => { if (i === 0) return; tr.classList.add("click"); tr.onclick = () => { const t = ctr[i - 1]; if (t && C()) { C().focusTrade($("plot-px"), t); window.scrollTo({ top: $("plot-px").getBoundingClientRect().top + window.scrollY - 80, behavior: "smooth" }); } }; });
 }
 function bdTable(rows, key) {
   return table([{ l: key, k: key }, { l: "Trades", n: 1, f: r => fmt(r.trades, 0) }, { l: "Win %", n: 1, f: r => pct(r.win_rate) },
@@ -495,41 +691,10 @@ function tradesTable(tr) {
     { l: "MFE/MAE R", n: 1, f: r => `${fmt(r.mfe_r, 1)} / ${fmt(r.mae_r, 1)}` }, { l: "Bars", n: 1, k: "bars_held" },
   ], tr, { empty: "No trades." });
 }
-function drawEquity(id, eq, cap) {
-  const el = $(id); if (!plotReady()) { el.innerHTML = `<div class="muted" style="padding:12px">Charts need plotly.js (CDN). Offline?</div>`; return; }
-  if (!eq.length) { el.innerHTML = `<div class="muted" style="padding:12px">No equity (no trades).</div>`; return; }
-  const x = eq.map(e => e[0]), y = eq.map(e => e[1] - cap); let peak = -Infinity; const dd = y.map(v => { peak = Math.max(peak, v); return v - peak; });
-  Plotly.newPlot(el, [
-    { x, y, type: "scatter", mode: "lines", name: "P&L", line: { color: cssVar("--cyan"), width: 2 }, fill: "tozeroy", fillcolor: "rgba(34,211,238,.10)" },
-    { x, y: dd, type: "scatter", mode: "lines", name: "Drawdown", line: { color: cssVar("--bad"), width: 1 }, fill: "tozeroy", fillcolor: "rgba(255,83,112,.15)", yaxis: "y2" },
-  ], { ...PLOT_LAYOUT(), title: { text: "Cumulative net P&L (₹) and drawdown", font: { size: 13 } }, yaxis: { title: "₹", gridcolor: cssVar("--grid"), domain: [0.35, 1] }, yaxis2: { title: "DD ₹", gridcolor: cssVar("--grid"), domain: [0, 0.3] } }, { responsive: true, displaylogo: false });
-}
-function drawPrice(id, ch) {
-  const el = $(id); if (!plotReady()) { el.innerHTML = ""; return; }
-  const c = ch.candles || []; if (!c.length) { el.innerHTML = `<div class="muted" style="padding:12px">No bars for the chart.</div>`; return; }
-  const t = c.map(b => new Date(b[0] * 1000));
-  const traces = [{ x: t, open: c.map(b => b[1]), high: c.map(b => b[2]), low: c.map(b => b[3]), close: c.map(b => b[4]), type: "candlestick", name: "underlying",
-    increasing: { line: { color: cssVar("--ok") } }, decreasing: { line: { color: cssVar("--bad") } } }];
-  const tr = ch.trades || [];
-  if (tr.length) {
-    traces.push({ x: tr.map(x => new Date(x.entry_ts * 1000)), y: tr.map(x => x.entry), mode: "markers", type: "scatter", name: "entry",
-      marker: { symbol: tr.map(x => x.side === "LONG" ? "triangle-up" : "triangle-down"), size: 12, color: tr.map(x => x.side === "LONG" ? cssVar("--cyan") : cssVar("--accent2")), line: { width: 1, color: cssVar("--panel") } },
-      text: tr.map(x => `${x.side} in ${fmt(x.entry)} → ${fmt(x.exit)} (${x.reason}) net ₹${fmt(x.net_pnl, 0)} / ${fmt(x.r, 2)}R`), hoverinfo: "text" });
-    traces.push({ x: tr.map(x => new Date(x.exit_ts * 1000)), y: tr.map(x => x.exit), mode: "markers", type: "scatter", name: "exit",
-      marker: { symbol: "x", size: 10, color: tr.map(x => x.net_pnl > 0 ? cssVar("--ok") : cssVar("--bad")) }, hoverinfo: "skip" });
-  }
-  Plotly.newPlot(el, traces, { ...PLOT_LAYOUT(), title: { text: "Underlying with entries (▲▼) and exits (×)", font: { size: 13 } },
-    xaxis: { gridcolor: cssVar("--grid"), rangeslider: { visible: false }, rangebreaks: [{ bounds: ["sat", "mon"] }, { bounds: [15.5, 9.25], pattern: "hour" }] } }, { responsive: true, displaylogo: false });
-}
-function drawMonthly(id, m) {
-  const el = $(id); if (!plotReady() || !m.length) { el.innerHTML = ""; return; }
-  Plotly.newPlot(el, [{ x: m.map(x => x.month), y: m.map(x => x.pnl), type: "bar", marker: { color: m.map(x => x.pnl >= 0 ? cssVar("--ok") : cssVar("--bad")) } }],
-    { ...PLOT_LAYOUT(), title: { text: "Monthly net P&L (₹)", font: { size: 13 } } }, { responsive: true, displaylogo: false });
-}
 function renderOpt(r) {
   const a = r.artifacts || {}, cfg = r.config || {}, el = $("lab-result");
   const best = a.best_params || {};
-  const applyBtn = `<button class="btn small" id="apply-best"><span>Apply best params to the form</span></button>`;
+  const applyBtn = `<button class="btn small" id="apply-best">Apply best params to the form</button>`;
   if (r.kind === "optimize") {
     const bm = a.best_metrics || {};
     el.innerHTML = `<div class="card"><h2>#${r.id} · optimizer · ${esc(cfg.strategy)} on ${esc(cfg.instrument_key)} ${esc(cfg.timeframe)}
@@ -544,20 +709,92 @@ function renderOpt(r) {
           { l: "PF", n: 1, f: x => fmt(x.profit_factor) }, { l: "expR", n: 1, f: x => fmt(x.expectancy_r, 3) }, { l: "net ₹", n: 1, f: x => rup(x.net_pnl), c: x => cls(x.net_pnl) }],
         a.trials || [])}</div></div>`;
   } else {
-    const o = a.oos_metrics || {}, d = a.default_oos_metrics || {};
-    const v = (o.trades || 0) >= 30 && o.profit_factor >= 1.2 && o.expectancy_r >= 0.05 ? ["good", "PASS-LIKE OOS"] : ((o.trades || 0) >= 15 && o.expectancy_r > 0 && o.profit_factor > 1 ? ["meh", "WATCH"] : ["bad", "FAIL"]);
+    const o = a.oos_metrics || {}, d = a.default_oos_metrics || {}, plan = a.plan || {};
+    const v = (o.trades || 0) >= 30 && o.profit_factor >= 1.2 && o.expectancy_r >= 0.05 ? ["good", "PASS-LIKE OOS", "m-cow-cheer"] : ((o.trades || 0) >= 15 && o.expectancy_r > 0 && o.profit_factor > 1 ? ["meh", "WATCH", "m-cow"] : ["bad", "FAIL", "m-cow-sweat"]);
+    const better = (o.expectancy_r || 0) > (d.expectancy_r || 0);
     el.innerHTML = `<div class="card"><div class="row between"><h2>#${r.id} · walk-forward · ${esc(cfg.strategy)} on ${esc(cfg.instrument_key)} ${esc(cfg.timeframe)}
-      <small>only the out-of-sample folds count</small></h2><span class="verdict ${v[0]}">${v[1]}</span></div>
-      <div class="tiles">${tile("OOS trades", fmt(o.trades, 0))}${tile("OOS win %", pct(o.win_rate))}${tile("OOS PF", fmt(o.profit_factor))}
-        ${tile("OOS exp R", fmt(o.expectancy_r, 3))}${tile("OOS net ₹", rup(o.net_pnl), "", cls(o.net_pnl))}${tile("OOS max DD", rup(o.max_drawdown_inr), "", "neg")}
-        ${tile("Default-params OOS PF", fmt(d.profit_factor), "same windows, untuned")}</div>
+      <small>only the out-of-sample folds count</small></h2><span class="row"><svg class="mascot"><use href="#${v[2]}"/></svg><span class="verdict ${v[0]}">${v[1]}</span></span></div>
+      <div class="plan">${esc(plan.note || "")}${plan.sessions ? ` · ${plan.sessions} sessions (${esc(plan.first)} → ${esc(plan.last)})` : ""}</div>
+      <div class="tiles">${tile("OOS trades", fmt(o.trades, 0), `${plan.folds || (a.folds || []).length} folds`)}${tile("OOS win %", pct(o.win_rate))}${tile("OOS PF", fmt(o.profit_factor))}
+        ${tile("OOS exp R", fmt(o.expectancy_r, 3), "", cls(o.expectancy_r))}${tile("OOS net ₹", rup(o.net_pnl), "", cls(o.net_pnl))}${tile("OOS max DD", rup(o.max_drawdown_inr), "", "neg")}
+        ${tile("Untuned OOS exp R", fmt(d.expectancy_r, 3), `PF ${fmt(d.profit_factor)} · same windows`, cls(d.expectancy_r))}</div>
+      <div class="notice"><b>Reading it:</b> each fold tunes on the in-sample window and is then judged on the next, unseen window. ${better ? "Tuned parameters beat the untuned defaults out of sample — the tuning carries some information." : "Tuned parameters did <b>not</b> beat the untuned defaults out of sample — the optimizer is fitting noise on this data; keep the defaults."}
+        ${(o.trades || 0) < 30 ? " Fewer than 30 OOS trades: treat every number as provisional until Dhan's 5-year history is loaded." : ""}</div>
       <div class="notice"><b>Last fold's parameters</b> <code>${esc(JSON.stringify(best))}</code> ${applyBtn}</div>
       <h3>Folds</h3><div class="scroll">${table([{ l: "#", k: "fold", n: 1 }, { l: "In-sample", k: "is" }, { l: "OOS", k: "oos" }, { l: "IS PF", n: 1, f: x => fmt(x.is_pf) },
         { l: "OOS trades", n: 1, k: "oos_trades" }, { l: "OOS PF", n: 1, f: x => fmt(x.oos_pf) }, { l: "OOS exp R", n: 1, f: x => fmt(x.oos_exp_r, 3), c: x => cls(x.oos_exp_r) },
-        { l: "Default OOS PF", n: 1, f: x => fmt(x.default_oos_pf) }], a.folds || [])}</div></div>`;
+        { l: "Untuned OOS PF", n: 1, f: x => fmt(x.default_oos_pf) }], a.folds || [])}</div></div>`;
   }
-  const b = $("apply-best"); if (b) b.onclick = () => { store.set("lab.params." + cfg.strategy, best); $("lab-strategy").value = cfg.strategy; onStrategyChange(false); toast("Parameters applied", "ok"); location.hash = "#lab"; window.scrollTo(0, 0); };
+  const b = $("apply-best"); if (b) b.onclick = () => { store.set("lab.params." + cfg.strategy, best); $("lab-strategy").value = cfg.strategy; onStrategyChange(false); toast("Parameters applied to the form (also pasteable into config/desk.yaml)", "ok"); window.scrollTo(0, 0); };
 }
+function renderSweepResult(r) {
+  const a = r.artifacts || {}, m = r.metrics || {}, cfg = r.config || {};
+  $("lab-result").innerHTML = `<div class="card"><h2>#${r.id} · sweep <small>${m.done || 0}/${m.combos || cfg.n} runs · ${m.failed || 0} failed · ${m.ranked || 0} ranked · ${m.positive || 0} positive${m.stopped ? " · stopped early" : ""}</small></h2>
+    <div class="notice">Every row is a saved run — click one to open it. The <b>Leaderboard</b> tab ranks all sweeps together.</div>
+    <h3>Best per instrument</h3><div class="scroll">${boardTable(Object.values(a.best_by_instrument || {}))}</div>
+    <h3>Best per strategy</h3><div class="scroll">${boardTable(Object.values(a.best_by_strategy || {}))}</div>
+    <h3>All ranked runs</h3><div class="scroll" style="max-height:520px;overflow:auto">${boardTable(a.leaderboard || [])}</div></div>`;
+  wireBoard($("lab-result"));
+}
+function boardTable(rows) {
+  return table([{ l: "#", k: "run_id", n: 1 }, { l: "Strategy", k: "strategy" }, { l: "Instrument", k: "instrument" }, { l: "TF", k: "timeframe" },
+    { l: "Kind", f: r => r.oos ? "<span class='oos'>OOS</span>" : "IS", c: r => r.oos ? "oos" : "" }, { l: "Trades", n: 1, k: "trades" }, { l: "Win %", n: 1, f: r => pct(r.win_rate) },
+    { l: "PF", n: 1, f: r => fmt(r.profit_factor) }, { l: "Exp R", n: 1, f: r => fmt(r.expectancy_r, 3), c: r => cls(r.expectancy_r) }, { l: "Net ₹", n: 1, f: r => rup(r.net_pnl), c: r => cls(r.net_pnl) },
+    { l: "Max DD ₹", n: 1, f: r => rup(r.max_drawdown_inr) }, { l: "Score", n: 1, f: r => r.score == null ? "<span class='dim'>unranked</span>" : fmt(r.score, 2), c: r => cls(r.score) },
+    { l: "Sent.", f: r => r.sentiment_mode && r.sentiment_mode !== "off" ? esc(r.sentiment_mode) : "" }], rows, { empty: "No ranked runs yet — run a sweep.", rowClass: () => "lead" });
+}
+function wireBoard(root) {
+  root.querySelectorAll("tr.lead").forEach(tr => tr.onclick = () => { const id = parseInt(tr.children[0].textContent, 10); if (id) { showSub("result"); showRun(id); } });
+}
+async function loadBoard() {
+  const q = new URLSearchParams(); if ($("board-kind").value) q.set("kind", $("board-kind").value); if ($("board-cat").value) q.set("category", $("board-cat").value);
+  q.set("min_trades", $("board-min").value || 10);
+  const r = await api("/api/lab/leaderboard?" + q.toString());
+  const s = r.summary || {};
+  $("board-summary").innerHTML = tile("Saved runs", s.runs || 0) + tile("Ranked", s.ranked || 0, `≥ ${$("board-min").value} trades`) + tile("Positive", s.positive || 0, "PF ≥ 1.2 & score > 0", s.positive ? "pos" : "") +
+    tile("Instruments covered", Object.keys(s.best_by_instrument || {}).length) + tile("Strategies covered", Object.keys(s.best_by_strategy || {}).length);
+  $("lab-board").innerHTML = boardTable(r.rows || []);
+  wireBoard($("lab-board"));
+}
+$("board-refresh").onclick = () => loadBoard().catch(() => {});
+["board-kind", "board-cat"].forEach(id => $(id).onchange = () => loadBoard().catch(() => {}));
+function renderSweepForm() {
+  const chips = (el, items, key, labelOf) => {
+    const sel = new Set(store.get("sweep." + key, items));
+    el.innerHTML = items.map(x => `<span class="chip ${sel.has(x) ? "active" : ""}" data-v="${esc(x)}">${esc(labelOf ? labelOf(x) : x)}</span>`).join("");
+    el.querySelectorAll(".chip").forEach(c => c.onclick = () => { c.classList.toggle("active"); store.set("sweep." + key, [...el.querySelectorAll(".chip.active")].map(z => z.dataset.v)); sweepPlan(); });
+  };
+  chips($("sweep-strats"), lab.strategies.map(s => s.name), "strats", x => (lab.strategies.find(s => s.name === x) || {}).label || x);
+  chips($("sweep-insts"), lab.focus, "insts");
+  chips($("sweep-tfs"), lab.focusTfs, "tfs");
+  sweepPlan();
+}
+const sweepSel = (id) => [...$(id).querySelectorAll(".chip.active")].map(z => z.dataset.v);
+function sweepPlan() { const n = sweepSel("sweep-strats").length * sweepSel("sweep-insts").length * sweepSel("sweep-tfs").length; $("sweep-plan").textContent = `${n} runs · roughly ${Math.ceil(n * 1.5 / 60)} min on the Yahoo corpus`; }
+$("sweep-run").onclick = async () => {
+  const body = { strategies: sweepSel("sweep-strats"), instruments: sweepSel("sweep-insts"), timeframes: sweepSel("sweep-tfs"),
+    cost_multiplier: parseFloat($("sweep-costx").value) || 1, sentiment_mode: $("sweep-sent").value };
+  if (!body.strategies.length || !body.instruments.length || !body.timeframes.length) { toast("Pick at least one of each", "warn"); return; }
+  const r = await api("/api/lab/sweep", body);
+  toast(`Sweep #${r.run_id} started: ${r.combos} runs`, "ok"); startPoll();
+};
+function renderSweeps() {
+  const rows = lab.runs.filter(x => x.kind === "sweep");
+  $("lab-sweeps").innerHTML = table([{ l: "#", k: "id", n: 1 }, { l: "Label", f: x => esc(x.label || "") },
+    { l: "Status", f: x => x.status === "RUNNING" ? `RUNNING <div class="progress"><i style="width:${Math.round((x.progress || 0) * 100)}%"></i></div>` : esc(x.status), c: x => x.status === "FAILED" ? "neg" : "" },
+    { l: "Progress", f: x => esc(x.message || "") }, { l: "Positive", n: 1, f: x => x.metrics ? (x.metrics.positive ?? "–") : "–" }, { l: "When", f: x => tsf(x.created_at) },
+    { l: "", f: x => x.status === "RUNNING" || x.status === "QUEUED" ? `<button class="btn small" data-stop="${x.id}">stop</button>` : (x.status === "DONE" ? `<button class="btn small ghost" data-open="${x.id}">open</button>` : "") }],
+    rows, { empty: "No sweeps yet." });
+  $("lab-sweeps").querySelectorAll("[data-stop]").forEach(b => b.onclick = () => api(`/api/lab/runs/${b.dataset.stop}/stop`, {}));
+  $("lab-sweeps").querySelectorAll("[data-open]").forEach(b => b.onclick = () => { showSub("result"); showRun(+b.dataset.open); });
+}
+function showSub(name) {
+  document.querySelectorAll("#lab-subtabs a").forEach(a => a.classList.toggle("active", a.dataset.sub === name));
+  document.querySelectorAll(".lab-results .sub").forEach(s => s.classList.toggle("active", s.dataset.sub === name));
+  if (name === "board") loadBoard().catch(() => {});
+}
+document.querySelectorAll("#lab-subtabs a").forEach(a => a.onclick = () => showSub(a.dataset.sub));
+$("lab-runs-refresh").onclick = refreshRuns;
 tabLoaders.lab = () => loadLab().catch(e => console.error(e));
 
 /* ═══════════════════════════════ DATA ═══════════════════════════════ */
@@ -570,11 +807,43 @@ async function loadData() {
   $("data-jobs").innerHTML = table([{ l: "#", k: "id", n: 1 }, { l: "Kind", k: "kind" },
     { l: "Status", f: j => j.status === "RUNNING" ? `RUNNING <div class="progress"><i style="width:${Math.round((j.progress || 0) * 100)}%"></i></div>` : esc(j.status), c: j => j.status === "FAILED" ? "neg" : "" },
     { l: "Message", f: j => esc(j.message || "") }, { l: "Started", f: j => tsf(j.created_at) },
-    { l: "", f: j => j.status === "RUNNING" ? `<button class="btn small" data-stop="${j.id}"><span>stop</span></button>` : "" }], jobs.jobs, { empty: "No jobs yet." });
+    { l: "", f: j => j.status === "RUNNING" ? `<button class="btn small" data-stop="${j.id}">stop</button>` : "" }], jobs.jobs, { empty: "No jobs yet." });
   $("data-jobs").querySelectorAll("[data-stop]").forEach(b => b.onclick = () => api(`/api/data/jobs/${b.dataset.stop}/stop`, {}));
   if (busy && !dataPoll) dataPoll = setInterval(loadData, 2500);
   if (!busy && dataPoll) { clearInterval(dataPoll); dataPoll = null; }
+  if (!$("eda-series").options.length) {
+    const keys = [...new Set((cov.coverage || []).map(r => r.series_key))];
+    const prev = store.get("eda.series", "BANKNIFTY");
+    $("eda-series").innerHTML = keys.map(k => `<option ${k === prev ? "selected" : ""}>${esc(k)}</option>`).join("");
+    if (keys.length) loadEda().catch(() => {});
+  }
 }
+async function loadEda() {
+  const key = $("eda-series").value, res = $("eda-res").value; store.set("eda.series", key);
+  const [e, corr] = await Promise.all([api(`/api/data/eda?series=${encodeURIComponent(key)}&resolution=${res}`), api("/api/data/correlation")]);
+  const d = e.daily || {}, rs = d.returns_stats || {}, gs = d.gap_stats || {};
+  $("eda-stats").innerHTML = tile("Sessions (daily)", rs.n ?? "–") + tile("Intraday bars", e.bars != null ? Number(e.bars).toLocaleString("en-IN") : "–", res) +
+    tile("Daily σ", pct(rs.std), `mean ${spct(rs.mean, 3)}`) + tile("Up days", pct(rs.positive_pct)) + tile("Skew / kurt", `${fmt(rs.skew)} / ${fmt(rs.kurtosis)}`) +
+    tile("Worst / best day", `${spct(rs.min)} / ${spct(rs.max)}`) + tile("Gap σ", pct(gs.std), `5–95 % ${spct(gs.p05)}…${spct(gs.p95)}`);
+  if (C() && d.dates) {
+    const closePts = d.dates.map((t, i) => ({ time: t, value: d.close[i] }));
+    const series = [{ name: key, points: closePts, color: cssVar("--cyan") }];
+    if (d.vix) series.push({ name: "VIX", points: d.dates.map((t, i) => ({ time: t, value: d.vix[i] })).filter(p => p.value != null), color: cssVar("--accent2"), width: 1, scale: "left" });
+    C().lines($("eda-close"), series, { left: !!d.vix, lastValue: true });
+    const h = d.returns_hist || { edges: [], counts: [] };
+    C().bars($("eda-ret"), h.edges.slice(0, -1).map(x => x.toFixed(1) + "%"), h.counts, { color: (v, i) => (h.edges[i] + h.edges[i + 1]) / 2 >= 0 ? cssVar("--ok") : cssVar("--bad") });
+  }
+  const p = e.profile;
+  if (C() && p) C().bars($("eda-profile"), p.times, p.range_pct, { color: () => cssVar("--violet"), priceFormat: { type: "price", precision: 3, minMove: 0.001 } });
+  const cv = e.coverage;
+  if (C() && cv) C().bars($("eda-cov"), cv.months, cv.sessions, { color: () => cssVar("--cyan") });
+  $("eda-weekday").innerHTML = table([{ l: "Weekday", k: "weekday" }, { l: "Mean return", n: 1, f: r => spct(r.mean_ret, 3), c: r => cls(r.mean_ret) }, { l: "Up %", n: 1, f: r => pct(r.win_pct) }, { l: "Days", n: 1, k: "n" }], e.weekday || [], { empty: "no daily bars" });
+  const ks = corr.keys || [], M = corr.matrix || [];
+  const col = (v) => { if (v == null) return "transparent"; const a = Math.min(1, Math.abs(v)); return v >= 0 ? `rgba(20,131,71,${0.12 + 0.75 * a})` : `rgba(212,31,62,${0.12 + 0.75 * a})`; };
+  $("eda-corr").innerHTML = ks.length ? `<table class="heat"><thead><tr><th></th>${ks.map(k => `<th>${esc(k)}</th>`).join("")}</tr></thead><tbody>` +
+    ks.map((k, i) => `<tr><th style="text-align:right">${esc(k)}</th>${M[i].map(v => `<td style="background:${col(v)}">${v == null ? "" : v.toFixed(2)}</td>`).join("")}</tr>`).join("") + `</tbody></table><div class="hint">${corr.sessions || 0} sessions</div>` : `<div class="muted">Need daily bars for at least two series.</div>`;
+}
+$("eda-go").onclick = () => loadEda().catch(() => {});
 $("data-run").onclick = async () => {
   const series = $("data-series").value.trim().split(/[\s,]+/).filter(Boolean);
   const res = $("data-res").value.trim().split(/[\s,]+/).filter(Boolean);
@@ -589,34 +858,58 @@ $("data-quality").onclick = async () => {
 tabLoaders.data = () => loadData().catch(() => {});
 
 /* ═══════════════════════════ NEWS & SENTIMENT ═══════════════════════ */
+function renderPulse(p) {
+  const comps = p.components || {};
+  const g = p.score == null ? `<div class="gauge"><b class="muted">–</b><div class="lbl">${esc(p.label || "no data")}</div></div>`
+    : `<div class="gauge"><b class="${p.score >= 0.6 ? "pos" : p.score <= 0.4 ? "neg" : "warn"}">${fmt(p.score, 2)}</b><div class="lbl">${esc(p.label)}</div><div class="bar"><i style="margin-left:${Math.round(p.score * 100)}%"></i></div><div class="hint">${tsf(p.at)}</div></div>`;
+  const t = (name, c) => !c ? tile(name, "–", "not available") : (c.score == null ? tile(name, "–", esc(c.note || "")) : tile(name, fmt(c.score, 2), esc(c.note || ""), c.score >= 0.6 ? "pos" : c.score <= 0.4 ? "neg" : ""));
+  $("pulse").innerHTML = g + `<div class="tiles">${t("Breadth", comps.breadth)}${t("Index trend", comps.trend)}${t("India VIX", comps.vix)}${t("NIFTY PCR", comps.pcr)}</div>`;
+}
 async function loadNews() {
-  const [lat, sc, nw] = await Promise.all([api("/api/sentiment/latest"), api("/api/sentiment?limit=100"), api("/api/news?limit=100")]);
+  const [pulse, lat, sc, nw, hist] = await Promise.all([api("/api/sentiment/pulse"), api("/api/sentiment/latest"), api("/api/sentiment?limit=100"), api("/api/news?limit=100"), api("/api/sentiment?scope=MARKET&limit=2000")]);
+  renderPulse(pulse);
   const L = Object.values(lat.latest || {});
-  $("sent-board").innerHTML = L.length ? L.map(x => `<div class="tile"><small>${esc(x.scope)} ${esc(x.symbol || "")}</small>
+  $("sent-board").innerHTML = L.length ? L.map(x => `<div class="tile"><small>${esc(x.scope)} ${esc(x.symbol || "")} · ${esc(x.source || "")}</small>
     <b class="${x.score > 0.1 ? "pos" : (x.score < -0.1 ? "neg" : "")}">${Number(x.score) > 0 ? "+" : ""}${fmt(x.score, 2)}</b><i>${esc(x.horizon || "")} · conf ${fmt(x.confidence, 2)} · ${tsf(x.ts)}</i></div>`).join("")
-    : `<div class="muted">No sentiment yet. Post one below or from your scorer via the API.</div>`;
+    : `<div class="muted">No sentiment yet. The pulse records itself every 15 minutes while the market is open; post or import your own below.</div>`;
+  const bySrc = {};
+  (hist.scores || []).forEach(r => { const k = r.source || "manual"; (bySrc[k] = bySrc[k] || []).push({ time: C() ? C().toT(Math.floor(Date.parse(r.ts) / 1000)) : 0, value: r.score }); });
+  const palette = [cssVar("--cyan"), cssVar("--accent2"), cssVar("--violet"), cssVar("--ok"), cssVar("--bad")];
+  const series = Object.entries(bySrc).map(([k, pts], i) => ({ name: k, points: pts.sort((a, b) => a.time - b.time).filter((p, j, arr) => j === 0 || p.time !== arr[j - 1].time), color: palette[i % palette.length], width: 2 }));
+  if (C()) { if (series.length) C().lines($("sent-chart"), series, { timeVisible: true, lastValue: true }); else { C().dispose($("sent-chart")); $("sent-chart").innerHTML = `<div class="empty-inline" style="padding:14px"><svg class="mascot sm"><use href="#m-cow"/></svg> No MARKET scores recorded yet.</div>`; } }
   $("sent-list").innerHTML = table([{ l: "Time", f: r => tsf(r.ts) }, { l: "Scope", k: "scope" }, { l: "Symbol", k: "symbol" },
-    { l: "Score", n: 1, f: r => fmt(r.score, 2), c: r => cls(r.score) }, { l: "Conf", n: 1, f: r => fmt(r.confidence, 2) }, { l: "Horizon", k: "horizon" }, { l: "Source", k: "source" }, { l: "Note", f: r => esc(r.note || "") }], sc.scores, { empty: "–" });
+    { l: "Score", n: 1, f: r => fmt(r.score, 2), c: r => cls(r.score) }, { l: "Conf", n: 1, f: r => fmt(r.confidence, 2) }, { l: "Horizon", k: "horizon" }, { l: "Source", k: "source" }, { l: "Note", f: r => esc((r.note || "").slice(0, 80)) }], sc.scores, { empty: "–" });
   $("news-list").innerHTML = (nw.items || []).map(n => `<div><span class="lvl ${n.sentiment > 0.1 ? "pos" : (n.sentiment < -0.1 ? "neg" : "muted")}">${n.sentiment == null ? "NEWS" : (n.sentiment > 0 ? "+" : "") + fmt(n.sentiment, 2)}</span>
     <b>${esc(n.headline)}</b> <span class="dim">${tsf(n.ts)} · ${esc(n.source || "")} ${(n.symbols || []).map(esc).join(" ")}</span>
-    ${n.url ? ` <a href="${esc(n.url)}" target="_blank" rel="noopener">link</a>` : ""}<br><span class="muted">${esc((n.body || "").slice(0, 240))}</span></div>`).join("") || `<div class="muted">No news yet.</div>`;
+    ${n.url ? ` <a href="${esc(n.url)}" target="_blank" rel="noopener">link</a>` : ""}<br><span class="muted">${esc((n.body || "").slice(0, 240))}</span></div>`).join("") || `<div class="empty-inline"><svg class="mascot sm"><use href="#m-cow"/></svg> No news yet. Add items below or post them from your scorer.</div>`;
   $("news-curl").textContent = `# post a sentiment score (token = ONELOT_API_TOKEN or data/api_token.txt)
 curl -X POST ${location.origin}/api/sentiment -H "x-onelot-token: $TOKEN" -H "Content-Type: application/json" \\
-  -d '{"scope":"INDEX","symbol":"BANKNIFTY","score":0.35,"confidence":0.7,"horizon":"intraday","source":"my-scorer"}'
+  -d '{"scope":"MARKET","score":0.35,"confidence":0.7,"horizon":"intraday","source":"my-scorer"}'
+# bulk-import history for backtests (date,score[,confidence]; 0..1 or -1..1)
+curl -X POST ${location.origin}/api/sentiment/import -H "x-onelot-token: $TOKEN" -H "Content-Type: application/json" \\
+  -d '{"text":"2024-01-02,0.62\\n2024-01-03,0.48","scope":"MARKET","source":"my-scorer","replace_source":true}'
 # post a news item
 curl -X POST ${location.origin}/api/news -H "x-onelot-token: $TOKEN" -H "Content-Type: application/json" \\
-  -d '{"headline":"RBI holds rates","source":"wire","symbols":["BANKNIFTY"],"sentiment":0.1}'`;
+  -d '{"headline":"RBI holds rates","source":"wire","symbols":["BANKNIFTY"],"sentiment":0.1}'
+# feed GIFT NIFTY into the desk's context strip
+curl -X POST ${location.origin}/api/desk/context -H "x-onelot-token: $TOKEN" -H "Content-Type: application/json" \\
+  -d '{"key":"GIFTNIFTY","last":25410,"change_pct":0.3}'`;
 }
+$("pulse-refresh").onclick = async () => { renderPulse(await api("/api/sentiment/pulse?refresh=1")); };
 $("sent-add").onclick = async () => {
   await api("/api/sentiment", { scope: $("sent-scope").value, symbol: $("sent-symbol").value || null, score: parseFloat($("sent-score").value), confidence: parseFloat($("sent-conf").value),
     horizon: $("sent-horizon").value, source: $("sent-source").value || "manual", note: $("sent-note").value || null });
   toast("Sentiment posted", "ok"); loadNews();
 };
+$("imp-run").onclick = async () => {
+  const text = $("imp-text").value.trim(); if (!text) { toast("Paste some rows first", "warn"); return; }
+  const r = await api("/api/sentiment/import", { text, scope: $("imp-scope").value, symbol: $("imp-symbol").value || null, source: $("imp-source").value || "import", replace_source: $("imp-replace").checked });
+  $("imp-out").textContent = `imported ${r.imported} rows (${r.first.slice(0, 10)} → ${r.last.slice(0, 10)})`; toast(`Imported ${r.imported} scores`, "ok"); loadNews();
+};
 $("news-add").onclick = async () => {
-  if (!$("news-headline").value.trim()) { toast("Headline required", "warn"); return; }
-  const s = $("news-sent").value;
-  await api("/api/news", { headline: $("news-headline").value, body: $("news-body").value || null, source: $("news-source").value || null, url: $("news-url").value || null,
-    symbols: $("news-symbols").value.trim().split(/[\s,]+/).filter(Boolean), sentiment: s === "" ? null : parseFloat(s) });
+  const sym = $("news-symbols").value.trim().split(/[\s,]+/).filter(Boolean);
+  const sent = $("news-sent").value === "" ? null : parseFloat($("news-sent").value);
+  await api("/api/news", { headline: $("news-headline").value, body: $("news-body").value || null, source: $("news-source").value || null, url: $("news-url").value || null, symbols: sym, sentiment: sent });
   $("news-headline").value = ""; $("news-body").value = ""; toast("News added", "ok"); loadNews();
 };
 tabLoaders.news = () => loadNews().catch(() => {});
@@ -631,7 +924,15 @@ async function loadSettings() {
     kv("Market feed", esc(s.feed_broker || "–") + (s.feed_broker === "mock" ? " <span class='dim'>(restart with credentials for live data)</span>" : ""));
   const block = (t, o) => `<h3>${t}</h3><pre class="code">${esc(JSON.stringify(o, null, 2))}</pre>`;
   $("cfg-view").innerHTML = kv("Mode", esc(s.mode)) + kv("Bind", `${esc(s.api.host)}:${s.api.port}`) +
-    block("Live direction source", s.live) + block("Risk (absolute rupees, one lot)", s.risk) + block("Backtest defaults", s.backtest) + block("Data corpus", s.data);
+    block("Live direction source (Bank Nifty engine)", s.live) + block("Risk (absolute rupees, one unit)", s.risk) + block("Backtest defaults", s.backtest) + block("Data corpus", s.data);
+  try {
+    const d = await api("/api/desk");
+    const rows = [...(d.indices || []), ...(d.stocks || [])];
+    $("desk-cfg").innerHTML = kv("File", esc(d.config_path || "config/desk.yaml")) + kv("Instruments", `${(d.indices || []).length} indices · ${(d.stocks || []).length} stocks`) +
+      kv("Strategy slots", (d.counts || {}).strategies || 0) + kv("Bars", `${(d.source || {}).name} · ${(d.source || {}).resolution} · poll ${(d.source || {}).poll_seconds}s`) +
+      `<div class="scroll mt">` + table([{ l: "Instrument", f: r => `<b>${esc(r.label)}</b> <span class="dim">${esc(r.tracked)}</span>` },
+        { l: "Strategies", f: r => (r.strategies || []).map(x => `<span class="schip">${esc(x.name)}@${esc(x.timeframe)}${Object.keys(x.params || {}).length ? " ✎" : ""}</span>`).join(" ") }], rows) + `</div>`;
+  } catch (e) { $("desk-cfg").innerHTML = `<div class="warn">Live Desk not running.</div>`; }
 }
 $("cred-save").onclick = async () => {
   const body = {}; if ($("cred-client").value.trim()) body.client_id = $("cred-client").value.trim();
@@ -642,10 +943,10 @@ $("cred-save").onclick = async () => {
   $("cred-client").value = ""; $("cred-token").value = ""; $("cred-data-token").value = "";
   toast(r.ok ? "Credentials saved and attached" : "Saved, but adapter not attached: " + (r.reason || ""), r.ok ? "ok" : "warn");
   if (r.restart_needed_for_live_data) toast("Restart the engine (without --mock) for live market data", "warn");
-  acctLoaded = false; loadSettings();
+  acctLoaded = false; loadSettings(); loadAccount(true).catch(() => {});
 };
 $("cred-test").onclick = async () => {
-  $("cred-test-out").innerHTML = `<div class="muted">testing…</div>`;
+  $("cred-test-out").innerHTML = `<div class="empty-inline"><svg class="mascot sm bounce"><use href="#m-ichi"/></svg> testing every endpoint (the scrip master download takes a while)…</div>`;
   const r = await api("/api/settings/dhan/test", {});
   const rows = Object.entries(r.checks || {}).map(([k, v]) => ({ name: k, ...v }));
   $("cred-test-out").innerHTML = `<div class="row"><span class="badge ${r.trading_ok ? "ok" : "bad"}"><span>trading API ${r.trading_ok ? "OK" : "FAIL"}</span></span>
@@ -654,10 +955,13 @@ $("cred-test").onclick = async () => {
     table([{ l: "Check", k: "name" }, { l: "Tier", k: "tier" }, { l: "Result", f: x => x.ok ? "<span class='pos'>OK</span>" : `<span class='neg'>${esc(x.error)}</span>` }, { l: "Detail", f: x => esc((x.detail || "").slice(0, 120)) }], rows) +
     ((r.notes || []).length ? `<ul class="small-list muted">${[...new Set(r.notes)].map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : "");
 };
+$("desk-reload").onclick = async () => { const r = await api("/api/desk/reload", {}); toast(`Desk reloaded: ${r.instruments} instruments`, "ok"); loadSettings(); };
+$("desk-poll").onclick = async () => { await api("/api/desk/poll", {}); toast("Polling now", "ok"); desk.force = true; };
 $("notify-test").onclick = async () => { const r = await api("/api/notify/test", {}); toast("Notification test: " + JSON.stringify(r), "ok"); };
 tabLoaders.settings = () => loadSettings().catch(() => {});
 
 /* ── boot ─────────────────────────────────────────────────────────────── */
 connect();
+api("/api/account").then(a => { acctSummary = a.summary || null; if (latest) renderBadges(latest); }).catch(() => {});
 showTab(location.hash.slice(1) || store.get("tab", "home"));
 })();

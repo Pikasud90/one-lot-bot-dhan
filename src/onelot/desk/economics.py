@@ -1,0 +1,142 @@
+"""One-unit economics for a desk signal, and the alert text the operator acts on.
+
+STOCK  : 1 share. Entry/stop/target are share prices; charges from the equity_intraday
+         cost table.
+INDEX  : 1 lot of a delta-selected option (CE for bullish, PE for bearish), priced with
+         the same Black-76 model as the Backtest Lab off the current underlying and
+         India VIX. Stop/target are underlying levels; the premium at those levels gives
+         the rupee risk/reward. Labelled SYNTHETIC until the Data-API option chain is wired.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+from dataclasses import dataclass, field
+
+import pandas as pd
+
+from ..clock import IST
+from ..config import BacktestCfg, CostConfig
+from ..costs import CostModel
+from ..data.universe import InstrumentSpec
+from ..lab.execution import (
+    OptionPricer,
+    expiry_datetime,
+    monthly_expiry,
+    strike_for_delta,
+    year_frac,
+)
+from ..settings import current_settings
+
+
+@dataclass
+class Economics:
+    kind: str                      # STOCK | INDEX
+    side: str                      # BUY | SELL | BUY_CE | BUY_PE
+    qty: int
+    unit_label: str                # "1 share" | "1 lot (30)"
+    underlying_entry: float
+    underlying_stop: float
+    underlying_target: float | None
+    entry_price: float             # per unit: share price or option premium
+    stop_price: float
+    target_price: float | None
+    outlay: float
+    risk_inr: float
+    reward_inr: float | None
+    costs_inr: float
+    rr_net: float | None
+    r_target: float
+    option: dict = field(default_factory=dict)
+    synthetic: bool = False
+    notes: list[str] = field(default_factory=list)
+
+    def as_dict(self) -> dict:
+        d = self.__dict__.copy()
+        return d
+
+
+def _costs_for(spec: InstrumentSpec) -> CostModel:
+    s = current_settings()
+    return CostModel(CostConfig.load(s.project_root / "config" / "costs.yaml").product(spec.product))
+
+
+def stock_economics(spec: InstrumentSpec, direction: str, entry: float, stop: float,
+                    target_r: float) -> Economics:
+    sign = 1 if direction == "long" else -1
+    risk_pts = abs(entry - stop)
+    target = entry + sign * target_r * risk_pts if target_r > 0 else None
+    costs = _costs_for(spec)
+    exit_for_cost = target if target else entry
+    c = costs.round_trip_cost(entry, exit_for_cost, 1)
+    reward = (abs(target - entry) - c) if target else None
+    return Economics("STOCK", "BUY" if sign > 0 else "SELL", 1, "1 share", entry, stop, target,
+                     entry, stop, target, entry, risk_pts + c, reward, c,
+                     (reward / (risk_pts + c)) if reward is not None and risk_pts + c > 0 else None, target_r)
+
+
+def index_option_economics(spec: InstrumentSpec, direction: str, entry: float, stop: float,
+                           target_r: float, now: dt.datetime, vix: float | None,
+                           bt: BacktestCfg | None = None) -> Economics:
+    bt = bt or current_settings().backtest
+    sign = 1 if direction == "long" else -1
+    opt = "CE" if sign > 0 else "PE"
+    risk_pts = abs(entry - stop)
+    target = entry + sign * target_r * risk_pts if target_r > 0 else None
+    vix_series = pd.Series([vix], index=[pd.Timestamp(now).tz_convert(IST).normalize()]) if vix else None
+    pricer = OptionPricer(bt, vix_series)
+    ts = pd.Timestamp(now).tz_convert(IST)
+    exp_d = monthly_expiry(ts.date(), bt.option_expiry_weekday, bt.option_min_days_to_expiry)
+    expiry = expiry_datetime(exp_d)
+    t = year_frac(now, expiry)
+    iv = pricer.iv_for(ts)
+    k = strike_for_delta(entry, t, iv, opt, bt.option_target_delta, spec.strike_step, bt.risk_free_rate)
+    prem = pricer.premium(entry, k, ts, expiry, opt)
+    delta = pricer.delta(entry, k, ts, expiry, opt)
+    prem_stop = pricer.premium(stop, k, ts, expiry, opt)
+    prem_target = pricer.premium(target, k, ts, expiry, opt) if target else None
+    lot = int(spec.lot_size)
+    costs = _costs_for(spec)
+    c = costs.round_trip_cost(prem, prem_target or prem, lot)
+    risk = max(prem - prem_stop, 0.0) * lot + c
+    reward = ((prem_target - prem) * lot - c) if prem_target is not None else None
+    return Economics("INDEX", f"BUY_{opt}", lot, f"1 lot ({lot})", entry, stop, target,
+                     round(prem, 2), round(prem_stop, 2), round(prem_target, 2) if prem_target else None,
+                     round(round(prem, 2) * lot, 2), round(risk, 2), round(reward, 2) if reward is not None else None,
+                     round(c, 2), (round(reward / risk, 2) if reward is not None and risk > 0 else None), target_r,
+                     option={"strike": k, "opt_type": opt, "expiry": exp_d.isoformat(), "delta": round(abs(delta), 3),
+                             "iv": round(iv, 4), "premium": round(prem, 2), "lot": lot},
+                     synthetic=True,
+                     notes=["premium is a Black-76 estimate off India VIX; use the live chain quote when you place the order"])
+
+
+def alert_text(label: str, series_key: str, eco: Economics, strategy: str, timeframe: str,
+               bar_ts: dt.datetime | None, exit_time: str, reasons: list[str]) -> str:
+    r = lambda v: f"₹{v:,.2f}"  # noqa: E731
+    pct = lambda a, b: f"{(a / b - 1) * 100:+.2f}%"  # noqa: E731
+    lines: list[str] = []
+    if eco.kind == "STOCK":
+        verb = "BUY" if eco.side == "BUY" else "SELL (short, intraday)"
+        lines.append(f"{verb} 1 share {label} at ~{r(eco.entry_price)} (market)")
+        lines.append(f"Stop {r(eco.stop_price)} ({pct(eco.stop_price, eco.entry_price)}, risk {r(eco.risk_inr)} incl. charges)")
+        if eco.target_price:
+            lines.append(f"Target {r(eco.target_price)} ({pct(eco.target_price, eco.entry_price)}, {eco.r_target:g}R, "
+                         f"net reward {r(eco.reward_inr or 0)}; net R/R {eco.rr_net:.2f})" if eco.rr_net is not None else
+                         f"Target {r(eco.target_price)} ({eco.r_target:g}R)")
+        else:
+            lines.append("No fixed target: trail the stop per the strategy; exit on the opposite signal")
+    else:
+        o = eco.option
+        lines.append(f"BUY {eco.unit_label} {series_key} {o['strike']:g} {o['opt_type']} "
+                     f"(Δ≈{o['delta']:.2f}, est. premium {r(o['premium'])} → outlay {r(eco.outlay)})")
+        lines.append(f"Underlying {eco.underlying_entry:,.2f} → stop {eco.underlying_stop:,.2f} "
+                     f"(premium ≈ {r(eco.stop_price)}, risk ≈ {r(eco.risk_inr)})")
+        if eco.underlying_target:
+            lines.append(f"Target {eco.underlying_target:,.2f} (premium ≈ {r(eco.target_price or 0)}, "
+                         f"reward ≈ {r(eco.reward_inr or 0)}; net R/R {eco.rr_net if eco.rr_net is not None else '–'})")
+        lines.append(f"Exit = SELL the same option back. Charges ≈ {r(eco.costs_inr)} round trip. {eco.notes[0] if eco.notes else ''}")
+    lines.append(f"Square off by {exit_time}. Strategy {strategy} {timeframe}"
+                 + (f", signal bar {bar_ts.astimezone(IST).strftime('%H:%M')}" if bar_ts else "") + ".")
+    if reasons:
+        lines.append("Why: " + "; ".join(reasons[:4]))
+    return "\n".join(lines)

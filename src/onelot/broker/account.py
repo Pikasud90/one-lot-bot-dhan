@@ -48,6 +48,16 @@ def _voucher_date(v: Any) -> dt.date | None:
     return None
 
 
+def _split_error(raw: str | None) -> tuple[str | None, str | None]:
+    """'<iso>|<message>' -> (message, iso); tolerate the old bare format."""
+    if not raw:
+        return None, None
+    head, sep, tail = raw.partition("|")
+    if sep and len(head) >= 19 and head[4] == "-" and "T" in head:
+        return tail, head
+    return raw, None
+
+
 class AccountService:
     def __init__(self, engine: Engine, adapter=None, stale_after: dt.timedelta = dt.timedelta(hours=12),
                  ledger_days: int = 30, trades_days: int = 30) -> None:
@@ -65,8 +75,19 @@ class AccountService:
         return dict(row) if row else None
 
     def _write(self, key: str, payload: Any, error: str | None) -> None:
+        """A failed refresh must never blank the panel: keep the last good
+        payload and its fetch time, and record the error with its own time.
+        (The token expires daily and the laptop is not always online; the
+        operator still needs to see yesterday's ledger, clearly marked.)"""
+        now = now_ist()
+        if error is None:
+            upsert(self.engine, account_cache,
+                   [{"key": key, "fetched_at": now, "payload": payload, "error": None}], ["key"])
+            return
+        prev = self._read(key) or {}
         upsert(self.engine, account_cache,
-               [{"key": key, "fetched_at": now_ist(), "payload": payload, "error": error}], ["key"])
+               [{"key": key, "fetched_at": prev.get("fetched_at") if prev.get("payload") is not None else None,
+                 "payload": prev.get("payload"), "error": f"{now.isoformat()}|{error}"}], ["key"])
 
     # ── fetch ─────────────────────────────────────────────────────────────
     def _fetch(self, key: str) -> Any:
@@ -124,10 +145,11 @@ class AccountService:
             self.refresh()
         out: dict[str, Any] = {"configured": self.adapter is not None, "panels": {}}
         oldest: dt.datetime | None = None
+        last_err: tuple[str, str, str] | None = None   # (error_at, key, message)
         for k in KEYS:
             row = self._read(k)
             if row is None:
-                out["panels"][k] = {"data": None, "fetched_at": None, "error": None}
+                out["panels"][k] = {"data": None, "fetched_at": None, "error": None, "error_at": None}
                 continue
             fa = row.get("fetched_at")
             if fa is not None and fa.tzinfo is None:
@@ -135,10 +157,19 @@ class AccountService:
             if fa is not None:
                 fa = fa.astimezone(IST)
                 oldest = fa if oldest is None or fa < oldest else oldest
+            err, err_at = _split_error(row.get("error"))
+            if err and (last_err is None or (err_at or "") > last_err[0]):
+                last_err = (err_at or "", k, err)
             out["panels"][k] = {"data": row.get("payload"), "fetched_at": fa.isoformat() if fa else None,
-                                "error": row.get("error")}
+                                "error": err, "error_at": err_at}
         out["fetched_at"] = oldest.isoformat() if oldest else None
         out["stale"] = bool(oldest and (now_ist() - oldest) > self.stale_after)
+        out["last_error"] = ({"at": last_err[0] or None, "panel": last_err[1], "message": last_err[2]}
+                             if last_err else None)
+        out["token_expired"] = any((p.get("error") or "").startswith("TOKEN_EXPIRED")
+                                   for p in out["panels"].values())
+        out["offline"] = any("ConnectError" in (p.get("error") or "") or "network error" in (p.get("error") or "")
+                             for p in out["panels"].values())
         out["summary"] = self._summary(out["panels"])
         return out
 

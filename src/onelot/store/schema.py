@@ -442,3 +442,47 @@ data_jobs = Table(
     Column("finished_at", TZDateTime),
     Column("payload", JSON),
 )
+
+# ── Live Desk: multi-instrument signals and one-unit paper positions ──────
+
+desk_signals = Table(
+    "desk_signals", METADATA,
+    Column("id", String(16), primary_key=True),
+    Column("created_at", TZDateTime, nullable=False),
+    Column("expires_at", TZDateTime),
+    Column("resolved_at", TZDateTime),
+    Column("instrument_key", String(48), nullable=False),
+    Column("series_key", String(32), nullable=False),
+    Column("kind", String(8)),                                   # INDEX | STOCK
+    Column("side", String(8)),                                   # BUY | SELL (stock); BUY_CE | BUY_PE (index)
+    Column("strategy", String(48)),
+    Column("timeframe", String(6)),
+    Column("bar_ts", TZDateTime),
+    Column("status", String(12)),                                # PENDING | TAKEN | SKIPPED | EXPIRED
+    Column("payload", JSON),
+    Index("ix_desk_signals_created", "created_at"),
+)
+
+desk_positions = Table(
+    "desk_positions", METADATA,
+    Column("id", String(16), primary_key=True),
+    Column("signal_id", String(16)),
+    Column("instrument_key", String(48), nullable=False),
+    Column("series_key", String(32), nullable=False),
+    Column("kind", String(8)),
+    Column("side", String(8)),
+    Column("strategy", String(48)),
+    Column("timeframe", String(6)),
+    Column("opened_at", TZDateTime, nullable=False),
+    Column("closed_at", TZDateTime),
+    Column("status", String(12), nullable=False),                # OPEN | CLOSED
+    Column("entry_price", Float),                                # per unit (share price / option premium)
+    Column("exit_price", Float),
+    Column("qty", Integer),
+    Column("gross_pnl", Float),
+    Column("costs", Float),
+    Column("net_pnl", Float),
+    Column("exit_reason", String(24)),
+    Column("payload", JSON),
+    Index("ix_desk_positions_status", "status"),
+)

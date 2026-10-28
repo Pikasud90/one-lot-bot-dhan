@@ -183,6 +183,45 @@ class WFResult:
     oos_metrics: dict
     default_oos_metrics: dict
     chosen_params: list[dict]
+    plan: dict = field(default_factory=dict)
+
+
+MIN_WF_SESSIONS = 12
+
+
+def plan_windows(n_days: int, is_days: int | None = None, oos_days: int | None = None,
+                 min_folds: int = 3, target_folds: int = 4) -> tuple[int, int, str]:
+    """Pick in-sample / out-of-sample lengths (in sessions) that FIT the data.
+
+    The old defaults (40 in / 10 out) silently produced zero folds on a 40-session
+    Yahoo corpus and the job still said "done". Now: honour the request when it
+    yields at least `min_folds` folds, otherwise size the windows from the data
+    and say so in the returned note. Fewer than MIN_WF_SESSIONS sessions is an
+    error -- there is nothing honest to compute.
+    """
+    if n_days < MIN_WF_SESSIONS:
+        raise ValueError(f"walk-forward needs at least {MIN_WF_SESSIONS} sessions after warm-up; "
+                         f"this instrument/timeframe has {n_days}. Backfill more history "
+                         "(Dhan gives 5 years of 1-minute bars) or use a coarser timeframe.")
+
+    def folds_for(i: int, o: int) -> int:
+        return max(0, (n_days - i) // o) if i > 0 and o > 0 else 0
+
+    if is_days and oos_days and folds_for(is_days, oos_days) >= min_folds:
+        return int(is_days), int(oos_days), (f"{folds_for(is_days, oos_days)} folds of "
+                                            f"{is_days} in / {oos_days} out sessions, as requested")
+    oos = max(3, n_days // (target_folds + 2))
+    is_ = n_days - target_folds * oos
+    if is_ < 2 * oos:
+        is_ = n_days - min_folds * oos
+    if is_ < 2 * oos:
+        oos = max(2, n_days // (min_folds + 2))
+        is_ = n_days - min_folds * oos
+    f = folds_for(is_, oos)
+    why = (f"requested {is_days} in / {oos_days} out would give only "
+           f"{folds_for(is_days or 0, oos_days or 1)} fold(s) on {n_days} sessions; " if is_days and oos_days
+           else f"{n_days} sessions available; ")
+    return int(is_), int(oos), why + f"auto-sized to {is_} in / {oos} out = {f} folds"
 
 
 def trading_days(cache: DataCache, series_key: str, timeframe: str) -> list[pd.Timestamp]:
@@ -191,9 +230,18 @@ def trading_days(cache: DataCache, series_key: str, timeframe: str) -> list[pd.T
 
 
 def walk_forward(base: BacktestConfig, space: Space, evaluator: Evaluator, days: list[pd.Timestamp],
-                 is_days: int, oos_days: int, warmup: int = 3, n_trials: int = 40, min_trades: int = 15,
-                 seed: int = 11, progress: Callable[[float, str], None] | None = None) -> WFResult:
+                 is_days: int | None = None, oos_days: int | None = None, warmup: int = 3, n_trials: int = 40,
+                 min_trades: int = 15, seed: int = 11,
+                 progress: Callable[[float, str], None] | None = None, auto_size: bool = True) -> WFResult:
     days = days[warmup:]
+    if auto_size:
+        is_days, oos_days, note = plan_windows(len(days), is_days, oos_days)
+    else:
+        if not is_days or not oos_days:
+            raise ValueError("is_days and oos_days are required when auto_size=False")
+        note = f"{is_days} in / {oos_days} out as requested"
+    plan = {"sessions": len(days), "is_days": is_days, "oos_days": oos_days, "note": note,
+            "first": str(days[0].date()) if days else None, "last": str(days[-1].date()) if days else None}
     folds_def = []
     start = 0
     while start + is_days + 1 <= len(days):
@@ -227,9 +275,10 @@ def walk_forward(base: BacktestConfig, space: Space, evaluator: Evaluator, days:
     dft = pd.concat(def_nz, ignore_index=True) if def_nz else pd.DataFrame()
     oos_m = _concat_metrics(oos, base.reference_capital)
     def_m = _concat_metrics(dft, base.reference_capital)
+    plan["folds"] = len(folds)
     if progress:
         progress(1.0, "done")
-    return WFResult(folds, oos, oos_m, def_m, chosen)
+    return WFResult(folds, oos, oos_m, def_m, chosen, plan)
 
 
 def _concat_metrics(trades: pd.DataFrame, capital: float) -> dict:

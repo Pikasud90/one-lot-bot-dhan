@@ -4,19 +4,54 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>One Lot Desk</title>
-<meta name="description" content="Signal-only Dhan trade desk: live Bank Nifty signals, one-lot backtest lab, account ledger, news and sentiment.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<meta name="description" content="Signal-only Dhan trade desk: multi-instrument live signals, one-lot backtest lab, account ledger, news and sentiment.">
 <script>try{var t=JSON.parse(localStorage.getItem("onelot.theme"));if(t==="night"||t==="day")document.documentElement.dataset.theme=t;}catch(e){}</script>
+<link rel="stylesheet" href="/static/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="/static/styles.css">
-<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js" defer></script>
+<script src="/static/vendor/lightweight-charts.standalone.production.js" defer></script>
+<script src="/static/charts.js" defer></script>
 </head>
 <body>
-<div class="shell">
+<!-- ── mascots: Ichi (the "1") and Moo (the 2-D cow) ─────────────────────── -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="m-ichi" viewBox="0 0 64 64">
+    <path d="M30 6h14v52H30z" fill="currentColor"/><path d="M30 6 18 16l6 8 6-5z" fill="currentColor"/><path d="M22 58h30v6H22z" fill="currentColor"/>
+    <rect x="26" y="12" width="22" height="5" fill="#ff4463"/><path d="M48 12l11-4-2 7-7 2z" fill="#ff4463"/><path d="M48 15l12 4-7 2z" fill="#b8123a"/>
+    <circle cx="34" cy="26" r="3.2" fill="#fff"/><circle cx="41.5" cy="26" r="3.2" fill="#fff"/><circle cx="35" cy="26.5" r="1.5" fill="#0b1326"/><circle cx="42.5" cy="26.5" r="1.5" fill="#0b1326"/>
+    <path d="M30.5 21l6 2.2M45 23.2l-6-2.2" stroke="#0b1326" stroke-width="1.8" stroke-linecap="round"/>
+    <path d="M34 33q3.8 3.4 7.5 0" stroke="#0b1326" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="m-cow" viewBox="0 0 64 64">
+    <path d="M21 16c-4-6 1-10 4-3M43 16c4-6-1-10-4-3" fill="#f3c969" stroke="#0b1326" stroke-width="2" stroke-linejoin="round"/>
+    <ellipse cx="10" cy="27" rx="7" ry="4" transform="rotate(-18 10 27)" fill="#fff" stroke="#0b1326" stroke-width="2"/>
+    <ellipse cx="54" cy="27" rx="7" ry="4" transform="rotate(18 54 27)" fill="#fff" stroke="#0b1326" stroke-width="2"/>
+    <ellipse cx="32" cy="34" rx="22" ry="19" fill="#fff" stroke="#0b1326" stroke-width="2"/>
+    <path d="M14 30c-2-8 10-10 12-2 1 6-10 10-12 2zM44 20c8 0 10 10 2 11-6 0-8-9-2-11z" fill="#0b1326"/>
+    <ellipse cx="32" cy="43" rx="12" ry="7" fill="#f7b6c4" stroke="#0b1326" stroke-width="2"/>
+    <circle cx="27" cy="43" r="1.6" fill="#0b1326"/><circle cx="37" cy="43" r="1.6" fill="#0b1326"/>
+    <circle cx="25" cy="31" r="2.5" fill="#0b1326"/><circle cx="39" cy="31" r="2.5" fill="#0b1326"/>
+    <circle cx="26" cy="30" r=".9" fill="#fff"/><circle cx="40" cy="30" r=".9" fill="#fff"/>
+    <circle cx="19" cy="37" r="2.2" fill="#ffb3c2" opacity=".85"/><circle cx="45" cy="37" r="2.2" fill="#ffb3c2" opacity=".85"/>
+  </symbol>
+  <symbol id="m-cow-sleep" viewBox="0 0 64 64">
+    <use href="#m-cow"/><rect x="21" y="27" width="22" height="9" fill="#fff"/>
+    <path d="M22 31q3-3 6 0M36 31q3-3 6 0" stroke="#0b1326" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <text x="48" y="14" font-family="Bebas Neue, Impact, sans-serif" font-size="12" fill="#0b1326">z</text><text x="54" y="8" font-family="Bebas Neue, Impact, sans-serif" font-size="9" fill="#0b1326">z</text>
+  </symbol>
+  <symbol id="m-cow-cheer" viewBox="0 0 64 64">
+    <use href="#m-cow"/><rect x="18" y="20" width="28" height="5" fill="#ff4463"/><path d="M46 20l10-4-2 7-8 2z" fill="#ff4463"/>
+    <path d="M4 10l2 4 4 1-3 3 1 4-4-2-4 2 1-4-3-3 4-1z" fill="#ffb52e"/>
+  </symbol>
+  <symbol id="m-cow-sweat" viewBox="0 0 64 64">
+    <use href="#m-cow"/><rect x="24" y="40" width="16" height="6" fill="#f7b6c4"/><path d="M27 44h10" stroke="#0b1326" stroke-width="1.8" stroke-linecap="round"/>
+    <path d="M55 36c0-4 3-7 3-7s3 3 3 7a3 3 0 0 1-6 0z" fill="#2dd4ee"/>
+  </symbol>
+</svg>
 
+<div class="shell">
   <header class="top">
     <div class="brand">
-      <div class="brand-mark">1</div>
+      <div class="brand-mark"><svg class="mascot"><use href="#m-ichi"/></svg></div>
       <div>
         <div class="brand-name">ONE LOT <span>DESK</span></div>
         <div class="brand-sub"><span class="kana">ワンロット</span> · signal-only · places no orders · you execute</div>
@@ -50,7 +85,7 @@
     <div class="tiles" id="acct-tiles"></div>
     <div class="grid2">
       <div class="card"><h2>Profile &amp; entitlements</h2><div id="acct-profile"></div></div>
-      <div class="card"><h2>Paper journal (this desk)</h2><div id="home-journal"></div></div>
+      <div class="card"><h2>Desk journal <small>closed one-unit trades you confirmed</small></h2><div id="home-journal"></div></div>
     </div>
     <div class="card"><h2>Open positions (broker)</h2><div class="scroll" id="acct-positions"></div></div>
     <div class="card"><h2>Holdings <small>marked at Dhan's last traded price as of the last refresh</small></h2><div class="scroll" id="acct-holdings"></div></div>
@@ -62,76 +97,132 @@
 
   <!-- ──────────────────────────── LIVE DESK ────────────────────────── -->
   <section data-tab="live" class="tab">
-    <div class="card signal none" id="signalCard">
-      <h2>Active signal</h2>
-      <div id="signalBody"><div class="muted">No active signal.</div></div>
+    <div class="card strip" id="desk-positions-card">
+      <div class="row between"><h2>Open positions <small>one unit each · managed every poll · you close them</small></h2><span class="muted" id="desk-risk-line"></span></div>
+      <div id="desk-positions"><div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sleep"/></svg> Flat. Moo is napping until you take a signal.</div></div>
     </div>
-    <div class="grid4">
-      <div class="card"><h2>Market</h2><div id="market"></div></div>
-      <div class="card"><h2>Regime &amp; volatility</h2><div id="regime"></div></div>
-      <div class="card"><h2>Risk governor</h2><div id="risk"></div>
-        <div class="actions mt">
-          <button class="btn danger" id="haltBtn">Panic halt</button>
-          <button class="btn" id="resetBtn">Clear halt</button>
-        </div>
+    <div id="desk-signals"></div>
+    <div class="card strip">
+      <div class="row between"><h2>Market context</h2><span class="muted" id="desk-source"></span></div>
+      <div class="ctx" id="desk-context"></div>
+    </div>
+    <div class="desk-cols">
+      <div class="card"><div class="row between"><h2>Indices <small>bullish → buy CE · bearish → buy PE · 1 lot</small></h2><span class="muted" id="desk-idx-count"></span></div>
+        <div class="acc" id="desk-indices"></div></div>
+      <div class="card"><div class="row between"><h2>Stocks <small>buy / sell · 1 share · intraday</small></h2><span class="muted" id="desk-stk-count"></span></div>
+        <div class="acc" id="desk-stocks"></div></div>
+    </div>
+    <details class="card legacy"><summary><h2 style="display:inline">Bank Nifty option engine <small>the original gate-based engine · alerts feed · paper journal</small></h2></summary>
+      <div class="card signal none mt" id="signalCard"><h2>Active signal</h2><div id="signalBody"><div class="muted">No active signal.</div></div></div>
+      <div class="grid4">
+        <div class="card"><h2>Market</h2><div id="market"></div></div>
+        <div class="card"><h2>Regime &amp; volatility</h2><div id="regime"></div></div>
+        <div class="card"><h2>Risk governor</h2><div id="risk"></div>
+          <div class="actions mt"><button class="btn danger" id="haltBtn">Panic halt</button><button class="btn" id="resetBtn">Clear halt</button></div></div>
+        <div class="card"><h2>Data health</h2><div id="health"></div></div>
       </div>
-      <div class="card"><h2>Data health</h2><div id="health"></div></div>
-    </div>
-    <div class="card"><h2>Open positions (this desk)</h2>
-      <div class="scroll" id="positions"><div class="muted">Flat.</div></div></div>
-    <div class="grid3">
-      <div class="card"><h2>Why no signal — 24h gate rejections</h2><div class="scroll" id="gates"></div></div>
-      <div class="card"><h2>Journal (net of all costs)</h2><div id="journal"></div></div>
-      <div class="card"><h2>Alerts</h2><div class="feed" id="feed"></div></div>
-    </div>
+      <div class="card"><h2>Open option positions (engine)</h2><div class="scroll" id="positions"><div class="muted">Flat.</div></div></div>
+      <div class="grid3">
+        <div class="card"><h2>Why no signal — 24h gate rejections</h2><div class="scroll" id="gates"></div></div>
+        <div class="card"><h2>Engine journal (net of all costs)</h2><div id="journal"></div></div>
+        <div class="card"><h2>Alerts</h2><div class="feed" id="feed"></div></div>
+      </div>
+    </details>
   </section>
 
   <!-- ──────────────────────────── BACKTEST LAB ─────────────────────── -->
   <section data-tab="lab" class="tab">
     <div class="lab-layout">
       <div class="card lab-form">
-        <h2>Set up a backtest <small>one unit per trade, always</small></h2>
-        <label>Category
-          <div class="chips" id="lab-cats"></div></label>
-        <label>Instrument
-          <select id="lab-instrument"></select>
-          <div class="hint" id="lab-inst-hint"></div></label>
-        <label>Strategy
-          <select id="lab-strategy"></select>
-          <div class="hint" id="lab-strat-hint"></div></label>
+        <h2>Backtest <small>one unit per trade, always</small></h2>
+        <div class="chips" id="lab-cats"></div>
+        <label>Instrument <select id="lab-instrument"></select></label>
+        <div class="hint" id="lab-inst-hint"></div>
+        <label>Strategy <select id="lab-strategy"></select></label>
+        <div class="hint" id="lab-strat-hint"></div>
         <div class="row2">
           <label>Timeframe <select id="lab-tf"></select></label>
-          <label>Slippage % / side <input type="number" id="lab-slip" step="0.01" value="0.03"></label>
-        </div>
-        <div class="row2">
-          <label>From <input type="date" id="lab-start"></label>
-          <label>To <input type="date" id="lab-end"></label>
-        </div>
-        <details open class="params"><summary>Strategy parameters <span class="muted" id="lab-ind"></span></summary>
-          <div class="param-grid" id="lab-params-strategy"></div></details>
-        <details class="params"><summary>Exits &amp; risk</summary>
-          <div class="param-grid" id="lab-params-exits"></div></details>
-        <details class="params"><summary>Filters &amp; session</summary>
-          <div class="param-grid" id="lab-params-filters"></div></details>
-        <div class="row2">
-          <label>Cost stress × <input type="number" id="lab-costx" step="0.5" value="1"></label>
-          <label>Optimizer trials <input type="number" id="lab-trials" step="5" value="40"></label>
+          <label>Sentiment gate <select id="lab-sent"><option value="off">off</option><option value="follow">follow (block against)</option><option value="strict">strict (only with)</option><option value="contrarian">contrarian</option></select></label>
         </div>
         <div class="actions mt">
           <button class="btn primary" id="lab-run">Run backtest</button>
-          <button class="btn" id="lab-opt">Optimize</button>
           <button class="btn" id="lab-wf">Walk-forward</button>
-          <button class="btn ghost" id="lab-reset">Reset params</button>
+          <button class="btn" id="lab-opt">Optimize</button>
         </div>
         <div class="hint mt" id="lab-status"></div>
+        <details class="params"><summary>Strategy parameters <span class="muted" id="lab-ind"></span></summary>
+          <div class="param-grid" id="lab-params-strategy"></div></details>
+        <details class="params"><summary>Exits &amp; risk <span class="muted">target / stop / trail — the 30 % rule lives here</span></summary>
+          <div class="param-grid" id="lab-params-exits"></div></details>
+        <details class="params"><summary>Filters &amp; session</summary>
+          <div class="param-grid" id="lab-params-filters"></div></details>
+        <details class="params"><summary>Advanced <span class="muted">dates · slippage · cost stress · optimizer trials</span></summary>
+          <div class="row2"><label>From <input type="date" id="lab-start"></label><label>To <input type="date" id="lab-end"></label></div>
+          <div class="row2"><label>Slippage % / side <input type="number" id="lab-slip" step="0.01" value="0.03"></label>
+            <label>Cost stress × <input type="number" id="lab-costx" step="0.5" value="1"></label></div>
+          <div class="row2"><label>Optimizer trials <input type="number" id="lab-trials" step="5" value="40"></label>
+            <label>Walk-forward windows <input type="text" id="lab-wfwin" placeholder="auto (e.g. 40/10)"></label></div>
+          <div class="actions mt"><button class="btn ghost small" id="lab-reset">Reset parameters to defaults</button></div></details>
       </div>
 
       <div class="lab-results">
-        <div class="card">
-          <div class="row between"><h2>Runs</h2><button class="btn ghost small" id="lab-runs-refresh">refresh</button></div>
-          <div class="scroll runs" id="lab-runs"></div>
+        <div class="subtabs" id="lab-subtabs">
+          <a data-sub="result" class="active">Result</a><a data-sub="board">Leaderboard</a><a data-sub="sweep">Sweep</a><a data-sub="runs">Runs</a><a data-sub="help">How to read</a>
         </div>
-        <div id="lab-result"></div>
+        <div class="sub active" data-sub="result"><div id="lab-result">
+          <div class="card empty"><svg class="mascot lg"><use href="#m-cow"/></svg><div><b>No result selected.</b><br>Pick a category, an instrument and a strategy, then <b>Run backtest</b>. Results stay saved — see <b>Runs</b> and the <b>Leaderboard</b>.</div></div>
+        </div></div>
+        <div class="sub" data-sub="board">
+          <div class="card">
+            <div class="row between"><h2>Leaderboard <small>every saved run, best first</small></h2>
+              <div class="actions"><select id="board-kind"><option value="">in-sample + walk-forward</option><option value="walkforward">walk-forward (OOS) only</option><option value="single">in-sample only</option></select>
+                <select id="board-cat"><option value="">all categories</option><option>OPTIONS</option><option>FUTURES</option><option>STOCK</option><option>CURRENCY</option></select>
+                <input type="number" id="board-min" value="10" min="1" style="width:90px;margin:0" title="minimum trades"><button class="btn small" id="board-refresh">refresh</button></div></div>
+            <div class="tiles small" id="board-summary"></div>
+            <div class="scroll" id="lab-board"></div>
+          </div>
+        </div>
+        <div class="sub" data-sub="sweep">
+          <div class="card">
+            <h2>Brute-force sweep <small>every strategy × instrument × timeframe, each saved as a run</small></h2>
+            <div class="row2">
+              <label>Strategies <div class="chips" id="sweep-strats"></div></label>
+              <label>Instruments <div class="chips" id="sweep-insts"></div></label>
+            </div>
+            <label>Timeframes <div class="chips" id="sweep-tfs"></div></label>
+            <div class="row2"><label>Cost stress × <input type="number" id="sweep-costx" step="0.5" value="1"></label>
+              <label>Sentiment gate <select id="sweep-sent"><option value="off">off</option><option value="follow">follow</option><option value="strict">strict</option><option value="contrarian">contrarian</option></select></label></div>
+            <div class="actions mt"><button class="btn primary" id="sweep-run">Start sweep</button><span class="hint" id="sweep-plan"></span></div>
+            <h3>Sweeps</h3><div class="scroll" id="lab-sweeps"></div>
+          </div>
+        </div>
+        <div class="sub" data-sub="runs">
+          <div class="card"><div class="row between"><h2>Runs <small>click one to open it</small></h2><button class="btn ghost small" id="lab-runs-refresh">refresh</button></div>
+            <div class="scroll runs" id="lab-runs"></div></div>
+        </div>
+        <div class="sub" data-sub="help">
+          <div class="card help">
+            <h2>How to read the Lab</h2>
+            <h3>What a backtest does</h3>
+            <p>Signals are decided on <b>closed bars</b> and filled at the next bar's open with slippage and the full Indian charge stack (brokerage, STT, exchange, SEBI, stamp, GST). One unit per trade: 1 share, or 1 lot. Index option trades are priced with a Black-76 model off the underlying and India VIX (<b>synthetic</b>) until the Dhan option-chain history is wired.</p>
+            <h3>The numbers that matter</h3>
+            <ul>
+              <li><b>Expectancy (R)</b> — average result per trade in units of initial risk. Positive after costs is the first bar to clear.</li>
+              <li><b>Profit factor</b> — gross wins ÷ gross losses. Below 1.0 loses; 1.2+ with 30+ trades starts to mean something.</li>
+              <li><b>Payoff</b> — average win ÷ average loss. The <b>30 % rule</b>: at a 30 % win rate you need a payoff of 2.33 to break even, so the panel shows the profit factor your exits would give at 30 % wins.</li>
+              <li><b>Max drawdown (₹)</b> — worst peak-to-trough in rupees, which is what you actually feel.</li>
+              <li><b>Trades</b> — fewer than ~30 and every other number is noise.</li>
+            </ul>
+            <h3>Walk-forward</h3>
+            <p>The honest test. The data is cut into folds: optimise the parameters on an <b>in-sample</b> window, then run them untouched on the next <b>out-of-sample</b> window; slide forward; repeat. Only the stitched out-of-sample trades are scored. Windows are sized automatically from the data (at least 3 folds); it refuses to run on fewer than 12 sessions instead of reporting an empty "done". <b>Default-params OOS</b> shows what the untuned strategy did on the same windows — if tuning does not beat it, the tuning is curve-fitting.</p>
+            <h3>Optimizer</h3>
+            <p>Random search over the strategy's declared ranges, scored SQN-style, then the top candidates are re-scored with jittered neighbours and the most <b>plateau-robust</b> one wins (a sharp peak that dies when a parameter moves by one step is not an edge). In-sample numbers are optimistic by construction.</p>
+            <h3>Sweep &amp; leaderboard</h3>
+            <p>Sweep runs every strategy on every watchlist instrument at four timeframes with default parameters and saves each run. The leaderboard ranks all saved runs by <b>expectancy × √trades</b> (capped at 100 trades), unranked below the minimum trade count; walk-forward rows are flagged OOS and should be trusted over in-sample rows.</p>
+            <h3>Sentiment gate</h3>
+            <p>Once historical scores are imported (News &amp; Sentiment → Import), a strategy can be gated: <b>follow</b> blocks longs while sentiment is bearish and shorts while bullish; <b>strict</b> allows only trades with sentiment; <b>contrarian</b> the opposite. The score used for a bar is the latest one at or before that bar's close, never a later one.</p>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -141,7 +232,7 @@
     <div class="grid2">
       <div class="card">
         <h2>Backfill the corpus</h2>
-        <p class="muted">Yahoo is keyless (2m/5m/15m ≈ 60 days, 60m ≈ 2 years, daily unlimited). Once the Dhan Data API is active, pick <b>dhan</b> for five years of 1-minute bars.</p>
+        <p class="muted">Yahoo is keyless (2m/5m/15m ≈ 60 days, 60m ≈ 2 years, daily unlimited). Once the Dhan Data API is active, pick <b>dhan</b> for five years of 1-minute bars — one re-download then covers every timeframe the Lab and the Desk use.</p>
         <div class="row2">
           <label>Provider <select id="data-provider"><option value="">auto</option><option value="yahoo">yahoo</option><option value="dhan">dhan</option></select></label>
           <label>Resolutions <input type="text" id="data-res" placeholder="default plan"></label>
@@ -155,47 +246,70 @@
       <div class="card"><h2>Coverage</h2><div class="scroll" id="data-coverage"></div></div>
     </div>
     <div class="card" id="data-quality-card" hidden><h2>Quality</h2><div class="scroll" id="data-quality-out"></div></div>
+    <div class="card">
+      <div class="row between"><h2>Explore a series <small>what the backtests actually see</small></h2>
+        <div class="actions"><select id="eda-series"></select><select id="eda-res"><option>5m</option><option>2m</option><option>15m</option><option>60m</option></select><button class="btn small" id="eda-go">Explore</button></div></div>
+      <div class="tiles small" id="eda-stats"></div>
+      <div class="grid2">
+        <div><h3>Daily close · India VIX (right axis)</h3><div class="plot" id="eda-close"></div></div>
+        <div><h3>Daily returns distribution (%)</h3><div class="plot" id="eda-ret"></div></div>
+        <div><h3>Intraday profile — average bar range % by time of day</h3><div class="plot" id="eda-profile"></div></div>
+        <div><h3>Sessions in the corpus by month</h3><div class="plot" id="eda-cov"></div></div>
+      </div>
+      <div class="grid2">
+        <div><h3>Weekday seasonality</h3><div class="scroll" id="eda-weekday"></div></div>
+        <div><h3>Daily-return correlation <small>watchlist + indices, last 250 sessions</small></h3><div class="scroll" id="eda-corr"></div></div>
+      </div>
+    </div>
   </section>
 
   <!-- ──────────────────────────── NEWS & SENTIMENT ─────────────────── -->
   <section data-tab="news" class="tab">
+    <div class="card">
+      <div class="row between"><h2>Market pulse <small>rule-based baseline from data the desk already has · 0 bearish · 0.5 chop · 1 bullish</small></h2>
+        <button class="btn small" id="pulse-refresh">recompute</button></div>
+      <div class="pulse" id="pulse"></div>
+      <p class="hint">Breadth and index trend come from the Live Desk bars, VIX from the corpus, the NIFTY put/call ratio from the Dhan option chain once the Data API is active (one request per five minutes, well inside the 1-per-3-seconds limit). Recorded into the score history every 15 minutes while the market is open, so backtests can gate on it and your own scorer can be compared against it.</p>
+    </div>
     <div class="grid2">
       <div class="card">
-        <h2>Sentiment board <small>latest score per scope</small></h2>
-        <div class="tiles small" id="sent-board"></div>
-        <h3>Post a score</h3>
-        <div class="row2">
-          <label>Scope <select id="sent-scope"><option>MARKET</option><option>INDEX</option><option>STOCK</option><option>SECTOR</option></select></label>
-          <label>Symbol <input type="text" id="sent-symbol" placeholder="BANKNIFTY"></label>
-        </div>
-        <div class="row2">
-          <label>Score (−1 … +1) <input type="number" id="sent-score" step="0.05" min="-1" max="1" value="0"></label>
-          <label>Confidence (0 … 1) <input type="number" id="sent-conf" step="0.05" min="0" max="1" value="0.5"></label>
-        </div>
-        <div class="row2">
-          <label>Horizon <select id="sent-horizon"><option>intraday</option><option>swing</option><option>positional</option></select></label>
-          <label>Source <input type="text" id="sent-source" placeholder="manual / my-scorer"></label>
-        </div>
-        <label>Note <input type="text" id="sent-note"></label>
-        <div class="actions mt"><button class="btn primary" id="sent-add">Post sentiment</button></div>
+        <h2>Score history <small>MARKET scope · all sources</small></h2>
+        <div class="plot" id="sent-chart" style="height:260px"></div>
+        <h3>Latest per scope</h3><div class="tiles small" id="sent-board"></div>
+        <details class="mt"><summary>Post a score manually</summary>
+          <div class="row2">
+            <label>Scope <select id="sent-scope"><option>MARKET</option><option>INDEX</option><option>STOCK</option><option>SECTOR</option></select></label>
+            <label>Symbol <input type="text" id="sent-symbol" placeholder="BANKNIFTY"></label>
+          </div>
+          <div class="row2">
+            <label>Score (−1 … +1) <input type="number" id="sent-score" step="0.05" min="-1" max="1" value="0"></label>
+            <label>Confidence (0 … 1) <input type="number" id="sent-conf" step="0.05" min="0" max="1" value="0.5"></label>
+          </div>
+          <div class="row2">
+            <label>Horizon <select id="sent-horizon"><option>intraday</option><option>swing</option><option>positional</option></select></label>
+            <label>Source <input type="text" id="sent-source" placeholder="manual / my-scorer"></label>
+          </div>
+          <label>Note <input type="text" id="sent-note"></label>
+          <div class="actions mt"><button class="btn primary" id="sent-add">Post sentiment</button></div></details>
+        <details class="mt"><summary>Import historical scores for backtests</summary>
+          <p class="hint">One row per day (or timestamp): <code>2024-01-02,0.62</code> — a 0…1 scale is mapped to −1…+1 automatically. Optional third column = confidence. Then pick a <b>sentiment gate</b> in the Lab.</p>
+          <div class="row2"><label>Scope <select id="imp-scope"><option>MARKET</option><option>INDEX</option><option>STOCK</option></select></label><label>Symbol (optional) <input type="text" id="imp-symbol"></label></div>
+          <div class="row2"><label>Source <input type="text" id="imp-source" value="my-scorer"></label><label class="inline"><input type="checkbox" id="imp-replace" checked> replace earlier rows from this source</label></div>
+          <label>Rows <textarea id="imp-text" rows="6" placeholder="date,score[,confidence]"></textarea></label>
+          <div class="actions mt"><button class="btn primary" id="imp-run">Import</button><span class="hint" id="imp-out"></span></div></details>
         <h3>Recent scores</h3><div class="scroll" id="sent-list"></div>
       </div>
       <div class="card">
         <h2>News feed</h2>
-        <label>Headline <input type="text" id="news-headline"></label>
-        <label>Body <textarea id="news-body" rows="3"></textarea></label>
-        <div class="row2">
-          <label>Source <input type="text" id="news-source"></label>
-          <label>URL <input type="text" id="news-url"></label>
-        </div>
-        <div class="row2">
-          <label>Symbols <input type="text" id="news-symbols" placeholder="BANKNIFTY HDFCBANK"></label>
-          <label>Sentiment (optional) <input type="number" id="news-sent" step="0.05" min="-1" max="1"></label>
-        </div>
-        <div class="actions mt"><button class="btn primary" id="news-add">Add news</button></div>
-        <h3>Latest</h3><div class="feed tall" id="news-list"></div>
-        <details class="mt"><summary>API for your scorer</summary>
-          <pre class="code" id="news-curl"></pre></details>
+        <div class="feed tall" id="news-list"></div>
+        <details class="mt"><summary>Add a news item</summary>
+          <label>Headline <input type="text" id="news-headline"></label>
+          <label>Body <textarea id="news-body" rows="3"></textarea></label>
+          <div class="row2"><label>Source <input type="text" id="news-source"></label><label>URL <input type="text" id="news-url"></label></div>
+          <div class="row2"><label>Symbols <input type="text" id="news-symbols" placeholder="BANKNIFTY HDFCBANK"></label>
+            <label>Sentiment (optional) <input type="number" id="news-sent" step="0.05" min="-1" max="1"></label></div>
+          <div class="actions mt"><button class="btn primary" id="news-add">Add news</button></div></details>
+        <details class="mt"><summary>API for your scorer</summary><pre class="code" id="news-curl"></pre></details>
       </div>
     </div>
   </section>
@@ -217,21 +331,29 @@
         <div class="scroll mt" id="cred-test-out"></div>
         <h3>Generating tokens on Dhan</h3>
         <ol class="muted small-list">
-          <li>web.dhan.co → My Profile → <b>Access DhanHQ APIs</b> → Generate access token (24 h validity; renew daily).</li>
+          <li>web.dhan.co → My Profile → <b>Access DhanHQ APIs</b> → Generate access token (24 h validity; renew daily — the header badge counts down).</li>
           <li><b>Postback URL:</b> optional, only used for order updates. This desk never places orders, so leave it blank — or point it at <code id="postback-hint"></code> (recorded, never acted upon).</li>
           <li>Do not grant anything you don't need; the desk only READS.</li>
         </ol>
       </div>
-      <div class="card">
-        <h2>Desk configuration <small>read-only here; edit config/config.yaml</small></h2>
-        <div id="cfg-view"></div>
-        <div class="actions mt"><button class="btn" id="notify-test">Send a test notification</button></div>
+      <div>
+        <div class="card">
+          <h2>Live Desk watchlist <small>config/desk.yaml</small></h2>
+          <div id="desk-cfg"></div>
+          <p class="hint">Edit the file to add or remove instruments, or to change which strategies (and parameters) run on each — the Lab's <b>Apply best params</b> prints the keys to paste. Then reload.</p>
+          <div class="actions mt"><button class="btn" id="desk-reload">Reload desk config</button><button class="btn ghost" id="desk-poll">Poll now</button></div>
+        </div>
+        <div class="card">
+          <h2>Desk configuration <small>read-only here; edit config/config.yaml</small></h2>
+          <div id="cfg-view"></div>
+          <div class="actions mt"><button class="btn" id="notify-test">Send a test notification</button></div>
+        </div>
       </div>
     </div>
   </section>
 
   <footer class="foot">
-    Decision-support only. Not investment advice. Every figure is an estimate until reconciled with a contract note.
+    <svg class="mascot sm"><use href="#m-cow"/></svg> Decision-support only. Not investment advice. Every figure is an estimate until reconciled with a contract note.
     <span id="conn"></span>
   </footer>
 </div>

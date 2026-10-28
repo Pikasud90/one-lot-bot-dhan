@@ -15,7 +15,9 @@ Bright **Day** theme by default; **☾ Night** in the header switches.
    Then **Walk-forward**. Only out-of-sample numbers count.
 4. **Data** → coverage of the local corpus; backfill from Yahoo now, from Dhan (1-minute, 5 years) once the Data API is active.
 5. **News & Sentiment** → post scores manually or from your scorer (`POST /api/sentiment`).
-6. **Live Desk** → the Bank Nifty option engine (needs the Data API and a restart without `--mock`).
+6. **Live Desk** → 5 indices + 10 stocks under several strategies each, on delayed Yahoo bars until the
+   Data API is active (then 1-minute Dhan bars, automatically). Expand a row for market / regime /
+   risk / data health. Take or skip alerts; close what you took.
 
 Shell:
 
@@ -24,6 +26,8 @@ Shell:
 .venv/bin/python -m onelot backfill
 .venv/bin/python -m onelot backtest --strategy supertrend_vol --instrument BANKNIFTY_FUT --timeframe 5m
 .venv/bin/python -m onelot research --instruments BANKNIFTY_OPT --timeframes 5m,15m
+.venv/bin/python -m onelot sweep --strategies all --instruments focus --timeframes 5m,15m,30m,60m
+.venv/bin/python -m onelot leaderboard --min-trades 10
 .venv/bin/python -m pytest -q
 ```
 

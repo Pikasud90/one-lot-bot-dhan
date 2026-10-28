@@ -1,0 +1,53 @@
+# Live Desk watchlist.
+#
+# Indices are tracked through their OPTIONS: a bullish signal means BUY a CE, a bearish
+# signal means BUY a PE; the only exit is selling that option back. Stocks are traded as
+# ONE share, long or short, intraday. Every instrument runs several strategies at once;
+# each strategy decides on its own closed bars of its own timeframe.
+#
+# Edit, then press "Reload desk config" in Settings (or restart). Strategy names are the
+# Backtest Lab names; `params` overrides the strategy defaults (the Lab's "Apply best
+# params" writes the same keys).
+
+poll_seconds: 60          # how often fresh bars are pulled during the session
+history_days: 10          # fine bars kept in memory per instrument (warm-up for 60 bars at 30m needs ~5 sessions)
+source: auto              # auto = Dhan 1-minute bars when the Data API is active, else Yahoo 2-minute (delayed ~15 min)
+signal_valid_minutes: 10  # a BUY/SELL alert expires if not acknowledged within this window
+
+context:                  # the strip above the two panels
+  - {key: INDIAVIX, label: "India VIX"}
+  - {key: NIFTY,     label: "NIFTY 50"}
+  - {key: BANKNIFTY, label: "NIFTY BANK"}
+  - {key: SENSEX,    label: "SENSEX"}
+  - {key: USDINR,    label: "USD/INR"}
+  - {key: GIFTNIFTY, label: "GIFT NIFTY", manual: true,
+     note: "No free feed exists (NSE IX). Feed it from your own source: POST /api/desk/context {\"key\":\"GIFTNIFTY\",\"last\":25410,\"change_pct\":0.3}"}
+
+defaults:
+  index_strategies:       # applied to every index unless it lists its own
+    - {name: ema_cross,       timeframe: 12m}
+    - {name: supertrend_vol,  timeframe: 5m}
+    - {name: orb,             timeframe: 5m}
+  stock_strategies:
+    - {name: ema_cross,       timeframe: 15m}
+    - {name: supertrend_vol,  timeframe: 15m}
+    - {name: mean_reversion,  timeframe: 5m}
+
+indices:
+  - {key: BANKNIFTY,  tracked: BANKNIFTY_OPT}
+  - {key: NIFTY,      tracked: NIFTY_OPT}
+  - {key: FINNIFTY,   tracked: FINNIFTY_OPT}
+  - {key: MIDCPNIFTY, tracked: MIDCPNIFTY_OPT}
+  - {key: SENSEX,     tracked: SENSEX_OPT}
+
+stocks:
+  - {key: RELIANCE}
+  - {key: MM}                   # Mahindra & Mahindra (NSE symbol M&M)
+  - {key: SBIN}
+  - {key: HDFCBANK}
+  - {key: ITC}
+  - {key: TMPV, note: "Tata Motors Passenger Vehicles (post-demerger); TMCV is the commercial-vehicle entity"}
+  - {key: MARUTI}
+  - {key: ADANIGREEN}
+  - {key: ICICIBANK}
+  - {key: HEROMOTOCO}

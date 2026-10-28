@@ -225,6 +225,32 @@ class TestAccountService:
         assert snap["panels"]["ledger"]["error"].startswith("BrokerError")
         assert snap["panels"]["funds"]["data"]["availabelBalance"] == 98765.5
 
+    def test_failed_refresh_keeps_last_good_data(self, engine):
+        """Day-two scenario: token expired / laptop offline. The Home tab must
+        keep showing yesterday's ledger, clearly marked, never zeros."""
+        svc = AccountService(engine, adapter=make_adapter(good_handler))
+        svc.refresh()
+        before = svc.snapshot()
+        assert before["summary"]["available_balance"] == 98765.5 and before["last_error"] is None
+
+        svc.adapter = make_adapter(lambda r: httpx.Response(401, json={"errorCode": "DH-901", "errorMessage": "expired"}))
+        res = svc.refresh()
+        assert all(v["error"] == "TOKEN_EXPIRED" for v in res.values())
+        after = svc.snapshot()
+        assert after["summary"]["available_balance"] == 98765.5          # data preserved
+        assert after["panels"]["funds"]["data"]["availabelBalance"] == 98765.5
+        assert after["panels"]["funds"]["fetched_at"] == before["panels"]["funds"]["fetched_at"]
+        assert after["panels"]["funds"]["error"].startswith("TOKEN_EXPIRED")
+        assert after["panels"]["funds"]["error_at"] is not None
+        assert after["token_expired"] is True and after["last_error"]["panel"] in KEYS
+
+        def offline(_r):
+            raise httpx.ConnectError("no route to host")
+        svc.adapter = make_adapter(offline)
+        svc.refresh()
+        snap = svc.snapshot()
+        assert snap["offline"] is True and snap["summary"]["holdings_count"] == 1
+
     def test_summary_tolerates_strings_and_missing_fields(self):
         panels = {"funds": {"data": {"availabelBalance": "12.5"}}, "positions": {"data": [{"netQty": "0"}, {"netQty": "-35", "unrealizedProfit": "-10"}]},
                   "holdings": {"data": []}, "profile": {"data": {}}, "ledger": {"data": "not-a-list"}}

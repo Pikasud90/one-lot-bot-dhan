@@ -67,6 +67,21 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--trials", type=int, default=30)
     rs.add_argument("--workers", type=int, default=None)
 
+    sw = sub.add_parser("sweep", help="brute-force every strategy x instrument x timeframe; saves every run")
+    sw.add_argument("--strategies", default="all", help="comma list or 'all'")
+    sw.add_argument("--instruments", default="focus", help="comma list or 'focus' (the desk watchlist)")
+    sw.add_argument("--timeframes", default="5m,15m,30m,60m")
+    sw.add_argument("--cost-x", type=float, default=1.0, help="cost stress multiplier")
+    sw.add_argument("--top", type=int, default=25, help="rows of the leaderboard to print")
+
+    lb = sub.add_parser("leaderboard", help="rank every saved backtest run")
+    lb.add_argument("--strategy")
+    lb.add_argument("--instrument")
+    lb.add_argument("--timeframe")
+    lb.add_argument("--kind", choices=["single", "walkforward"])
+    lb.add_argument("--min-trades", type=int, default=10)
+    lb.add_argument("--top", type=int, default=40)
+
     q = sub.add_parser("quality", help="corpus coverage + quality report")
     q.add_argument("--resolution", default="5m")
 
@@ -228,6 +243,62 @@ def cmd_research(args, cfg: AppConfig, secrets: Secrets) -> int:
     return 0
 
 
+def _print_board(rows: list[dict], top: int) -> None:
+    print(f"{'#':>4} {'strategy':<18} {'instrument':<15} {'tf':<4} {'kind':<5} {'trades':>6} {'win%':>6} "
+          f"{'PF':>6} {'expR':>7} {'net ₹':>10} {'maxDD ₹':>9} {'score':>7}")
+    for r in rows[:top]:
+        print(f"{r['run_id']:>4} {r['strategy']:<18} {r['instrument']:<15} {r['timeframe']:<4} "
+              f"{'OOS' if r['oos'] else 'IS':<5} {r['trades'] or 0:>6} {(r['win_rate'] or 0):>6.1f} "
+              f"{(r['profit_factor'] or 0):>6.2f} {(r['expectancy_r'] or 0):>7.3f} {(r['net_pnl'] or 0):>10,.0f} "
+              f"{(r['max_drawdown_inr'] or 0):>9,.0f} {(r['score'] if r['score'] is not None else float('nan')):>7.2f}")
+
+
+def cmd_sweep(args, cfg: AppConfig, secrets: Secrets) -> int:
+    import time
+
+    from .data.db import get_engine
+    from .lab.jobs import JobRunner
+    from .lab.sweep import leaderboard, plan, summarise
+
+    strategies = None if args.strategies == "all" else [s.strip() for s in args.strategies.split(",") if s.strip()]
+    instruments = None if args.instruments == "focus" else [i.strip().upper() for i in args.instruments.split(",") if i.strip()]
+    tfs = [t.strip() for t in args.timeframes.split(",") if t.strip()]
+    combos = plan(strategies, instruments, tfs)
+    print(f"sweep: {len(combos)} runs ({len({c['strategy'] for c in combos})} strategies x "
+          f"{len({c['instrument_key'] for c in combos})} instruments x {len(tfs)} timeframes)")
+    eng = get_engine(cfg.db_url_resolved)
+    jobs = JobRunner(eng, workers=1)
+    rid = jobs.submit_sweep(combos, label="cli sweep", base={"cost_multiplier": args.cost_x})
+    last = ""
+    while True:
+        run = jobs.get_run(rid, with_trades=False)
+        if run["message"] != last:
+            last = run["message"] or ""
+            print(f"  {run['progress'] * 100:5.1f}%  {last}")
+        if run["status"] in ("DONE", "FAILED"):
+            break
+        time.sleep(2)
+    jobs.pool.shutdown(wait=True)
+    print(f"sweep #{rid}: {run['status']} — {run['metrics']}")
+    rows = leaderboard(eng, sweep_id=rid)
+    s = summarise(rows)
+    print(f"ranked {s['ranked']} / {s['runs']}; {s['positive']} with PF >= 1.2 and positive score")
+    _print_board(rows, args.top)
+    return 0 if run["status"] == "DONE" else 1
+
+
+def cmd_leaderboard(args, cfg: AppConfig, secrets: Secrets) -> int:
+    from .data.db import get_engine
+    from .lab.sweep import leaderboard, summarise
+
+    rows = leaderboard(get_engine(cfg.db_url_resolved), strategy=args.strategy, instrument=args.instrument,
+                       timeframe=args.timeframe, kind=args.kind, min_trades=args.min_trades)
+    s = summarise(rows)
+    print(f"{s['runs']} saved runs, {s['ranked']} ranked (>= {args.min_trades} trades), {s['positive']} positive")
+    _print_board(rows, args.top)
+    return 0
+
+
 def cmd_quality(args, cfg: AppConfig, secrets: Secrets) -> int:
     import pandas as pd
 
@@ -271,6 +342,7 @@ def main(argv: list[str] | None = None) -> int:
                   max_bytes=cfg.logging.max_bytes, backup_count=cfg.logging.backup_count,
                   secrets=secrets.secret_values(), component="engine" if component == "run" else component)
     fn = {"run": cmd_run, "backfill": cmd_backfill, "backtest": cmd_backtest, "research": cmd_research,
+          "sweep": cmd_sweep, "leaderboard": cmd_leaderboard,
           "quality": cmd_quality, "preflight": cmd_preflight, "cost": cmd_cost}[component]
     return int(fn(args, cfg, secrets) or 0)
 

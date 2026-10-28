@@ -139,6 +139,7 @@ class Engine:
         use_database(self.db)
         self.account = AccountService(self.db.engine, adapter=None)
         self.lab_jobs = JobRunner(self.db.engine)
+        self.desk = None   # built in start(): the multi-instrument Live Desk
 
     # ── startup ───────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -187,6 +188,19 @@ class Engine:
 
         self.notifier.self_test()
 
+        # The Live Desk: every watchlist index/stock under several strategies at
+        # once. Runs on Yahoo (delayed) until the Dhan Data API is active, so the
+        # whole tab works on day one. Shares the risk governor and the notifier.
+        try:
+            from .desk import Desk
+            self.desk = Desk(self.db.engine, self.cfg, self.notifier, self.governor, self.session_clock,
+                             repo=self.repo, adapter_getter=lambda: self.account.adapter,
+                             data_api_active=self._data_api_active)
+            self.desk.start()
+        except Exception:
+            log.exception("Live Desk failed to start (the Bank Nifty engine continues)")
+            self.status.warnings.append("Live Desk failed to start — see the log")
+
         for target, name in ((self._bar_loop, "bar-loop"),
                              (self._guardian_loop, "guardian-loop"),
                              (self._housekeeping_loop, "housekeeping")):
@@ -198,9 +212,19 @@ class Engine:
                  self.cfg.mode, getattr(self.broker, "name", "?"),
                  self.expiry, self.lot_size)
 
+    def _data_api_active(self) -> bool:
+        """Cheap: reads the cached profile, never the network."""
+        try:
+            prof = (self.account.snapshot()["panels"].get("profile") or {}).get("data") or {}
+            return str(prof.get("dataPlan") or "").lower() == "active"
+        except Exception:  # noqa: BLE001
+            return False
+
     def stop(self) -> None:
         log.info("Engine stopping")
         self._stop.set()
+        if self.desk:
+            self.desk.stop()
         if self.feed:
             self.feed.stop()
         if self.chain:
@@ -830,6 +854,7 @@ class Engine:
             "rate_limiter": self.limiter.snapshot(),
             "notifications": self.notifier.status(),
             "journal": self.journal.metrics(self.cfg.mode),
+            "desk": self.desk.snapshot() if self.desk else None,
         }
 
     def gate_histogram(self, hours: int = 24) -> list[dict]:

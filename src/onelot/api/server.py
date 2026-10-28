@@ -52,14 +52,35 @@ class BacktestBody(BaseModel):
     slippage_pct: float | None = None
     cost_multiplier: float = 1.0
     label: str = ""
+    sentiment_mode: str = "off"          # off | follow | strict | contrarian
+    sentiment_scope: str = "MARKET"
+    sentiment_symbol: str | None = None
+    sentiment_threshold: float = 0.2
 
 
 class OptimizeBody(BacktestBody):
     kind: str = "optimize"          # optimize | walkforward
     trials: int = 40
     space: dict | None = None       # {param: {"choices":[...]} | {"lo","hi","step"}}
-    is_days: int = 40
-    oos_days: int = 10
+    is_days: int | None = None      # None = windows auto-sized from the available sessions
+    oos_days: int | None = None
+
+
+class DeskContextBody(BaseModel):
+    key: str
+    last: float
+    change_pct: float | None = None
+    note: str | None = None
+
+
+class SweepBody(BaseModel):
+    strategies: list[str] | None = None     # None = every registered strategy
+    instruments: list[str] | None = None    # None = the desk watchlist (config/desk.yaml)
+    timeframes: list[str] | None = None     # None = 5m, 15m, 30m, 60m
+    slippage_pct: float | None = None
+    cost_multiplier: float = 1.0
+    sentiment_mode: str = "off"
+    label: str = ""
 
 
 class BackfillBody(BaseModel):
@@ -89,6 +110,15 @@ class SentimentBody(BaseModel):
     source: str | None = None
     note: str | None = None
     ts: str | None = None
+
+
+class SentimentImportBody(BaseModel):
+    text: str = Field(..., description="CSV rows: date[,score[,confidence]]; header optional")
+    scope: str = "MARKET"
+    symbol: str | None = None
+    source: str = "import"
+    horizon: str | None = "daily"
+    replace_source: bool = Field(False, description="Delete earlier rows from the same source first")
 
 
 class CredentialsBody(BaseModel):
@@ -191,6 +221,46 @@ def create_app(engine, api_token: str) -> FastAPI:
     def notify_test() -> dict:
         return engine.notifier.self_test()
 
+    # ── Live Desk (multi-instrument; alerts only) ─────────────────────────
+    def _desk():
+        if engine.desk is None:
+            raise HTTPException(503, "Live Desk not running")
+        return engine.desk
+
+    @app.get("/api/desk")
+    def desk_state() -> dict:
+        return _desk().snapshot()
+
+    @app.post("/api/desk/signal/{signal_id}/ack", dependencies=[Depends(require_token)])
+    def desk_ack(signal_id: str, body: AckBody) -> dict:
+        return _desk().acknowledge(signal_id, body.action, body.fill_price, body.source)
+
+    @app.post("/api/desk/position/{position_id}/close", dependencies=[Depends(require_token)])
+    def desk_close(position_id: str, body: CloseBody) -> dict:
+        res = _desk().close_position(position_id, body.exit_price, body.reason)
+        if res is None:
+            raise HTTPException(404, "position not found or already closed")
+        return res
+
+    @app.post("/api/desk/context", dependencies=[Depends(require_token)])
+    def desk_context(body: DeskContextBody) -> dict:
+        """Feed a context value the desk has no free source for (GIFT NIFTY)."""
+        return _desk().set_context(body.key, body.last, body.change_pct, body.note)
+
+    @app.post("/api/desk/reload", dependencies=[Depends(require_token)])
+    def desk_reload() -> dict:
+        return _desk().reload()
+
+    @app.post("/api/desk/poll", dependencies=[Depends(require_token)])
+    def desk_poll() -> dict:
+        d = _desk()
+        d._wake.set()
+        return {"ok": True}
+
+    @app.get("/api/desk/journal")
+    def desk_journal(limit: int = Query(200, ge=1, le=2000)) -> dict:
+        return {"trades": _desk().journal(limit)}
+
     # ── account (free Trading API; cached, never polled) ──────────────────
     @app.get("/api/account")
     def account(refresh: int = Query(0, ge=0, le=1)) -> dict:
@@ -240,6 +310,8 @@ def create_app(engine, api_token: str) -> FastAPI:
         cfg = BacktestConfig.from_settings(
             body.strategy, body.instrument_key.upper(), params=body.params, timeframe=body.timeframe,
             start=body.start, end=body.end, cost_multiplier=body.cost_multiplier, label=body.label,
+            sentiment_mode=body.sentiment_mode, sentiment_scope=body.sentiment_scope,
+            sentiment_symbol=body.sentiment_symbol, sentiment_threshold=body.sentiment_threshold,
             **({"slippage_pct": body.slippage_pct} if body.slippage_pct is not None else {}))
         rid = engine.lab_jobs.submit_backtest(cfg.__dict__, label=body.label or f"{body.strategy} {body.instrument_key} {body.timeframe}")
         return {"run_id": rid}
@@ -270,6 +342,42 @@ def create_app(engine, api_token: str) -> FastAPI:
     @app.get("/api/lab/runs")
     def lab_runs(limit: int = Query(50, ge=1, le=500)) -> dict:
         return {"runs": engine.lab_jobs.list_runs(limit)}
+
+    @app.post("/api/lab/runs/{rid}/stop", dependencies=[Depends(require_token)])
+    def lab_run_stop(rid: int) -> dict:
+        return {"stopped": engine.lab_jobs.stop_run(rid)}
+
+    @app.post("/api/lab/sweep", dependencies=[Depends(require_token)])
+    def lab_sweep(body: SweepBody) -> dict:
+        from ..lab.sweep import plan
+
+        try:
+            combos = plan(body.strategies, body.instruments, body.timeframes)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if len(combos) > 3000:
+            raise HTTPException(400, f"{len(combos)} runs is too many for one sweep; narrow the grid")
+        base = {"cost_multiplier": body.cost_multiplier, "sentiment_mode": body.sentiment_mode}
+        if body.slippage_pct is not None:
+            base["slippage_pct"] = body.slippage_pct
+        rid = engine.lab_jobs.submit_sweep(combos, label=body.label, base=base)
+        return {"run_id": rid, "combos": len(combos)}
+
+    @app.get("/api/lab/leaderboard")
+    def lab_leaderboard(strategy: str | None = None, instrument: str | None = None, timeframe: str | None = None,
+                        category: str | None = None, kind: str | None = None, sweep_id: int | None = None,
+                        min_trades: int = Query(10, ge=1, le=500), limit: int = Query(300, ge=1, le=2000)) -> dict:
+        from ..lab.sweep import leaderboard, summarise
+
+        rows = leaderboard(db.engine, strategy=strategy, instrument=instrument, timeframe=timeframe,
+                           category=category, kind=kind, min_trades=min_trades, sweep_id=sweep_id, limit=limit)
+        return {"rows": rows, "summary": summarise(rows)}
+
+    @app.get("/api/lab/focus")
+    def lab_focus() -> dict:
+        from ..lab.sweep import FOCUS_TIMEFRAMES, focus_instruments
+
+        return {"instruments": focus_instruments(), "timeframes": FOCUS_TIMEFRAMES}
 
     @app.get("/api/lab/runs/{rid}")
     def lab_run(rid: int, trades: int = Query(1, ge=0, le=1)) -> dict:
@@ -319,6 +427,24 @@ def create_app(engine, api_token: str) -> FastAPI:
         return {"resolution": resolution, "rows": json.loads(q.to_json(orient="records")) if not q.empty else []}
 
     # ── news + sentiment (endpoints now; the scorer is a separate project) ─
+    @app.get("/api/data/eda")
+    def data_eda(series: str = Query("BANKNIFTY"), resolution: str = Query("5m")) -> dict:
+        from ..data.eda import series_eda
+
+        return series_eda(db.engine, series.upper(), resolution)
+
+    @app.get("/api/data/correlation")
+    def data_correlation(series: str | None = None) -> dict:
+        from ..data.eda import correlation
+        from ..lab.sweep import desk_config
+
+        if series:
+            keys = [k.strip().upper() for k in series.split(",") if k.strip()]
+        else:
+            cfg_d = desk_config()
+            keys = ["NIFTY", "BANKNIFTY", "SENSEX", "INDIAVIX"] + [str(x["key"]).upper() for x in cfg_d.get("stocks") or []]
+        return correlation(db.engine, keys)
+
     @app.get("/api/news")
     def news(limit: int = Query(100, ge=1, le=1000), symbol: str | None = None) -> dict:
         from ..data.schema import news_items
@@ -389,6 +515,37 @@ def create_app(engine, api_token: str) -> FastAPI:
                 note=body.note, created_at=utcnow())).inserted_primary_key[0]
         return {"id": int(sid)}
 
+    @app.get("/api/sentiment/pulse")
+    def sentiment_pulse(refresh: int = Query(0, ge=0, le=1)) -> dict:
+        d = engine.desk
+        if d is None:
+            return {"score": None, "label": "desk not running", "components": {}}
+        return d.pulse.compute() if refresh or d.pulse.last.get("score") is None else d.pulse.last
+
+    @app.post("/api/sentiment/import", dependencies=[Depends(require_token)])
+    def sentiment_import(body: SentimentImportBody) -> dict:
+        """Bulk-load historical scores (your scorer's output) for backtests."""
+        from sqlalchemy import delete
+
+        from ..data.db import utcnow
+        from ..data.schema import sentiment_scores
+        from ..lab.sentiment import parse_import
+
+        rows = parse_import(body.text)
+        if not rows:
+            raise HTTPException(400, "no rows parsed; expected lines like 2024-01-02,0.62")
+        scope, symbol = body.scope.upper(), (body.symbol or "").upper() or None
+        with db.engine.begin() as conn:
+            if body.replace_source:
+                conn.execute(delete(sentiment_scores).where(
+                    (sentiment_scores.c.source == body.source) & (sentiment_scores.c.scope == scope)
+                    & ((sentiment_scores.c.symbol == symbol) if symbol else sentiment_scores.c.symbol.is_(None))))
+            conn.execute(sentiment_scores.insert(), [
+                {"ts": r["ts"], "scope": scope, "symbol": symbol, "score": r["score"], "confidence": r["confidence"],
+                 "horizon": body.horizon, "source": body.source, "note": None, "created_at": utcnow()} for r in rows])
+        return {"imported": len(rows), "first": rows[0]["ts"].isoformat(), "last": rows[-1]["ts"].isoformat(),
+                "scope": scope, "symbol": symbol, "source": body.source}
+
     # ── settings / credentials ────────────────────────────────────────────
     @app.get("/api/settings")
     def settings() -> dict:
@@ -441,13 +598,16 @@ def create_app(engine, api_token: str) -> FastAPI:
         html = (UI_DIR / "index.html").read_text(encoding="utf-8")
         return html.replace("__API_TOKEN__", api_token)
 
-    @app.get("/static/{name}")
+    @app.get("/static/{name:path}")
     def static(name: str):
         p = (UI_DIR / name).resolve()
         if not p.is_file() or UI_DIR.resolve() not in p.parents:
             raise HTTPException(404, "not found")
         media = {"js": "application/javascript", "css": "text/css", "svg": "image/svg+xml",
-                 "png": "image/png"}.get(p.suffix.lstrip("."), "application/octet-stream")
-        return FileResponse(str(p), media_type=media, headers={"Cache-Control": "no-cache"})
+                 "png": "image/png", "woff2": "font/woff2", "woff": "font/woff", "ttf": "font/ttf",
+                 "json": "application/json"}.get(p.suffix.lstrip("."), "application/octet-stream")
+        # Vendored libraries and fonts are immutable per version: cache them hard.
+        cache = "public, max-age=604800" if name.startswith("vendor/") else "no-cache"
+        return FileResponse(str(p), media_type=media, headers={"Cache-Control": cache})
 
     return app

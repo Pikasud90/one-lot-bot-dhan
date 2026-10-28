@@ -21,10 +21,10 @@ are reference only.
 | Tab | What it does | Needs |
 |---|---|---|
 | **Home** | Your Dhan account: funds, holdings, positions, 30-day ledger and trade book, token/Data-API validity. **Cached** — fetched only when you press Refresh or after you confirm a fill/exit. | free-tier token |
-| **Live Desk** | The Bank Nifty option engine: closed-bar signals with net-of-cost entry/stop/target/breakeven, a 75 s decision window, the Guardian (ratcheting trail, time stop, square-off), six risk kill-switches, "why no signal" histogram. | Data API |
-| **Backtest Lab** | Pick a category → instrument → strategy → timeframe → parameters, run on the local corpus. Equity, drawdown, candles with trade markers, monthly bars, breakdowns, trade list, the **30 % rule** panel. Optimizer with plateau-robust selection and rolling **walk-forward**. | nothing (Yahoo corpus) |
-| **Data** | The historical corpus: coverage per series/resolution, backfill jobs (Yahoo now, Dhan 1-minute × 5 years once the Data API is on), quality report. | nothing / Data API |
-| **News & Sentiment** | Sentiment board and news feed with `POST /api/sentiment` and `POST /api/news` for your own scorer (built separately). | nothing |
+| **Live Desk** | Two panels — **5 indices** (buy CE / buy PE, 1 lot) and **10 stocks** (buy / sell, 1 share) — each under several strategies at once, with an open-positions strip and a market-context strip (VIX, NIFTY, BANKNIFTY, SENSEX, USD/INR, GIFT NIFTY slot). Collapsible rows show market, regime & volatility, risk governor and data health per instrument. Alerts give instrument, unit, entry, stop, target, rupee risk/reward and instructions; taken trades are managed until you close them. Runs on Yahoo bars (delayed) until the Data API is active. The original Bank Nifty engine is folded underneath. `docs/14_LIVE_DESK.md` | nothing (Yahoo) / Data API |
+| **Backtest Lab** | Desk watchlist first, then any instrument. TradingView-style charts (vendored, offline) with trade markers; equity + drawdown; 30 % rule panel. **Walk-forward** with auto-sized windows, **optimizer**, **sweeps** (every strategy × instrument × timeframe, each saved) and a **leaderboard** over every saved run. Sentiment gate. 14 strategies. `docs/15_LAB_SWEEPS_SENTIMENT.md` | nothing (Yahoo corpus) |
+| **Data** | Corpus coverage, backfill jobs (Yahoo now, Dhan 1-minute × 5 years once the Data API is on), quality report, and an **explore** section: daily closes vs VIX, return distribution, intraday range profile, sessions per month, weekday seasonality, correlation heatmap. | nothing / Data API |
+| **News & Sentiment** | **Market pulse** (breadth, index trend, VIX percentile, NIFTY PCR with the Data API) recorded every 15 min, score history chart, board, news feed, manual posts, **bulk import** of your scorer's history for backtests. | nothing |
 | **Settings** | Paste Dhan credentials (written to `.env`, mode 0600, never echoed), **Test entitlements** (free tier vs Data API, per endpoint), postback guidance, read-only config. | — |
 
 Everything runs in **one Python process** (`python -m onelot run`) on macOS and Windows,
@@ -59,8 +59,11 @@ First run creates `.venv` and installs everything. Then:
 2. **Home** now shows your ledger and funds. Press Refresh whenever you want; it never polls.
 3. **Data**: the Yahoo corpus is already loaded on this machine (406 k bars: 26 series × 2m/5m/15m/60m/1d).
    Run a backfill any time to top it up.
-4. **Backtest Lab**: `OPTIONS → NIFTY BANK options → EMA Cross → 12m → Run backtest`.
+4. **Backtest Lab**: `Desk watchlist → NIFTY BANK options → EMA Cross → 12m → Run backtest`.
    Then *Walk-forward* on anything that looks good. Only out-of-sample numbers count.
+   **Sweep** runs everything on everything and the **Leaderboard** ranks all saved runs
+   (`python -m onelot sweep`, `python -m onelot leaderboard`).
+5. **Live Desk** works immediately on delayed Yahoo bars: 15 instruments, 45 strategy slots.
 5. Once the Data API is active: `python -m onelot backfill --provider dhan` (five years of
    1-minute bars), re-run the research gate, and promote a PASS strategy to the live engine
    with `strategy.live.source: lab` in `config/config.yaml`.

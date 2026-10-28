@@ -52,6 +52,12 @@ class BacktestConfig:
     warmup_sessions: int = 3
     reference_capital: float = 100000.0
     label: str = ""
+    # sentiment gate (see lab/sentiment.py); "off" leaves the strategy untouched
+    sentiment_mode: str = "off"
+    sentiment_scope: str = "MARKET"
+    sentiment_symbol: str | None = None
+    sentiment_threshold: float = 0.2
+    sentiment_max_age_days: float = 5.0
 
     def key(self) -> str:
         d = asdict(self)
@@ -202,6 +208,17 @@ def run_backtest(cfg: BacktestConfig, cache: DataCache | None = None,
     candidates: list[SimTrade] = []
     days = pd.DatetimeIndex([])
     test = None
+    if f is not None and cfg.sentiment_mode and cfg.sentiment_mode != "off":
+        from ..data.resample import minutes_of
+        from .sentiment import apply_gate, bias_at, load_scores
+
+        scores = load_scores(cache.engine, cfg.sentiment_scope, cfg.sentiment_symbol)
+        bias = bias_at(scores, f.index, minutes_of(cfg.timeframe) if cfg.timeframe != "1d" else 375,
+                       cfg.sentiment_threshold, cfg.sentiment_max_age_days)
+        f = apply_gate(f, bias, cfg.sentiment_mode)
+        counts["sentiment_scores_used"] = int(len(scores))
+        counts["sentiment_blocked_long"] = int(f["blk_sentiment_long"].sum())
+        counts["sentiment_blocked_short"] = int(f["blk_sentiment_short"].sum())
     if f is not None:
         test = f.loc[start_day:] if start_day is not None else f
         counts["setups_long"] = int(test["setup_long"].sum())
