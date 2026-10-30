@@ -82,3 +82,46 @@ equality test (which the 1-minute Bank Nifty engine uses) would never fire.
 
 GIFT NIFTY has no free feed (it trades on NSE IX); the slot exists so your own scraper or a paid
 feed can post it.
+
+## Alerts (Home tab) — the agreed lifecycle
+
+Every alert, F&O or stock, is handled the same way:
+
+1. **Raised** with an IST timestamp, the signal bar, the data it was computed on (`yahoo 2m ·
+   ~15 min delayed` or `dhan-ws 1m · live`), the strategy and timeframe, the signal strength and a
+   **confidence** score (0–100: 35 % signal strength, 30 % saved-backtest evidence for that
+   strategy/instrument/timeframe, 20 % the strategy's own archived-alert record, 15 % regime
+   fit; neutral 50 where there is no evidence yet — the parts are shown).
+2. **Time-to-live** (`signal_valid_minutes`, default 10): a countdown on the card. **Trade taken**
+   (with your fill) or **Skipped**; otherwise it **expires**. Either way it is archived.
+3. **Taken → Monitoring**: the position is re-checked every poll with the live price (the
+   WebSocket tick when the Dhan socket is on): trailing stop, target, the originating strategy's
+   own exit/opposite signal on its latest closed bar (`hold_check` says "still long — HOLD" or
+   why not), square-off time for intraday, a session time stop for swing. Each trigger is an
+   EXIT alert until you press **Closed** with the exit price.
+4. **Archive with outcome**: every archived alert (taken or not) is re-audited against the bars
+   that followed, at its own entry/stop/target: TARGET, STOP, SQUARE_OFF (intraday horizon
+   ended), OPEN, with best/worst excursion in R and the estimated one-unit P&L. Ties inside one
+   bar go to the stop. The per-strategy **scoreboard** (hit rate, average R) is built from this
+   and feeds the confidence score of the next alert.
+
+Horizons: index options are **intraday** (square-off 15:15). Stocks are **swing** by default
+(`stock_horizon: swing`, `swing_max_sessions: 5` in `config/desk.yaml`): a taken stock position is
+carried across sessions, recovered at the next start, resubscribed on the socket, and re-checked
+against its strategy every poll until the strategy exits, the stop/target hits, or the time stop.
+
+## Instrument focus (Live tab)
+
+A dropdown at the top of the Live tab selects any tracked instrument and shows its Market,
+Regime & volatility, Risk governor and Data health panels, its strategies' latest verdicts, and
+a chart (any timeframe) with every alert raised on it marked. The accordion rows remain below.
+
+## Live Data API path (once the token is valid and the plan active)
+
+* The engine switches from the synthetic market to the Dhan feed **in place** (Save credentials,
+  or Settings → Go live); the desk switches to **Dhan 1-minute bars + WebSocket ticks** for all
+  watchlist instruments on the engine's socket (one connection, 5000-instrument capacity).
+* Index alerts price the option from the **live option chain** (nearest expiry, strike nearest
+  the target delta, bought at the ask, spread shown) instead of the Black-76 model; the alert
+  says which.
+* The market pulse adds the NIFTY put/call ratio.

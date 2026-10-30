@@ -563,11 +563,18 @@ class Secrets:
     """
 
     def __init__(self, client_id: str = "", access_token: str = "", api_token: str = "",
-                 data_access_token: str = ""):
+                 data_access_token: str = "", pin: str = "", totp_secret: str = ""):
         self.client_id = client_id
         self.access_token = access_token
         self.data_access_token = data_access_token
         self.api_token = api_token
+        # Optional: lets the engine mint its own 24-hour tokens (TOTP enabled on Dhan).
+        self.pin = pin
+        self.totp_secret = totp_secret
+
+    @property
+    def can_self_renew(self) -> bool:
+        return bool(self.client_id and self.pin and self.totp_secret)
 
     @property
     def data_token(self) -> str:
@@ -597,9 +604,11 @@ class Secrets:
             access_token=os.environ.get("DHAN_ACCESS_TOKEN", "").strip(),
             api_token=api_token,
             data_access_token=os.environ.get("DHAN_DATA_ACCESS_TOKEN", "").strip(),
+            pin=os.environ.get("DHAN_PIN", "").strip(),
+            totp_secret=os.environ.get("DHAN_TOTP_SECRET", "").strip(),
         )
 
-    ENV_KEYS = ("DHAN_CLIENT_ID", "DHAN_ACCESS_TOKEN", "DHAN_DATA_ACCESS_TOKEN")
+    ENV_KEYS = ("DHAN_CLIENT_ID", "DHAN_ACCESS_TOKEN", "DHAN_DATA_ACCESS_TOKEN", "DHAN_PIN", "DHAN_TOTP_SECRET")
 
     @classmethod
     def write_env(cls, project_root: Path, updates: dict[str, str]) -> Path:
@@ -641,14 +650,22 @@ class Secrets:
             return (f"…{v[-4:]}" if len(v) >= 8 else "set") if v else None
         return {"client_id": m(self.client_id), "access_token": m(self.access_token),
                 "data_access_token": m(self.data_access_token),
-                "has_broker_creds": self.has_broker_creds}
+                "has_broker_creds": self.has_broker_creds,
+                "pin_set": bool(self.pin), "totp_set": bool(self.totp_secret),
+                "can_self_renew": self.can_self_renew}
 
     @staticmethod
     def _ephemeral_api_token(root: Path) -> str:
-        """Generate a per-run shared secret for engine<->dashboard auth."""
+        """The engine<->dashboard shared secret. Persisted in data/api_token.txt
+        and REUSED across restarts: regenerating it every start broke every
+        page that was already open ("invalid or missing API token" on Save)."""
         d = root / "data"
         d.mkdir(parents=True, exist_ok=True)
         f = d / "api_token.txt"
+        if f.exists():
+            existing = f.read_text().strip()
+            if len(existing) >= 32:
+                return existing
         tok = secrets.token_urlsafe(32)
         f.write_text(tok)
         try:
@@ -663,8 +680,9 @@ class Secrets:
 
     def secret_values(self) -> list[str]:
         """Everything the log redactor must scrub. See logging_setup.py."""
-        return [v for v in (self.client_id, self.access_token, self.data_access_token, self.api_token)
-                if v and len(v) >= 6]
+        return [v for v in (self.client_id, self.access_token, self.data_access_token, self.api_token,
+                            self.pin, self.totp_secret)
+                if v and len(v) >= 4]
 
     def __repr__(self) -> str:  # never leak via repr in a traceback
         return f"<Secrets client_id={'set' if self.client_id else 'unset'} token=***>"

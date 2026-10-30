@@ -3,7 +3,7 @@
          lab (backtests, leaderboard, sweeps) · data (corpus + EDA) · news (pulse, scores) · settings */
 (() => {
 "use strict";
-const TOKEN = window.ONELOT_TOKEN || "";
+let TOKEN = window.ONELOT_TOKEN || "";
 const $ = (id) => document.getElementById(id);
 const fmt = (v, d = 2) => (v === null || v === undefined || Number.isNaN(Number(v))) ? "–" : Number(v).toFixed(d);
 const rup = (v) => (v === null || v === undefined || Number.isNaN(Number(v))) ? "–"
@@ -27,11 +27,15 @@ function toast(msg, kind = "") {
   const d = document.createElement("div"); d.className = "toast " + kind; d.textContent = msg;
   $("toasts").appendChild(d); setTimeout(() => d.remove(), 6000);
 }
-async function api(url, body, method) {
+async function api(url, body, method, _retry) {
   const opt = { method: method || (body ? "POST" : "GET"), headers: { "x-onelot-token": TOKEN } };
   if (body) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
   const r = await fetch(url, opt);
   const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && !_retry) {
+    // The engine restarted or its session token changed: re-sync it once and retry.
+    try { const t = await fetch("/api/session").then(x => x.json()); if (t.token && t.token !== TOKEN) { TOKEN = t.token; return api(url, body, method, true); } } catch (e) {}
+  }
   if (!r.ok) { toast((j && (j.detail || j.error)) || `${r.status} ${url}`, "bad"); throw new Error(j.detail || r.status); }
   return j;
 }
@@ -51,6 +55,69 @@ function applyTheme(t) {
 }
 $("theme-toggle").onclick = () => applyTheme(document.documentElement.dataset.theme === "night" ? "day" : "night");
 applyTheme(store.get("theme", "day") === "night" ? "night" : "day");
+
+/* ── IST clock (system time, never the network) + exchange calendar ──── */
+const IST_FMT = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit", weekday: "short", day: "2-digit", month: "short", year: "numeric" });
+let calData = null, calMonth = null;
+function tickClock() {
+  const now = new Date();
+  const parts = Object.fromEntries(IST_FMT.formatToParts(now).map(p => [p.type, p.value]));
+  const ms = String(now.getMilliseconds()).padStart(3, "0");
+  $("clock").innerHTML = `${parts.hour}:${parts.minute}:${parts.second}<small>.${ms}</small>`;
+  $("clock-date").textContent = `${parts.weekday} ${parts.day} ${parts.month} ${parts.year} IST`;
+  const mins = parseInt(parts.hour, 10) * 60 + parseInt(parts.minute, 10);
+  let s = "";
+  if (calData && !calData.today_is_trading_day) s = calData.holidays.find(h => h.today) ? "holiday · " + calData.holidays.find(h => h.today).name : "weekend";
+  else if (mins < 555) s = `pre-open · opens in ${Math.floor((555 - mins) / 60)}h ${(555 - mins) % 60}m`;
+  else if (mins < 930) s = `market open · ${Math.floor((930 - mins) / 60)}h ${(930 - mins) % 60}m to close`;
+  else s = "market closed";
+  $("clock-session").textContent = s;
+  requestAnimationFrame(tickClock);
+}
+requestAnimationFrame(tickClock);
+async function loadCalendar(year) {
+  calData = await api("/api/calendar" + (year ? `?year=${year}` : ""));
+  return calData;
+}
+function renderCalendar() {
+  if (!calData) return;
+  const hol = new Map(calData.holidays.map(h => [h.date, h]));
+  const wk = new Map(calData.weekend_holidays.map(h => [h.date, h]));
+  const today = calData.today;
+  const y = calMonth.getFullYear(), m = calMonth.getMonth();
+  const first = new Date(y, m, 1), days = new Date(y, m + 1, 0).getDate();
+  const cells = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(d => `<div class="dow">${d}</div>`);
+  for (let i = 0; i < (first.getDay() + 6) % 7; i++) cells.push(`<div class="d empty"></div>`);
+  for (let d = 1; d <= days; d++) {
+    const iso = `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    const dow = new Date(y, m, d).getDay();
+    const h = hol.get(iso), w = wk.get(iso);
+    const cls = ["d"];
+    if (dow === 0 || dow === 6) cls.push("wk");
+    if (h) cls.push("hol", iso < today ? "past" : "next"); else if (iso < today && !(dow === 0 || dow === 6)) cls.push("past");
+    if (iso === today) cls.push("today");
+    cells.push(`<div class="${cls.join(" ")}" title="${esc((h || w || {}).name || "")}">${d}</div>`);
+  }
+  $("cal-grid").innerHTML = `<div class="cal-nav" style="grid-column:1/-1"><button class="btn small ghost" id="cal-prev">‹</button><b>${calMonth.toLocaleString("en-IN", { month: "long", year: "numeric" })}</b><button class="btn small ghost" id="cal-next">›</button></div>` + cells.join("");
+  $("cal-prev").onclick = () => { calMonth = new Date(y, m - 1, 1); renderCalendar(); };
+  $("cal-next").onclick = () => { calMonth = new Date(y, m + 1, 1); renderCalendar(); };
+  $("cal-meta").textContent = `${calData.year} · ${calData.holidays.length} weekday holidays · ${calData.verified ? "verified " + (calData.verified_on || "") : "UNVERIFIED"} · session ${calData.session.open}–${calData.session.close}`;
+  const nx = calData.next_holiday;
+  $("cal-list").innerHTML = (nx ? `<div class="notice"><b>Next holiday:</b> ${esc(nx.name)} — ${nx.weekday} ${nx.date} (${nx.days_away} day${nx.days_away === 1 ? "" : "s"} away)</div>` : "") +
+    table([{ l: "Date", f: r => `${r.date} <span class="dim">${r.weekday}</span>` }, { l: "Holiday", k: "name" },
+      { l: "", f: r => r.today ? "<b class='warn'>today</b>" : (r.past ? "<span class='dim'>done</span>" : `<span class='pos'>in ${r.days_away} d</span>`) }],
+      calData.holidays, { rowClass: r => r.past ? "dim" : "" }) +
+    (calData.special_sessions.length ? `<div class="hint mt">Special sessions: ${calData.special_sessions.map(x => `${esc(x.name)} ${esc(x.date)}`).join(" · ")}</div>` : "");
+}
+$("clockbox").onclick = async () => {
+  const pop = $("calpop");
+  if (!pop.hidden) { pop.hidden = true; return; }
+  if (!calData) await loadCalendar().catch(() => {});
+  calMonth = calMonth || new Date();
+  renderCalendar(); pop.hidden = false;
+};
+$("cal-close").onclick = () => { $("calpop").hidden = true; };
+loadCalendar().catch(() => {});
 
 /* ── tabs ─────────────────────────────────────────────────────────────── */
 const tabLoaders = {};
@@ -183,7 +250,91 @@ async function renderHomeJournal() {
         { l: "Net", n: 1, f: r => rup(r.net_pnl), c: r => cls(r.net_pnl) }, { l: "Why", k: "exit_reason" }], t.slice(0, 8)) + `</div>`;
   } catch (e) {}
 }
-tabLoaders.home = () => { if (!acctLoaded) loadAccount(false).catch(() => {}); renderHomeJournal(); };
+/* ── Home: alerts (pending cards, monitoring, archive with audited outcomes) ── */
+const alerts = { open: store.get("alerts.open", {}), rows: [], scoreboard: {}, loadedAt: 0 };
+const srcTag = (d) => d ? `${esc(d.source)} ${esc(d.resolution)}${d.delayed ? " · <span class='warn'>~15 min delayed</span>" : " · live"}` : "–";
+function confBadge(c) { return c ? `<div class="conf ${c.label}" title="${esc(JSON.stringify(c.parts))}">${fmt(c.score, 0)} ${esc(c.label)}</div>` : `<div class="conf medium">–</div>`; }
+function outcomeCell(s) {
+  const o = s.outcome;
+  if (s.status === "PENDING") return `<span class="countdown" data-exp="${esc(s.expires_at)}">…</span>`;
+  if (s.status === "TAKEN") return s.trade ? `<span class="outc ${s.trade.net_pnl >= 0 ? "TARGET" : "STOP"}">CLOSED ${rup(s.trade.net_pnl)}</span>` : `<span class="outc OPEN">MONITORING</span>`;
+  if (!o || !o.outcome || o.outcome === "NO_DATA") return `<span class="dim">no data yet</span>`;
+  return `<span class="outc ${esc(o.outcome)}">${esc(o.outcome.replace("_", " "))}</span> <span class="${cls(o.r_now)}" style="font-family:var(--mono)">${fmt(o.r_now, 2)}R</span>`;
+}
+function alertRow(s) {
+  const e = s.economics || {}, o = s.option || e.option || {}, out = s.outcome || {}, c = s.confidence || {};
+  const sell = s.direction === "short";
+  const what = s.kind === "INDEX" ? `${esc(s.side.replace("_", " "))} ${esc(s.label)} ${o.strike ? fmt(o.strike, 0) + " " + esc(o.opt_type) : ""}` : `${sell ? "SELL" : "BUY"} ${esc(s.label)}`;
+  const parts = c.parts || {};
+  const body = `
+    <div class="grid3">
+      <div><h4>Alert</h4>${kv("Raised", tsf(s.created_at) + " IST")}${kv("Signal bar", hhmm(s.bar_ts))}${kv("Valid until", hhmm(s.expires_at))}${kv("Status", esc(s.status))}
+        ${kv("Data", srcTag(s.data))}${kv("Horizon", esc(s.horizon || "intraday"))}${kv("Risk governor", s.risk_allowed ? "<span class='pos'>allowed</span>" : `<span class='neg'>blocked: ${esc(s.risk_reason)}</span>`)}</div>
+      <div><h4>One-unit economics</h4>${kv("Unit", esc(e.unit_label || ""))}${kv(s.kind === "INDEX" ? "Est. premium" : "Entry", rup2(e.entry_price))}${kv(s.kind === "INDEX" ? "Premium at stop" : "Stop", rup2(e.stop_price), "neg")}
+        ${kv(s.kind === "INDEX" ? "Premium at target" : "Target", e.target_price != null ? rup2(e.target_price) : "trail", "pos")}${kv("Risk ₹ (incl. charges)", rup(e.risk_inr), "neg")}${kv("Net reward ₹", e.reward_inr != null ? rup(e.reward_inr) : "–", "pos")}${kv("Net R/R", fmt(e.rr_net))}
+        ${s.kind === "INDEX" ? kv("Underlying entry / stop / target", `${fmt(e.underlying_entry, 0)} / ${fmt(e.underlying_stop, 0)} / ${e.underlying_target != null ? fmt(e.underlying_target, 0) : "–"}`) : ""}${e.synthetic ? `<div class="hint warn">premium synthetic (Black-76) — no live chain at alert time</div>` : (o.spread_pct != null ? kv("Chain spread", pct(o.spread_pct)) : "")}</div>
+      <div><h4>Confidence ${fmt(c.score, 0)} <span class="dim">${esc(c.label || "")}</span></h4>
+        ${["signal_strength", "backtest_evidence", "live_record", "regime_fit"].map(k => `<div class="kv"><span>${k.replace("_", " ")}</span><span>${fmt(parts[k], 0)}</span></div><div class="conf-bar"><i style="width:${Math.max(0, Math.min(100, parts[k] || 0))}%"></i></div>`).join("")}
+        <div class="hint">${esc(parts.backtest_note || "")}<br>${esc(parts.live_note || "")}</div>
+        <h4>Outcome at the alerted levels</h4>${out.outcome ? kv("Result", outcomeCell(s)) + kv("Best / worst excursion", `${fmt(out.mfe_r, 2)}R / −${fmt(out.mae_r, 2)}R`) + kv("Est. P&L (1 unit)", rup(out.pnl_est), cls(out.pnl_est)) + kv("Resolved", out.exit_ts ? tsf(out.exit_ts) : "–") : `<div class="muted">audited once the next bars arrive</div>`}</div>
+    </div>
+    <pre>${esc(s.text || "")}</pre>
+    ${s.status === "PENDING" ? `<div class="actions"><label class="inline">Your actual fill <input type="number" step="0.05" id="afill_${s.id}" placeholder="${fmt(e.entry_price)}" style="width:130px"></label>
+      <button class="btn take" data-take="${s.id}">Trade taken</button><button class="btn" data-skip="${s.id}">Skipped</button></div>` : ""}`;
+  return `<div class="alert-row ${s.status === "PENDING" ? "pending" : ""} ${s.status === "TAKEN" ? "taken" : ""} ${sell ? "sell" : ""} ${alerts.open[s.id] ? "open" : ""}" data-aid="${s.id}">
+    <div class="alert-head" data-atoggle="${s.id}">
+      <div class="when">${hhmm(s.created_at)}<small>${String(s.created_at || "").slice(0, 10)}</small></div>
+      <div class="what"><b>${what}</b><span class="dim">${esc(e.unit_label || "")} · ${s.kind === "INDEX" ? "~" + rup(e.outlay) + " outlay" : rup2(e.entry_price)} · ${srcTag(s.data)}</span></div>
+      <div class="strat"><b>${esc(s.strategy_label || s.strategy)}</b>${esc(s.timeframe)} · strength ${fmt(s.strength, 0)}</div>
+      ${confBadge(c)}
+      <div>${outcomeCell(s)}</div>
+      <div class="dim" style="font-size:12px">${esc(s.status)}${s.resolved_at ? "<br>" + hhmm(s.resolved_at) : ""}</div>
+      <div class="acc-caret">▾</div>
+    </div>
+    <div class="alert-body">${body}</div></div>`;
+}
+async function loadAlerts(force) {
+  const days = $("alerts-days").value || 7, filt = $("alerts-filter").value;
+  const r = await api(`/api/desk/signals?days=${days}`).catch(() => null);
+  if (!r) { $("home-signals").innerHTML = `<div class="card"><div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sweat"/></svg> Live Desk not running.</div></div>`; return; }
+  alerts.rows = r.signals || []; alerts.scoreboard = r.scoreboard || {};
+  const rows = alerts.rows.filter(s => !filt || s.status === filt || (filt === "TAKEN" && s.status === "CLOSED"));
+  const pend = rows.filter(s => s.status === "PENDING"), rest = rows.filter(s => s.status !== "PENDING");
+  $("alerts-meta").textContent = `${alerts.rows.length} alerts · ${pend.length} pending · ${alerts.rows.filter(s => s.status === "TAKEN").length} taken`;
+  $("home-signals").innerHTML = (pend.length ? `<h3>Pending — act or let them expire</h3>` + pend.map(alertRow).join("") : `<div class="card"><div class="empty-inline"><svg class="mascot sm"><use href="#m-cow"/></svg> No pending alert. The desk is tracking ${latest && latest.desk ? latest.desk.counts.instruments : "the watchlist"} instruments.</div></div>`);
+  $("home-archive").innerHTML = rest.length ? rest.map(alertRow).join("") : `<div class="muted">Nothing archived in this window.</div>`;
+  wireAlerts($("home-signals")); wireAlerts($("home-archive"));
+  const sb = Object.values(alerts.scoreboard).sort((a, b) => (b.avg_r || 0) - (a.avg_r || 0));
+  $("home-scoreboard").innerHTML = table([{ l: "Strategy", k: "strategy" }, { l: "Alerts", n: 1, k: "n" }, { l: "Positive %", n: 1, f: x => pct(x.hit_rate) },
+    { l: "Avg R", n: 1, f: x => fmt(x.avg_r, 2), c: x => cls(x.avg_r) }, { l: "Targets / stops / sq-off", n: 1, f: x => `${x.targets} / ${x.stops} / ${x.square_offs}` },
+    { l: "Σ est. P&L", n: 1, f: x => rup(x.pnl_sum), c: x => cls(x.pnl_sum) }], sb, { empty: "No resolved alerts yet — the scoreboard fills as alerts are audited against later bars." });
+  if (latest && latest.desk) renderHomePositions(latest.desk);
+}
+function wireAlerts(root) {
+  root.querySelectorAll("[data-take]").forEach(b => b.onclick = async (e) => { e.stopPropagation();
+    const f = $("afill_" + b.dataset.take).value;
+    const r = await api(`/api/desk/signal/${b.dataset.take}/ack`, { action: "TAKE", fill_price: f ? Number(f) : null, source: "dashboard" });
+    toast(r.message, r.accepted ? "ok" : "warn"); desk.force = true; setTimeout(() => loadAlerts(true), 400); });
+  root.querySelectorAll("[data-skip]").forEach(b => b.onclick = async (e) => { e.stopPropagation();
+    await api(`/api/desk/signal/${b.dataset.skip}/ack`, { action: "SKIP", source: "dashboard" }); desk.force = true; setTimeout(() => loadAlerts(true), 400); });
+}
+document.addEventListener("click", (e) => {
+  const h = e.target.closest("[data-atoggle]"); if (!h || e.target.closest("input,button")) return;
+  const k = h.dataset.atoggle; alerts.open[k] = !alerts.open[k]; store.set("alerts.open", alerts.open);
+  h.parentElement.classList.toggle("open", alerts.open[k]);
+});
+function renderHomePositions(d) {
+  const ps = (d && d.positions) || [];
+  $("home-positions").innerHTML = positionsTable(ps);
+  $("home-positions").querySelectorAll("[data-dclose]").forEach(b => b.onclick = async () => {
+    const v = $("dx_" + b.dataset.dclose).value;
+    if (!v) { toast("Enter the price you actually exited at.", "warn"); return; }
+    const r = await api(`/api/desk/position/${b.dataset.dclose}/close`, { exit_price: Number(v), reason: "MANUAL" });
+    toast(`Closed: net ${rup(r.net_pnl)}`, r.net_pnl >= 0 ? "ok" : "bad"); desk.force = true; renderHomeJournal(); loadAlerts(true);
+  });
+}
+["alerts-days", "alerts-filter"].forEach(id => $(id).onchange = () => loadAlerts(true));
+tabLoaders.home = () => { if (!acctLoaded) loadAccount(false).catch(() => {}); renderHomeJournal(); loadAlerts(true).catch(() => {}); };
 $("acct-refresh").onclick = async () => { $("acct-refresh").disabled = true; try { await loadAccount(true); toast("Account refreshed", "ok"); } finally { $("acct-refresh").disabled = false; } };
 
 /* ═══════════════════ LIVE: legacy Bank Nifty engine ═════════════════ */
@@ -300,8 +451,9 @@ function renderFeed(items) {
   items.forEach(n => {
     const d = document.createElement("div");
     const c = ["SIGNAL", "EXIT", "CRITICAL"].includes(n.level) ? "neg" : (n.level === "WARNING" ? "warn" : "muted");
-    d.innerHTML = `<span class="lvl ${c}">${esc(n.level)}</span> <b>${esc(n.title)}</b><br><span class="muted">${esc((n.body || "").split("\n")[0])}</span>`;
+    d.innerHTML = `<span class="lvl ${c}">${esc(n.level)}</span> <b>${esc(n.title)}</b> <span class="dim">${hhmm(n.created_at)}</span><br><span class="muted">${esc((n.body || "").split("\n")[0])}</span>`;
     el.prepend(d);
+    const hf = $("home-feed"); if (hf) { hf.prepend(d.cloneNode(true)); while (hf.children.length > 60) hf.removeChild(hf.lastChild); }
     if (n.level === "SIGNAL") { beep(); toast(n.title, "warn"); desk.force = true; }
     if (["EXIT", "CRITICAL"].includes(n.level)) { toast(n.title, "bad"); desk.force = true; }
   });
@@ -454,11 +606,16 @@ setInterval(() => {
 }, 1000);
 
 /* ── stream ──────────────────────────────────────────────────────────── */
+let lastDesk = null, lastDeskVersion = -1;
 function applyStream(payload) {
   latest = payload.state;
+  if (latest.desk && latest.desk.unchanged) latest.desk = lastDesk; else if (latest.desk) lastDesk = latest.desk;
   renderBadges(latest); renderWarnings(latest); renderSignal(latest); renderPositions(latest);
   renderPanels(latest); renderJournal(latest); renderFeed(payload.notifications);
-  if (document.querySelector('[data-tab="live"]').classList.contains("active")) renderDesk(latest.desk);
+  const changed = latest.desk && latest.desk.version !== lastDeskVersion;
+  if (changed) lastDeskVersion = latest.desk.version;
+  if (document.querySelector('[data-tab="live"]').classList.contains("active")) { renderDesk(latest.desk); if (changed) renderFocus(latest.desk); }
+  if (changed && document.querySelector('[data-tab="home"]').classList.contains("active")) { renderHomePositions(latest.desk); if (Date.now() - alerts.loadedAt > 15000) { alerts.loadedAt = Date.now(); loadAlerts(true).catch(() => {}); } }
 }
 function connect() {
   const es = new EventSource("/api/stream");
@@ -468,7 +625,43 @@ function connect() {
 setInterval(renderGates, 30000);
 $("haltBtn").onclick = () => { if (confirm("Halt trading? No new signals will fire until you clear it.")) api("/api/risk/halt", {}); };
 $("resetBtn").onclick = () => { if (confirm("Clear the halt and resume signalling?")) api("/api/risk/reset", {}); };
-tabLoaders.live = () => { renderGates(); desk.force = true; if (latest) renderDesk(latest.desk); };
+/* ── instrument focus: one instrument, everything, plus its chart with signal markers ── */
+const focus = { key: store.get("focus.key", "BANKNIFTY"), loading: false, lastKey: null, lastTf: null, lastAt: 0 };
+function renderFocus(d) {
+  if (!d || d.booting) return;
+  const rows = [...(d.indices || []), ...(d.stocks || [])];
+  const sel = $("focus-key");
+  if (sel.options.length !== rows.length) {
+    sel.innerHTML = rows.map(r => `<option value="${esc(r.key)}" ${r.key === focus.key ? "selected" : ""}>${esc(r.label)} (${r.kind === "INDEX" ? "options" : "stock"})</option>`).join("");
+  }
+  const r = rows.find(x => x.key === focus.key) || rows[0]; if (!r) return;
+  const L = r.last || {}, R = r.regime || {}, H = r.health || {}, K = r.risk || {}, risk = d.risk || {}, LM = risk.limits || {};
+  $("focus-body").innerHTML = `
+    <div class="row between"><div class="acc-name"><b>${esc(r.label)}</b><span class="dim">${r.kind === "INDEX" ? "index · options" : "stock"} · ${esc(r.unit)} · tracked as ${esc(r.tracked)}</span></div><div class="state-badge st-${esc(r.state)}">${esc(r.state)}</div></div>
+    <div class="grid4">
+      <div><h4>Market</h4>${kv("Last", fmt(L.price) + (L.live ? " <span class='pos'>●</span>" : ""))}${kv("Day change", spct(L.change_pct), cls(L.change_pct))}${kv("Prev close", fmt(L.prev_close))}${kv("Last bar", hhmm(L.bar_ts))}${L.live ? kv("Bid / ask", `${fmt(L.live.bid)} / ${fmt(L.live.ask)}`) : ""}</div>
+      <div><h4>Regime &amp; volatility</h4>${kv("Regime", esc(R.regime || "–"))}${kv("Trend", esc(R.trend || "–"), R.trend === "up" ? "pos" : R.trend === "down" ? "neg" : "")}${kv("ADX(14)", fmt(R.adx, 1))}${kv("ATR(14)", fmt(R.atr))}${kv("ATR pct", fmt(R.atr_pct, 0))}${kv("RSI(14)", fmt(R.rsi, 1))}${kv("VWAP", fmt(R.vwap))}</div>
+      <div><h4>Risk governor</h4>${kv("Desk", esc(risk.state || "–"), risk.state === "HALTED" ? "neg" : "pos")}${kv("Trades today (this)", K.trades_today || 0)}${kv("Trades (all)", `${risk.trades_taken || 0}/${LM.max_trades_per_day || "–"}`)}${kv("Open (all)", `${risk.open_positions || 0}/${LM.max_open_positions || "–"}`)}${kv("Realised (all)", rup(risk.realized_pnl), cls(risk.realized_pnl))}</div>
+      <div><h4>Data health</h4>${kv("State", hdot(H.state) + esc(H.state || "–"))}${kv("Source", esc(H.source || "–") + (H.delayed ? " (~15m delayed)" : ""))}${kv("Bars", `${H.bars || 0} × ${H.resolution_min || "–"}m`)}${kv("Bar age", L.age_sec != null ? Math.round(L.age_sec / 60) + " min" : "–")}<div class="hint">${esc(H.note || "")}</div></div>
+    </div>
+    <h4>Strategies</h4><div class="tbl">${table([{ l: "Strategy", f: s => `<b>${esc(s.label)}</b>` }, { l: "TF", k: "timeframe" }, { l: "Bar", f: s => hhmm(s.last_bar_ts) },
+      { l: "Verdict", f: s => `<span class="schip ${s.verdict !== "none" ? s.verdict : ""}">${esc(s.verdict)}</span>` }, { l: "Why", f: s => esc(s.error || s.reason || "") }], r.strategies || [])}</div>
+    ${r.signal ? `<div class="notice mt"><b>Pending alert:</b> ${esc(r.signal.side.replace("_", " "))} · ${esc(r.signal.strategy)} ${esc(r.signal.timeframe)} · conf ${fmt((r.signal.confidence || {}).score, 0)} — act on it from <a href="#home">Home</a>.</div>` : ""}
+    ${r.position ? `<div class="notice mt"><b>Monitoring:</b> ${esc(r.position.side.replace("_", " "))} from ${fmt(r.position.entry_price)} · ${fmt(r.position.r_now, 2)}R · ${esc(r.position.hold_check || "")}${r.position.exit_advice ? ` · <b class="neg">EXIT: ${esc(r.position.exit_advice)}</b>` : ""}</div>` : ""}`;
+  const tf = $("focus-tf").value;
+  if (focus.lastKey !== r.key || focus.lastTf !== tf || Date.now() - focus.lastAt > 55000) {
+    focus.lastKey = r.key; focus.lastTf = tf; focus.lastAt = Date.now();
+    api(`/api/desk/bars?key=${encodeURIComponent(r.key)}&timeframe=${tf}&n=400`).then(b => {
+      if (!C() || !b.bars.length) { $("focus-chart-note").textContent = "no bars yet"; return; }
+      const trades = (b.markers || []).map(m => ({ entry_ts: m.ts, exit_ts: m.ts, entry: m.entry, exit: null, side: m.side === "long" ? "LONG" : "SHORT", net_pnl: (m.outcome === "TARGET") ? 1 : (m.outcome === "STOP" ? -1 : 0), r: null, reason: m.strategy }));
+      C().candles($("focus-chart"), b.bars.map(x => x.slice(0, 5)), trades.map(t => ({ ...t, exit_ts: t.entry_ts })), { fit: "last" });
+      $("focus-chart-note").textContent = `${b.bars.length} × ${b.timeframe} bars · ${b.source}${b.live ? " · live tick " + hhmm(b.live.ts) : ""} · ▲▼ = alerts raised on this instrument`;
+    }).catch(() => {});
+  }
+}
+$("focus-key").onchange = () => { focus.key = $("focus-key").value; store.set("focus.key", focus.key); if (latest) renderFocus(latest.desk); };
+$("focus-tf").onchange = () => { if (latest) renderFocus(latest.desk); };
+tabLoaders.live = () => { renderGates(); desk.force = true; if (latest) { renderDesk(latest.desk); focus.lastAt = 0; renderFocus(latest.desk); } };
 
 /* ═══════════════════════════════ LAB ════════════════════════════════ */
 const lab = { strategies: [], instruments: [], focus: [], focusTfs: [], cat: store.get("lab.cat", "DESK"), runs: [], waiting: null, poll: null, shown: null };
@@ -770,10 +963,32 @@ function renderSweepForm() {
   sweepPlan();
 }
 const sweepSel = (id) => [...$(id).querySelectorAll(".chip.active")].map(z => z.dataset.v);
-function sweepPlan() { const n = sweepSel("sweep-strats").length * sweepSel("sweep-insts").length * sweepSel("sweep-tfs").length; $("sweep-plan").textContent = `${n} runs · roughly ${Math.ceil(n * 1.5 / 60)} min on the Yahoo corpus`; }
+function sweepPlan() { const n = sweepSel("sweep-strats").length * sweepSel("sweep-insts").length * sweepSel("sweep-tfs").length * ($("sweep-presets").checked ? 3 : 1); $("sweep-plan").textContent = `${n} runs · roughly ${Math.ceil(n * 2 / 60)} min on the Yahoo corpus, several hours on 5 years of Dhan 1-minute bars`; }
+$("sweep-presets").onchange = sweepPlan;
+async function loadMatrix() {
+  const q = new URLSearchParams(); if ($("matrix-sweep").value) q.set("sweep_id", $("matrix-sweep").value); q.set("min_trades", $("matrix-min").value || 5);
+  const sweeps = lab.runs.filter(x => x.kind === "sweep" && x.status === "DONE");
+  const cur = $("matrix-sweep").value;
+  $("matrix-sweep").innerHTML = `<option value="">all saved runs</option>` + sweeps.map(x => `<option value="${x.id}" ${String(x.id) === cur ? "selected" : ""}>sweep #${x.id} · ${esc((x.label || "").slice(0, 40))}</option>`).join("");
+  const m = await api("/api/lab/matrix?" + q.toString());
+  const strats = m.strategies || [];
+  const positive = strats.reduce((a, s) => a + (s.positive || 0), 0);
+  $("matrix-summary").innerHTML = tile("Ranked runs", m.runs) + tile("Strategies", strats.length) + tile("Positive cells", positive, "PF ≥ 1.2 & score > 0", positive ? "pos" : "") +
+    tile("Best strategy", strats[0] && strats[0].best ? esc(strats[0].strategy) : "–", strats[0] && strats[0].best ? `${esc(strats[0].best.instrument)} ${esc(strats[0].best.timeframe)} ${esc(strats[0].best.preset)} · score ${fmt(strats[0].best.score, 2)}` : "");
+  $("lab-matrix").innerHTML = strats.length ? strats.map((s, i) => `<details class="mx-strat" ${i < 2 ? "open" : ""}><summary><b>${esc(s.strategy)}</b>
+      <span class="muted">${s.instruments.length} instruments · ${s.positive} positive · best ${s.best ? `${esc(s.best.instrument)} ${esc(s.best.timeframe)} ${esc(s.best.preset)} (win ${pct(s.best.win_rate)}, exp ${fmt(s.best.expectancy_r, 3)}R, score ${fmt(s.best.score, 2)})` : "–"}</span></summary>
+    ${s.instruments.map(ir => `<div class="mx-inst"><h4>${esc(ir.instrument)} <span class="dim">${esc(ir.category)}</span>${ir.best ? `<span class="best">best: ${esc(ir.best.timeframe)} ${esc(ir.best.preset)} · score ${fmt(ir.best.score, 2)}</span>` : ""}</h4>
+      <div class="scroll">${table([{ l: "#", k: "run_id", n: 1 }, { l: "TF", k: "timeframe" }, { l: "Setting", k: "preset" }, { l: "Trades", n: 1, k: "trades" }, { l: "Win %", n: 1, f: r => pct(r.win_rate) },
+        { l: "PF", n: 1, f: r => fmt(r.profit_factor) }, { l: "Exp R", n: 1, f: r => fmt(r.expectancy_r, 3), c: r => cls(r.expectancy_r) }, { l: "Net ₹", n: 1, f: r => rup(r.net_pnl), c: r => cls(r.net_pnl) },
+        { l: "Max DD ₹", n: 1, f: r => rup(r.max_drawdown_inr) }, { l: "Score", n: 1, f: r => r.score == null ? "<span class='dim'>–</span>" : fmt(r.score, 2), c: r => (ir.best && r.run_id === ir.best.run_id) ? "best-row" : cls(r.score) }],
+        ir.rows, { rowClass: () => "lead" })}</div></div>`).join("")}</details>`).join("") : `<div class="empty"><svg class="mascot lg"><use href="#m-cow"/></svg><div><b>No ranked runs yet.</b><br>Run a sweep (Sweep tab) — with "three settings per strategy" ticked you get the full matrix.</div></div>`;
+  wireBoard($("lab-matrix"));
+}
+$("matrix-refresh").onclick = () => loadMatrix().catch(() => {});
+$("matrix-sweep").onchange = () => loadMatrix().catch(() => {});
 $("sweep-run").onclick = async () => {
   const body = { strategies: sweepSel("sweep-strats"), instruments: sweepSel("sweep-insts"), timeframes: sweepSel("sweep-tfs"),
-    cost_multiplier: parseFloat($("sweep-costx").value) || 1, sentiment_mode: $("sweep-sent").value };
+    cost_multiplier: parseFloat($("sweep-costx").value) || 1, sentiment_mode: $("sweep-sent").value, presets: $("sweep-presets").checked };
   if (!body.strategies.length || !body.instruments.length || !body.timeframes.length) { toast("Pick at least one of each", "warn"); return; }
   const r = await api("/api/lab/sweep", body);
   toast(`Sweep #${r.run_id} started: ${r.combos} runs`, "ok"); startPoll();
@@ -792,6 +1007,7 @@ function showSub(name) {
   document.querySelectorAll("#lab-subtabs a").forEach(a => a.classList.toggle("active", a.dataset.sub === name));
   document.querySelectorAll(".lab-results .sub").forEach(s => s.classList.toggle("active", s.dataset.sub === name));
   if (name === "board") loadBoard().catch(() => {});
+  if (name === "matrix") loadMatrix().catch(() => {});
 }
 document.querySelectorAll("#lab-subtabs a").forEach(a => a.onclick = () => showSub(a.dataset.sub));
 $("lab-runs-refresh").onclick = refreshRuns;
@@ -849,6 +1065,14 @@ $("data-run").onclick = async () => {
   const res = $("data-res").value.trim().split(/[\s,]+/).filter(Boolean);
   const r = await api("/api/data/backfill", { series: series.length ? series : null, resolutions: res.length ? res : null, provider: $("data-provider").value || null, full: $("data-full").checked });
   toast("Backfill job #" + r.job_id + " started", "ok"); loadData();
+};
+$("data-dhan-full").onclick = async () => {
+  if (!confirm("Backfill from Dhan: daily bars for every series plus 1-minute bars for the desk watchlist and India VIX, five years back. Runs in the background (15–40 min). Start?")) return;
+  const focusKeys = (lab.focus.length ? lab.focus : (await api("/api/lab/focus")).instruments).map(k => k.replace(/_(OPT|FUT)$/, ""));
+  const series = [...new Set([...focusKeys, "INDIAVIX", "NIFTY", "BANKNIFTY", "SENSEX"])];
+  const r1 = await api("/api/data/backfill", { series: null, resolutions: ["1d"], provider: "dhan", full: false });
+  const r2 = await api("/api/data/backfill", { series, resolutions: ["1m"], provider: "dhan", full: false });
+  toast(`Dhan backfill jobs #${r1.job_id} (daily) and #${r2.job_id} (1-minute) started`, "ok"); loadData();
 };
 $("data-quality").onclick = async () => {
   const q = await api("/api/data/quality?resolution=5m"); $("data-quality-card").hidden = false;
@@ -920,8 +1144,12 @@ async function loadSettings() {
   $("env-path").textContent = s.env_path; $("postback-hint").textContent = s.postback_url_hint;
   $("cred-status").innerHTML = kv("Client ID", c.client_id || "<span class='warn'>not set</span>") + kv("Access token", c.access_token || "<span class='warn'>not set</span>") +
     kv("Data API token", c.data_access_token || "<span class='dim'>not set (optional)</span>") +
+    kv("Token valid till", s.token_expiry ? tsf(s.token_expiry) + " IST" : "<span class='dim'>unknown (refresh the account)</span>") +
+    kv("Self-renew (TOTP)", c.can_self_renew ? "<span class='pos'>configured</span>" + (s.last_renew_at ? ` · last ${tsf(s.last_renew_at)}` : "") + (s.last_renew_error ? ` · <span class='neg'>${esc(s.last_renew_error)}</span>` : "") : "<span class='dim'>not configured</span>") +
     kv("Account reads", s.account_adapter ? "<span class='pos'>attached</span>" : "<span class='warn'>no adapter</span>") +
-    kv("Market feed", esc(s.feed_broker || "–") + (s.feed_broker === "mock" ? " <span class='dim'>(restart with credentials for live data)</span>" : ""));
+    kv("Data API plan", s.data_api_active ? "<span class='pos'>active</span>" : "<span class='warn'>not active / unknown</span>") +
+    kv("Market feed", s.feed_live ? "<span class='pos'>Dhan (live)</span>" : "<span class='warn'>synthetic mock</span> <span class='dim'>— press Go live once the token is valid</span>") +
+    kv("Desk bars", s.desk_source ? `${esc(s.desk_source.name)} ${esc(s.desk_source.resolution)}${s.desk_source.delayed ? " (delayed)" : " (live)"}${s.desk_source.socket ? ` · socket ${s.desk_source.socket.alive ? "<span class='pos'>connected</span>" : "<span class='warn'>down</span>"} (${s.desk_source.socket.subscribed} instruments)` : ""}` : "–");
   const block = (t, o) => `<h3>${t}</h3><pre class="code">${esc(JSON.stringify(o, null, 2))}</pre>`;
   $("cfg-view").innerHTML = kv("Mode", esc(s.mode)) + kv("Bind", `${esc(s.api.host)}:${s.api.port}`) +
     block("Live direction source (Bank Nifty engine)", s.live) + block("Risk (absolute rupees, one unit)", s.risk) + block("Backtest defaults", s.backtest) + block("Data corpus", s.data);
@@ -938,11 +1166,16 @@ $("cred-save").onclick = async () => {
   const body = {}; if ($("cred-client").value.trim()) body.client_id = $("cred-client").value.trim();
   if ($("cred-token").value.trim()) body.access_token = $("cred-token").value.trim();
   if ($("cred-data-token").value.trim()) body.data_access_token = $("cred-data-token").value.trim();
+  if ($("cred-pin").value.trim()) body.pin = $("cred-pin").value.trim();
+  if ($("cred-totp").value.trim()) body.totp_secret = $("cred-totp").value.trim();
   if (!Object.keys(body).length) { toast("Nothing to save", "warn"); return; }
+  $("live-status").innerHTML = `<div class="empty-inline"><svg class="mascot sm bounce"><use href="#m-ichi"/></svg> saving, checking the profile, switching the feed…</div>`;
   const r = await api("/api/settings/dhan", body);
-  $("cred-client").value = ""; $("cred-token").value = ""; $("cred-data-token").value = "";
-  toast(r.ok ? "Credentials saved and attached" : "Saved, but adapter not attached: " + (r.reason || ""), r.ok ? "ok" : "warn");
-  if (r.restart_needed_for_live_data) toast("Restart the engine (without --mock) for live market data", "warn");
+  ["cred-client", "cred-token", "cred-data-token", "cred-pin", "cred-totp"].forEach(id => { $(id).value = ""; });
+  const msg = !r.ok ? "Saved, but the adapter is not attached: " + (r.reason || "") : !r.profile_ok ? "Saved, but Dhan rejected the token (profile failed) — generate a fresh one" :
+    r.went_live ? "Saved · token valid · Data API active · LIVE feed started" : (r.live ? "Saved · token valid · already live" : "Saved · token valid · " + (r.live_reason || ""));
+  toast(msg, r.ok && r.profile_ok ? "ok" : "warn");
+  $("live-status").innerHTML = `<div class="${r.ok && r.profile_ok ? "notice" : "warnbar"}">${esc(msg)}</div>`;
   acctLoaded = false; loadSettings(); loadAccount(true).catch(() => {});
 };
 $("cred-test").onclick = async () => {
@@ -954,6 +1187,20 @@ $("cred-test").onclick = async () => {
     (r.profile ? kv("Token valid till", esc(r.profile.token_validity || "–")) + kv("Data plan", esc(r.profile.data_plan || "–")) + kv("Data valid till", esc(r.profile.data_validity || "–")) : "") +
     table([{ l: "Check", k: "name" }, { l: "Tier", k: "tier" }, { l: "Result", f: x => x.ok ? "<span class='pos'>OK</span>" : `<span class='neg'>${esc(x.error)}</span>` }, { l: "Detail", f: x => esc((x.detail || "").slice(0, 120)) }], rows) +
     ((r.notes || []).length ? `<ul class="small-list muted">${[...new Set(r.notes)].map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : "");
+};
+$("cred-renew").onclick = async () => {
+  $("live-status").innerHTML = `<div class="empty-inline"><svg class="mascot sm bounce"><use href="#m-ichi"/></svg> minting a fresh token…</div>`;
+  const r = await api("/api/settings/dhan/renew", {});
+  toast(r.ok ? `Token renewed${r.expiry_time ? " · valid till " + r.expiry_time : ""}` : "Renewal failed: " + r.reason, r.ok ? "ok" : "bad");
+  $("live-status").innerHTML = `<div class="${r.ok ? "notice" : "warnbar"}">${esc(r.ok ? "Token renewed" + (r.expiry_time ? " · valid till " + r.expiry_time : "") + (r.live ? " · live feed on" : "") : r.reason)}</div>`;
+  acctLoaded = false; loadSettings(); loadAccount(true).catch(() => {});
+};
+$("cred-golive").onclick = async () => {
+  $("live-status").innerHTML = `<div class="empty-inline"><svg class="mascot sm bounce"><use href="#m-ichi"/></svg> checking the Data API and starting the feed…</div>`;
+  const r = await api("/api/settings/dhan/golive", {});
+  toast(r.live ? (r.switched ? "Live feed started" : "Already live") : "Not live: " + r.reason, r.live ? "ok" : "warn");
+  $("live-status").innerHTML = `<div class="${r.live ? "notice" : "warnbar"}">${esc(r.reason)}</div>`;
+  loadSettings();
 };
 $("desk-reload").onclick = async () => { const r = await api("/api/desk/reload", {}); toast(`Desk reloaded: ${r.instruments} instruments`, "ok"); loadSettings(); };
 $("desk-poll").onclick = async () => { await api("/api/desk/poll", {}); toast("Polling now", "ok"); desk.force = true; };

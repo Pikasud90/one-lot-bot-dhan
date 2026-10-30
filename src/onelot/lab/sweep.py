@@ -39,15 +39,64 @@ def focus_instruments() -> list[str]:
 
 
 def plan(strategies: list[str] | None, instruments: list[str] | None,
-         timeframes: list[str] | None) -> list[dict[str, Any]]:
+         timeframes: list[str] | None, presets: bool = False) -> list[dict[str, Any]]:
     strategies = strategies or list(REGISTRY)
     instruments = instruments or focus_instruments()
     timeframes = timeframes or FOCUS_TIMEFRAMES
     bad = [s for s in strategies if s not in REGISTRY]
     if bad:
         raise ValueError(f"unknown strategies: {bad}")
-    return [{"strategy": s, "instrument_key": i.upper(), "timeframe": tf}
-            for s, i, tf in itertools.product(strategies, instruments, timeframes)]
+    if not presets:
+        return [{"strategy": s, "instrument_key": i.upper(), "timeframe": tf}
+                for s, i, tf in itertools.product(strategies, instruments, timeframes)]
+    from .presets import presets_for
+
+    out = []
+    for s, i, tf in itertools.product(strategies, instruments, timeframes):
+        for name, params in presets_for(s).items():
+            out.append({"strategy": s, "instrument_key": i.upper(), "timeframe": tf, "params": params, "preset": name})
+    return out
+
+
+def matrix(engine: Engine, sweep_id: int | None = None, min_trades: int = 5) -> dict:
+    """strategy -> instrument -> rows (timeframe x preset), rows sorted by win rate, high to low.
+
+    Also marks, per (strategy, instrument), the best row by score and, per strategy, the
+    best instrument. This is the operator's "which strategy, which instrument, which
+    timeframe, which setting" table."""
+    rows = leaderboard(engine, sweep_id=sweep_id, min_trades=min_trades, limit=100000, latest_only=True)
+    tree: dict[str, dict[str, list[dict]]] = {}
+    for r in rows:
+        preset = _preset_of(r)
+        r = {**r, "preset": preset}
+        tree.setdefault(r["strategy"], {}).setdefault(r["instrument"], []).append(r)
+    out_strats = []
+    for strat, insts in tree.items():
+        inst_rows = []
+        for inst, lst in insts.items():
+            lst.sort(key=lambda x: ((x["win_rate"] or 0), (x["score"] if x["score"] is not None else -1e9)), reverse=True)
+            ranked = [x for x in lst if x["score"] is not None]
+            best = max(ranked, key=lambda x: x["score"]) if ranked else None
+            inst_rows.append({"instrument": inst, "category": lst[0]["category"], "rows": lst, "best": best,
+                              "best_win_rate": lst[0]["win_rate"] if lst else None})
+        inst_rows.sort(key=lambda x: (x["best"]["score"] if x["best"] else -1e9), reverse=True)
+        best_inst = inst_rows[0]["best"] if inst_rows and inst_rows[0]["best"] else None
+        out_strats.append({"strategy": strat, "instruments": inst_rows, "best": best_inst,
+                           "positive": sum(1 for ir in inst_rows for x in ir["rows"] if x["score"] is not None and x["score"] > 0 and (x["profit_factor"] or 0) >= 1.2)})
+    out_strats.sort(key=lambda x: (x["best"]["score"] if x["best"] else -1e9), reverse=True)
+    return {"strategies": out_strats, "runs": len(rows), "sweep_id": sweep_id, "min_trades": min_trades}
+
+
+def _preset_of(r: dict) -> str:
+    p = r.get("params") or {}
+    if not p:
+        return "default"
+    from .presets import presets_for
+
+    for name, params in presets_for(r["strategy"]).items():
+        if params and all(p.get(k) == v for k, v in params.items()) and len(p) == len(params):
+            return name
+    return "custom"
 
 
 def rank_score(m: dict, min_trades: int = 10) -> float:

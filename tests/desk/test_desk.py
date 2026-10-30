@@ -57,7 +57,9 @@ class FakeSource:
         self.frames = {}
 
     def fetch(self, specs, days, since=None):
-        return {k: self.frames.get(k, synthetic(seed=hash(k) % 1000)) for k in specs}
+        # deterministic: full sessions ending yesterday 15:30, whatever the wall clock says
+        end = (pd.Timestamp.now(tz=IST).normalize() - pd.Timedelta(days=1)) + pd.Timedelta(hours=15, minutes=30)
+        return {k: self.frames.get(k, synthetic(seed=hash(k) % 1000, end=end)) for k in specs}
 
 
 class FakeNotifier:
@@ -254,7 +256,7 @@ class TestDeskFlow:
         assert d.acknowledge(sid, "SKIP")["accepted"] and not d.signals
         d._raise_signal(t, t.slots[0], v, now_ist() - dt.timedelta(minutes=30))
         d._expire_signals(now_ist())
-        assert not d.signals and d.recent_signals[0]["status"] == "EXPIRED"
+        assert not d.signals and d.archive[0]["status"] == "EXPIRED"
         # an open position survives a restart
         d._raise_signal(t, t.slots[0], v, now_ist())
         sid = next(iter(d.signals))

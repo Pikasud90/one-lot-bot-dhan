@@ -20,18 +20,20 @@ are reference only.
 
 | Tab | What it does | Needs |
 |---|---|---|
-| **Home** | Your Dhan account: funds, holdings, positions, 30-day ledger and trade book, token/Data-API validity. **Cached** — fetched only when you press Refresh or after you confirm a fill/exit. | free-tier token |
+| **Home** | **Alerts** first: every signal with IST time, data source and delay, strategy, confidence, time-to-live, Taken / Skipped, then the archive with each alert's audited outcome at its own levels and a per-strategy scoreboard; positions being monitored; then your Dhan account (funds, holdings, positions, ledger, trade book — cached, never polled). | free-tier token |
 | **Live Desk** | Two panels — **5 indices** (buy CE / buy PE, 1 lot) and **10 stocks** (buy / sell, 1 share) — each under several strategies at once, with an open-positions strip and a market-context strip (VIX, NIFTY, BANKNIFTY, SENSEX, USD/INR, GIFT NIFTY slot). Collapsible rows show market, regime & volatility, risk governor and data health per instrument. Alerts give instrument, unit, entry, stop, target, rupee risk/reward and instructions; taken trades are managed until you close them. Runs on Yahoo bars (delayed) until the Data API is active. The original Bank Nifty engine is folded underneath. `docs/14_LIVE_DESK.md` | nothing (Yahoo) / Data API |
 | **Backtest Lab** | Desk watchlist first, then any instrument. TradingView-style charts (vendored, offline) with trade markers; equity + drawdown; 30 % rule panel. **Walk-forward** with auto-sized windows, **optimizer**, **sweeps** (every strategy × instrument × timeframe, each saved) and a **leaderboard** over every saved run. Sentiment gate. 14 strategies. `docs/15_LAB_SWEEPS_SENTIMENT.md` | nothing (Yahoo corpus) |
 | **Data** | Corpus coverage, backfill jobs (Yahoo now, Dhan 1-minute × 5 years once the Data API is on), quality report, and an **explore** section: daily closes vs VIX, return distribution, intraday range profile, sessions per month, weekday seasonality, correlation heatmap. | nothing / Data API |
 | **News & Sentiment** | **Market pulse** (breadth, index trend, VIX percentile, NIFTY PCR with the Data API) recorded every 15 min, score history chart, board, news feed, manual posts, **bulk import** of your scorer's history for backtests. | nothing |
-| **Settings** | Paste Dhan credentials (written to `.env`, mode 0600, never echoed), **Test entitlements** (free tier vs Data API, per endpoint), postback guidance, read-only config. | — |
+| **Settings** | Paste Dhan credentials (written to `.env`, mode 0600, never echoed), **Test entitlements**, **Renew token** (TOTP self-renewal, no daily pasting), **Go live** (switch to the Dhan feed in place), desk watchlist, read-only config. | — |
 
 Everything runs in **one Python process** (`python -m onelot run`) on macOS and Windows,
 with SQLite in WAL mode. No Docker, no external services.
 
 The web app opens in a bright **Day** theme sized for reading at arm's length; the **☾ Night**
-button in the header switches to the dark desk and the choice is remembered per browser.
+button in the header switches to the dark desk and the choice is remembered per browser. The
+header clock is system time in IST (seconds and milliseconds); click it for the NSE holiday
+calendar (2026 cross-checked; past holidays shaded, the next one highlighted).
 
 ---
 

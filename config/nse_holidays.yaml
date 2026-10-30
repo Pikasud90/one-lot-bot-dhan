@@ -1,33 +1,43 @@
 # ─────────────────────────────────────────────────────────────────────────────
-#  NSE trading holidays (equity / F&O segment).
+#  NSE / BSE trading holidays (equity + equity-derivatives segments).
 #
-#  !! `verified: false` means the engine will WARN on every startup. !!
+#  2026 was cross-checked on 2026-10-30 against two independent broker
+#  calendars that mirror the NSE circular (both agree on every weekday
+#  closure):
+#    https://www.bajajbroking.in/nse-holidays
+#    https://upstox.com/stocks-market/nse-holidays/
+#  The official source remains
+#    https://www.nseindia.com/resources/exchange-communication-holidays
+#  Re-check in December for the 2027 circular; 2027 below holds only the
+#  fixed-date national holidays until then.
 #
-#  Only fixed-date national holidays are pre-filled below, because those are
-#  the only ones that can be stated without consulting a circular. Every
-#  lunar-calendar holiday (Holi, Ram Navami, Mahavir Jayanti, Id, Muharram,
-#  Ganesh Chaturthi, Dussehra, Diwali/Laxmi Pujan, Guru Nanak Jayanti, ...)
-#  MOVES EVERY YEAR and is deliberately NOT guessed here.
-#
-#  TO COMPLETE THIS FILE:
-#    1. Open the NSE holiday circular for the year:
-#       https://www.nseindia.com/resources/exchange-communication-holidays
-#    2. Add every date as `- {date: "YYYY-MM-DD", name: "..."}`
-#    3. Add any muhurat / special sessions under `special_sessions`
-#    4. Set `verified: true`
-#
-#  FAILURE MODE IF YOU DON'T: the engine treats an unlisted holiday as a
-#  trading day, finds no market data, drops to health=DEAD, and emits no
+#  FAILURE MODE IF THIS FILE IS WRONG: the engine treats an unlisted holiday
+#  as a trading day, finds no market data, drops to health=DEAD, and emits no
 #  signals. Annoying, never dangerous — it cannot trade on a closed exchange.
 # ─────────────────────────────────────────────────────────────────────────────
-verified: false
+verified: true
+verified_on: "2026-10-30"
+sources:
+  - https://www.bajajbroking.in/nse-holidays
+  - https://upstox.com/stocks-market/nse-holidays/
 
 holidays:
   2026:
+    - {date: "2026-01-15", name: "Municipal Corporation Election (Maharashtra)"}
     - {date: "2026-01-26", name: "Republic Day"}
+    - {date: "2026-03-03", name: "Holi"}
+    - {date: "2026-03-26", name: "Shri Ram Navami"}
+    - {date: "2026-03-31", name: "Shri Mahavir Jayanti"}
+    - {date: "2026-04-03", name: "Good Friday"}
+    - {date: "2026-04-14", name: "Dr. Baba Saheb Ambedkar Jayanti"}
     - {date: "2026-05-01", name: "Maharashtra Day"}
-    - {date: "2026-08-15", name: "Independence Day"}
+    - {date: "2026-05-28", name: "Bakri Id"}
+    - {date: "2026-06-26", name: "Muharram"}
+    - {date: "2026-09-14", name: "Ganesh Chaturthi"}
     - {date: "2026-10-02", name: "Mahatma Gandhi Jayanti"}
+    - {date: "2026-10-20", name: "Dussehra"}
+    - {date: "2026-11-10", name: "Diwali – Balipratipada"}
+    - {date: "2026-11-24", name: "Prakash Gurpurb Sri Guru Nanak Dev"}
     - {date: "2026-12-25", name: "Christmas"}
   2027:
     - {date: "2027-01-26", name: "Republic Day"}
@@ -35,6 +45,15 @@ holidays:
     - {date: "2027-10-02", name: "Mahatma Gandhi Jayanti"}
     - {date: "2027-12-25", name: "Christmas"}
 
-# Sessions that run at non-standard hours (e.g. Diwali Muhurat trading).
+# Holidays that fall on weekends (informational; the exchange is shut anyway).
+weekend_holidays:
+  2026:
+    - {date: "2026-02-15", name: "Mahashivratri"}
+    - {date: "2026-03-21", name: "Id-Ul-Fitr (Ramadan Eid)"}
+    - {date: "2026-08-15", name: "Independence Day"}
+    - {date: "2026-11-08", name: "Diwali Laxmi Pujan"}
+
+# Sessions that run at non-standard hours (Diwali Muhurat trading).
 # The engine will NOT trade these unless explicitly enabled.
-special_sessions: []
+special_sessions:
+  - {date: "2026-11-08", name: "Diwali Muhurat trading", note: "Sunday evening session; timings per NSE circular"}

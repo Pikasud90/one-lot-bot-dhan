@@ -40,6 +40,9 @@ class DeskConfig:
     history_days: int = 15
     source: str = "auto"
     signal_valid_minutes: int = 10
+    stock_horizon: str = "swing"        # swing = a stock position may be carried for days; intraday = square off
+    swing_max_sessions: int = 5         # time stop for swing positions, in sessions
+    audit_days: int = 7                 # archived alerts re-audited against later bars for this long
     context: tuple[ContextCfg, ...] = ()
     indices: tuple[DeskInstrumentCfg, ...] = ()
     stocks: tuple[DeskInstrumentCfg, ...] = ()
@@ -81,4 +84,5 @@ def load_desk_config(path: str | Path | None = None) -> DeskConfig:
                                str(c.get("note") or "")) for c in raw.get("context") or [])
     return DeskConfig(int(raw.get("poll_seconds", 60)), int(raw.get("history_days", 15)),
                       str(raw.get("source", "auto")), int(raw.get("signal_valid_minutes", 10)),
-                      context, indices, stocks, str(p))
+                      str(raw.get("stock_horizon", "swing")), int(raw.get("swing_max_sessions", 5)),
+                      int(raw.get("audit_days", 7)), context, indices, stocks, str(p))

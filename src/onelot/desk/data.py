@@ -179,8 +179,104 @@ class CompositeBars:
         return out
 
 
-def build_source(mode: str, adapter, data_api_active: bool) -> CompositeBars:
+
+
+class DhanLiveBars:
+    """Dhan 1-minute bars with the WebSocket on top.
+
+    REST (`DhanBars`) seeds history and self-heals every poll; ticks from the engine's
+    socket build the forming minute in real time and expose the last trade for each
+    desk instrument (`quotes`). Closed bars from ticks are merged with REST bars by
+    timestamp (REST wins on conflict), so a dropped socket never corrupts the series.
+    """
+
+    name = "dhan-ws"
+    delayed = False
+    resolution = "1m"
+
+    def __init__(self, adapter, feed, specs: dict[str, SeriesSpec]) -> None:
+        from ..broker.base import Contract
+        from ..market.candles import CandleSeries
+
+        self.rest = DhanBars(adapter)
+        self.feed = feed
+        self.last_error: str | None = None
+        self.quotes: dict[str, dict] = {}
+        self._series: dict[str, CandleSeries] = {}
+        self._id_to_key: dict[str, str] = {}
+        self._closed: dict[str, list] = {}
+        self._lock = __import__("threading").Lock()
+        contracts: list[Contract] = []
+        session_open = dt.datetime.now(IST).replace(hour=9, minute=15, second=0, microsecond=0)
+        for key, spec in specs.items():
+            if not self.rest.can_serve(spec):
+                continue
+            try:
+                c = self.rest.provider.contract_for(spec)
+            except Exception:  # noqa: BLE001
+                continue
+            contracts.append(c)
+            self._id_to_key[str(c.security_id)] = key
+            self._series[key] = CandleSeries(key, 1, session_open, has_volume=bool(spec.has_volume), max_bars=3000)
+            self._closed[key] = []
+        if feed is not None and contracts:
+            feed.add_tick_listener(self._on_tick)
+            feed.subscribe_extra(contracts)
+        self.subscribed = len(contracts)
+
+    def can_serve(self, spec: SeriesSpec) -> bool:
+        return self.rest.can_serve(spec)
+
+    def _on_tick(self, q) -> None:
+        key = self._id_to_key.get(str(q.security_id))
+        if key is None or q.ltp is None:
+            return
+        with self._lock:
+            self.quotes[key] = {"ltp": float(q.ltp), "bid": q.bid, "ask": q.ask, "volume": q.volume,
+                                "ts": q.ts.isoformat() if q.ts else None, "source": q.source}
+            series = self._series.get(key)
+            if series is not None:
+                for b in series.on_tick(q.ts, q.ltp, q.volume):
+                    self._closed[key].append(b)
+
+    def socket_alive(self) -> bool:
+        try:
+            return bool(self.feed and self.feed.broker.stream_alive())
+        except Exception:  # noqa: BLE001
+            return False
+
+    def fetch(self, specs: dict[str, SeriesSpec], days: int,
+              since: dict[str, pd.Timestamp] | None = None) -> dict[str, pd.DataFrame]:
+        now = dt.datetime.now(IST)
+        out = self.rest.fetch(specs, days, since)          # history + self-heal (closed bars only)
+        self.last_error = self.rest.last_error
+        with self._lock:
+            for key, series in self._series.items():
+                if key not in specs:
+                    continue
+                for b in series.mark_closed_through(now, settle_delay_sec=2.0):
+                    self._closed[key].append(b)
+                closed, self._closed[key] = self._closed[key], []
+                if not closed:
+                    continue
+                df = pd.DataFrame([{"ts": b.ts, "open": b.open, "high": b.high, "low": b.low, "close": b.close,
+                                    "volume": b.volume or 0.0} for b in closed]).set_index("ts")
+                df = _clean(df, specs[key], 1)
+                if df.empty:
+                    continue
+                if key in out and not out[key].empty:
+                    merged = pd.concat([df, out[key]])                 # REST last -> wins on duplicates
+                    out[key] = merged[~merged.index.duplicated(keep="last")].sort_index()
+                else:
+                    out[key] = df
+        return out
+
+
+def build_source(mode: str, adapter, data_api_active: bool, feed=None,
+                 specs: dict[str, SeriesSpec] | None = None) -> CompositeBars:
     yahoo = YahooBars()
     if mode == "yahoo" or adapter is None or (mode == "auto" and not data_api_active):
         return CompositeBars(None, yahoo)
+    if feed is not None and specs:
+        return CompositeBars(DhanLiveBars(adapter, feed, specs), yahoo)
     return CompositeBars(DhanBars(adapter), yahoo)

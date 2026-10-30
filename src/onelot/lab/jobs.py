@@ -150,11 +150,11 @@ class JobRunner:
                 cfg = BacktestConfig.from_settings(combo["strategy"], combo["instrument_key"],
                                                    timeframe=combo["timeframe"], params=combo.get("params") or {},
                                                    **base)
-                cfgd = {**cfg.__dict__, "_sweep_id": rid}
+                cfgd = {**cfg.__dict__, "_sweep_id": rid, "_preset": combo.get("preset", "default")}
                 with self.engine.begin() as conn:
                     child = conn.execute(backtest_runs.insert().values(
                         created_at=utcnow(), kind="single",
-                        label=f"sweep#{rid} {cfg.strategy} {cfg.instrument_key} {cfg.timeframe}",
+                        label=f"sweep#{rid} {cfg.strategy} {cfg.instrument_key} {cfg.timeframe} {combo.get('preset', '')}".strip(),
                         config=cfgd, status="QUEUED", progress=0.0)).inserted_primary_key[0]
                 self._run_backtest(int(child), dict(cfgd), cache=cache)
                 with self.engine.connect() as conn:

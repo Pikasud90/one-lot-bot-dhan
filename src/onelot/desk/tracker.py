@@ -44,7 +44,19 @@ class StrategySlot:
     last_eval_at: dt.datetime | None = None
     signals_today: int = 0
     last_features: dict = field(default_factory=dict)
+    last_flags: dict = field(default_factory=dict)      # long_entry/short_entry/long_exit/short_exit of the last bar
     error: str | None = None
+
+    def exit_advice(self, side: str) -> str | None:
+        """What the strategy says about an OPEN position on its latest closed bar."""
+        f = self.last_flags
+        if not f:
+            return None
+        if f.get(f"{side}_exit"):
+            return "SIGNAL_EXIT"
+        if f.get("short_entry" if side == "long" else "long_entry"):
+            return "OPPOSITE_SIGNAL"
+        return None
 
     def as_dict(self) -> dict:
         v = self.last_verdict
@@ -85,6 +97,7 @@ class InstrumentTracker:
         self.pnl_today = 0.0
         self.last_error: str | None = None
         self.regime: dict = {}
+        self.live_quote: dict | None = None     # last WS tick (ltp, bid, ask, ts) when the Dhan socket is on
 
     # ── bars ──────────────────────────────────────────────────────────────
     def update_bars(self, df: pd.DataFrame) -> None:
@@ -99,7 +112,18 @@ class InstrumentTracker:
         self.bars = self.bars[self.bars.index >= cutoff]
 
     def last_price(self) -> float | None:
+        q = self.live_quote
+        if q and q.get("ltp"):
+            return float(q["ltp"])
         return float(self.bars["close"].iloc[-1]) if not self.bars.empty else None
+
+    def bars_for(self, timeframe: str, n: int = 400) -> pd.DataFrame:
+        df = self.bars
+        if df.empty:
+            return df
+        if timeframe and minutes_of(timeframe) != self.fine_minutes:
+            df = resample_bars(df, timeframe)
+        return df.tail(n)
 
     def last_bar_ts(self) -> dt.datetime | None:
         return self.bars.index[-1].to_pydatetime() if not self.bars.empty else None
@@ -172,6 +196,7 @@ class InstrumentTracker:
         slot.last_features = {k: _num(last.get(k)) for k in ("adx", "rsi", "atr", "atr_pct", "vwap", "ema20", "ema50", "rvol",
                                                            "long_score", "short_score", "mkt_bias")}
         slot.last_features["regime"] = str(last.get("regime", ""))
+        slot.last_flags = {k: bool(last.get(k)) for k in ("long_entry", "short_entry", "long_exit", "short_exit")}
         long_e, short_e = bool(last.get("long_entry")), bool(last.get("short_entry"))
         close = float(last["close"])
         if long_e or short_e:
@@ -212,7 +237,8 @@ class InstrumentTracker:
             "tracked": self.instrument.key, "tracked_label": self.instrument.label,
             "unit": "1 share" if self.cfg.kind == "STOCK" else f"1 lot ({self.instrument.lot_size})",
             "last": {"price": self.last_price(), "change_pct": chg, "prev_close": prev,
-                     "bar_ts": self.last_bar_ts().isoformat() if self.last_bar_ts() else None, "age_sec": age},
+                     "bar_ts": self.last_bar_ts().isoformat() if self.last_bar_ts() else None, "age_sec": age,
+                     "live": self.live_quote},
             "strategies": [s.as_dict() for s in self.slots],
             "regime": self.regime,
             "risk": {"trades_today": self.trades_today, "consecutive_losses": self.consecutive_losses,

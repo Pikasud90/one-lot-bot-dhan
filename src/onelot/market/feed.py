@@ -77,6 +77,20 @@ class MarketFeed:
         self._failover_thread: threading.Thread | None = None
         self._id_to_key: dict[str, str] = {}
         self._rebuild_id_map()
+        self._listeners: list = []          # extra tick consumers (the Live Desk)
+
+    def add_tick_listener(self, fn) -> None:
+        with self._lock:
+            if fn not in self._listeners:
+                self._listeners.append(fn)
+
+    def subscribe_extra(self, contracts: list[Contract]) -> None:
+        """Put more instruments on the same socket (desk watchlist). They are not
+        candles the engine builds; listeners get the raw ticks."""
+        try:
+            self.broker.update_subscription(list(contracts))
+        except Exception as exc:
+            log.warning("extra subscription failed: %s", exc)
 
     def _rebuild_id_map(self) -> None:
         self._id_to_key = {str(self.contracts.index.security_id): INDEX_KEY}
@@ -169,11 +183,17 @@ class MarketFeed:
         key = self._id_to_key.get(str(q.security_id))
         with self._lock:
             self.latest_quotes[str(q.security_id)] = q
-        self.health.note_quote(q.security_id, q.ts)
         if q.source == "ws":
             self.health.note_socket(True, q.ts)
-
-        if key is None or q.ltp is None:
+        for fn in list(self._listeners):
+            try:
+                fn(q)
+            except Exception:
+                log.exception("tick listener failed")
+        if key is None:
+            return                              # a desk instrument, not the engine's
+        self.health.note_quote(q.security_id, q.ts)
+        if q.ltp is None:
             return
         closed: list[Bar] = []
         if key == INDEX_KEY:

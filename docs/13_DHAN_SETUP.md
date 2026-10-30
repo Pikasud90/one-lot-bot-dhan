@@ -78,3 +78,24 @@ is no technical difference between the tokens on Dhan's side once the plan is ac
 
 prints a two-tier report and `READY` / `NOT READY`. The same report is behind **Settings →
 Test entitlements**.
+
+## Daily token without the browser (TOTP), and "invalid or missing API token"
+
+Two different tokens exist and both bit the operator on 2026-10-30:
+
+* **Dhan access token** (24 h). Enable TOTP on web.dhan.co → Access DhanHQ APIs, then store the
+  Dhan **PIN** and the **TOTP secret** in Settings (they go to `.env`, mode 0600). The engine then
+  mints a fresh token itself (`POST https://auth.dhan.co/app/generateAccessToken?dhanClientId=&pin=&totp=`)
+  whenever the current one has under 90 minutes left or is reported expired, re-attaches the
+  account reads, swaps the token into the data feed, and keeps the desk live. **Renew token now**
+  in Settings does it on demand.
+* **One Lot Desk session token** (`data/api_token.txt`, the `x-onelot-token` header every
+  mutation needs). It used to be regenerated on every engine start, so any page already open
+  failed every Save with *invalid or missing API token*. It is now persisted and reused, and the
+  page re-syncs it automatically on a 401 (`GET /api/session`) and retries once.
+
+Saving credentials now also fetches the profile synchronously and, when the Data API plan is
+active, switches the engine from the synthetic market to the Dhan feed without a restart
+(**Go live** does the same on demand). The WebSocket client was rewritten for dhanhq 2.x
+(`MarketFeed(DhanContext, …)`); the previous build called a class that no longer exists, so the
+socket had never connected.

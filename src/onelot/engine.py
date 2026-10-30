@@ -26,6 +26,7 @@ import numpy as np
 from .analytics.ivp import IVPercentileEngine
 from .analytics.regime import RegimeModel, compute_for_date
 from .broker.base import Contract, TokenExpiredError, nearest_monthly_expiry
+from .broker.dhan import DhanAdapter
 from .broker.mock import MockBroker
 from .clock import IST, SessionClock, TradingCalendar, assert_clock_sane, now_ist
 from .config import AppConfig, CostConfig, Secrets
@@ -140,6 +141,8 @@ class Engine:
         self.account = AccountService(self.db.engine, adapter=None)
         self.lab_jobs = JobRunner(self.db.engine)
         self.desk = None   # built in start(): the multi-instrument Live Desk
+        self._last_renew_at: dt.datetime | None = None
+        self._last_renew_error: str | None = None
 
     # ── startup ───────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -195,7 +198,8 @@ class Engine:
             from .desk import Desk
             self.desk = Desk(self.db.engine, self.cfg, self.notifier, self.governor, self.session_clock,
                              repo=self.repo, adapter_getter=lambda: self.account.adapter,
-                             data_api_active=self._data_api_active)
+                             data_api_active=self._data_api_active, feed_getter=lambda: self.feed,
+                             calendar=self.calendar)
             self.desk.start()
         except Exception:
             log.exception("Live Desk failed to start (the Bank Nifty engine continues)")
@@ -215,7 +219,10 @@ class Engine:
     def _data_api_active(self) -> bool:
         """Cheap: reads the cached profile, never the network."""
         try:
-            prof = (self.account.snapshot()["panels"].get("profile") or {}).get("data") or {}
+            snap = self.account.snapshot()
+            prof = (snap["panels"].get("profile") or {}).get("data") or {}
+            if snap.get("token_expired"):
+                return False
             return str(prof.get("dataPlan") or "").lower() == "active"
         except Exception:  # noqa: BLE001
             return False
@@ -276,8 +283,10 @@ class Engine:
         return {"ok": True, "feed_is_mock": isinstance(self.broker, MockBroker)}
 
     def update_credentials(self, client_id: str | None, access_token: str | None,
-                           data_access_token: str | None) -> dict:
-        """Persist new Dhan credentials to .env and hot-attach the account adapter."""
+                           data_access_token: str | None, pin: str | None = None,
+                           totp_secret: str | None = None) -> dict:
+        """Persist new Dhan credentials to .env, hot-attach the account adapter,
+        refresh the profile, and go LIVE on the spot when the Data API is active."""
         updates = {}
         if client_id is not None:
             updates["DHAN_CLIENT_ID"] = client_id
@@ -285,6 +294,13 @@ class Engine:
             updates["DHAN_ACCESS_TOKEN"] = access_token
         if data_access_token is not None:
             updates["DHAN_DATA_ACCESS_TOKEN"] = data_access_token
+        if pin is not None:
+            updates["DHAN_PIN"] = pin
+        if totp_secret is not None:
+            updates["DHAN_TOTP_SECRET"] = totp_secret.replace(" ", "")
+        return self._apply_credentials(updates)
+
+    def _apply_credentials(self, updates: dict) -> dict:
         from .config import Secrets
         from .logging_setup import register_secrets
 
@@ -294,10 +310,116 @@ class Engine:
         self.secrets = new
         register_secrets(new.secret_values())
         res = self.attach_account_adapter()
+        profile_ok = False
         if res.get("ok"):
+            # synchronous: the UI (and go_live) need the profile NOW
+            refreshed = self.account.refresh(("profile",))
+            profile_ok = bool(refreshed.get("profile", {}).get("ok"))
             self.account.on_trade_event()
-        return {**res, "masked": new.masked(),
-                "restart_needed_for_live_data": isinstance(self.broker, MockBroker)}
+            if isinstance(self.broker, DhanAdapter):
+                self.broker.set_token(new.data_token)
+        live = self.go_live() if profile_ok else {"live": not isinstance(self.broker, MockBroker),
+                                                    "reason": "profile could not be fetched with this token"}
+        if self.desk is not None:
+            self.desk._wake.set()
+        return {**res, "masked": new.masked(), "profile_ok": profile_ok,
+                "data_api_active": self._data_api_active(), "went_live": bool(live.get("switched")),
+                "live": bool(live.get("live")), "live_reason": live.get("reason", ""),
+                "restart_needed_for_live_data": False}
+
+    def go_live(self) -> dict:
+        """Replace the synthetic market with the real Dhan feed, in place.
+
+        Preconditions: credentials, a profile that answers, and the Data API plan
+        active on the account. Otherwise the mock keeps running and the reason is
+        returned. Nothing here can place an order; "live" means live DATA.
+        """
+        if not isinstance(self.broker, MockBroker):
+            return {"live": True, "switched": False, "reason": "already on the Dhan feed"}
+        if not self.secrets.has_broker_creds:
+            return {"live": False, "switched": False, "reason": "no credentials"}
+        if not self._data_api_active():
+            return {"live": False, "switched": False,
+                    "reason": "Data API plan is not active on this account (profile.dataPlan); staying on the synthetic market"}
+        try:
+            adapter = DhanAdapter(self.secrets.client_id, self.secrets.data_token, self.limiter)
+            adapter.expiry_list(self.cfg.instrument.underlying_symbol,
+                                self.cfg.instrument.index_security_id,
+                                self.cfg.instrument.exchange_segment_index)
+        except Exception as exc:  # noqa: BLE001
+            return {"live": False, "switched": False, "reason": f"Dhan data check failed: {type(exc).__name__}: {str(exc)[:160]}"}
+        old_feed, old_chain = self.feed, self.chain
+        try:
+            if old_feed:
+                old_feed.stop()
+            if old_chain:
+                old_chain.stop()
+        except Exception:  # noqa: BLE001
+            log.exception("stopping the mock feed")
+        self.use_mock = False
+        self.broker = adapter
+        self.attach_account_adapter()
+        self.status.warnings = [w for w in self.status.warnings if "SYNTHETIC" not in w and "mock" not in w.lower()]
+        try:
+            self._resolve_instruments()
+            self._start_feed()
+            self._load_regime()
+        except Exception as exc:  # noqa: BLE001
+            log.exception("go_live failed while starting the feed")
+            return {"live": True, "switched": True, "reason": f"feed started with errors: {type(exc).__name__}: {str(exc)[:160]}"}
+        self.notifier.info("Live market data ON", "Switched from the synthetic market to the Dhan feed (data only; nothing is traded).",
+                           dedup_key="go_live")
+        log.info("Engine switched to the Dhan feed (expiry=%s, lot=%s)", self.expiry, self.lot_size)
+        return {"live": True, "switched": True, "reason": "switched to the Dhan feed"}
+
+    # ── token renewal (TOTP) ──────────────────────────────────────────────
+    def renew_token(self, force: bool = False) -> dict:
+        """Mint a fresh 24-hour token from the PIN + TOTP secret in .env and apply it everywhere."""
+        from .broker.totp import generate_access_token
+
+        if not self.secrets.can_self_renew:
+            return {"ok": False, "reason": "PIN and TOTP secret are not configured (Settings → Dhan credentials)"}
+        if not force and not self._token_needs_renewal():
+            return {"ok": True, "renewed": False, "reason": "token still has more than 90 minutes left"}
+        try:
+            res = generate_access_token(self.secrets.client_id, self.secrets.pin, self.secrets.totp_secret)
+        except Exception as exc:  # noqa: BLE001
+            self._last_renew_error = f"{type(exc).__name__}: {str(exc)[:200]}"
+            log.error("token renewal failed: %s", self._last_renew_error)
+            return {"ok": False, "reason": self._last_renew_error}
+        updates = {"DHAN_ACCESS_TOKEN": res["access_token"]}
+        if self.secrets.data_access_token:
+            updates["DHAN_DATA_ACCESS_TOKEN"] = res["access_token"]
+        out = self._apply_credentials(updates)
+        self._last_renew_at = now_ist()
+        self._last_renew_error = None
+        self.notifier.info("Dhan token renewed", f"valid until {res.get('expiry_time') or 'tomorrow'}", dedup_key="token_renew")
+        return {"ok": True, "renewed": True, "expiry_time": res.get("expiry_time"), **{k: out[k] for k in ("live", "data_api_active")}}
+
+    def token_expiry(self) -> dt.datetime | None:
+        try:
+            prof = (self.account.snapshot()["panels"].get("profile") or {}).get("data") or {}
+            tv = str(prof.get("tokenValidity") or "")
+            return dt.datetime.strptime(tv, "%d/%m/%Y %H:%M").replace(tzinfo=IST) if tv else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _token_needs_renewal(self) -> bool:
+        exp = self.token_expiry()
+        if exp is None:
+            snap = self.account.snapshot()
+            return bool(snap.get("token_expired"))
+        return (exp - now_ist()) < dt.timedelta(minutes=90)
+
+    def _maybe_auto_renew(self, now: dt.datetime) -> None:
+        if not self.secrets.can_self_renew:
+            return
+        last = getattr(self, "_last_renew_try", None)
+        if last and (now - last) < dt.timedelta(minutes=15):
+            return
+        if self._token_needs_renewal():
+            self._last_renew_try = now
+            self.renew_token(force=True)
 
     def _resolve_instruments(self) -> None:
         """Expiry and lot size come from the broker, never from a constant.
@@ -731,6 +853,7 @@ class Engine:
                         log.error("INDEX DIVERGENCE: %s", why)
                         self.notifier.critical("Index feed disagreement", why)
                         self.health.note_api_error(why)
+                self._maybe_auto_renew(now)
                 today = now.date().isoformat()
                 if today != last_iv_record and self.chain and self.chain.snapshot:
                     iv = self.chain.atm_iv()

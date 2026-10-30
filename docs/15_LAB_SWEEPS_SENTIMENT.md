@@ -70,3 +70,17 @@ All charts are **TradingView Lightweight Charts v5**, vendored under `src/onelot
 (Apache-2.0, 198 KB) with the fonts, so the whole app, backtests included, runs with no internet.
 Candles carry entry/exit markers; click a trade in the table to zoom to it with its entry/exit
 lines. Equity and drawdown share one chart in two panes.
+
+## Matrix: three settings per strategy
+
+`lab/presets.py` derives, from each strategy's declared search space, three fixed settings chosen
+before any result is seen: **low** (first choice of every entry knob), **default**, **high** (last
+choice). Exit knobs stay at the defaults. A sweep with *three settings per strategy* ticked runs
+strategies × instruments × timeframes × 3 (14 × 15 × 4 × 3 = 2520 runs) — every run saved.
+
+The **Matrix** sub-tab (`GET /api/lab/matrix?sweep_id=`) groups the results strategy → instrument
+→ rows of timeframe × setting, **sorted by win rate from highest to lowest**, and marks the best
+row per instrument and the best instrument per strategy by the leaderboard score. Nothing in it
+sees the future: signals are closed-bar, fills are next-open, the settings are fixed a priori.
+Run it on the Yahoo corpus for a pipeline check only; the real matrix needs the five-year Dhan
+history (Data tab → *Dhan: 5-year 1-minute history*).

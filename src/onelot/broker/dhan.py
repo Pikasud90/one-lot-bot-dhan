@@ -619,52 +619,89 @@ class DhanAdapter:
             target=self._feed_loop, name="dhan-feed", daemon=True)
         self._feed_thread.start()
 
+    # dhanhq >= 2.x MarketFeed wants integer segment codes in its tuples.
+    _WS_SEGMENT = {"IDX_I": 0, "NSE_EQ": 1, "NSE_FNO": 2, "NSE_CURRENCY": 3, "BSE_EQ": 4,
+                   "MCX_COMM": 5, "BSE_CURRENCY": 7, "BSE_FNO": 8}
+
+    def _ws_tuples(self, contracts) -> list[tuple]:
+        from dhanhq import marketfeed
+
+        out = []
+        for c in contracts:
+            seg = self._WS_SEGMENT.get(str(c.exchange_segment))
+            if seg is None:
+                log.warning("feed: unknown exchange segment %s for %s", c.exchange_segment, c.security_id)
+                continue
+            out.append((seg, str(c.security_id), marketfeed.MarketFeed.Quote))
+        return out
+
     def _feed_loop(self) -> None:  # pragma: no cover - requires live credentials
         """Reconnecting feed loop with jittered exponential backoff.
 
         v1 defect D4: v1 treated 3 seconds of tick silence as a dead socket.
         Ticks arrive on TRADES — a quiet strike legitimately goes 10s+ without
         one. Liveness is a property of the CONNECTION, not of tick arrival.
+
+        Uses the dhanhq 2.x `MarketFeed(DhanContext, instruments, "v2")` API:
+        `run_forever()` connects + subscribes, `get_data()` yields one message.
+        (The previous build called a `DhanFeed` class that no longer exists, so
+        the socket never connected and the engine silently lived on REST.)
         """
         import random
         import time
 
-        from dhanhq import marketfeed
+        from dhanhq import DhanContext, marketfeed
 
         attempt = 0
         while not self._feed_stop.is_set():
             try:
                 with self._lock:
-                    subs = [(c.exchange_segment, str(c.security_id),
-                             marketfeed.Quote) for c in self._subscribed.values()]
-                feed = marketfeed.DhanFeed(self._client_id, self._token, subs)
+                    subs = self._ws_tuples(self._subscribed.values())
+                if not subs:
+                    self._feed_connected = False
+                    time.sleep(5.0)
+                    continue
+                ctx = DhanContext(self._client_id, self._token)
+                feed = marketfeed.MarketFeed(ctx, subs, "v2")
                 self._feed = feed
+                feed.run_forever()                       # connect + subscribe
                 self._feed_connected = True
                 attempt = 0
                 log.info("Dhan market feed connected (%d instruments)", len(subs))
                 while not self._feed_stop.is_set():
-                    feed.run_forever()
                     msg = feed.get_data()
                     if msg:
                         self._handle_feed_message(msg)
+                        if isinstance(msg, dict) and msg.get("type") == "Disconnect":
+                            raise ConnectionError(f"server disconnect {msg}")
             except Exception as exc:
                 self._feed_connected = False
                 attempt += 1
                 delay = min(60.0, 2.0 * (2 ** min(attempt, 5))) * (0.5 + random.random())
-                log.warning("Market feed disconnected (%s) — reconnecting in %.1fs",
-                            type(exc).__name__, delay)
-                time.sleep(delay)
+                log.warning("Market feed disconnected (%s: %s) — reconnecting in %.1fs",
+                            type(exc).__name__, str(exc)[:120], delay)
+                try:
+                    if self._feed is not None:
+                        self._feed.close_connection()
+                except Exception:
+                    pass
+                self._feed = None
+                self._feed_stop.wait(delay)
         self._feed_connected = False
 
     def _handle_feed_message(self, msg: dict) -> None:  # pragma: no cover
+        if not isinstance(msg, dict):
+            return
         sid = str(_first(msg, "security_id", "securityId", default="") or "")
         if not sid or not self._on_tick:
             return
+        ltp = _f(_first(msg, "LTP", "last_price", "ltp"))
+        if ltp is None:
+            return                                   # OI / prev-close / status packets
         now = dt.datetime.now(IST)
         self._last_tick_at = now
         self._on_tick(QuoteSnapshot(
-            security_id=sid, ts=now,
-            ltp=_f(_first(msg, "LTP", "last_price", "ltp")),
+            security_id=sid, ts=now, ltp=ltp,
             bid=_f(_first(msg, "bid_price", "top_bid_price")),
             ask=_f(_first(msg, "ask_price", "top_ask_price")),
             bid_qty=_i(_first(msg, "bid_quantity")),
@@ -680,11 +717,34 @@ class DhanAdapter:
                 self._subscribed[str(c.security_id)] = c
         if new and self._feed is not None:  # pragma: no cover
             try:
-                self._feed.subscribe_symbols([
-                    (c.exchange_segment, str(c.security_id)) for c in new])
+                self._feed.subscribe_symbols(self._ws_tuples(new))
             except Exception as exc:
                 log.warning("Could not add subscriptions live (%s); "
                             "they apply on next reconnect.", type(exc).__name__)
+
+    def unsubscribe(self, contracts: list[Contract]) -> None:
+        with self._lock:
+            gone = [self._subscribed.pop(str(c.security_id), None) for c in contracts]
+        gone = [c for c in gone if c]
+        if gone and self._feed is not None:  # pragma: no cover
+            try:
+                self._feed.unsubscribe_symbols(self._ws_tuples(gone))
+            except Exception as exc:
+                log.warning("Could not drop subscriptions live (%s)", type(exc).__name__)
+
+    def subscribed_ids(self) -> set[str]:
+        with self._lock:
+            return set(self._subscribed)
+
+    def set_token(self, access_token: str) -> None:
+        """Swap in a renewed token: REST headers now, the socket on its next (forced) reconnect."""
+        self._token = access_token
+        self._client.headers["access-token"] = access_token
+        if self._feed is not None:  # pragma: no cover
+            try:
+                self._feed.close_connection()
+            except Exception:
+                pass
 
     def stop_stream(self) -> None:
         self._feed_stop.set()

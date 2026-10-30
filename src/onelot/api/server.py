@@ -25,6 +25,9 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Str
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 
+from ..broker.mock import MockBroker
+from ..clock import IST
+
 log = logging.getLogger(__name__)
 
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
@@ -77,6 +80,7 @@ class SweepBody(BaseModel):
     strategies: list[str] | None = None     # None = every registered strategy
     instruments: list[str] | None = None    # None = the desk watchlist (config/desk.yaml)
     timeframes: list[str] | None = None     # None = 5m, 15m, 30m, 60m
+    presets: bool = False                   # True = low / default / high setting per strategy (3x runs)
     slippage_pct: float | None = None
     cost_multiplier: float = 1.0
     sentiment_mode: str = "off"
@@ -125,6 +129,8 @@ class CredentialsBody(BaseModel):
     client_id: str | None = None
     access_token: str | None = None
     data_access_token: str | None = None
+    pin: str | None = None
+    totp_secret: str | None = None
 
 
 def _iso(v):
@@ -144,7 +150,9 @@ def create_app(engine, api_token: str) -> FastAPI:
         supplied = (request.headers.get("x-onelot-token")
                     or request.query_params.get("token", ""))
         if not api_token or supplied != api_token:
-            raise HTTPException(status_code=401, detail="invalid or missing API token")
+            raise HTTPException(status_code=401, detail=(
+                "invalid or missing API token: this page's session token no longer matches the engine "
+                "(the engine was restarted or data/api_token.txt changed). Reload the page once."))
 
     # ── live desk (unchanged contract) ────────────────────────────────────
     @app.get("/api/state")
@@ -182,9 +190,19 @@ def create_app(engine, api_token: str) -> FastAPI:
     async def stream():
         async def gen():
             last_seq = 0
+            last_desk_version = -1
             while True:
                 try:
                     snap = engine.snapshot()
+                    # The desk snapshot is the bulk of the payload and changes once per poll:
+                    # ship it only when its version moved (the client keeps the last copy).
+                    d = snap.get("desk")
+                    if isinstance(d, dict):
+                        v = d.get("version", 0)
+                        if v == last_desk_version:
+                            snap = {**snap, "desk": {"version": v, "unchanged": True}}
+                        else:
+                            last_desk_version = v
                     items, seq = engine.notifier.dashboard.since(last_seq)
                     last_seq = seq
                     yield f"data: {json.dumps({'state': snap, 'notifications': items}, default=str)}\n\n"
@@ -260,6 +278,15 @@ def create_app(engine, api_token: str) -> FastAPI:
     @app.get("/api/desk/journal")
     def desk_journal(limit: int = Query(200, ge=1, le=2000)) -> dict:
         return {"trades": _desk().journal(limit)}
+
+    @app.get("/api/desk/signals")
+    def desk_signals_view(days: int = Query(7, ge=1, le=60)) -> dict:
+        """Every alert of the last `days` with its audited outcome, plus the per-strategy scoreboard."""
+        return _desk().signals_view(days)
+
+    @app.get("/api/desk/bars")
+    def desk_bars(key: str, timeframe: str | None = None, n: int = Query(300, ge=20, le=3000)) -> dict:
+        return _desk().bars_view(key, timeframe, n)
 
     # ── account (free Trading API; cached, never polled) ──────────────────
     @app.get("/api/account")
@@ -352,10 +379,10 @@ def create_app(engine, api_token: str) -> FastAPI:
         from ..lab.sweep import plan
 
         try:
-            combos = plan(body.strategies, body.instruments, body.timeframes)
+            combos = plan(body.strategies, body.instruments, body.timeframes, presets=body.presets)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        if len(combos) > 3000:
+        if len(combos) > 4000:
             raise HTTPException(400, f"{len(combos)} runs is too many for one sweep; narrow the grid")
         base = {"cost_multiplier": body.cost_multiplier, "sentiment_mode": body.sentiment_mode}
         if body.slippage_pct is not None:
@@ -372,6 +399,18 @@ def create_app(engine, api_token: str) -> FastAPI:
         rows = leaderboard(db.engine, strategy=strategy, instrument=instrument, timeframe=timeframe,
                            category=category, kind=kind, min_trades=min_trades, sweep_id=sweep_id, limit=limit)
         return {"rows": rows, "summary": summarise(rows)}
+
+    @app.get("/api/lab/matrix")
+    def lab_matrix(sweep_id: int | None = None, min_trades: int = Query(5, ge=1, le=500)) -> dict:
+        from ..lab.sweep import matrix
+
+        return matrix(db.engine, sweep_id=sweep_id, min_trades=min_trades)
+
+    @app.get("/api/lab/presets")
+    def lab_presets() -> dict:
+        from ..lab.presets import all_presets
+
+        return {"presets": all_presets()}
 
     @app.get("/api/lab/focus")
     def lab_focus() -> dict:
@@ -563,13 +602,62 @@ def create_app(engine, api_token: str) -> FastAPI:
                      "corpus_resolutions": cfg.data.corpus_resolutions},
             "postback_url_hint": f"http://{cfg.api.host}:{cfg.api.port}/api/dhan/postback",
             "env_path": str(cfg.project_root / ".env"),
+            "feed_live": not isinstance(engine.broker, MockBroker),
+            "data_api_active": engine._data_api_active(),
+            "token_expiry": _iso(engine.token_expiry()),
+            "can_self_renew": engine.secrets.can_self_renew,
+            "last_renew_at": _iso(getattr(engine, "_last_renew_at", None)),
+            "last_renew_error": getattr(engine, "_last_renew_error", None),
+            "desk_source": (engine.desk.snapshot().get("source") if engine.desk else None),
         }
 
     @app.post("/api/settings/dhan", dependencies=[Depends(require_token)])
     def settings_dhan(body: CredentialsBody) -> dict:
-        if not any([body.client_id, body.access_token, body.data_access_token]):
+        if not any([body.client_id, body.access_token, body.data_access_token, body.pin, body.totp_secret]):
             raise HTTPException(400, "nothing to update")
-        return engine.update_credentials(body.client_id, body.access_token, body.data_access_token)
+        return engine.update_credentials(body.client_id, body.access_token, body.data_access_token,
+                                         body.pin, body.totp_secret)
+
+    @app.post("/api/settings/dhan/renew", dependencies=[Depends(require_token)])
+    def settings_dhan_renew() -> dict:
+        """Mint a fresh 24-hour token from the stored PIN + TOTP secret."""
+        return engine.renew_token(force=True)
+
+    @app.post("/api/settings/dhan/golive", dependencies=[Depends(require_token)])
+    def settings_dhan_golive() -> dict:
+        engine.account.refresh(("profile",))
+        return engine.go_live()
+
+    @app.get("/api/session")
+    def session_token_probe() -> dict:
+        """Lets a stale page re-sync its session token without a reload."""
+        return {"token": api_token}
+
+    @app.get("/api/calendar")
+    def calendar(year: int | None = None) -> dict:
+        import yaml
+
+        path = engine.cfg.project_root / "config" / "nse_holidays.yaml"
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}
+        today = dt.datetime.now(IST).date()
+        y = year or today.year
+        def rows(section):
+            out = []
+            for e in ((raw.get(section) or {}).get(y) or []):
+                d = dt.date.fromisoformat(str(e["date"]))
+                out.append({"date": d.isoformat(), "weekday": d.strftime("%a"), "name": str(e.get("name", "")),
+                            "past": d < today, "today": d == today, "days_away": (d - today).days})
+            return out
+        hol = rows("holidays")
+        upcoming = [h for h in hol if not h["past"]]
+        window = engine.session_clock.current_window(dt.datetime.now(IST))
+        return {"year": y, "verified": bool(raw.get("verified")), "verified_on": raw.get("verified_on"),
+                "sources": raw.get("sources") or [], "holidays": hol, "weekend_holidays": rows("weekend_holidays"),
+                "special_sessions": [{**x, "date": str(x.get("date"))} for x in (raw.get("special_sessions") or [])],
+                "next_holiday": upcoming[0] if upcoming else None, "today": today.isoformat(),
+                "today_is_trading_day": window is not None,
+                "session": {"open": "09:15", "close": "15:30", "square_off": "15:15"},
+                "years_available": sorted(int(k) for k in (raw.get("holidays") or {}))}
 
     @app.post("/api/settings/dhan/test", dependencies=[Depends(require_token)])
     def settings_dhan_test() -> dict:
