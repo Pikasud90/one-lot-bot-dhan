@@ -268,3 +268,65 @@ class TestAccountService:
         svc = AccountService(engine, adapter=make_adapter(good_handler))
         svc.refresh()
         json.dumps(svc.snapshot())  # must be serialisable for the API
+
+
+# ── scrip master: both layouts, real rows captured 2026-10-30 ──────────────────────────────
+DETAILED_ROWS = [
+    {"EXCH_ID": "NSE", "SEGMENT": "I", "SECURITY_ID": "25", "INSTRUMENT": "INDEX", "UNDERLYING_SECURITY_ID": "25",
+     "UNDERLYING_SYMBOL": "BANKNIFTY", "SYMBOL_NAME": "BANKNIFTY", "INSTRUMENT_TYPE": "INDEX", "LOT_SIZE": "1.0",
+     "SM_EXPIRY_DATE": "0001-01-01", "STRIKE_PRICE": "", "OPTION_TYPE": "XX", "TICK_SIZE": "0.0500"},
+    {"EXCH_ID": "NSE", "SEGMENT": "D", "SECURITY_ID": "61466", "INSTRUMENT": "FUTIDX", "UNDERLYING_SECURITY_ID": "26009",
+     "UNDERLYING_SYMBOL": "BANKNIFTY", "SYMBOL_NAME": "BANKNIFTY-Nov2026-FUT", "INSTRUMENT_TYPE": "FUT", "LOT_SIZE": "30.0",
+     "SM_EXPIRY_DATE": "2026-11-23", "STRIKE_PRICE": "-0.01000", "OPTION_TYPE": "XX", "TICK_SIZE": "20.0000"},
+    {"EXCH_ID": "NSE", "SEGMENT": "D", "SECURITY_ID": "35000", "INSTRUMENT": "OPTIDX", "UNDERLYING_SECURITY_ID": "26009",
+     "UNDERLYING_SYMBOL": "BANKNIFTY", "SYMBOL_NAME": "BANKNIFTY-Nov2026-69400-CE", "INSTRUMENT_TYPE": "OP", "LOT_SIZE": "30.0",
+     "SM_EXPIRY_DATE": "2026-11-23", "STRIKE_PRICE": "69400.00000", "OPTION_TYPE": "CE", "TICK_SIZE": "5.0000"},
+    {"EXCH_ID": "NSE", "SEGMENT": "D", "SECURITY_ID": "99001", "INSTRUMENT": "OPTIDX", "UNDERLYING_SECURITY_ID": "26037",
+     "UNDERLYING_SYMBOL": "FINNIFTY", "SYMBOL_NAME": "FINNIFTY-Nov2026-25000-PE", "INSTRUMENT_TYPE": "OP", "LOT_SIZE": "60.0",
+     "SM_EXPIRY_DATE": "2026-11-23", "STRIKE_PRICE": "25000.00000", "OPTION_TYPE": "PE", "TICK_SIZE": "5.0000"},
+    {"EXCH_ID": "NSE", "SEGMENT": "E", "SECURITY_ID": "2885", "INSTRUMENT": "EQUITY", "UNDERLYING_SYMBOL": "RELIANCE",
+     "SYMBOL_NAME": "RELIANCE INDUSTRIES LTD", "INSTRUMENT_TYPE": "ES", "LOT_SIZE": "1.0", "SM_EXPIRY_DATE": "", "TICK_SIZE": "10.0"},
+]
+COMPACT_ROWS = [
+    {"SEM_EXM_EXCH_ID": "NSE", "SEM_SEGMENT": "D", "SEM_SMST_SECURITY_ID": "61466", "SEM_INSTRUMENT_NAME": "FUTIDX",
+     "SEM_TRADING_SYMBOL": "BANKNIFTY-Nov2026-FUT", "SEM_LOT_UNITS": "30.0", "SEM_EXPIRY_DATE": "2026-11-23 14:30:00",
+     "SEM_STRIKE_PRICE": "-0.01000", "SEM_OPTION_TYPE": "XX", "SEM_TICK_SIZE": "20.0000"},
+]
+
+
+class TestScripMaster:
+    def _adapter(self, rows):
+        a = make_adapter(good_handler)
+        a._download_scrip_master = lambda limit=None: rows
+        a._instrument_cache, a._instrument_cached_on = [], None
+        return a
+
+    def test_detailed_layout_resolves_index_future_and_options(self):
+        cs = self._adapter(DETAILED_ROWS).instruments("BANKNIFTY", force=True)
+        kinds = {c.instrument_type for c in cs}
+        assert kinds == {"INDEX", "FUTIDX", "OPTIDX"}                     # derivatives were invisible before
+        idx = next(c for c in cs if c.instrument_type == "INDEX")
+        assert idx.exchange_segment == "IDX_I" and idx.security_id == "25" and idx.expiry is None
+        fut = next(c for c in cs if c.instrument_type == "FUTIDX")
+        assert fut.lot_size == 30 and fut.expiry == "2026-11-23" and fut.exchange_segment == "NSE_FNO"
+        opt = next(c for c in cs if c.instrument_type == "OPTIDX")
+        assert opt.opt_type == "CE" and opt.strike == 69400.0 and opt.lot_size == 30
+        assert all(c.underlying == "BANKNIFTY" for c in cs)               # FINNIFTY row excluded
+
+    def test_underlying_prefix_does_not_leak_between_indices(self):
+        cs = self._adapter(DETAILED_ROWS).instruments("FINNIFTY", force=True)
+        assert [c.security_id for c in cs] == ["99001"]
+        assert self._adapter(DETAILED_ROWS).instruments("NIFTY", force=True) == []
+
+    def test_compact_layout_still_works(self):
+        cs = self._adapter(COMPACT_ROWS).instruments("BANKNIFTY", force=True)
+        assert len(cs) == 1 and cs[0].lot_size == 30 and cs[0].expiry == "2026-11-23" and cs[0].exchange_segment == "NSE_FNO"
+
+    def test_segment_enum_and_lookup(self):
+        from onelot.broker.dhan import scrip_fields
+
+        assert scrip_fields(DETAILED_ROWS[4])["segment"] == "NSE_EQ"
+        assert scrip_fields({"EXCH_ID": "BSE", "SEGMENT": "I"})["segment"] == "IDX_I"
+        a = self._adapter(DETAILED_ROWS)
+        hit = a.scrip_lookup("BANKNIFTY", segment="NSE_FNO", instrument="FUTIDX")
+        assert len(hit) == 1 and hit[0]["SECURITY_ID"] == "61466"

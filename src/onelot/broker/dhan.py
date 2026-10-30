@@ -118,6 +118,39 @@ def _is_entitlement(code: str, msg: str) -> bool:
     return code in _DATA_ENTITLEMENT_CODES or "not subscribed" in m or "data api" in m
 
 
+# Dhan's exchange + segment-code columns -> the exchangeSegment enum its APIs speak.
+_SEGMENT_ENUM = {("NSE", "I"): "IDX_I", ("BSE", "I"): "IDX_I", ("NSE", "E"): "NSE_EQ", ("BSE", "E"): "BSE_EQ",
+                 ("NSE", "D"): "NSE_FNO", ("BSE", "D"): "BSE_FNO", ("NSE", "C"): "NSE_CURRENCY",
+                 ("BSE", "C"): "BSE_CURRENCY", ("MCX", "M"): "MCX_COMM"}
+
+
+def scrip_fields(r: dict) -> dict:
+    """Normalise one scrip-master row from EITHER csv layout.
+
+    api-scrip-master.csv          SEM_EXM_EXCH_ID, SEM_SEGMENT, SEM_INSTRUMENT_NAME (FUTIDX), SEM_TRADING_SYMBOL ...
+    api-scrip-master-detailed.csv EXCH_ID, SEGMENT, INSTRUMENT (FUTIDX), UNDERLYING_SYMBOL, SYMBOL_NAME, LOT_SIZE ...
+
+    The detailed file's INSTRUMENT_TYPE column holds a different thing ("FUT" / "OP" / "INDEX");
+    reading it as the instrument type made every future and option invisible, so the engine
+    resolved lot size 0 and no futures contract, and typed the index as NSE_FNO instead of IDX_I.
+    """
+    exch = str(_first(r, "SEM_EXM_EXCH_ID", "EXCH_ID", default="")).upper()
+    seg = str(_first(r, "SEM_SEGMENT", "SEGMENT", default="")).upper()
+    return {
+        "security_id": str(_first(r, "SEM_SMST_SECURITY_ID", "SECURITY_ID", default="")),
+        "exchange": exch, "segment_code": seg,
+        "segment": _SEGMENT_ENUM.get((exch, seg), f"{exch}_{seg}".strip("_")),
+        "instrument": str(_first(r, "SEM_INSTRUMENT_NAME", "INSTRUMENT", default="")).upper(),
+        "trading_symbol": str(_first(r, "SEM_TRADING_SYMBOL", "SYMBOL_NAME", "SM_SYMBOL_NAME", default="")).upper(),
+        "underlying": str(_first(r, "UNDERLYING_SYMBOL", default="")).upper(),
+        "lot": _i(_first(r, "SEM_LOT_UNITS", "LOT_SIZE")),
+        "expiry": str(_first(r, "SEM_EXPIRY_DATE", "SM_EXPIRY_DATE", default="") or "")[:10],
+        "strike": _f(_first(r, "SEM_STRIKE_PRICE", "STRIKE_PRICE")),
+        "opt": str(_first(r, "SEM_OPTION_TYPE", "OPTION_TYPE", default="") or "").upper(),
+        "tick": _f(_first(r, "SEM_TICK_SIZE", "TICK_SIZE")) or 0.05,
+    }
+
+
 def _first(d: dict, *keys, default=None):
     """Tolerate key-name variation across API versions rather than KeyError."""
     for k in keys:
@@ -318,14 +351,14 @@ class DhanAdapter:
         sym = trading_symbol.upper()
         out = []
         for r in self._download_scrip_master():
-            ts = str(_first(r, "SEM_TRADING_SYMBOL", "SM_SYMBOL_NAME", "UNDERLYING_SYMBOL", default="")).upper()
-            if not ts.startswith(sym):
+            f = scrip_fields(r)
+            if not (f["trading_symbol"].startswith(sym) or f["underlying"] == sym):
                 continue
-            if segment and str(_first(r, "SEM_EXM_EXCH_ID", "EXCH_ID", default="")).upper() not in segment:
-                pass
-            if instrument and str(_first(r, "SEM_INSTRUMENT_NAME", "INSTRUMENT", default="")).upper() != instrument.upper():
+            if segment and f["segment"] != segment:
                 continue
-            out.append(r)
+            if instrument and f["instrument"] != instrument.upper():
+                continue
+            out.append({**r, "_norm": f})
         return out
 
     # ── preflight ─────────────────────────────────────────────────────────
@@ -436,27 +469,25 @@ class DhanAdapter:
             return self._instrument_cache
 
         contracts: list[Contract] = []
+        want = underlying.upper()
         for r in self._download_scrip_master():
-            sym = str(_first(r, "SEM_TRADING_SYMBOL", "SM_SYMBOL_NAME",
-                             "UNDERLYING_SYMBOL", default="")).upper()
-            under = str(_first(r, "UNDERLYING_SYMBOL", default="")).upper()
-            if underlying.upper() not in (sym, under) and not sym.startswith(underlying.upper()):
+            f = scrip_fields(r)
+            if f["instrument"] not in ("OPTIDX", "FUTIDX", "INDEX"):
                 continue
-            itype = str(_first(r, "SEM_INSTRUMENT_NAME", "INSTRUMENT_TYPE", default="")).upper()
-            if itype not in ("OPTIDX", "FUTIDX", "INDEX"):
+            if want not in (f["underlying"], f["trading_symbol"]) and not f["trading_symbol"].startswith(want + "-"):
                 continue
-            expiry = str(_first(r, "SEM_EXPIRY_DATE", "SM_EXPIRY_DATE", default="") or "")[:10]
-            opt = str(_first(r, "SEM_OPTION_TYPE", "OPTION_TYPE", default="") or "").upper()
+            # "NIFTY" must not pull in BANKNIFTY / FINNIFTY / MIDCPNIFTY rows
+            if f["underlying"] and f["underlying"] != want:
+                continue
+            if f["instrument"] == "INDEX" and f["segment"] != "IDX_I":
+                continue
             contracts.append(Contract(
-                security_id=str(_first(r, "SEM_SMST_SECURITY_ID", "SECURITY_ID", default="")),
-                exchange_segment=str(_first(r, "SEM_EXM_EXCH_ID", "EXCHANGE_SEGMENT",
-                                            default="NSE_FNO")),
-                symbol=sym, underlying=underlying.upper(), instrument_type=itype,
-                expiry=expiry or None,
-                strike=_f(_first(r, "SEM_STRIKE_PRICE", "STRIKE_PRICE")),
-                opt_type=opt if opt in ("CE", "PE") else None,
-                lot_size=_i(_first(r, "SEM_LOT_UNITS", "LOT_SIZE")),
-                tick_size=_f(_first(r, "SEM_TICK_SIZE", "TICK_SIZE")) or 0.05,
+                security_id=f["security_id"], exchange_segment=f["segment"],
+                symbol=f["trading_symbol"], underlying=want, instrument_type=f["instrument"],
+                expiry=(f["expiry"] if f["expiry"] and not f["expiry"].startswith("0001") else None),
+                strike=f["strike"] if f["strike"] and f["strike"] > 0 else None,
+                opt_type=f["opt"] if f["opt"] in ("CE", "PE") else None,
+                lot_size=f["lot"], tick_size=f["tick"],
             ))
         self._instrument_cache = contracts
         self._instrument_cached_on = today

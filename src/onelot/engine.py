@@ -626,6 +626,9 @@ class Engine:
             try:
                 now = now_ist()
                 # Clock-driven closes, for intervals with no trades at all.
+                if self.feed is not None:
+                    w = self.session_clock.current_window(now)
+                    self.health.market_open = bool(w and w.is_open(now))     # follows the clock, not just the calendar
                 closed = self.feed.tick_time_boundaries(now) if self.feed else []
                 if self._pending_bar.is_set() or any(k == INDEX_KEY for k, _ in closed):
                     self._pending_bar.clear()

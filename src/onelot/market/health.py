@@ -139,8 +139,8 @@ class HealthMonitor:
             reasons.append(f"stale quotes ({', '.join(stale[:4])})")
         details["stale_quotes"] = stale
 
-        if critical_ids and len(stale) >= len(critical_ids):
-            dead = True
+        if self.market_open and critical_ids and len(stale) >= len(critical_ids):
+            dead = True        # after the bell silence is normal: DEGRADED ("market is closed"), not DEAD
             reasons.append("no fresh data for any critical instrument")
 
         # Option chain freshness — sizing off a stale chain is sizing off fiction.
@@ -151,7 +151,7 @@ class HealthMonitor:
             details["chain_age_sec"] = round(age, 1)
             if age > self.chain_stale_after_sec:
                 reasons.append(f"option chain is {age:.0f}s stale")
-            if age > self.chain_stale_after_sec * 6:
+            if self.market_open and age > self.chain_stale_after_sec * 6:
                 dead = True
 
         # Warm-up (v1 defect B4)
