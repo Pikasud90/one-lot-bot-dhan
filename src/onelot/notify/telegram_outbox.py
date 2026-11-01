@@ -264,6 +264,17 @@ def format_digest(event: Mapping[str, Any], now: dt.datetime) -> str:
     return "\n".join(lines)
 
 
+class NoteNotInserted(RuntimeError):
+    """A missed note or digest the worker made was not inserted (its key was already taken).
+    Raised inside the transaction that skips the rows it reports, so they roll back and stay
+    queued: a row never ends skipped without the note that carries it."""
+
+
+def _require(inserted: int, what: str) -> None:
+    if inserted != 1:
+        raise NoteNotInserted(f"{what} was not inserted (its key is taken)")
+
+
 # ── rows ──────────────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class _Row:
@@ -687,7 +698,7 @@ class TelegramOutbox:
             self._insert_digest(conn, "expired", alerts, now)
             return
         for r in alerts:
-            self._insert_note(
+            inserted = self._insert_note(
                 conn,
                 dedup_key=f"missed:{r.dedup_key}",
                 kind="missed",
@@ -696,6 +707,7 @@ class TelegramOutbox:
                 silent=r.silent,
                 now=now,
             )
+            _require(inserted, f"the missed note for row {r.id}")
 
     def _supersede_exits(self, queued: list[_Row]) -> bool:
         """Only the newest queued EXIT of a position goes (decision B): the older unsent ones
@@ -775,7 +787,7 @@ class TelegramOutbox:
             if folded:
                 missed = [a for r in folded for a in _missed_alerts(r) or ()]
                 missed.sort(key=_best_first)
-                self._insert_note(
+                inserted = self._insert_note(
                     conn,
                     dedup_key=f"digest:expired:{min(r.id for r in folded)}",  # folded once
                     kind="digest",
@@ -784,6 +796,7 @@ class TelegramOutbox:
                     silent=all(r.silent for r in folded),
                     now=now,
                 )
+                _require(inserted, f"the digest of {len(folded)} missed note(s)")
         log.info("telegram outbox: %d missed note(s) folded into one digest", len(folded))
         return True
 
@@ -791,7 +804,7 @@ class TelegramOutbox:
         self, conn: Connection, reason: str, rows: list[_Row], now: dt.datetime
     ) -> None:
         ranked = sorted(rows, key=_Row.priority)
-        self._insert_note(
+        inserted = self._insert_note(
             conn,
             dedup_key=f"digest:{reason}:{min(r.id for r in rows)}",  # a row is folded once
             kind="digest",
@@ -800,6 +813,7 @@ class TelegramOutbox:
             silent=all(r.silent for r in rows),
             now=now,
         )
+        _require(inserted, f"the {reason} digest of {len(rows)} row(s)")
 
     @staticmethod
     def _insert_note(
@@ -811,10 +825,11 @@ class TelegramOutbox:
         payload: Mapping[str, Any],
         silent: bool,
         now: dt.datetime,
-    ) -> None:
+    ) -> int:
         """A note made by the worker: due at once, never expires; its latency is counted
-        from when it was made (it is its own message, not the alert it reports)."""
-        conn.execute(
+        from when it was made (it is its own message, not the alert it reports). Returns the
+        rows inserted: 0 when its key is already taken (the caller must not go on)."""
+        result = conn.execute(
             sqlite_insert(OUTBOX)
             .values(
                 dedup_key=dedup_key,
@@ -833,6 +848,7 @@ class TelegramOutbox:
             )
             .on_conflict_do_nothing()
         )
+        return int(result.rowcount)
 
     # ── reading ────────────────────────────────────────────────────────────
     def exit_sequences(self) -> dict[str, int]:

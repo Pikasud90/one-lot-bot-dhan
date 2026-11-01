@@ -773,3 +773,71 @@ def test_a_legacy_exit_note_has_no_validity_line(make_rig):
 
     (request,) = rig.requests
     assert "Valid till" not in __import__("json").loads(request.read())["text"]
+
+
+# ========================= a note that cannot be inserted rolls everything back ==========
+def _occupy(rig: Rig, dedup_key: str, alert_id: str | None = None, kind: str = "test") -> None:
+    """A row already holding the key a worker note is about to use."""
+    rig.outbox.enqueue(
+        dedup_key=dedup_key,
+        kind=kind,  # type: ignore[arg-type]
+        alert_id=alert_id,
+        payload={"title": "in the way"},
+        alert_created_at=T0,
+        expires_at=None,
+    )
+
+
+def _status_of(rig: Rig, row_id: int) -> str:
+    return next(r["status"] for r in rig.rows() if r["id"] == row_id)
+
+
+def test_an_expired_alert_stays_queued_when_its_missed_note_cannot_be_inserted(make_rig):
+    from onelot.notify.telegram_outbox import NoteNotInserted
+
+    rig = make_rig()
+    alert = rig.alert(1, minutes=1)
+    rig.enqueue(alert)  # row 1
+    _occupy(rig, "someone else's", alert_id=alert["id"], kind="missed")  # (alert_id, missed)
+    rig.clock.advance(3600)
+
+    with pytest.raises(NoteNotInserted):
+        rig.outbox.drain_once()
+
+    assert _status_of(rig, 1) == "queued", "never skipped without its missed note"
+
+
+def test_folded_alerts_stay_queued_when_the_burst_digest_cannot_be_inserted(make_rig):
+    from onelot.notify.telegram_outbox import NoteNotInserted
+
+    rig = make_rig()
+    for i in range(1, 10):  # rows 1..9; row 9 has the lowest confidence and is folded
+        rig.enqueue(rig.alert(i, minutes=30, score=100.0 - i))
+    _occupy(rig, "digest:burst:9")
+
+    with pytest.raises(NoteNotInserted):
+        rig.outbox.drain_once()
+
+    assert _status_of(rig, 9) == "queued", "never skipped without a digest that carries it"
+    assert rig.requests == []
+
+
+def test_piled_missed_notes_stay_queued_when_their_digest_cannot_be_inserted(make_rig):
+    from onelot.notify.telegram_outbox import NoteNotInserted
+
+    rig = make_rig(lambda r: error(500, "down"))
+    for i in range(1, 10):  # nine missed notes waiting (rows 1..9), as after an outage
+        rig.outbox.enqueue(
+            dedup_key=f"missed:{i}",
+            kind="missed",
+            alert_id=f"{i:06d}abcdef",
+            payload=rig.alert(i),
+            alert_created_at=T0,
+            expires_at=None,
+        )
+    _occupy(rig, "digest:expired:1")
+
+    with pytest.raises(NoteNotInserted):
+        rig.outbox.drain_once()
+
+    assert [_status_of(rig, i) for i in range(1, 10)] == ["queued"] * 9
