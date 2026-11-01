@@ -3,8 +3,9 @@
 AC4  A risk-blocked, low-confidence or already-expired alert still opens a paper trade, and
      `governor.snapshot().as_dict()` is identical before and after: the paper book never
      touches the risk governor (ADR-001 option A was rejected for exactly that).
-     (The clause "including after a paper loss larger than daily_loss_limit_inr closes" needs a
-     trade that closes with a loss, which is US-002's management; it is covered there.)
+     (The clause "including after a paper loss larger than daily_loss_limit_inr closes" moved to
+     US-002 by Manager decision: it needs a trade that closes with a loss, which is US-002's
+     management.)
 
 AC5  An index alert is exactly one lot of the alerted option and a stock alert exactly one
      share, even when risk.lots_per_trade is 5 or the capital is huge, and even when the alert

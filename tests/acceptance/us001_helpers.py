@@ -508,7 +508,7 @@ def expected_stock_entry(
     return tick_paise * math.floor(o * (1 - f) / tick_paise)
 
 
-def oracle_option_entry_paise(
+def oracle_option_fill(
     *,
     bt: BacktestCfg,
     spec: InstrumentSpec,
@@ -516,8 +516,13 @@ def oracle_option_entry_paise(
     underlying_open: float,
     fill_ts: dt.datetime,
     pricer: Callable[[Any, float, Any], float | None],
-) -> int:
-    """The premium `lab.execution.execute_trade` pays for the same entry, in paise."""
+    underlying_stop: float | None = None,
+) -> tuple[int, int]:
+    """(entry_paise, risk_paise) that `lab.execution.execute_trade` books for the same entry.
+
+    Entry is the premium it pays; risk is its `risk_inr`: (entry fill - the stop exit fill) x
+    lot, where the stop fill is round_to_tick(stop_fair*(1-spread) - ticks*tick, down) floored
+    at one tick (the Manager's decision: paper R and Lab R are comparable)."""
     from onelot.lab.execution import execute_trade
     from onelot.lab.simulator import Leg, SimTrade
 
@@ -531,16 +536,18 @@ def oracle_option_entry_paise(
         def delta(self, spot, k, ts, expiry, opt):
             return 0.65
 
+    sign = 1 if opt_type == "CE" else -1
+    stop = float(underlying_open) - 150.0 * sign if underlying_stop is None else underlying_stop
     ts = pd.Timestamp(fill_ts)
     t = SimTrade(
         symbol="BANKNIFTY",
         strategy="ema_cross",
-        side=1 if opt_type == "CE" else -1,
+        side=sign,
         signal_ts=ts - pd.Timedelta(minutes=1),
         entry_ts=ts,
         entry_price=float(underlying_open),
-        stop_initial=float(underlying_open) - 150.0 * (1 if opt_type == "CE" else -1),
-        risk_ps=150.0,
+        stop_initial=float(stop),
+        risk_ps=abs(float(underlying_open) - float(stop)),
         target=None,
         strength=60.0,
         atr=100.0,
@@ -549,7 +556,12 @@ def oracle_option_entry_paise(
     row = execute_trade(
         t, spec, CostModel(_cost_cfg().product(spec.product)), bt, bt.slippage_pct, Pricer()
     )
-    return to_paise(row["detail"]["premium_entry"])
+    return to_paise(row["detail"]["premium_entry"]), to_paise(row["risk_inr"])
+
+
+def oracle_option_entry_paise(**kw: Any) -> int:
+    """The premium `lab.execution.execute_trade` pays for the same entry, in paise."""
+    return oracle_option_fill(**kw)[0]
 
 
 # ── failure injection ─────────────────────────────────────────────────────────────────

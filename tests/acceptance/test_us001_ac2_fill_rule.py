@@ -417,31 +417,38 @@ class TestIndexOptionFill:
 
     @given(
         underlying_ticks=st.integers(min_value=1_070_000, max_value=1_090_000),
+        stop_distance=st.integers(min_value=20, max_value=1_500),
         direction=st.sampled_from(["long", "short"]),
     )
     @PROP
-    def test_property_the_option_entry_equals_execute_trade_for_any_underlying_open(
-        self, underlying_ticks, direction
+    def test_property_the_option_entry_and_risk_equal_execute_trade(
+        self, underlying_ticks, stop_distance, direction
     ):
+        """For any underlying open and stop distance (some far enough to hit the one-tick floor),
+        entry_paise and risk_paise equal what the lab's execute_trade books, to the paise."""
         underlying_open = round(underlying_ticks * 0.05, 2)  # an index level on the 0.05 grid
-        pricer = H.make_pricer()
-        alert = _option_alert(
-            direction,
-            stop=underlying_open - 2_000 if direction == "long" else underlying_open + 2_000,
+        underlying_stop = round(
+            underlying_open - stop_distance
+            if direction == "long"
+            else underlying_open + stop_distance,
+            2,
         )
-        with H.temp_book(premium_at=pricer) as (book, engine):
+        alert = _option_alert(direction, stop=underlying_stop)
+        with H.temp_book(premium_at=H.make_pricer()) as (book, engine):
             H.open_trade(book, alert)
             book.step(H.at(10, 8), H.Feed(BANKNIFTY=_option_frame(underlying_open)))
-            entry = H.trade_row(engine, "O1")["entry_paise"]
-        oracle = H.oracle_option_entry_paise(
+            row = H.trade_row(engine, "O1")
+        entry, risk = H.oracle_option_fill(
             bt=H.BT,
             spec=H.SPECS["BANKNIFTY_OPT"],
             opt_type="CE" if direction == "long" else "PE",
             underlying_open=underlying_open,
+            underlying_stop=underlying_stop,
             fill_ts=H.at(10, 6),
             pricer=H.make_pricer(),
         )
-        assert entry == oracle
+        assert row["entry_paise"] == entry
+        assert row["risk_paise"] == risk
 
     def test_a_pricer_that_returns_none_never_produces_a_zero_fill(self, db):
         book = H.make_book(db.engine, premium_at=lambda option, underlying, ts: None)
@@ -458,8 +465,11 @@ class TestIndexOptionFill:
 
 class TestRiskIsSetAtTheFill:
     """Manager decision: risk_paise (excluding costs) is written when the trade fills.
-    Stock: |entry - stop| x qty. Option: (entry premium - premium_at(option, underlying_stop,
-    fill ts)) x qty. When the repricing fails: NULL and a PRICING_UNAVAILABLE event."""
+    Stock: |entry - stop| x qty (0 is stored as NULL). Option, ALIGNED WITH THE LAB so paper R
+    and Lab R are comparable: (entry premium - the stop exit fill execute_trade would book) x qty,
+    i.e. stop_fair = premium_at(option, underlying_stop, fill ts), stop fill =
+    round_to_tick(stop_fair*(1 - option_spread_pct) - option_slippage_ticks*tick, down) floored
+    at one tick. When the stop cannot be repriced: NULL and a PRICING_UNAVAILABLE event."""
 
     def test_a_pending_trade_has_no_risk_yet(self, db):
         book = H.make_book(db.engine)
@@ -483,18 +493,68 @@ class TestRiskIsSetAtTheFill:
         assert H.typeof(db.engine, "risk_paise", "A1") == "integer"
 
     @pytest.mark.parametrize("direction, underlying_stop", [("long", 53850.0), ("short", 54150.0)])
-    def test_an_option_risks_the_premium_lost_if_the_underlying_reaches_the_stop(
+    def test_an_option_risks_what_the_lab_would_book_at_the_stop_exit(
         self, db, direction, underlying_stop
     ):
+        """Entry 452.80. The model premium at the stop is 450 -+ 0.65 x 150 = 352.50; the lab's
+        stop exit is 352.50 x (1 - 0.006) - 2 x 0.05 = 350.285 -> down to the tick = 350.25."""
         pricer = H.make_pricer()
         alert = _option_alert(direction, stop=underlying_stop)
         _, row, _ = fill(db, alert=alert, frame=_option_frame(54000.0), premium_at=pricer)
-        opt = {"opt_type": "CE" if direction == "long" else "PE"}
-        stop_premium = pricer(opt, underlying_stop, H.at(10, 6))  # 450 -+ 0.65 * 150 = 352.50
-        assert stop_premium == pytest.approx(352.5)
-        want = (45280 - H.to_paise(stop_premium)) * H.LOT
-        assert row["risk_paise"] == want == (45280 - 35250) * H.LOT
+        opt = "CE" if direction == "long" else "PE"
+        assert pricer({"opt_type": opt}, underlying_stop, H.at(10, 6)) == pytest.approx(352.5)
+        lab_entry, lab_risk = H.oracle_option_fill(
+            bt=H.BT,
+            spec=H.SPECS["BANKNIFTY_OPT"],
+            opt_type=opt,
+            underlying_open=54000.0,
+            underlying_stop=underlying_stop,
+            fill_ts=H.at(10, 6),
+            pricer=H.make_pricer(),
+        )
+        assert (lab_entry, lab_risk) == (45280, 307650), "harness: the literal and the lab differ"
+        assert row["entry_paise"] == 45280
+        assert row["risk_paise"] == (45280 - 35025) * H.LOT == 307650
         assert H.typeof(db.engine, "risk_paise", "O1") == "integer"
+
+    @pytest.mark.parametrize("direction, underlying_stop", [("long", 52000.0), ("short", 56000.0)])
+    def test_the_option_stop_fill_is_floored_at_one_tick(self, db, direction, underlying_stop):
+        """A stop so far away that the model premium is the pricer's 0.05 floor: the lab's stop
+        fill would go below zero, so it is clamped at one tick (0.05) and risk is 452.75 x lot."""
+        alert = _option_alert(direction, stop=underlying_stop)
+        _, row, _ = fill(db, alert=alert, frame=_option_frame(54000.0), premium_at=H.make_pricer())
+        _, lab_risk = H.oracle_option_fill(
+            bt=H.BT,
+            spec=H.SPECS["BANKNIFTY_OPT"],
+            opt_type="CE" if direction == "long" else "PE",
+            underlying_open=54000.0,
+            underlying_stop=underlying_stop,
+            fill_ts=H.at(10, 6),
+            pricer=H.make_pricer(),
+        )
+        assert lab_risk == (45280 - 5) * H.LOT == 1358250, "harness"
+        assert row["risk_paise"] == 1358250
+
+    def test_the_options_risk_uses_the_configured_spread_and_ticks_like_the_lab(self, db):
+        """option_spread_pct is a FRACTION (0.01 = 1%) and the slippage is in ticks (3): the stop
+        fill is 352.50 x 0.99 - 0.15 = 348.825 -> 348.80 and the entry 454.65, so risk = 105.85 x lot."""
+        bt = H.BT.model_copy(update={"option_spread_pct": 0.01, "option_slippage_ticks": 3})
+        _, row, _ = fill(
+            db, alert=_option_alert("long", stop=53850.0), frame=_option_frame(54000.0), bt=bt
+        )
+        assert row["entry_paise"] == 45465
+        assert row["risk_paise"] == (45465 - 34880) * H.LOT == 317550
+
+    def test_a_stock_with_no_distance_to_its_stop_stores_null_not_zero(self, db):
+        """Zero slippage and a stop on the open: the stock fills (the open is not BEYOND the stop),
+        entry == stop, and a risk of 0 would make R meaningless, so the column stays NULL."""
+        bt = H.BT.model_copy(update={"slippage_pct": 0.0})
+        for direction in ("long", "short"):
+            alert = H.make_alert(f"Z-{direction}", direction=direction, stop=1000.0)
+            _, row, _ = fill(db, alert=alert, bt=bt)
+            assert H.val(row["status"]) == "OPEN" and row["entry_paise"] == 100000, direction
+            assert row["risk_paise"] is None, direction
+            assert H.typeof(db.engine, "risk_paise", alert["id"]) == "null"
 
     def test_a_stop_that_cannot_be_repriced_leaves_risk_null_and_says_so(self, db):
         base = H.make_pricer()

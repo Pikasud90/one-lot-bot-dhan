@@ -56,20 +56,29 @@ def spied(app_cfg, desk_db, **kw):
 
 
 def hook_errors(desk) -> int | None:
-    """hook_errors is specified as a counter but not WHERE it lives: the desk, the book's
-    status(), or the desk snapshot. The largest value reported anywhere is the count."""
+    """hook_errors is specified as a counter but not WHERE it lives: on the desk
+    (`hook_errors` or `desk_hook_errors`), in the book's status(), or in the desk snapshot's
+    paper block (which shows status() and the desk's own count separately). The largest value
+    reported anywhere is the count."""
     seen: list[int] = []
-    n = getattr(desk, "hook_errors", None)
-    if isinstance(n, int):
-        seen.append(n)
+    for name in ("hook_errors", "desk_hook_errors"):
+        n = getattr(desk, name, None)
+        if isinstance(n, int) and not isinstance(n, bool):
+            seen.append(n)
     try:
         seen.append(int(desk.paper.status()["hook_errors"]))
     except Exception:
         pass
     try:
-        seen.append(int(desk.snapshot()["paper"]["hook_errors"]))
+        block = desk.snapshot()["paper"]
     except Exception:
-        pass
+        block = None
+    if isinstance(block, dict):
+        for key in ("hook_errors", "desk_hook_errors"):
+            try:
+                seen.append(int(block[key]))
+            except Exception:
+                pass
     return max(seen) if seen else None
 
 
