@@ -19,8 +19,9 @@ gross_paise = sign x (exit - entry) x qty (story notes, Manager scope decisions)
 * CLOSED events and the row's exit_ts carry the OPEN time of the bar that decided the close;
 * the levels are the ALERT's underlying_stop / underlying_target; a fill bar that opens at or
   beyond the alert target is NO_FILL, reason gap_through_target (Manager decision 3);
-* costs_paise and net_paise are US-023 (pulled into Sprint 1 right after this story): until
-  then they stay NULL, never a fake 0.
+* costs_paise and net_paise were US-023's (pulled into Sprint 1 right after this story) and
+  stayed NULL, never a fake 0, until it booked them: a priced close now carries exact costs and
+  net (see TestCostsAreBookedByUs023; the US-023 acceptance tests pin them in full).
 
 Worked stock: alert long SBIN 1000.00, stop 990.00, target 1020.00, 10:05:03; the fill bar is
 10:06 and opens 1000.00, so entry_paise is 100030 (US-001) and one share is traded. Its short
@@ -433,12 +434,14 @@ class TestAFillBarOpeningAtOrBeyondTheTarget:
         assert H.count_rows(db.engine, "paper_events") == 2  # OPENED + NO_FILL
 
 
-class TestCostsAreUs023:
-    def test_costs_and_net_stay_null_until_us023_never_a_fake_zero(self, db):
-        """Manager scope decision. RETIRE this test in US-023, which books them."""
+class TestCostsAreBookedByUs023:
+    def test_a_priced_close_books_exact_costs_and_net(self, db):
+        """Retired from 'costs stay NULL until US-023' (Manager, 2026-11-02): US-023 books them.
+        BUY 1000.30 costs 42.15 paise -> 42, SELL 989.70 costs 63.48 paise -> 63: each leg is
+        rounded once, so 105 (rounding the sum, 105.63, would give 106)."""
         _, row, _ = go(db, rows=[(100000, 100100, 99000, 99500)])
-        assert row["costs_paise"] is None and row["net_paise"] is None
         assert row["gross_paise"] == -1060  # 98970 - 100030, the slipped exit
+        assert row["costs_paise"] == 105 and row["net_paise"] == -1060 - 105
 
     def test_risk_paise_set_at_the_fill_is_untouched_by_the_close(self, db):
         book = H.make_book(db.engine)
