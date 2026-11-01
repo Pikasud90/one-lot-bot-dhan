@@ -73,7 +73,8 @@ class TestTheClose:
         assert (row["status"], row["close_reason"], row["exit_paise"]) == ("CLOSED", "STOP", 99_470)
         assert row["gross_paise"] == 99_470 - ENTRY == -560
         assert row["exit_ts"] == at(7) and row["last_bar_ts"] == at(7)
-        assert row["costs_paise"] is None and row["net_paise"] is None  # US-023
+        # US-023: booked with the close. BUY 1000.30: 42.15 -> 42; SELL 994.70: 63.80 -> 64
+        assert (row["costs_paise"], row["net_paise"]) == (106, -560 - 106)
         assert [e.kind for e in events] == ["FILLED", "CLOSED"]
         closed = events[-1]
         assert (closed.ts, closed.detail["price_paise"], closed.detail["exit_paise"]) == (

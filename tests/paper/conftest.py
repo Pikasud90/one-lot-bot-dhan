@@ -201,7 +201,7 @@ def pricer() -> FakePricer:
 
 @pytest.fixture
 def make_book(engine: Engine, cost_cfg: CostConfig, pricer: FakePricer) -> Callable[..., Any]:
-    """Build a PaperBook on the test database; keyword overrides for cfg/bt/pricer."""
+    """Build a PaperBook on the test database; keyword overrides for cfg/bt/pricer/cost_for."""
     from onelot.paper.book import PaperBook
 
     models = {k: CostModel(cost_cfg.product(s.product)) for k, s in SPECS.items()}
@@ -213,6 +213,7 @@ def make_book(engine: Engine, cost_cfg: CostConfig, pricer: FakePricer) -> Calla
         premium_at: Callable[..., float | None] | None = None,
         reconcile_days: int = 3,
         clock: Callable[[], dt.datetime] | None = None,
+        cost_for: Callable[[str], Any] | None = None,
     ) -> PaperBook:
         cfg = PaperCfg(
             enabled=enabled, feed_delay_minutes=feed_delay_minutes, reconcile_days=reconcile_days
@@ -222,7 +223,7 @@ def make_book(engine: Engine, cost_cfg: CostConfig, pricer: FakePricer) -> Calla
             cfg,
             bt,
             SPECS,
-            models.__getitem__,
+            cost_for or models.__getitem__,
             premium_at or pricer,
             clock=clock or (lambda: ist(THU, 10, 8)),
         )

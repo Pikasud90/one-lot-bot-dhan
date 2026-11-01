@@ -23,7 +23,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from functools import partial
-from numbers import Real
+from numbers import Integral, Real
 from typing import Any, Literal, NamedTuple, cast
 
 import numpy as np
@@ -48,6 +48,7 @@ from .alert import (
     jsonable,
     trade_values,
 )
+from .charges import round_trip_paise
 from .events import PaperEvent
 from .fill import (
     Bars,
@@ -204,12 +205,12 @@ class PaperTrade:
             exit_ts=_ist_or_none(row["exit_ts"]),
             last_bar_ts=_ist_or_none(row["last_bar_ts"]),
             resolution_min=_int_or_none(row["resolution_min"]),
-            entry_paise=_int_or_none(row["entry_paise"]),
-            exit_paise=_int_or_none(row["exit_paise"]),
-            gross_paise=_int_or_none(row["gross_paise"]),
-            costs_paise=_int_or_none(row["costs_paise"]),
-            net_paise=_int_or_none(row["net_paise"]),
-            risk_paise=_int_or_none(row["risk_paise"]),
+            entry_paise=_paise_or_none(row, "entry_paise"),
+            exit_paise=_paise_or_none(row, "exit_paise"),
+            gross_paise=_paise_or_none(row, "gross_paise"),
+            costs_paise=_paise_or_none(row, "costs_paise"),
+            net_paise=_paise_or_none(row, "net_paise"),
+            risk_paise=_paise_or_none(row, "risk_paise"),
             created_at=_ist(row["created_at"]),
             expires_at=_ist(row["expires_at"]),
             plan_json=json.dumps(row["plan"], sort_keys=True, separators=(",", ":")),
@@ -691,15 +692,60 @@ class PaperBook:
 
     # ── persistence ───────────────────────────────────────────────────────
     def _load_active(self) -> None:
-        stmt = select(paper_trades).where(paper_trades.c.status.in_(ACTIVE_STATUSES))
+        """Reload the PENDING_FILL and OPEN trades, one row at a time.
+
+        One corrupt row (a JSON plan or a time that does not parse, an unknown grade) is
+        logged, counted in hook_errors and skipped, so the book still starts and manages the
+        others (US-023 carry-over); read together, one bad cell would fail every row. A
+        database that cannot be read at all still raises: starting with no trades would
+        leave them unmanaged without a word.
+        """
+        ids_stmt = (
+            select(paper_trades.c.id)
+            .where(paper_trades.c.status.in_(ACTIVE_STATUSES))
+            .order_by(paper_trades.c.id)
+        )
         with self.engine.connect() as conn:
-            rows = conn.execute(stmt).mappings().all()
-        with self._lock:
-            for row in rows:
-                trade = PaperTrade.from_row(row)
+            ids = [int(i) for i in conn.execute(ids_stmt).scalars().all()]
+        loaded = skipped = 0
+        for trade_id in ids:
+            try:
+                trade = self._fetch_id(trade_id)
+            except (IntegrityError, DataError) as exc:  # this row's data, not the database
+                skipped += self._skip_corrupt(trade_id, exc)
+                continue
+            except DBAPIError:
+                raise
+            except Exception as exc:
+                skipped += self._skip_corrupt(trade_id, exc)
+                continue
+            if trade is None or not trade.is_active:  # closed or deleted meanwhile
+                continue
+            with self._lock:
                 self._active[trade.alert_id] = trade
-        if rows:
-            log.info("paper: reloaded %d active paper trade(s)", len(rows))
+            loaded += 1
+        if skipped:
+            with self._lock:
+                self._counts["hook_errors"] += skipped
+        if loaded:
+            log.info("paper: reloaded %d active paper trade(s)", loaded)
+
+    @staticmethod
+    def _skip_corrupt(trade_id: int, exc: Exception) -> int:
+        log.warning(
+            "paper: active paper_trades.id=%s is unreadable and was skipped (not managed until "
+            "the row is repaired): %s: %s",
+            trade_id,
+            type(exc).__name__,
+            exc,
+        )
+        return 1
+
+    def _fetch_id(self, trade_id: int) -> PaperTrade | None:
+        stmt = select(paper_trades).where(paper_trades.c.id == trade_id)
+        with self.engine.connect() as conn:
+            row = conn.execute(stmt).mappings().first()
+        return PaperTrade.from_row(row) if row is not None else None
 
     def _fetch(self, alert_id: str) -> PaperTrade | None:
         stmt = select(paper_trades).where(paper_trades.c.alert_id == alert_id)
@@ -887,23 +933,61 @@ class PaperBook:
         for kind, _, detail in booked:
             if kind == CLOSED:
                 detail["exit_paise"] = exit_paise  # the rule level stays in price_paise (A13)
+        gross = _gross(trade, exit_paise)
+        costs, uncosted = self._costs(trade, exit_paise, new.closed.at)
+        net = None if gross is None or costs is None else gross - costs
         values |= {
             "status": "CLOSED",
             "close_reason": new.closed.reason,
             "exit_ts": new.closed.at,
             "exit_paise": exit_paise,
-            "gross_paise": _gross(trade, exit_paise),
-            # costs_paise and net_paise stay NULL until US-023 books them (never a fake 0)
+            "gross_paise": gross,
+            # booked in the same transaction as the close (US-023 AC1); NULL without a price
+            "costs_paise": costs,
+            "net_paise": net,
         }
         log.info(
-            "paper: trade %s (alert %s) closed %s at %s, exit %s paise",
+            "paper: trade %s (alert %s) closed %s at %s, exit %s, gross %s, costs %s, net %s paise",
             trade.id,
             trade.alert_id,
             new.closed.reason,
             new.closed.at.isoformat(),
             exit_paise,
+            gross,
+            costs,
+            net,
         )
-        return self._commit(trade, values, [*booked, *also], counter="closed")
+        return self._commit(trade, values, [*booked, *also, *uncosted], counter="closed")
+
+    def _costs(
+        self, trade: PaperTrade, exit_paise: int | None, at: dt.datetime
+    ) -> tuple[int | None, list[Booked]]:
+        """The trade's charges in paise (US-023 AC1), or None with why.
+
+        Two legs on their real sides, each rounded once half-up (`charges.round_trip_paise`),
+        from the injected `cost_for(instrument_key)`. No exit price: None, nothing asked (the
+        exit's PRICING_UNAVAILABLE already says why). A cost model that fails: the close is
+        still booked, costs and net stay NULL (never a fake 0), a COSTS_UNAVAILABLE event says
+        why, and the failure is logged and counted in hook_errors.
+        """
+        if exit_paise is None or trade.entry_paise is None:
+            return None, []
+        try:
+            model = self.cost_for(trade.instrument_key)
+            costs = round_trip_paise(
+                model, trade.kind, trade.direction, trade.entry_paise, exit_paise, trade.qty
+            )
+        except Exception as exc:
+            log.exception(
+                "paper: trade %s (alert %s) closed without costs: the cost model failed",
+                trade.id,
+                trade.alert_id,
+            )
+            with self._lock:
+                self._counts["hook_errors"] += 1
+            detail = {"error": f"{type(exc).__name__}: {exc}", "exit_paise": exit_paise}
+            return None, [("COSTS_UNAVAILABLE", at, detail)]
+        return costs, []
 
     def _position(self, trade: PaperTrade, plan: Mapping[str, Any]) -> PositionState:
         """The managed state: the plan's record, or (a row filled before US-002) the fill."""
@@ -1369,3 +1453,43 @@ def _ist_or_none(value: dt.datetime | None) -> dt.datetime | None:
 
 def _int_or_none(value: object) -> int | None:
     return None if value is None else int(cast(int, value))
+
+
+_MAX_EXACT_FLOAT = 2**53  # beyond it a float no longer holds every whole number of paise
+_MONEY_WARNED: set[tuple[object, str]] = set()  # (trade id, column) already warned about
+_MONEY_WARNED_LOCK = threading.Lock()
+
+
+def _paise_or_none(row: Mapping[Any, Any], column: str) -> int | None:
+    """A money column read back as integer paise, or None when it is not a whole number.
+
+    A non-integer (a REAL 1030.5, text, NaN, a bool) is UNKNOWN, never truncated to a wrong
+    amount (US-023 carry-over); it is warned about once per trade and column. A whole float
+    within 2**53 is exact and accepted.
+    """
+    value = row[column]
+    if value is None:
+        return None
+    if isinstance(value, Integral) and not isinstance(value, bool):
+        return int(value)
+    if (
+        isinstance(value, Real)
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+        and float(value).is_integer()
+        and abs(float(value)) <= _MAX_EXACT_FLOAT
+    ):
+        return int(float(value))
+    key = (row["id"], column)
+    with _MONEY_WARNED_LOCK:
+        first = key not in _MONEY_WARNED
+        _MONEY_WARNED.add(key)
+    if first:
+        log.warning(
+            "paper_trades.id=%s: %s=%r is not a whole number of paise; read as unknown, "
+            "never truncated",
+            row["id"],
+            column,
+            value,
+        )
+    return None
