@@ -31,7 +31,7 @@ instruments automatically; lot sizes there are fallbacks overridden by the Dhan 
 
 `scripts/gate.sh` is the quality gate. From the repo root it runs exactly these commands, in
 this order, with `.venv/bin/python` (else `python`, or `python3`, from `PATH`), and stops with a
-non-zero exit at the first one that fails. CI runs the same script.
+non-zero exit at the first one that fails. CI will run the same script (US-008).
 
 ```bash
 .venv/bin/python -m ruff format --check .

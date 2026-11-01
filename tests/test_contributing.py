@@ -114,6 +114,13 @@ def test_contributing_lists_exactly_the_gate_commands_in_one_bash_block() -> Non
     assert listed == gate_commands()
 
 
+def test_the_docs_do_not_claim_a_ci_that_does_not_exist_yet() -> None:
+    """CI arrives with US-008; until then the docs say it will, not that it does."""
+    for path in (CONTRIBUTING, GATE):
+        assert "CI runs" not in path.read_text(encoding="utf-8"), f"{path.name} claims CI runs"
+    assert "CI will run the same script (US-008)" in running_everything_section()
+
+
 def test_contributing_states_the_ruff_format_policy_with_the_pinned_version() -> None:
     section = running_everything_section()
     assert "scripts/gate.sh" in section

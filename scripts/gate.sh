@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Quality gate: the exact checks CONTRIBUTING.md lists and CI runs. Stops at the first
-# failing step with a non-zero exit. Needs nothing outside this repo and its venv.
+# Quality gate: the exact checks CONTRIBUTING.md lists; CI will run the same script (US-008).
+# Stops at the first failing step with a non-zero exit. Needs nothing outside this repo and
+# its venv.
 #   scripts/gate.sh
 # pyproject.toml already deselects live tests; the gate says so again so that editing
 # pytest's options there can never make the gate need broker credentials.
