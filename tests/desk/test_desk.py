@@ -474,6 +474,32 @@ class TestFeedDelayLabel:
         # the notification (Telegram) carries the very same flag: one rule, one place
         assert notifier.sent[-1].payload["data"]["delayed"] is delayed
 
+    @pytest.mark.parametrize(
+        "dhan_empty_for, delayed",
+        [({"SBIN"}, True), (set(), False), (None, True)],
+        ids=["dhan-primary-yahoo-served", "dhan-served", "yahoo-only"],
+    )
+    def test_signal_notification_title_leads_with_the_delay_marker(
+        self, cfg, db, monkeypatch, dhan_empty_for, delayed
+    ):
+        d, notifier = self._composite_desk(cfg, db, monkeypatch, dhan_empty_for)
+        t = d.trackers["SBIN"]
+        d._raise_signal(t, t.slots[0], self._verdict(t), now_ist())
+        sent, sig = notifier.sent[-1], next(iter(d.signals.values()))
+        # first words of the OS toast / dashboard title, so truncation can never hide it
+        assert sent.title.startswith("(delayed ~15m) ") is delayed
+        assert ("delayed" in sent.title) is delayed
+        # title-only: the alert record (payload) and its text are unchanged
+        assert sent.payload is sig and "delayed ~15m" not in sig["text"]
+        assert sent.body == sig["text"]
+
+    def test_a_blocked_delayed_alert_keeps_the_blocked_prefix_first(self, cfg, db, monkeypatch):
+        d, notifier = self._composite_desk(cfg, db, monkeypatch, {"SBIN"})
+        d.governor.manual_panic_halt()
+        t = d.trackers["SBIN"]
+        d._raise_signal(t, t.slots[0], self._verdict(t), now_ist())
+        assert notifier.sent[-1].title.startswith("[BLOCKED by risk] (delayed ~15m) ")
+
     def test_snapshot_marks_only_the_yahoo_served_tracker_delayed(self, cfg, db, monkeypatch):
         d, _ = self._composite_desk(cfg, db, monkeypatch, {"SBIN"})
         snap = d.snapshot()

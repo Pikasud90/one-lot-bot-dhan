@@ -41,6 +41,10 @@ from .tracker import InstrumentTracker, StrategySlot, Verdict
 
 log = logging.getLogger(__name__)
 
+# Leads the title of a SIGNAL notification built on delayed (Yahoo) bars, so a truncated
+# OS toast still shows it. The alert payload keeps the flag in data.delayed / delay_note.
+DELAYED_TITLE_MARKER = "(delayed ~15m)"
+
 
 def _iso(v: dt.datetime | None) -> str | None:
     return v.isoformat() if v else None
@@ -451,7 +455,9 @@ class Desk:
             )
             + f" · {slot.cfg.name} {slot.cfg.timeframe} · conf {conf['score']:.0f}"
         )
-        if not allowed:
+        if delayed:
+            title = f"{DELAYED_TITLE_MARKER} {title}"
+        if not allowed:  # blocked outranks delayed: it stays the very first word
             title = f"[BLOCKED by risk] {title}"
         self.notifier.send(
             Notification(
