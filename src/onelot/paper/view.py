@@ -32,10 +32,13 @@ class DayTotals(TypedDict):
 
 
 def trade_view(trade: PaperTrade) -> dict[str, Any]:
-    """One paper trade for GET /api/paper: entry/exit are per unit, gross/net the whole trade."""
+    """One paper trade for GET /api/paper: entry/exit/mark are per unit, gross/net/unrealised
+    the whole trade. `mark` and `unrealised` are set for an OPEN trade only (`open_mark`)."""
+    plan = trade.plan  # parsed once for the label and the mark
+    mark, unrealised = open_mark(trade, plan)
     return {
         "alert_id": trade.alert_id,
-        "instrument": instrument_label(trade.plan, trade.kind, trade.series_key),
+        "instrument": instrument_label(plan, trade.kind, trade.series_key),
         "side": trade.side,
         "direction": trade.direction,
         "kind": trade.kind,
@@ -50,9 +53,36 @@ def trade_view(trade: PaperTrade) -> dict[str, Any]:
         "exit": format_rupees(trade.exit_paise),
         "gross": format_rupees(trade.gross_paise),
         "net": format_rupees(trade.net_paise),
+        "mark": format_rupees(mark),
+        "unrealised": format_rupees(unrealised),
         "created_at": _iso(trade.created_at),
         "closed_at": _iso(closed_at(trade)),
     }
+
+
+def open_mark(
+    trade: PaperTrade, plan: Mapping[str, Any] | None = None
+) -> tuple[int | None, int | None]:
+    """(mark, unrealised) of an OPEN trade in paise, or (None, None) when it has none.
+
+    A stock is marked at the close of the last bar managed, unslipped (the position's
+    last_close_paise); an index option at the premium the book stored with that close
+    (mark_paise, US-023 AC3), None when repricing failed: never 0, never invented.
+    unrealised = sign x (mark - entry) x qty, gross of costs; an option is long premium.
+    A waiting, closed or NO_FILL trade has neither. `plan` is `trade.plan` if already parsed.
+    """
+    if trade.status != "OPEN" or trade.entry_paise is None:
+        return None, None
+    position = (trade.plan if plan is None else plan).get("position")
+    if not isinstance(position, Mapping):
+        return None, None
+    if trade.kind == "INDEX":
+        raw, sign = position.get("mark_paise"), 1
+    else:
+        raw, sign = position.get("last_close_paise"), 1 if trade.direction == "long" else -1
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return None, None
+    return raw, sign * (raw - trade.entry_paise) * trade.qty
 
 
 def closed_at(trade: PaperTrade) -> dt.datetime | None:

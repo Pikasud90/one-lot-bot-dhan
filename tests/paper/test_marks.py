@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Callable, Mapping, Sequence
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import Any
 
 import pandas as pd
+import pytest
 
 from onelot.paper.money import to_paise
-from onelot.store.schema import paper_trades
+from onelot.store.schema import paper_events, paper_trades
 
 from .conftest import THU, ist, make_alert, table_rows
 
@@ -97,3 +99,99 @@ def test_a_negative_basis_never_marks_below_one_tick(make_book, engine):
     assert row["plan"]["pricing"]["basis_paise"] == 30000 - 31234
     assert to_paise(pricer.fair(44740.0)) + row["plan"]["pricing"]["basis_paise"] < 0
     assert position(engine)["mark_paise"] == 5
+
+
+# ── Manager decision (1), option A: the live-chain basis prices the fills too ──────────────
+def ask_paise(premium: str, spread: str = "0.006", ticks: int = 2) -> int:
+    """Oracle: ceil_tick(premium x (1 + spread) + ticks x 0.05), in paise, in Decimal."""
+    raw = Decimal(premium) * (1 + Decimal(spread)) + ticks * Decimal("0.05")
+    return int((raw / Decimal("0.05")).to_integral_value(rounding=ROUND_CEILING)) * 5
+
+
+def bid_paise(premium: str, spread: str = "0.006", ticks: int = 2) -> int:
+    """Oracle: floor_tick(premium x (1 - spread) - ticks x 0.05), at least one tick, in paise."""
+    raw = Decimal(premium) * (1 - Decimal(spread)) - ticks * Decimal("0.05")
+    return max(int((raw / Decimal("0.05")).to_integral_value(rounding=ROUND_FLOOR)) * 5, 5)
+
+
+def chain_alert(chain: float = 300.00) -> dict[str, Any]:
+    """The worked option quoted on the live chain at `chain` (the model says 312.34)."""
+    alert = make_alert("INDEX")
+    alert["economics"]["entry_price"] = chain
+    alert["economics"]["synthetic"] = False
+    return alert
+
+
+def test_a_live_chain_entry_and_its_risk_leg_are_priced_at_model_plus_basis(make_book, engine):
+    """Basis 300.00 - 312.34 = -12.34. Entry: the model 312.34 at the 45210.35 open, plus the
+    basis, is 300.00, so the ask is 301.90 (not 314.35). The stop leg: 247.34 at 45110.35,
+    plus the basis, is 235.00, sold at 233.45. Risk (301.90 - 233.45) x 30 = 2,053.50."""
+    book = make_book(premium_at=Recording())
+    book.on_alert(chain_alert(), ist(THU, 10, 5, 4))
+    book.step(ist(THU, 10, 7), feed(BANKNIFTY=bars([OPT_FILL])))
+    (row,) = table_rows(engine, paper_trades)
+    assert row["plan"]["pricing"]["basis_paise"] == -1234
+    assert row["entry_paise"] == ask_paise("300.00") == 30190
+    assert row["risk_paise"] == (30190 - bid_paise("235.00")) * 30 == 205350
+
+
+def test_a_live_chain_exit_is_sold_at_model_plus_basis(make_book, engine):
+    """The target 45410.35 trades through: the model there is 442.34, plus the basis 430.00,
+    sold at floor_tick(430.00 x 0.994 - 0.10) = 427.30."""
+    book = make_book(premium_at=Recording())
+    book.on_alert(chain_alert(), ist(THU, 10, 5, 4))
+    through = (45215.00, 45420.00, 45200.00, 45400.00)
+    book.step(ist(THU, 10, 8), feed(BANKNIFTY=bars([OPT_FILL, through])))
+    (row,) = table_rows(engine, paper_trades)
+    assert (row["status"], row["close_reason"]) == ("CLOSED", "TARGET")
+    assert row["exit_paise"] == bid_paise("430.00") == 42730
+    assert row["gross_paise"] == (42730 - 30190) * 30
+
+
+def test_a_synthetic_alert_is_priced_on_the_model_alone(make_book, engine):
+    """No basis recorded: the ask is the model's own, 312.34 -> 314.35 (the Lab's number)."""
+    book = make_book(premium_at=Recording())
+    book.on_alert(make_alert("INDEX"), ist(THU, 10, 5, 4))
+    book.step(ist(THU, 10, 7), feed(BANKNIFTY=bars([OPT_FILL])))
+    (row,) = table_rows(engine, paper_trades)
+    assert "basis_paise" not in row["plan"]["pricing"]
+    assert row["entry_paise"] == ask_paise("312.34") == 31435
+
+
+def test_a_step_that_manages_no_usable_close_keeps_the_mark_and_prices_nothing(make_book, engine):
+    """A bar whose prices are NaN moves the cursor but not the last close: the mark stays the
+    one priced at that close, nothing is repriced and no PRICING_UNAVAILABLE is booked."""
+    pricer = Recording()
+    book = make_book(premium_at=pricer)
+    book.on_alert(make_alert("INDEX"), ist(THU, 10, 5, 4))
+    nan = float("nan")
+    frame = bars([OPT_FILL, QUIET, (nan, nan, nan, nan)])
+    book.step(ist(THU, 10, 8), feed(BANKNIFTY=frame))
+    marked = position(engine)
+    asked = len(pricer.calls)
+    book.step(ist(THU, 10, 9), feed(BANKNIFTY=frame))
+    state = position(engine)
+    assert state["last_bar_ts"] != marked["last_bar_ts"], "the NaN bar was managed"
+    assert state["mark_paise"] == marked["mark_paise"] == to_paise(pricer.fair(45225.0))
+    assert len(pricer.calls) == asked
+    kinds = [r["kind"] for r in table_rows(engine, paper_events)]
+    assert "PRICING_UNAVAILABLE" not in kinds
+
+
+@pytest.mark.parametrize("stored", [312.5, True, "31234", None])
+def test_the_panel_shows_no_mark_for_a_stored_mark_that_is_not_integer_paise(
+    make_book, engine, stored
+):
+    """A mark that is not a plain int in the plan (a corrupt write, or a failed mark) is JSON
+    null, mark and unrealised alike: never truncated, never 0."""
+    book = make_book(premium_at=Recording())
+    book.on_alert(make_alert("INDEX"), ist(THU, 10, 5, 4))
+    book.step(ist(THU, 10, 8), feed(BANKNIFTY=bars([OPT_FILL, QUIET])))
+    (row,) = table_rows(engine, paper_trades)
+    plan = row["plan"]
+    plan["position"]["mark_paise"] = stored
+    with engine.begin() as conn:
+        conn.execute(paper_trades.update().values(plan=plan))
+    (view,) = book.recent()
+    assert view["status"] == "OPEN"
+    assert (view["mark"], view["unrealised"]) == (None, None)

@@ -23,7 +23,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from functools import partial
-from numbers import Integral, Real
+from numbers import Real
 from typing import Any, Literal, NamedTuple, cast
 
 import numpy as np
@@ -75,7 +75,7 @@ from .manage import (
     normalise_ohlc,
     remember_exit,
 )
-from .money import to_paise
+from .money import stored_paise, to_paise
 from .position import (
     initial_position,
     position_from_json,
@@ -738,7 +738,8 @@ class PaperBook:
         the underlying entry and created_at (Manager decision h); if that fails the IV stays
         missing and every repricing is PRICING_UNAVAILABLE, never a constant IV.
         Basis: for a live-chain alert, chain premium minus the model premium at the alert,
-        in paise. Only RECORDED here (ADR-001 amendment 6); US-023 applies it.
+        in paise (ADR-001 amendment 6). It is added to every premium the trade is priced at
+        later, its fills and its marks alike (`_quote`, `_mark`; US-023 decision 1).
         """
         alert = plan["alert"]
         eco = alert["economics"]
@@ -1035,6 +1036,7 @@ class PaperBook:
         new, managed = manage_view(start, view, rules, data_now, reported)
         if new == state and not managed and "rules" in plan:
             return []  # nothing new: no write at all
+        before = plan.get("position")
         plan["position"] = position_to_json(new)
         plan["rules"] = rules_to_json(rules)  # already there, unless opened before US-002
         # the row's cursor never goes back to None before the fill bar is managed (NIT)
@@ -1042,6 +1044,8 @@ class PaperBook:
         values: dict[str, Any] = {"plan": plan, "last_bar_ts": last_bar_ts, "updated_at": now}
         booked: list[Booked] = [(e.kind, e.ts, dict(e.detail)) for e in managed]
         if new.closed is None:
+            if trade.kind == "INDEX":
+                booked += self._mark(trade, plan, before, state, new)
             return self._commit(trade, values, booked, counter=None)
         exit_paise, also = self._price_exit(trade, plan, new.closed)
         for kind, _, detail in booked:
@@ -1102,6 +1106,57 @@ class PaperBook:
             detail = {"error": f"{type(exc).__name__}: {exc}", "exit_paise": exit_paise}
             return None, [("COSTS_UNAVAILABLE", at, detail)]
         return costs, []
+
+    def _mark(
+        self,
+        trade: PaperTrade,
+        plan: dict[str, Any],
+        before: object,
+        state: PositionState,
+        new: PositionState,
+    ) -> list[Booked]:
+        """Mark an OPEN option at the last close managed (US-023 AC3); mutates `plan`.
+
+        A new close: mark_paise = max(to_paise(premium_at(option, close, close time)) + basis,
+        one tick), the option frozen at the alert; rounded once (HALF_EVEN, `to_paise`). No
+        new close (a step that only remembered an exit, or skipped unusable bars): the mark
+        stays what it was. A mark that cannot be priced is None, never 0 and never the stale
+        one, with ONE PRICING_UNAVAILABLE leg="mark" event per failure streak: a later
+        failure books nothing, a recovery books nothing, a failure after it is a new event.
+        """
+        record = plan["position"]
+        known = before if isinstance(before, Mapping) else {}
+        close, at = new.last_close_paise, new.last_close_at
+        if close is None or at is None or at == state.last_close_at:
+            if "mark_paise" in known:
+                record["mark_paise"] = known["mark_paise"]
+            return []
+        option = plan["alert"]["economics"].get("option") or {}
+        fair, why = self._premium(option, close, at)
+        if fair is not None:
+            tick = to_paise(self._tick(trade))
+            record["mark_paise"] = max(to_paise(fair) + _basis_paise(plan), tick)
+            return []
+        record["mark_paise"] = None
+        if "mark_paise" in known and known["mark_paise"] is None:
+            return []  # the streak was already said
+        return [
+            ("PRICING_UNAVAILABLE", at, {"leg": "mark", "underlying_paise": close, "error": why})
+        ]
+
+    def _quote(
+        self, trade: PaperTrade, plan: Mapping[str, Any], underlying_paise: int, ts: dt.datetime
+    ) -> tuple[float | None, str | None]:
+        """The option premium a fill is priced from: the model plus the live-chain basis
+        (Manager decision 1, option A: entry, exit and the risk leg alike, so a live-chain
+        trade never shows P&L at birth), never below one tick. A synthetic alert has no
+        basis: the model's premium, untouched (the Lab differential stays exact)."""
+        option = plan["alert"]["economics"].get("option") or {}
+        fair, why = self._premium(option, underlying_paise, ts)
+        basis = _basis_paise(plan)
+        if fair is None or basis == 0:
+            return fair, why
+        return max(fair + basis / 100, self._tick(trade)), None
 
     def _position(self, trade: PaperTrade, plan: Mapping[str, Any]) -> PositionState:
         """The managed state: the plan's record, or (a row filled before US-002) the fill."""
@@ -1178,9 +1233,10 @@ class PaperBook:
 
         A stock mirrors the Lab: slipped by slippage_pct against the trader and snapped to
         the tick against the trader, except a TARGET (a limit fill, unslipped). An option is
-        sold at `option_exit_paise` of the premium at the UNSLIPPED underlying level and the
-        close time, the option frozen at the alert; if that premium is unavailable the close
-        is still booked, with no exit price and a PRICING_UNAVAILABLE event (amendment 6).
+        sold at `option_exit_paise` of the premium (`_quote`: model + live-chain basis) at the
+        UNSLIPPED underlying level and the close time, the option frozen at the alert; if that
+        premium is unavailable the close is still booked, with no exit price and a
+        PRICING_UNAVAILABLE event (amendment 6).
         A close with no rule level (a session that ended before one usable bar, MINOR-1) is
         booked the same way.
         """
@@ -1198,8 +1254,7 @@ class PaperBook:
             return stock_exit_paise(
                 close.price_paise, trade.direction, self.bt.slippage_pct, tick
             ), []
-        option = plan["alert"]["economics"].get("option") or {}
-        fair, why = self._premium(option, close.price_paise, close.at)
+        fair, why = self._quote(trade, plan, close.price_paise, close.at)
         if fair is None:
             problem = {"leg": "exit", "underlying_paise": close.price_paise, "error": why}
             return None, [("PRICING_UNAVAILABLE", close.at, problem)]
@@ -1232,14 +1287,14 @@ class PaperBook:
     ) -> _Priced | str:
         """One lot, priced like `execute_trade`; or why the fill bar cannot be priced.
 
-        risk = (entry premium - the stop EXIT fill the Lab would book) x qty, the stop leg
-        priced at the underlying stop with the option frozen at the alert (Manager decision
+        The premium is the model's plus the live-chain basis (`_quote`; none for a synthetic
+        alert). risk = (entry premium - the stop EXIT fill the Lab would book) x qty, the stop
+        leg priced at the underlying stop with the option frozen at the alert (Manager decision
         (a): paper R and Lab R are comparable). If that repricing fails, or the stop exit is
         not below the entry, the trade still fills with risk_paise NULL and a
         PRICING_UNAVAILABLE event (ADR-001 amendment 6).
         """
-        option = plan["alert"]["economics"].get("option") or {}
-        fair, why = self._premium(option, open_paise, bar_ts)
+        fair, why = self._quote(trade, plan, open_paise, bar_ts)
         if fair is None:
             return why or "no premium"
         bt = self.bt
@@ -1250,7 +1305,10 @@ class PaperBook:
             "option_spread_pct": bt.option_spread_pct,
             "option_slippage_ticks": bt.option_slippage_ticks,
         }
-        stop_fair, why = self._premium(option, stop_paise, bar_ts)
+        basis = _basis_paise(plan)
+        if basis:
+            inputs["basis_paise"] = basis  # included in fair_premium_paise
+        stop_fair, why = self._quote(trade, plan, stop_paise, bar_ts)
         risk = None
         if stop_fair is not None:
             spread, ticks = bt.option_spread_pct, bt.option_slippage_ticks
@@ -1481,6 +1539,17 @@ _NO_BARS = OhlcBars(
 )
 
 
+def _basis_paise(plan: Mapping[str, Any]) -> int:
+    """The live-chain basis frozen at the alert, in paise; 0 for a synthetic alert, for a row
+    opened before it was recorded, and when the model could not price the alert (None): the
+    trade is then priced on the model alone, as a synthetic one is."""
+    pricing = plan.get("pricing")
+    basis = pricing.get("basis_paise") if isinstance(pricing, Mapping) else None
+    if isinstance(basis, bool) or not isinstance(basis, int):
+        return 0
+    return basis
+
+
 def _gross(trade: PaperTrade, exit_paise: int | None) -> int | None:
     """sign x (exit - entry) x qty. An option is LONG PREMIUM whatever the direction on the
     underlying (a BUY_PE gains as the underlying falls); None without an exit price."""
@@ -1601,7 +1670,6 @@ def _int_or_none(value: object) -> int | None:
     return None if value is None else int(cast(int, value))
 
 
-_MAX_EXACT_FLOAT = 2**53  # beyond it a float no longer holds every whole number of paise
 _MONEY_WARNED: set[tuple[object, str]] = set()  # (trade id, column) already warned about
 _MONEY_WARNED_LOCK = threading.Lock()
 
@@ -1611,21 +1679,13 @@ def _paise_or_none(row: Mapping[Any, Any], column: str) -> int | None:
 
     A non-integer (a REAL 1030.5, text, NaN, a bool) is UNKNOWN, never truncated to a wrong
     amount (US-023 carry-over); it is warned about once per trade and column. A whole float
-    within 2**53 is exact and accepted.
+    within 2**53 is exact and accepted (`money.stored_paise`, shared with the ledger).
     """
     value = row[column]
-    if value is None:
-        return None
-    if isinstance(value, Integral) and not isinstance(value, bool):
-        return int(value)
-    if (
-        isinstance(value, Real)
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-        and float(value).is_integer()
-        and abs(float(value)) <= _MAX_EXACT_FLOAT
-    ):
-        return int(float(value))
+    try:
+        return stored_paise(value)
+    except ValueError:
+        pass
     key = (row["id"], column)
     with _MONEY_WARNED_LOCK:
         first = key not in _MONEY_WARNED
