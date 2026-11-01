@@ -1,7 +1,7 @@
 # Board
-_Generated 2026-11-01T15:21+05:30 by agile_board.py; do not edit by hand._
+_Generated 2026-11-01T18:07+05:30 by agile_board.py; do not edit by hand._
 
-## backlog — 25 stories, 104 pts
+## backlog — 26 stories, 107 pts
 | ID | Title | Pts | Priority | Sprint | Protocol |
 |---|---|---|---|---|---|
 | US-005 | Reads require authentication whenever the app is reachable off-loopback | 5 | Must | 2 | driver-navigator |
@@ -27,17 +27,27 @@ _Generated 2026-11-01T15:21+05:30 by agile_board.py; do not edit by hand._
 | US-018 | Frontend modules, accessibility and UI smoke tests | 8 | Should | 5 | driver-navigator |
 | US-022 | Operator runbook, release notes and 1.0 cut | 3 | Should | 6 | driver-navigator |
 | US-025 | Desk manual positions adopt the shared rules; fix short costing | 3 | Should | 3 | ping-pong-tdd |
+| US-029 | Fallback bars never pollute a Dhan series; alerts report the resolution that served them | 3 | Should | 2 | ping-pong-tdd |
 | SP-001 | Spike: review fnolab.in end to end for reference ideas | 2 | Could | 5 | driver-navigator |
 | US-012 | Paper vs taken reconciliation and slippage report | 3 | Could | 6 | ping-pong-tdd |
 
-## ready — 6 stories, 24 pts
+## ready — 4 stories, 17 pts
 | ID | Title | Pts | Priority | Sprint | Protocol |
 |---|---|---|---|---|---|
-| US-000 | Quality gate baseline is green: format, pins, mypy ratchet, repo hygiene | 3 | Must | 0 | driver-navigator |
-| US-001 | Every alert opens a paper trade | 5 | Must | 1 | ping-pong-tdd |
 | US-002 | Paper trades are managed to a close by the strategy exit rules | 5 | Must | 1 | ping-pong-tdd |
 | US-003 | Telegram client and compact alert formatter, with redaction hardening | 5 | Must | 1 | ping-pong-tdd |
 | US-004 | Alerts reach Telegram through a durable outbox | 5 | Must | 1 | driver-navigator |
+| US-030 | Paper trades visible on the desk (thin slice of US-016) | 2 | Must | 1 | driver-navigator |
+
+## in-progress — 1 story, 5 pts
+| ID | Title | Pts | Priority | Sprint | Protocol |
+|---|---|---|---|---|---|
+| US-001 | Every alert opens a paper trade | 5 | Must | 1 | ping-pong-tdd |
+
+## done — 2 stories, 4 pts
+| ID | Title | Pts | Priority | Sprint | Protocol |
+|---|---|---|---|---|---|
+| US-000 | Quality gate baseline is green: format, pins, mypy ratchet, repo hygiene | 3 | Must | 0 | driver-navigator |
 | US-028 | Fix: alerts served by the Yahoo fallback are labelled live | 1 | Must | 1 | ping-pong-tdd |
 
-**Total:** 31 stories, 0/128 points done
+**Total:** 33 stories, 4/133 points done
