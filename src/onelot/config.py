@@ -581,6 +581,18 @@ def telegram_token_forms(token: str) -> list[str]:
 
 
 _CHAT_ID_LIKE = re.compile(r"-?[0-9]+")
+# The Bot API token shape (ADR-002 #7), shared with onelot.notify.telegram. ASCII only:
+# [0-9], never \d (which also matches other Unicode digits); always use fullmatch, never $
+# (which also matches before a trailing newline).
+TELEGRAM_TOKEN_SHAPE = re.compile(r"[0-9]{6,12}:[A-Za-z0-9_-]{30,}")
+
+
+def _token_status(token: str) -> str | None:
+    """What Settings may say about the Telegram token: None (not set), 'set' (a valid
+    shape) or 'invalid'; never any part of it, not even the last four characters."""
+    if not token:
+        return None
+    return "set" if TELEGRAM_TOKEN_SHAPE.fullmatch(token) else "invalid"
 
 
 def telegram_redaction_literals(token: str) -> list[str]:
@@ -714,7 +726,8 @@ class Secrets:
 
     def masked(self) -> dict:
         """What the Settings tab may show: presence and the last 4 characters only.
-        The Telegram values are reported only as set or not set (ADR-002 #7)."""
+        The Telegram token is reported only as None, 'set' (a valid shape) or 'invalid';
+        the chat id as 'set' or None. Never any part of either (ADR-002 #7)."""
 
         def m(v: str) -> str | None:
             return (f"…{v[-4:]}" if len(v) >= 8 else "set") if v else None
@@ -727,7 +740,7 @@ class Secrets:
             "pin_set": bool(self.pin),
             "totp_set": bool(self.totp_secret),
             "can_self_renew": self.can_self_renew,
-            "telegram_bot_token": "set" if self.telegram_bot_token else None,
+            "telegram_bot_token": _token_status(self.telegram_bot_token),
             "telegram_chat_id": "set" if self.telegram_chat_id else None,
         }
 

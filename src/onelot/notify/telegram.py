@@ -46,7 +46,7 @@ from typing import Any, Literal
 import httpx
 
 from ..clock import to_ist
-from ..config import telegram_redaction_literals
+from ..config import TELEGRAM_TOKEN_SHAPE, telegram_redaction_literals
 from ..logging_setup import get_redactor, register_secrets
 from .base import shown_confidence
 
@@ -372,8 +372,9 @@ TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
 CHAT_ENV = "TELEGRAM_CHAT_ID"
 TIMEOUT = httpx.Timeout(10.0)  # connect, read, write and pool alike
 # ASCII only: [0-9], never \d (which also matches full-width and other Unicode digits),
-# and always re.fullmatch, never $ (which also matches before a trailing newline).
-_TOKEN_SHAPE = re.compile(r"[0-9]{6,12}:[A-Za-z0-9_-]{30,}")
+# and always re.fullmatch, never $ (which also matches before a trailing newline). The
+# token shape lives in onelot.config so Settings (Secrets.masked) applies the same rule.
+_TOKEN_SHAPE = TELEGRAM_TOKEN_SHAPE
 _CHAT_SHAPE = re.compile(r"-?[1-9][0-9]{0,18}")
 _CAP_DESCRIPTION = 200
 _MASK = "***"

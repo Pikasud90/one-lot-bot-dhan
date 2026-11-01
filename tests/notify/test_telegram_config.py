@@ -217,6 +217,17 @@ class TestSecretsWiring:
         assert OTHER_TOKEN.split(":", 1)[1] not in repr(masked)
         assert Secrets().masked()["telegram_bot_token"] is None
 
+    @pytest.mark.parametrize(
+        "token",
+        ["123456789:short", "4455667788", " " + TOKEN, TOKEN + "!", "bot" + TOKEN],
+        ids=["short-secret", "chat-id", "leading-space", "bad-char", "bot-prefix"],
+    )
+    def test_masked_says_invalid_for_a_token_that_fails_validation(self, token):
+        """'set' would claim Telegram is configured when the client will be unavailable."""
+        masked = Secrets(telegram_bot_token=token).masked()
+        assert masked["telegram_bot_token"] == "invalid"
+        assert token.strip() not in repr(masked)
+
     def test_repr_never_shows_the_token(self):
         s = Secrets(telegram_bot_token=TOKEN, telegram_chat_id=CHAT)
         assert TOKEN.split(":", 1)[1] not in repr(s) and TOKEN.split(":", 1)[1] not in str(s)
