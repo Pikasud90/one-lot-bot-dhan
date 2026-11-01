@@ -1,10 +1,11 @@
-"""manage_step: one OPEN paper trade managed bar by bar (US-002 AC1-AC4). Pure: no I/O.
+"""manage_step: one OPEN paper trade managed bar by bar (US-002 AC1-AC6). Pure: no I/O.
 
 Levels in PositionState are integer paise on the MANAGED series (the stock itself, or the
 index under an option); bar frames arrive in rupees like the feed. Every price below sits
 on the 5-paise tick grid so no assertion depends on a float tie.
 
-Test list (ping-pong; Dev Beta T1 writes AC1/AC2 green and AC3/AC4 red):
+Test list (ping-pong; Beta T1: AC1/AC2 green, AC3/AC4 red; Alpha T2: AC3/AC4 green, AC5/AC6
+red here and the AC7 properties in test_manage_properties.py):
   AC1 stop: touch counts; one tick short does not; gap closes at the open; an open exactly
       at S is not a gap; STOP beats TARGET; shorts mirror; BUY_PE = short on the
       underlying; from the fill bar inclusive; earlier bars ignored; forming bar ignored;
@@ -18,7 +19,20 @@ Test list (ping-pong; Dev Beta T1 writes AC1/AC2 green and AC3/AC4 red):
   AC4 strategy exit: closes at the first fine open at/after B's close; pending across steps;
       a stale B (closed at or before the fill) is ignored; B after `now` is look-ahead;
       at-open precedence STOP/TARGET > SIGNAL_EXIT > OPPOSITE_SIGNAL; an exit due at a
-      bar's open closes before anything inside that bar.
+      bar's open closes before anything inside that bar; a late report closes at the next
+      bar not yet managed; a report with no new bar is remembered.
+  AC5 session end: the first open at/after exit_time (no bar exactly at it: the next one);
+      that open beats a touch inside the bar, a gap through the stop beats it, it beats a
+      strategy exit at the same open; custom exit_time; date-aware on a first step the next
+      day. Fallback (no bar at/after exit_time): once the session is over (15:30 IST on the
+      opening date, or a bar of a later date) close at the last managed bar's CLOSE, stamped
+      at that close time (decision A5), also when that bar was managed by an earlier step,
+      with the close the position saw; a later session's bar is never managed.
+      Time stop: the open once max_bars strategy bars have passed; that open beats a touch
+      inside the bar; a strategy exit at the same open outranks it; max_bars 0 is off;
+      a negative max_bars is rejected.
+  AC6 bar by bar == all at once (trail moves + session end, and the fallback close); the
+      same (now, bars) again books nothing; event times are bar times, never now.
   Contract: naive now / naive index / missing columns / wrong-side stop / bad tick raise;
       an unusable bar (NaN, high below low) is skipped; an open outside high/low is judged
       at the open, a close outside it is not a touch; a UTC-indexed frame behaves like an
@@ -45,7 +59,7 @@ from onelot.paper.manage import (
     manage_step,
 )
 
-from .conftest import THU, ist
+from .conftest import FRI, THU, ist
 
 TICK = 5
 OPENED = ist(THU, 10, 6)  # the fill bar's open
@@ -463,6 +477,217 @@ class TestAC4StrategyExit:
         state, _ = step(position(), rows, now=at(12))  # 10:06 .. 10:11 managed
         state, _ = step(state, rows, now=at(13), strategy_exit=exit_at(10))
         assert state.closed == PaperClose("SIGNAL_EXIT", 100_100, at(12), gap=False)
+
+
+# ── AC5: the session end and the time stop (written red for Dev Beta, T3) ──────
+
+
+def when(hh: int, mm: int, ss: int = 0, day: dt.date = THU) -> dt.datetime:
+    return ist(day, hh, mm, ss)
+
+
+def frame_at(stamps: Sequence[dt.datetime], rows: Sequence[Row]) -> pd.DataFrame:
+    """OHLC rows in RUPEES on explicit bar-open stamps (holes, two sessions)."""
+    o, h, l, c = (list(col) for col in zip(*rows, strict=True))
+    return pd.DataFrame(
+        {"open": o, "high": h, "low": l, "close": c, "volume": 1e3},
+        index=pd.DatetimeIndex(list(stamps)),
+    )
+
+
+LATE = when(15, 10)  # a fill five minutes before the 15:15 exit time
+EXIT_BAR = (1000.50, 1001.00, 999.50, 1000.75)  # the exit bar: open 100_050
+LAST_BAR = (1000.00, 1001.00, 999.00, 1000.35)  # a session's last bar: close 100_035
+NEXT_DAY = (900.00, 901.00, 899.00, 900.50)  # the next morning, far through the stop
+
+
+class TestAC5SessionEnd:
+    def test_it_closes_at_the_first_open_at_or_after_exit_time(self) -> None:
+        rows = [QUIET] * 5 + [EXIT_BAR, QUIET]  # 15:10 .. 15:16
+        state, events = step(position(opened=LATE), rows, start=LATE)
+        assert state.closed == PaperClose("SESSION_END", 100_050, when(15, 15), gap=False)
+        assert [(e.kind, e.ts) for e in events] == [("CLOSED", when(15, 15))]
+
+    def test_with_no_bar_at_exit_time_the_next_open_is_used(self) -> None:
+        stamps = [when(15, 10 + i) for i in range(5)] + [when(15, 17)]
+        bars = frame_at(stamps, [QUIET] * 5 + [EXIT_BAR])
+        state, _ = manage_step(position(opened=LATE), bars, RULES, when(15, 18))
+        assert state.closed == PaperClose("SESSION_END", 100_050, when(15, 17), gap=False)
+
+    def test_its_open_beats_a_stop_touched_later_inside_that_bar(self) -> None:
+        rows = [QUIET] * 5 + [(1000.50, 1001.00, 994.00, 996.00)]
+        state, _ = step(position(opened=LATE), rows, start=LATE)
+        assert state.closed == PaperClose("SESSION_END", 100_050, when(15, 15), gap=False)
+
+    def test_a_gap_through_the_stop_at_that_open_is_a_stop(self) -> None:
+        rows = [QUIET] * 5 + [(994.00, 995.00, 993.00, 994.50)]
+        state, _ = step(position(opened=LATE), rows, start=LATE)
+        assert state.closed == PaperClose("STOP", 99_400, when(15, 15), gap=True)
+
+    def test_it_outranks_a_strategy_exit_due_at_the_same_open(self) -> None:
+        signal = StrategyExit("SIGNAL_EXIT", when(15, 15))
+        rows = [QUIET] * 5 + [EXIT_BAR]
+        state, _ = step(position(opened=LATE), rows, start=LATE, strategy_exit=signal)
+        assert state.closed == PaperClose("SESSION_END", 100_050, when(15, 15), gap=False)
+
+    def test_a_custom_exit_time_is_honoured(self) -> None:
+        rules = replace(RULES, exit_time=dt.time(15, 12))
+        rows = [QUIET, QUIET, EXIT_BAR, QUIET]  # 15:10 .. 15:13
+        state, _ = step(position(opened=LATE), rows, start=LATE, rules=rules)
+        assert state.closed == PaperClose("SESSION_END", 100_050, when(15, 12), gap=False)
+
+    def test_a_first_step_on_the_next_day_closes_at_the_opening_days_exit_open(self) -> None:
+        stamps = [when(15, 10 + i) for i in range(7)] + [when(9, 15 + i, day=FRI) for i in range(3)]
+        rows = [QUIET] * 5 + [EXIT_BAR, QUIET] + [NEXT_DAY] * 3
+        bars = frame_at(stamps, rows)
+        state, events = manage_step(position(opened=LATE), bars, RULES, when(9, 30, day=FRI))
+        assert state.closed == PaperClose("SESSION_END", 100_050, when(15, 15), gap=False)
+        assert [e.kind for e in events] == ["CLOSED"]
+
+
+class TestAC5SessionEndFallback:
+    """No bar at or after exit_time: once the session is over (15:30 IST on the opening date,
+    as `fill.SESSION_CLOSE_IST`, or a bar of a later date exists) the trade closes at the
+    CLOSE of the last bar it managed, stamped at that bar's close time (decision A5)."""
+
+    START = when(15, 5)
+    ROWS = [QUIET] * 4 + [LAST_BAR]  # 15:05 .. 15:09
+
+    def opened(self) -> PositionState:
+        return position(opened=self.START)
+
+    def bars(self, rows: Sequence[Row] | None = None) -> pd.DataFrame:
+        return frame(self.ROWS if rows is None else rows, self.START)
+
+    def test_once_the_session_is_over_it_closes_at_the_last_bars_close(self) -> None:
+        state, (event,) = manage_step(self.opened(), self.bars(), RULES, when(15, 30))
+        assert state.closed == PaperClose("SESSION_END", 100_035, when(15, 10), gap=False)
+        assert (event.kind, event.ts) == ("CLOSED", when(15, 10))
+        assert (event.detail["reason"], event.detail["price_paise"]) == ("SESSION_END", 100_035)
+
+    def test_not_before_the_session_is_over(self) -> None:
+        # a quiet minute or a late feed: 15:15 .. 15:29 may still arrive
+        state, events = manage_step(self.opened(), self.bars(), RULES, when(15, 29, 59))
+        assert (state.closed, events, state.last_bar_ts) == (None, [], when(15, 9))
+
+    def test_the_last_bar_may_have_been_managed_by_an_earlier_step(self) -> None:
+        state, _ = manage_step(self.opened(), self.bars(), RULES, when(15, 10))
+        assert (state.closed, state.last_bar_ts) == (None, when(15, 9))
+        state, (event,) = manage_step(state, self.bars(), RULES, when(15, 31))
+        assert state.closed == PaperClose("SESSION_END", 100_035, when(15, 10), gap=False)
+        assert event.ts == when(15, 10)
+
+    def test_it_uses_the_close_the_position_saw_not_a_later_revision(self) -> None:
+        # AC6: a bar the position has already seen is never evaluated again
+        state, _ = manage_step(self.opened(), self.bars(), RULES, when(15, 10))
+        revised = self.bars([QUIET] * 4 + [(1000.00, 1001.00, 999.00, 1000.95)])
+        state, _ = manage_step(state, revised, RULES, when(15, 31))
+        assert state.closed is not None and state.closed.price_paise == 100_035
+
+    def test_a_later_days_bar_ends_the_session_and_is_never_managed(self) -> None:
+        stamps = [when(15, 5 + i) for i in range(5)] + [when(9, 15 + i, day=FRI) for i in range(3)]
+        bars = frame_at(stamps, [*self.ROWS] + [NEXT_DAY] * 3)
+        state, events = manage_step(self.opened(), bars, RULES, when(9, 20, day=FRI))
+        assert state.closed == PaperClose("SESSION_END", 100_035, when(15, 10), gap=False)
+        assert [e.kind for e in events] == ["CLOSED"]
+        assert (state.last_bar_ts, state.sessions_held) == (when(15, 9), 1)
+
+
+TIME_RULES = replace(RULES, max_bars=1, tf_min=5)  # one 5-minute bar from the 10:06 fill
+DUE_BAR = (1000.20, 1001.00, 999.00, 1000.50)  # 10:11, when one strategy bar has passed
+
+
+class TestAC5TimeStop:
+    def test_it_closes_at_the_open_once_max_bars_strategy_bars_have_passed(self) -> None:
+        state, events = step(position(), [QUIET] * 5 + [DUE_BAR, QUIET], rules=TIME_RULES)
+        assert state.closed == PaperClose("TIME_STOP", 100_020, at(11), gap=False)
+        assert [(e.kind, e.ts) for e in events] == [("CLOSED", at(11))]
+
+    def test_not_before_the_last_allowed_bar_has_passed(self) -> None:
+        state, events = step(position(), [QUIET] * 5, rules=TIME_RULES)  # 10:06 .. 10:10
+        assert (state.closed, events) == (None, [])
+
+    def test_its_open_beats_a_stop_touched_later_inside_that_bar(self) -> None:
+        rows = [QUIET] * 5 + [(1000.20, 1001.00, 994.00, 996.00)]
+        state, _ = step(position(), rows, rules=TIME_RULES)
+        assert state.closed == PaperClose("TIME_STOP", 100_020, at(11), gap=False)
+
+    def test_a_strategy_exit_due_at_the_same_open_outranks_it(self) -> None:
+        rows = [QUIET] * 5 + [DUE_BAR]
+        state, _ = step(position(), rows, rules=TIME_RULES, strategy_exit=exit_at(11))
+        assert state.closed == PaperClose("SIGNAL_EXIT", 100_020, at(11), gap=False)
+
+    def test_max_bars_zero_means_no_time_stop(self) -> None:
+        state, _ = step(position(), [QUIET] * 30, rules=replace(RULES, tf_min=1))
+        assert state.closed is None
+
+    def test_a_negative_max_bars_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="max_bars"):
+            manage_step(position(), frame([QUIET]), replace(RULES, max_bars=-1), at(7))
+
+
+# ── AC6: stepping is idempotent and catches up (written red for Dev Beta, T3) ──
+
+TRAIL_THEN_SESSION_END = [  # 15:05 .. 15:16; risk 5.00, trail 1 x 2.00
+    (1000.00, 1003.00, 999.50, 1002.00),  # +0.4 R
+    (1002.00, 1005.50, 1001.50, 1005.00),  # +1.0 R: the stop -> 1003.00 from 15:07
+    (1005.00, 1007.00, 1004.00, 1006.50),  # -> 1004.50 from 15:08
+    (1006.50, 1008.00, 1006.00, 1007.50),  # -> 1005.50 from 15:09
+    *[(1007.50, 1008.00, 1006.50, 1007.50)] * 6,  # 15:09 .. 15:14: no further move
+    (1007.00, 1008.00, 1006.00, 1007.50),  # 15:15: SESSION_END at the open, 100_700
+    (1007.50, 1008.00, 1006.50, 1007.50),
+]
+
+
+class TestAC6SteppingIsIdempotentAndCatchesUp:
+    START = when(15, 5)
+
+    def once(self, now: dt.datetime | None = None) -> tuple[PositionState, list[PaperEvent]]:
+        bars = frame(TRAIL_THEN_SESSION_END, self.START)
+        return manage_step(position(opened=self.START), bars, TRAIL, now or when(15, 17))
+
+    def test_bar_by_bar_equals_all_at_once(self) -> None:
+        once_state, once = self.once()
+        bars = frame(TRAIL_THEN_SESSION_END, self.START)
+        state, events = position(opened=self.START), []
+        for k in range(1, len(TRAIL_THEN_SESSION_END) + 1):
+            state, new = manage_step(state, bars, TRAIL, self.START + dt.timedelta(minutes=k))
+            events += new
+        assert [(e.kind, e.ts) for e in once] == [
+            ("STOP_MOVED", when(15, 7)),
+            ("STOP_MOVED", when(15, 8)),
+            ("STOP_MOVED", when(15, 9)),
+            ("CLOSED", when(15, 15)),
+        ]
+        assert events == once and state == once_state
+
+    def test_the_same_now_and_bars_again_book_nothing(self) -> None:
+        state, first = self.once()
+        bars = frame(TRAIL_THEN_SESSION_END, self.START)
+        again, more = manage_step(state, bars, TRAIL, when(15, 17))
+        assert first[-1].kind == "CLOSED" and more == [] and again == state
+
+    def test_event_times_are_bar_times_never_now(self) -> None:
+        now = when(17, 3, 9)
+        _, events = self.once(now)
+        edges = {self.START + dt.timedelta(minutes=i) for i in range(13)}  # opens and closes
+        assert events and events[-1].kind == "CLOSED"
+        assert all(e.ts in edges and e.ts != now for e in events)
+
+    def test_the_fallback_close_is_the_same_bar_by_bar_and_all_at_once(self) -> None:
+        start = when(15, 5)
+        stamps = [when(15, 5 + i) for i in range(5)] + [when(9, 15 + i, day=FRI) for i in range(3)]
+        bars = frame_at(stamps, [QUIET] * 4 + [LAST_BAR] + [NEXT_DAY] * 3)
+        once_state, once = manage_step(position(opened=start), bars, RULES, when(9, 20, day=FRI))
+        nows = [when(15, 6 + i) for i in range(26)] + [when(9, 16 + i, day=FRI) for i in range(5)]
+        state, events = position(opened=start), []
+        for now in nows:  # 15:06 .. 15:31, then the next morning
+            state, new = manage_step(state, bars, RULES, now)
+            events += new
+        assert [(e.kind, e.ts, e.detail["reason"]) for e in once] == [
+            ("CLOSED", when(15, 10), "SESSION_END")
+        ]
+        assert events == once and state == once_state
 
 
 # ── the contract ───────────────────────────────────────────────────────────────
