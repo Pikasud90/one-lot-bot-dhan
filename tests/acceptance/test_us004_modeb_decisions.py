@@ -7,9 +7,9 @@
   (C) missed notes that pile up while the worker drains through an outage become ONE
       "Missed N alerts" digest (more than 8); up to 8 stay individual notes.
   (D) p95 counts alert, exit and critical rows only.
-  (F) the same CRITICAL title in one 30-minute bucket reaches the phone once; another title,
-      or the next bucket, is another message. (Buckets start on :00 and :30 by the decision, so
-      two raises a minute apart across a boundary are two messages.)
+  (F) every CRITICAL is its own row; the worker skips a queued one whose title (spacing
+      normalised, case kept) matches one SENT less than 30 minutes ago: a sliding window from the
+      last message the phone got; a failed CRITICAL never silences the next.
   (G) the worker paces BEFORE it claims: a failure in the wait leaves the row queued.
 
 Outages are a transport that answers 502; the worker "drains throughout" by running
@@ -23,7 +23,7 @@ import re
 from typing import Any
 
 import pytest
-from us003_helpers import DOT, install_network_guard, telegram, visible
+from us003_helpers import DOT, install_network_guard, ok_response, telegram, tg_error, visible
 from us004_helpers import (
     RESEND,
     FakeClock,
@@ -36,6 +36,7 @@ from us004_helpers import (
     exit_notification,
     exit_payload,
     rig_factory,
+    scripted,
     signal_notification,
 )
 
@@ -338,13 +339,22 @@ def test_p95_counts_exit_and_critical_rows(make_rig):
 
 
 # ========================= (F) one CRITICAL per title per 30 minutes ====================
+# Every CRITICAL is its own row (key = notification id); the WORKER skips a queued CRITICAL whose
+# title (spacing normalised, case kept) matches one SENT less than 30 minutes ago. The window is
+# sliding, from the last message the phone actually got; a failed CRITICAL never silences the next.
 def at(rig: Any, hh: int, mm: int, ss: int = 0) -> dt.datetime:
     moment = rig.clock().replace(hour=hh, minute=mm, second=ss, microsecond=0)
     rig.clock.set(moment)
     return moment
 
 
-def test_the_same_critical_title_within_one_bucket_reaches_the_phone_once(make_rig):
+def criticals(rig: Any) -> list[dict[str, Any]]:
+    return [r for r in rig.rows() if r["kind"] == "critical"]
+
+
+def test_the_same_critical_title_within_30_minutes_is_sent_once_and_the_repeats_are_skipped(
+    make_rig,
+):
     rig = make_rig()
     notifier, _ = build_notifier(rig)
     results = []
@@ -355,20 +365,55 @@ def test_the_same_critical_title_within_one_bucket_reaches_the_phone_once(make_r
 
     assert all(r == {"dashboard": True, "telegram": True} for r in results), "never a failure"
     assert len(rig.rec.texts()) == 1
-    assert [r["kind"] for r in rig.rows()] == ["critical"]
+    rows = criticals(rig)
+    assert [r["status"] for r in rows] == ["sent", "skipped", "skipped", "skipped"]
+    assert all("repeat" in (r["last_error"] or "") for r in rows[1:])
 
 
-def test_the_same_critical_title_in_the_next_bucket_is_a_new_message(make_rig):
+def test_a_new_message_needs_30_minutes_from_the_last_one_that_was_sent(make_rig):
     rig = make_rig()
     notifier, _ = build_notifier(rig)
-    for hh, mm in [(10, 5), (10, 31), (11, 2)]:
-        notifier.send(critical_notification("UNMANAGED position", "x", at(rig, hh, mm)))
+    plan = [
+        ((10, 5, 0), "sent"),
+        ((10, 31, 0), "skipped"),  # 26 minutes after the 10:05 send
+        ((10, 35, 0), "sent"),  # exactly 30 minutes after it (the skipped 10:31 does not count)
+        ((11, 2, 0), "skipped"),  # 27 minutes after the 10:35 send
+        ((11, 5, 0), "sent"),
+    ]
+    for (hh, mm, ss), _expected in plan:
+        notifier.send(critical_notification("UNMANAGED position", "x", at(rig, hh, mm, ss)))
         rig.drain()
 
+    assert [r["status"] for r in criticals(rig)] == [status for _, status in plan]
     assert len(rig.rec.texts()) == 3
 
 
-def test_different_critical_titles_in_one_bucket_each_reach_the_phone(make_rig):
+@pytest.mark.parametrize(
+    "gap_s, sent",
+    [
+        (1, False),
+        (60.0, False),
+        (1799.999, False),
+        (1800.0, True),
+        (1800.001, True),
+        (7200.0, True),
+    ],
+)
+def test_the_repeat_window_is_exactly_30_minutes_from_the_last_send(make_rig, gap_s, sent):
+    rig = make_rig()
+    notifier, _ = build_notifier(rig)
+    first = at(rig, 10, 5)
+    notifier.send(critical_notification("Feed dead", "x", first))
+    rig.drain()
+    rig.clock.set(first + dt.timedelta(seconds=gap_s))
+    notifier.send(critical_notification("Feed dead", "x", rig.clock()))
+
+    rig.drain()
+
+    assert [r["status"] for r in criticals(rig)] == ["sent", "sent" if sent else "skipped"]
+
+
+def test_different_critical_titles_each_reach_the_phone(make_rig):
     rig = make_rig()
     notifier, _ = build_notifier(rig)
     moment = at(rig, 10, 5)
@@ -395,11 +440,74 @@ def test_a_repeated_critical_is_success_not_a_channel_failure(make_rig):
     rig = make_rig()
     notifier, _ = build_notifier(rig)
     moment = at(rig, 10, 5)
-    for _ in range(3):
-        notifier.send(critical_notification("Clock problem", "x", moment))
+    results = [notifier.send(critical_notification("Clock problem", "x", moment)) for _ in range(3)]
+    rig.drain()
 
+    assert all(r["telegram"] is True for r in results)
     assert notifier.stats["telegram"].failed == 0
-    assert len(rig.rows()) == 1
+    assert [r["status"] for r in criticals(rig)] == ["sent", "skipped", "skipped"]
+    assert rig.outbox.status()["failed"] == 0 and rig.outbox.status()["queue_depth"] == 0
+
+
+def test_a_failed_critical_never_silences_the_next_one(make_rig):
+    rig = make_rig(scripted(tg_error(403, "Forbidden: bot was blocked by the user"), ok_response))
+    notifier, _ = build_notifier(rig)
+    notifier.send(critical_notification("Dhan token expired", "x", at(rig, 10, 5)))
+    rig.drain()
+    assert [r["status"] for r in criticals(rig)] == ["failed"]
+
+    notifier.send(critical_notification("Dhan token expired", "x", at(rig, 10, 10)))
+    rig.drain()
+
+    assert [r["status"] for r in criticals(rig)] == ["failed", "sent"]
+
+
+def test_a_critical_that_is_still_failing_is_not_a_sent_one(make_rig):
+    """A transient failure leaves the first row queued; it does not count as 'sent'."""
+    outage = Outage()
+    rig = make_rig(outage)
+    notifier, _ = build_notifier(rig)
+    notifier.send(critical_notification("Feed dead", "x", at(rig, 10, 5)))
+    rig.drain()
+
+    assert outage.delivered == [] and [r["status"] for r in criticals(rig)] == ["queued"]
+
+
+def test_after_an_outage_the_oldest_of_a_run_of_repeats_goes_and_the_rest_are_skipped(make_rig):
+    """A legacy engine raises 'UNMANAGED' every minute. Forty minutes of outage queue forty
+    rows; on recovery the phone gets the OLDEST (with its own event time and 'sent late'), a
+    different title raised meanwhile gets through, and the other thirty-nine are skipped."""
+    outage = Outage()
+    rig = make_rig(outage)
+    notifier, _ = build_notifier(rig)
+    start = at(rig, 10, 0)
+    first_event = None
+    for minute in range(40):
+        moment = start + dt.timedelta(minutes=minute)
+        rig.clock.set(moment)
+        notifier.send(critical_notification("UNMANAGED position", f"poll {minute}", moment))
+        if minute == 3:
+            notifier.send(critical_notification("Clock problem", "drift", moment))
+        first_event = first_event or moment
+        rig.drain()
+    assert outage.delivered == []
+    outage.down = False
+    rig.clock.advance(120)  # past the retry back-off (at most 60 s) of the rows that kept failing
+    recovered_at = rig.clock()
+
+    rig.drain(limit=200)
+    rig.drain(limit=200)
+
+    assert len(outage.delivered) == 2, [visible(t).split("\n")[0] for t in outage.delivered]
+    unmanaged, clock_problem = outage.delivered
+    assert unmanaged == format_critical(
+        {"title": "UNMANAGED position", "body": "poll 0"}, first_event
+    ) + late_suffix(recovered_at)
+    assert "Clock problem" in visible(clock_problem)
+    statuses = [r["status"] for r in criticals(rig) if "UNMANAGED" in str(r["payload"])]
+    assert statuses.count("sent") == 1 and statuses.count("skipped") == 39
+    assert statuses[0] == "sent", "the oldest is the one that goes"
+    assert rig.outbox.status()["queue_depth"] == 0
 
 
 # ========================= (G) pace before claiming =====================================
@@ -437,3 +545,33 @@ def test_the_readme_states_the_final_quiet_and_late_rules():
     assert "SIGNAL and EXIT arrive silently" in readme
     assert "CRITICAL always sounds" in readme
     assert "sent late" in readme and "Missed N alerts" in readme
+
+
+# ========================= a digest that cannot be stored never loses its alerts ==========
+def test_a_digest_that_cannot_be_stored_never_leaves_alerts_skipped_and_unreported(make_rig):
+    """The digest's dedup key is 'digest:burst:{lowest folded row id}'. Plant a row that owns
+    that key: the insert collides. The alerts that were about to be folded must then stay
+    queued (or be covered by a digest), never end 'skipped' with nobody told."""
+    rig = make_rig()
+    now = rig.clock()
+    for i in range(9):  # nine queued alerts: the ninth (lowest confidence, row 9) is folded
+        rig.enqueue_alert(alert_at(now, id=alert_id(i), score=90.0 - i))
+    rig.outbox.enqueue(
+        dedup_key="digest:burst:9",
+        kind="test",
+        alert_id="planted",
+        payload={"title": "planted"},
+        alert_created_at=now,
+        expires_at=None,
+    )
+
+    for _ in range(3):  # whatever the worker does about it, it must not lose the alert
+        try:
+            rig.drain(limit=40)
+        except Exception:  # noqa: BLE001 - raising is allowed, silently skipping is not
+            pass
+
+    rows = rig.rows()
+    skipped = [r for r in rows if r["kind"] == "alert" and r["status"] == "skipped"]
+    digests = [r for r in rows if r["kind"] == "digest"]
+    assert not skipped or digests, f"{len(skipped)} alert(s) skipped and no digest tells the owner"
