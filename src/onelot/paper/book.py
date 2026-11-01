@@ -257,6 +257,8 @@ class PaperBook:
         self._retry_logged: set[str] = set()  # retries whose traceback was already logged
         self._tracked: frozenset[str] | None = None  # the desk's series (retire_untracked)
         self._callback_failed: set[int] = set()  # trades whose strategy_exit traceback is logged
+        # options whose premium_at is failing now: warned once per streak (review 1 NIT)
+        self._pricer_failing: set[tuple[str, str, str]] = set()
         # (trade id, reason) a read already warned about: the panel polls every few seconds,
         # so a repeat is DEBUG (US-030 review MINOR). Its own lock: reads never take _lock.
         self._read_warned: OrderedDict[tuple[object, str], None] = OrderedDict()
@@ -1488,12 +1490,33 @@ class PaperBook:
     def _premium(
         self, option: Mapping[str, Any], underlying_paise: int, ts: dt.datetime
     ) -> tuple[float | None, str | None]:
-        """premium_at(option, underlying, ts), or (None, why): never a silent zero."""
+        """premium_at(option, underlying, ts), or (None, why): never a silent zero.
+
+        A pricer that raises is logged at WARNING once per failure streak of that option
+        (strike, CE/PE, expiry) and at DEBUG while the streak lasts; a call that returns
+        ends the streak, so the next failure warns again (review round 1 NIT), like the
+        PRICING_UNAVAILABLE event. The set is bounded by READ_WARN_CAP.
+        """
+        key = _option_key(option)
         try:
             value = self.premium_at(dict(option), underlying_paise / 100, ts)
         except Exception as exc:
-            log.warning("paper: premium_at failed for %s at %s: %s", option, ts, exc)
+            with self._lock:
+                first = key not in self._pricer_failing
+                if first and len(self._pricer_failing) >= READ_WARN_CAP:
+                    self._pricer_failing.clear()  # bounded: a forgotten streak warns again
+                self._pricer_failing.add(key)
+            log.log(
+                logging.WARNING if first else logging.DEBUG,
+                "paper: premium_at failed for %s at %s: %s%s",
+                option,
+                ts,
+                exc,
+                "" if first else " (still failing)",
+            )
             return None, f"{type(exc).__name__}: {exc}"
+        with self._lock:
+            self._pricer_failing.discard(key)
         if value is None or isinstance(value, bool) or not isinstance(value, Real):
             return None, f"premium_at returned {value!r}"
         fair = float(value)
@@ -1653,6 +1676,11 @@ _NO_BARS = OhlcBars(
     close=np.empty(0),
     usable=np.empty(0, dtype=bool),
 )
+
+
+def _option_key(option: Mapping[str, Any]) -> tuple[str, str, str]:
+    """The contract an option dict names (strike, CE/PE, expiry), as text: a log key only."""
+    return str(option.get("strike")), str(option.get("opt_type")), str(option.get("expiry"))
 
 
 def _basis_paise(plan: Mapping[str, Any]) -> int:

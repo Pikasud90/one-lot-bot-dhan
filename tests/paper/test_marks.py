@@ -15,6 +15,7 @@ fills it and the 10:07 bar closes at 45225.00, so the last close time is 10:08.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import Any
@@ -195,3 +196,48 @@ def test_the_panel_shows_no_mark_for_a_stored_mark_that_is_not_integer_paise(
     (view,) = book.recent()
     assert view["status"] == "OPEN"
     assert (view["mark"], view["unrealised"]) == (None, None)
+
+
+class Flaky(Recording):
+    """Recording, but raising while `failing` is set (the switch is the test's, not the clock)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.failing = False
+
+    def __call__(self, option: Mapping[str, Any], underlying: float, ts: dt.datetime) -> float:
+        if self.failing:
+            raise RuntimeError("pricer down")
+        return super().__call__(option, underlying, ts)
+
+
+def test_a_pricer_that_keeps_raising_is_warned_once_per_failure_streak(make_book, engine, caplog):
+    """Review round 1 NIT: like the PRICING_UNAVAILABLE event, the log warns once when the
+    pricer starts failing for an option (later failures are DEBUG), and again only after it
+    has priced that option in between."""
+    pricer = Flaky()
+    book = make_book(premium_at=pricer)
+    book.on_alert(make_alert("INDEX"), ist(THU, 10, 5, 4))
+    frame = bars([OPT_FILL, QUIET, QUIET, QUIET, QUIET, QUIET])
+
+    def warnings() -> int:
+        return sum(
+            1
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "premium_at failed" in r.getMessage()
+        )
+
+    with caplog.at_level(logging.DEBUG, logger="onelot.paper.book"):
+        book.step(ist(THU, 10, 7), feed(BANKNIFTY=frame))
+        pricer.failing = True
+        book.step(ist(THU, 10, 8), feed(BANKNIFTY=frame))
+        book.step(ist(THU, 10, 9), feed(BANKNIFTY=frame))
+        book.step(ist(THU, 10, 10), feed(BANKNIFTY=frame))
+        assert warnings() == 1, caplog.text
+        pricer.failing = False
+        book.step(ist(THU, 10, 11), feed(BANKNIFTY=frame))
+        assert type(position(engine)["mark_paise"]) is int
+        pricer.failing = True
+        book.step(ist(THU, 10, 12), feed(BANKNIFTY=frame))
+        assert warnings() == 2, caplog.text
+    assert position(engine)["mark_paise"] is None
