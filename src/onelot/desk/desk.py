@@ -364,7 +364,10 @@ class Desk:
             t.last_error = f"economics: {type(exc).__name__}: {exc}"
             return
         exit_time = str(getattr(slot.strategy.p, "exit_time", "15:15"))
-        horizon = "intraday" if t.cfg.kind == "INDEX" else self.cfg.stock_horizon
+        # A stock short is intraday only (ADR-001 am. 8): the broker squares it off at the
+        # close, so it is never carried overnight whatever stock_horizon says.
+        intraday = t.cfg.kind == "INDEX" or (t.cfg.kind == "STOCK" and eco.side == "SELL")
+        horizon = "intraday" if intraday else self.cfg.stock_horizon
         sid = uuid.uuid4().hex[:12]
         expires = now + dt.timedelta(minutes=self.cfg.signal_valid_minutes)
         text = alert_text(
