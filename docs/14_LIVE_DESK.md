@@ -60,9 +60,14 @@ Dhan option chain is wired into the desk; the alert says so. Place the order off
 ## Data
 
 * Without the Data API the desk polls **Yahoo 2-minute bars** (one batched request per minute,
-  ~15 minutes delayed). Everything works; the badge says *desk yahoo ~15m*.
+  ~15 minutes delayed). Everything works; the badge says *desk yahoo delayed ~15 min: A, B, C +N*
+  (the first three delayed instruments, then a count of the rest).
 * With the Data API active (`dataPlan: Active` on the profile) the desk switches itself to
   **Dhan 1-minute bars** (incremental, 15 requests per poll, far below the 5-per-second limit).
+  Provenance is per series: on a Dhan desk the instruments the Yahoo fallback served (Dhan
+  returned no bars for them) are named in the badge (*desk dhan+yahoo delayed ~15 min: SBIN*;
+  *desk dhan+yahoo live* when there are none), their alerts are tagged delayed, and their SIGNAL
+  titles start with "(delayed ~15m)".
 * Outside market hours it polls every 5 minutes and the rows show *CLOSED* health with the last bar.
 
 Freshness rule: a strategy bar counts as "just closed" when it completed within one fine bar of
