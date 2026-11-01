@@ -257,9 +257,10 @@ def close_of(events: Iterable[Any]) -> Close | None:
         detail = nested
     for key in ("reason", "price_paise", "gap"):
         assert key in detail, f"the CLOSED detail must carry {key!r} (PaperClose): {detail}"
+    price = detail["price_paise"]  # None only for the no-usable-bar session close
     return Close(
         str(H.val(detail["reason"])),
-        int(detail["price_paise"]),
+        None if price is None else int(price),
         event.ts,
         bool(detail["gap"]),
         event,
@@ -350,6 +351,15 @@ def expected_stock_exit(
     if direction == "long":
         return tick * math.floor(Fraction(level_paise) * (1 - f) / tick)
     return tick * math.ceil(Fraction(level_paise) * (1 + f) / tick)
+
+
+def snap_target(level_paise: int, direction: str, tick: int = TICK) -> int:
+    """A STOCK target on the tick grid, snapped against the trader (review 1 MINOR-3): a long's
+    (a sell limit) floors, a short's (a buy-back limit) ceils; an on-tick target is unchanged."""
+    whole, rest = divmod(level_paise, tick)
+    if rest == 0:
+        return level_paise
+    return whole * tick if direction == "long" else (whole + 1) * tick
 
 
 def expected_gross(entry: int, exit_: int, direction: str, qty: int = 1) -> int:

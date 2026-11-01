@@ -58,13 +58,29 @@ def usable(open_price: float) -> bool:
     )
 
 
-def oracle(rows, *, created, expires, source, feed_delay, res, now, direction, stop, target):
+def oracle(
+    rows,
+    *,
+    created,
+    expires,
+    source,
+    feed_delay,
+    res,
+    now,
+    direction,
+    stop,
+    target,
+    exit_time=dt.time(15, 15),
+):
     """What the story says a waiting trade does at `now` over `rows` [(open ts, open price)].
 
-    ('fill', ts, open) | ('gap', ts, open) | ('gap_target', ts, open) | ('no_fill',) |
-    ('wait',), plus the grade. The fill bar's open is judged against the stop (strictly beyond
-    it: GAP_THROUGH_STOP) and, since US-002, against the TARGET (at or beyond it:
-    GAP_THROUGH_TARGET). `stop` and `target` are paise."""
+    ('fill', ts, open) | ('gap', ts, open) | ('gap_target', ts, open) | ('session_end', ts,
+    open) | ('no_fill',) | ('wait',), plus the grade. The first eligible bar decides: opening at
+    or after the strategy's `exit_time` on the alert's date is NO_FILL 'session_end' (US-002
+    review 1 MINOR-2); its open strictly beyond the stop is GAP_THROUGH_STOP; its open at or
+    beyond the TARGET, or the SLIPPED entry (open +- 0.03 %, snapped against the trader) at or
+    beyond it, is GAP_THROUGH_TARGET (decision 3 and MAJOR-2). `stop` and `target` are paise,
+    on the tick grid (stock targets are snapped against the trader, so these already are)."""
     last: dict[dt.datetime, float] = {}
     for ts, price in rows:  # a duplicated time: the LAST row wins
         last[ts] = price
@@ -90,10 +106,14 @@ def oracle(rows, *, created, expires, source, feed_delay, res, now, direction, s
         ):
             paise = H.to_paise(price)
             sign = 1 if direction == "long" else -1
+            if ts >= dt.datetime.combine(day, exit_time, tzinfo=IST):
+                return ("session_end", ts, price), grade
             if (paise - stop) * sign < 0:
                 return ("gap", ts, price), grade
             if (paise - target) * sign >= 0:
                 return ("gap_target", ts, price), grade
+            if (H.expected_stock_entry(price, direction) - target) * sign >= 0:
+                return ("gap_target", ts, price), grade  # the slipped entry is past the target
             return ("fill", ts, price), grade
     if closed:
         last_ts = closed[-1][0]
@@ -208,6 +228,11 @@ class TestTheFillRuleAgainstAnIndependentOracle:
             assert (status, reason) == ("NO_FILL", "GAP_THROUGH_TARGET"), (sc, expected, row)
             assert row["entry_paise"] is None and row["exit_paise"] is None
             assert row["costs_paise"] == 0 == row["net_paise"] and "FILLED" not in kinds
+        elif kind == "session_end":
+            assert (status, reason) == ("NO_FILL", "NO_FILL"), (sc, expected, row)
+            assert row["entry_paise"] is None and row["exit_paise"] is None
+            assert row["costs_paise"] == 0 == row["net_paise"] and "FILLED" not in kinds
+            assert kinds.count("NO_FILL") == 1
         elif kind == "no_fill":
             assert (status, reason) == ("NO_FILL", "NO_FILL"), (sc, expected, row)
             assert row["entry_paise"] is None and row["costs_paise"] == 0 == row["net_paise"]
@@ -255,7 +280,9 @@ class TestTheSessionEndBoundary:
             t += dt.timedelta(minutes=res)
         frame = H.bars_at(stamps, [1000.0] * len(stamps))
         book = H.make_book(db.engine)
-        H.open_trade(book, H.make_alert("A1", created=created, resolution=f"{res}m"))
+        alert = H.make_alert("A1", created=created, resolution=f"{res}m")
+        alert["manage"]["exit_time"] = "15:30"  # the 15:30 boundary is under test, not exit_time
+        H.open_trade(book, alert)
         book.step(now, H.Feed(SBIN=frame))
         row = H.trade_row(db.engine, "A1")
         if status == "FILLED":  # then SESSION_END closes it in the same step (US-002)

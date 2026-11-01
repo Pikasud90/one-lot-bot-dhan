@@ -154,8 +154,11 @@ class TestGapThroughTheStop:
 
 
 class TestGapThroughTheTarget:
-    """US-002 decision 3: a fill bar that opens AT or BEYOND the alert's target is NO_FILL,
-    reason GAP_THROUGH_TARGET (its target would sit behind the entry). One tick inside fills."""
+    """US-002 decision 3, widened by review round 1 (MAJOR-2): a stock whose fill bar opens AT or
+    BEYOND the alert's target, OR whose SLIPPED entry (open +- slippage, snapped against the
+    trader) is at or beyond it, is NO_FILL, reason GAP_THROUGH_TARGET: its target would sit
+    behind the entry and book a loss as TARGET. An index option is judged on the underlying open
+    alone (its entry is a premium). The boundary rows are hand-derived at 0.03 % slippage."""
 
     @pytest.mark.parametrize(
         "direction, target, fill_open, gaps",
@@ -163,11 +166,15 @@ class TestGapThroughTheTarget:
             ("long", 1020.0, 1020.0, True),  # AT the target
             ("long", 1020.0, 1020.05, True),
             ("long", 1020.0, 1100.0, True),
-            ("long", 1020.0, 1019.95, False),  # one tick inside: fills
+            ("long", 1020.0, 1019.95, True),  # the SLIPPED entry 1020.25 is past the target
+            ("long", 1020.0, 1019.65, True),  # 1019.65 x 1.0003 = 1019.9559 -> 1020.00: AT it
+            ("long", 1020.0, 1019.60, False),  # 1019.9058 -> 1019.95: one tick inside: fills
             ("short", 980.0, 980.0, True),
             ("short", 980.0, 979.95, True),
             ("short", 980.0, 900.0, True),
-            ("short", 980.0, 980.05, False),
+            ("short", 980.0, 980.05, True),  # the SLIPPED entry 979.75 is past the target
+            ("short", 980.0, 980.30, True),  # 980.30 x 0.9997 = 980.0059 -> 980.00: AT it
+            ("short", 980.0, 980.35, False),  # 980.0559 -> 980.05: one tick inside: fills
         ],
     )
     def test_a_stock_whose_fill_bar_opens_at_or_beyond_its_target_never_fills(
@@ -280,9 +287,30 @@ class TestDeadlineAndSession:
         assert [H.val(e.kind) for e in events] == ["NO_FILL"]
 
     def test_a_late_arriving_delayed_feed_is_not_cut_off_by_the_wall_clock(self, db):
-        """Yahoo data is ~15 minutes behind. Created Friday 15:20:03, it is 15:36 on the wall
-        but the data stops at 15:10: the 15:22..15:29 bars are still to come, so the trade must
-        wait (NO_FILL is judged on data time) and then fill on the first of them."""
+        """Yahoo data is ~15 minutes behind. Created Friday 15:08:03 (deadline 15:18:03, and 15
+        minutes more for a delayed trade: 15:33:03), it is 15:36 on the wall, past even the
+        delayed deadline, but the data stops at 15:06: the 15:10 bar is still to come, so the
+        trade must wait (NO_FILL is judged on data time) and then fill on the first late bar,
+        which opens BEFORE the strategy's exit_time (15:15). A first bar at or after exit_time
+        is NO_FILL 'session_end' instead (US-002 review 1 MINOR-2: see the next test)."""
+        created = H.at(15, 8, 3, day=H.FRIDAY)
+        alert = H.make_alert("N1", created=created, source="yahoo", resolution="2m")
+        book = H.make_book(db.engine)
+        H.open_trade(book, alert)
+        behind = H.minute_bars(H.at(15, 0, day=H.FRIDAY), [1000.0] * 4, step=2)  # 15:00 .. 15:06
+        assert book.step(H.at(15, 36, day=H.FRIDAY), H.Feed(SBIN=behind)) == []
+        assert H.val(H.trade_row(db.engine, "N1")["status"]) == "PENDING_FILL"
+        caught_up = H.minute_bars(H.at(15, 0, day=H.FRIDAY), [1000.0] * 8, step=2)  # .. 15:14
+        events = book.step(H.at(15, 45, day=H.FRIDAY), H.Feed(SBIN=caught_up))
+        row = H.trade_row(db.engine, "N1")
+        # filled on the first late bar; the same step may also close it (session over: US-002)
+        assert len(H.fills(events)) == 1
+        H.assert_filled(row, at_ts=H.at(15, 10, day=H.FRIDAY))
+
+    def test_a_late_arriving_first_bar_at_or_after_exit_time_is_no_fill_session_end(self, db):
+        """The old shape of the test above: created 15:20:03, data stops at 15:10, the late bars
+        15:22 .. 15:28 open after exit_time 15:15: the trade still WAITS for the data (the wall
+        clock cannot cut it off), and then closes NO_FILL 'session_end' on the first of them."""
         created = H.at(15, 20, 3, day=H.FRIDAY)
         alert = H.make_alert("N1", created=created, source="yahoo", resolution="2m")
         book = H.make_book(db.engine)
@@ -293,9 +321,11 @@ class TestDeadlineAndSession:
         caught_up = H.minute_bars(H.at(15, 0, day=H.FRIDAY), [1000.0] * 15, step=2)  # .. 15:28
         events = book.step(H.at(15, 45, day=H.FRIDAY), H.Feed(SBIN=caught_up))
         row = H.trade_row(db.engine, "N1")
-        # filled on the first late bar; the same step may also close it (session over: US-002)
-        assert len(H.fills(events)) == 1
-        H.assert_filled(row, at_ts=H.at(15, 22, day=H.FRIDAY))
+        assert (H.val(row["status"]), H.val(row["close_reason"])) == ("NO_FILL", "NO_FILL")
+        assert row["entry_paise"] is None and "FILLED" not in H.kinds_of(db.engine, "N1")
+        assert [H.val(e.kind) for e in events] == ["NO_FILL"]
+        assert "session_end" in H.blob(events[0].detail)
+        assert H.same_instant(events[0].ts, H.at(15, 22, day=H.FRIDAY)), "stamped with the fill bar"
 
 
 class TestNoPriceIsInventedWhileWaiting:
