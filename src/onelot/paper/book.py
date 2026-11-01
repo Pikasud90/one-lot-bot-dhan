@@ -29,7 +29,7 @@ from typing import Any, Literal, NamedTuple, cast
 # No pandas-stubs are pinned; every pandas module in the mypy baseline carries this one
 # error, so a NEW module stays at zero only by naming it here (the flags are untouched).
 import pandas as pd  # type: ignore[import-untyped]
-from sqlalchemy import Engine, Text, inspect, select, type_coerce
+from sqlalchemy import Engine, Text, and_, inspect, or_, select, type_coerce
 from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 
 from ..clock import IST, now_ist
@@ -59,6 +59,7 @@ from .fill import (
 )
 from .money import to_paise
 from .pricing import frozen_iv, implied_iv
+from .view import DayTotals, trade_view
 
 # The public contract of this module (PaperAlertError and grade_for live in .alert).
 __all__ = ["PaperAlertError", "PaperBook", "PaperEvent", "PaperTrade", "grade_for"]
@@ -71,6 +72,7 @@ ACTIVE_STATUSES: tuple[TradeStatus, ...] = ("PENDING_FILL", "OPEN")
 RETRY_CAP = 500  # failed on_alert calls kept in memory for a retry (oldest dropped)
 STATUS_KEYS = ("opened", "filled", "no_fill", "closed", "hook_errors")
 DEFAULT_TICK = 0.05  # rupees; only when the instrument spec is unknown
+RECENT_LIMIT = 200  # recent()'s default: the trades the desk's Paper panel is sent
 
 PremiumAt = Callable[[Mapping[str, Any], float, dt.datetime], float | None]
 CostFor = Callable[[str], CostModel]
@@ -472,6 +474,66 @@ class PaperBook:
         """Counters since this book was built: opened, filled, no_fill, closed, hook_errors."""
         with self._lock:
             return dict(self._counts)
+
+    @property
+    def enabled(self) -> bool:
+        """paper.enabled. False stops NEW paper trades only; open ones are still managed."""
+        return bool(self.cfg.enabled)
+
+    # ── read side (US-030): the desk's Paper panel ────────────────────────
+    # Both read the database only. They never take `self._lock` (an API read must not
+    # queue behind a step, BUG-2) and never touch the Desk.
+    def recent(self, limit: int = RECENT_LIMIT) -> list[dict[str, Any]]:
+        """The latest `limit` trades, newest first (created_at, then id), as display dicts.
+
+        Each is `onelot.paper.view.trade_view`: money as rupee strings from paise, times
+        ISO-8601 IST, None for what is not known yet. A row that cannot be read (an unknown
+        status, a corrupt plan) is logged and left out, never fatal to the listing.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError(f"limit={limit!r} must be a positive int")
+        plan_text = type_coerce(paper_trades.c.plan, Text).label("plan")  # parsed per row
+        columns = [c for c in paper_trades.c if c.name != "plan"] + [plan_text]
+        stmt = (
+            select(*columns)
+            .order_by(paper_trades.c.created_at.desc(), paper_trades.c.id.desc())
+            .limit(limit)
+        )
+        with self.engine.connect() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        views: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                stored = {**row, "plan": json.loads(row["plan"])}
+                views.append(trade_view(PaperTrade.from_row(stored)))
+            except Exception as exc:  # noqa: BLE001 - one bad row never hides the others
+                log.warning(
+                    "paper: trade %s (alert %s) not shown: %s: %s",
+                    row["id"],
+                    row["alert_id"],
+                    type(exc).__name__,
+                    exc,
+                )
+        return views
+
+    def today_totals(self, now: dt.datetime) -> DayTotals:
+        """The CLOSED trades closed on `now`'s IST calendar date (`closed_totals`).
+
+        A trade is closed at its exit_ts, or at updated_at when it has none. NO_FILL trades
+        never filled, so they are not counted. A naive `now` is rejected (ValueError).
+        """
+        _require_aware(now, "now")
+        start = dt.datetime.combine(now.astimezone(IST).date(), dt.time(0), tzinfo=IST)
+        end = start + dt.timedelta(days=1)
+        t = paper_trades.c
+        closed_today = or_(
+            and_(t.exit_ts >= start, t.exit_ts < end),
+            and_(t.exit_ts.is_(None), t.updated_at >= start, t.updated_at < end),
+        )
+        stmt = select(t.gross_paise, t.net_paise).where(t.status == "CLOSED", closed_today)
+        with self.engine.connect() as conn:
+            rows = conn.execute(stmt).all()
+        return closed_totals((gross, net) for gross, net in rows)
 
     # ── opening ───────────────────────────────────────────────────────────
     def _open(
@@ -933,6 +995,36 @@ def _read_bars(bars: BarsFor, series_key: str) -> Bars | None:
         )
         return None
     return view if view is not None and len(view) else None
+
+
+def closed_totals(trades: Iterable[tuple[object, object]]) -> DayTotals:
+    """Count and sum closed trades given as (gross_paise, net_paise) pairs.
+
+    A trade is a win or a loss on its net when it has one, else on its gross (before
+    US-023 there are no costs, so no net); zero is neither, and a trade with neither has
+    no outcome. A sum is None as soon as one trade lacks that amount: a partial sum would
+    look like a real total.
+    """
+    closed = wins = losses = 0
+    gross: int | None = 0
+    net: int | None = 0
+    for raw_gross, raw_net in trades:
+        trade_gross, trade_net = _int_or_none(raw_gross), _int_or_none(raw_net)
+        closed += 1
+        gross = None if gross is None or trade_gross is None else gross + trade_gross
+        net = None if net is None or trade_net is None else net + trade_net
+        outcome = trade_net if trade_net is not None else trade_gross
+        if outcome is not None and outcome > 0:
+            wins += 1
+        elif outcome is not None and outcome < 0:
+            losses += 1
+    return {
+        "closed": closed,
+        "wins": wins,
+        "losses": losses,
+        "gross_paise": gross,
+        "net_paise": net,
+    }
 
 
 def reconcile_since(now: dt.datetime, days: int) -> dt.datetime:
