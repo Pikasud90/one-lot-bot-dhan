@@ -102,8 +102,10 @@ exists for that; run in PAPER mode and accumulate it.
 ## Operational limitations
 
 - **The human is the bottleneck, by design.** A 75-second TTL assumes you are
-  at the machine. There is no remote acknowledgement channel in this build
-  (Telegram and webhook are stubbed, not implemented).
+  at the machine. Telegram delivers SIGNAL, EXIT and CRITICAL alerts to your
+  phone (one-way, at least once: a rare duplicate is possible after a crash),
+  but there is no remote acknowledgement yet (Taken/Skip from the phone is
+  US-013); the webhook is still not implemented.
 - **No auto-execution, ever.** Slippage between the alert and your manual fill
   is real and is not modelled beyond the configured tick allowance.
 - **Single machine.** No failover. If the machine sleeps, the engine stops.
