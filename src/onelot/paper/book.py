@@ -57,8 +57,25 @@ from .fill import (
     option_exit_paise,
     spacing_gaps,
     stock_entry_paise,
+    stock_exit_paise,
+)
+from .manage import (
+    CLOSED,
+    OhlcBars,
+    PaperClose,
+    PositionState,
+    StrategyExit,
+    manage_view,
+    normalise_ohlc,
 )
 from .money import to_paise
+from .position import (
+    initial_position,
+    position_from_json,
+    position_to_json,
+    rules_from_alert,
+    strategy_exit_of,
+)
 from .pricing import frozen_iv, implied_iv
 
 # The public contract of this module (PaperAlertError and grade_for live in .alert).
@@ -72,11 +89,16 @@ ACTIVE_STATUSES: tuple[TradeStatus, ...] = ("PENDING_FILL", "OPEN")
 RETRY_CAP = 500  # failed on_alert calls kept in memory for a retry (oldest dropped)
 STATUS_KEYS = ("opened", "filled", "no_fill", "closed", "hook_errors")
 DEFAULT_TICK = 0.05  # rupees; only when the instrument spec is unknown
+# A fill bar that gapped through a level: the row's close_reason (US-002 decision 3)
+GAP_CLOSE_REASONS = {
+    "gap_through_stop": "GAP_THROUGH_STOP",
+    "gap_through_target": "GAP_THROUGH_TARGET",
+}
 
 PremiumAt = Callable[[Mapping[str, Any], float, dt.datetime], float | None]
 CostFor = Callable[[str], CostModel]
 BarsFor = Callable[[str], pd.DataFrame | None]
-# US-002 narrows the return type to `onelot.paper.manage.StrategyExit | None`.
+# Answers a `manage.StrategyExit`, the desk's plain (reason, bar_close_ts) tuple, or None.
 StrategyExitFor = Callable[["PaperTrade", dt.datetime], Any]
 
 
@@ -261,18 +283,26 @@ class PaperBook:
         bars: BarsFor,
         strategy_exit: StrategyExitFor | None = None,
     ) -> list[PaperEvent]:
-        """Fill PENDING_FILL trades on closed bars (AC2/AC3); US-002 manages OPEN ones.
+        """Fill PENDING_FILL trades on closed bars (US-001) and manage OPEN ones to a close
+        by the strategy's exit rules (US-002); a trade that fills is managed in the same
+        call (decision A4).
 
-        `bars(series_key)` is called once per series that has a waiting trade. Each status
-        change commits with its paper_events rows in one transaction. A failure on one
-        trade is logged and counted in `hook_errors`; it never stops the other trades and
-        never escapes. The exception is a locked database: every further write would wait
-        a whole busy timeout (30 s) while the Desk lock is held, so the step stops at the
-        first one, counts and logs it once, and the next poll retries (BUG-1, review 1).
+        `bars(series_key)` is called ONCE per series with an active trade, and that frame is
+        normalised once for every trade on it (AC8). `strategy_exit(trade, now)` is asked only
+        about OPEN trades; it answers a `StrategyExit`, the desk's plain
+        `(reason, bar_close_ts)` tuple, or None, and an answer that raises or makes no sense
+        is logged and counted, never escapes. A delayed-grade trade is managed on DATA time
+        (`now` - paper.feed_delay_minutes), like its fill deadline.
+
+        Each change commits with its paper_events rows in one transaction; a step with
+        nothing new writes nothing. A failure on one trade is logged and counted in
+        `hook_errors`; it never stops the other trades and never escapes. A database that
+        fails as a whole (locked, read-only, a disk error) stops the step at the first
+        failure, counted and logged once; the next poll retries (BUG-1, review 1; review 3).
         A naive `now` is rejected (ValueError), never guessed.
 
         Order: failed on_alert calls are retried, waiting trades on series the desk no
-        longer tracks are retired (`retire_untracked`), then the rest are filled.
+        longer tracks are retired (`retire_untracked`), then every series is stepped.
         """
         _require_aware(now, "now")
         now = now.astimezone(IST)
@@ -282,24 +312,48 @@ class PaperBook:
                 return []  # the database is locked: nothing else can be written this poll
             events.extend(self._retire_overdue_untracked(now))
             with self._lock:
-                waiting = sorted(
-                    (t for t in self._active.values() if t.status == "PENDING_FILL"),
-                    key=lambda t: (t.created_at, t.id),
-                )
+                active = sorted(self._active.values(), key=lambda t: (t.created_at, t.id))
             by_series: dict[str, list[PaperTrade]] = {}
-            for trade in waiting:
+            for trade in active:
                 by_series.setdefault(trade.series_key, []).append(trade)
             for series_key, trades in by_series.items():
-                view = _read_bars(bars, series_key)
-                if view is None:
+                views = _SeriesViews.read(bars, series_key)
+                if views is None:
                     continue
                 for trade in trades:
-                    events.extend(
-                        self._guarded(trade, partial(self._step_waiting, trade, view, now))
-                    )
+                    events.extend(self._step_trade(trade.alert_id, views, now, strategy_exit))
         except _StepStopped:
             pass  # logged and counted once; every untouched trade is retried next poll
         return events
+
+    def _step_trade(
+        self,
+        alert_id: str,
+        views: _SeriesViews,
+        now: dt.datetime,
+        strategy_exit: StrategyExitFor | None,
+    ) -> list[PaperEvent]:
+        """One trade: fill it if it waits, then manage it if it is (or just became) OPEN.
+        The fill and the management are guarded apart, so a failed management never
+        hides a fill that committed."""
+        events: list[PaperEvent] = []
+        trade = self._current(alert_id)
+        if trade is not None and trade.status == "PENDING_FILL":
+            waiting = views.fill
+            if waiting is None:
+                return events
+            events += self._guarded(trade, partial(self._step_waiting, trade, waiting, now))
+            trade = self._current(alert_id)
+        if trade is not None and trade.status == "OPEN":
+            ohlc = views.ohlc
+            if ohlc is not None:
+                work = partial(self._step_open, trade, ohlc, now, strategy_exit)
+                events += self._guarded(trade, work)
+        return events
+
+    def _current(self, alert_id: str) -> PaperTrade | None:
+        with self._lock:
+            return self._active.get(alert_id)
 
     def retire_untracked(self, series_keys: Iterable[str], now: dt.datetime) -> list[PaperEvent]:
         """Learn the series the desk tracks; retire waiting trades on any other series.
@@ -688,6 +742,7 @@ class PaperBook:
         """Fill, close NO_FILL, or keep waiting one PENDING_FILL trade."""
         plan = trade.plan
         stop_paise = int(plan["levels"]["underlying_stop_paise"])
+        target = plan["levels"].get("underlying_target_paise")
         decision = decide_fill(
             view,
             created_at=trade.created_at,
@@ -696,6 +751,7 @@ class PaperBook:
             now=now,
             direction=trade.direction,
             stop_paise=stop_paise,
+            target_paise=None if target is None else int(target),
         )
         if decision.outcome == "wait":
             return []
@@ -715,6 +771,17 @@ class PaperBook:
                 return self._entry_unpriced(trade, decision, detail | {"error": priced}, now)
         else:
             priced = self._price_stock(trade, open_paise, stop_paise)
+        position = initial_position(
+            trade_id=trade.id,
+            direction=trade.direction,
+            kind=trade.kind,
+            qty=trade.qty,
+            # the managed series' entry: a stock's slipped fill, an option's underlying open
+            entry_paise=priced.entry_paise if trade.kind == "STOCK" else open_paise,
+            levels=plan["levels"],
+            opened_at=bar_ts,
+            option=None,
+        )
         values = {
             "status": "OPEN",
             "entry_paise": priced.entry_paise,
@@ -723,6 +790,7 @@ class PaperBook:
             "last_bar_ts": bar_ts,
             "resolution_min": resolution,
             "risk_paise": priced.risk_paise,
+            "plan": plan | {"position": position_to_json(position)},
             "updated_at": now,
         }
         detail |= priced.inputs | {
@@ -730,6 +798,157 @@ class PaperBook:
             "risk_paise": priced.risk_paise,
         }
         return self._commit(trade, values, [("FILLED", bar_ts, detail), *priced.also], "filled")
+
+    # ── management (US-002) ───────────────────────────────────────────────
+    def _step_open(
+        self,
+        trade: PaperTrade,
+        view: OhlcBars,
+        now: dt.datetime,
+        strategy_exit: StrategyExitFor | None,
+    ) -> list[PaperEvent]:
+        """Manage one OPEN trade over the bars closed by its data time; book what changed."""
+        plan = trade.plan
+        state = self._position(trade, plan)
+        rules = rules_from_alert(
+            plan["alert"],
+            tick_paise=to_paise(self._tick(trade)),
+            resolution=trade.resolution_min,
+            timeframe=trade.timeframe,
+        )
+        data_now = self._data_now(trade, now)
+        reported = self._ask_strategy(trade, now, data_now, strategy_exit)
+        new, managed = manage_view(state, view, rules, data_now, reported)
+        if new == state and not managed:
+            return []  # nothing new: no write at all
+        plan["position"] = position_to_json(new)
+        values: dict[str, Any] = {"plan": plan, "last_bar_ts": new.last_bar_ts, "updated_at": now}
+        booked: list[Booked] = [(e.kind, e.ts, dict(e.detail)) for e in managed]
+        if new.closed is None:
+            return self._commit(trade, values, booked, counter=None)
+        exit_paise, also = self._price_exit(trade, plan, new.closed)
+        for kind, _, detail in booked:
+            if kind == CLOSED:
+                detail["exit_paise"] = exit_paise  # the rule level stays in price_paise (A13)
+        values |= {
+            "status": "CLOSED",
+            "close_reason": new.closed.reason,
+            "exit_ts": new.closed.at,
+            "exit_paise": exit_paise,
+            "gross_paise": _gross(trade, exit_paise),
+            # costs_paise and net_paise stay NULL until US-023 books them (never a fake 0)
+        }
+        log.info(
+            "paper: trade %s (alert %s) closed %s at %s, exit %s paise",
+            trade.id,
+            trade.alert_id,
+            new.closed.reason,
+            new.closed.at.isoformat(),
+            exit_paise,
+        )
+        return self._commit(trade, values, [*booked, *also], counter="closed")
+
+    def _position(self, trade: PaperTrade, plan: Mapping[str, Any]) -> PositionState:
+        """The managed state: the plan's record, or (a row filled before US-002) the fill."""
+        option = plan["alert"]["economics"].get("option") or None
+        record = plan.get("position")
+        if isinstance(record, Mapping):
+            return position_from_json(
+                record,
+                trade_id=trade.id,
+                direction=trade.direction,
+                kind=trade.kind,
+                qty=trade.qty,
+                option=option,
+            )
+        if trade.entry_paise is None or trade.fill_bar_ts is None:
+            raise ValueError(f"paper: OPEN trade {trade.id} has no entry to manage from")
+        entry = trade.entry_paise if trade.kind == "STOCK" else self._filled_open(trade)
+        return initial_position(
+            trade_id=trade.id,
+            direction=trade.direction,
+            kind=trade.kind,
+            qty=trade.qty,
+            entry_paise=entry,
+            levels=plan["levels"],
+            opened_at=trade.fill_bar_ts,
+            option=option,
+        )
+
+    def _filled_open(self, trade: PaperTrade) -> int:
+        """The underlying open an option trade filled at, from its FILLED event."""
+        stmt = select(paper_events.c.detail).where(
+            paper_events.c.trade_id == trade.id, paper_events.c.kind == "FILLED"
+        )
+        with _database_io(), self.engine.connect() as conn:
+            detail = conn.execute(stmt).scalar_one()
+        return int(detail["bar_open_paise"])
+
+    def _data_now(self, trade: PaperTrade, now: dt.datetime) -> dt.datetime:
+        """The data horizon of a trade: `now`, less the feed delay for a delayed grade."""
+        if trade.grade == "delayed":
+            return now - dt.timedelta(minutes=self.cfg.feed_delay_minutes)
+        return now
+
+    def _ask_strategy(
+        self,
+        trade: PaperTrade,
+        now: dt.datetime,
+        data_now: dt.datetime,
+        ask: StrategyExitFor | None,
+    ) -> StrategyExit | None:
+        """The strategy's exit for an OPEN trade, or None. A callback that raises or answers
+        nonsense is logged and counted (the trade is still managed); an exit whose signal bar
+        closes after the trade's data time is not known yet and waits for a later step."""
+        if ask is None:
+            return None
+        try:
+            reported = strategy_exit_of(ask(trade, now))
+        except Exception:
+            log.exception(
+                "paper: strategy_exit failed for trade %s (alert %s)", trade.id, trade.alert_id
+            )
+            with self._lock:
+                self._counts["hook_errors"] += 1
+            return None
+        if reported is not None and reported.bar_close_ts > data_now:
+            log.info(
+                "paper: trade %s: strategy exit on a bar closing %s is ahead of data time %s; "
+                "not used this step",
+                trade.id,
+                reported.bar_close_ts.isoformat(),
+                data_now.isoformat(),
+            )
+            return None
+        return reported
+
+    def _price_exit(
+        self, trade: PaperTrade, plan: Mapping[str, Any], close: PaperClose
+    ) -> tuple[int | None, list[Booked]]:
+        """The exit fill for the rule level the trade closed at (Manager decision 2).
+
+        A stock mirrors the Lab: slipped by slippage_pct against the trader and snapped to
+        the tick against the trader, except a TARGET (a limit fill, unslipped). An option is
+        sold at `option_exit_paise` of the premium at the UNSLIPPED underlying level and the
+        close time, the option frozen at the alert; if that premium is unavailable the close
+        is still booked, with no exit price and a PRICING_UNAVAILABLE event (amendment 6).
+        """
+        if trade.kind != "INDEX":
+            if close.reason == "TARGET":
+                return close.price_paise, []
+            tick = to_paise(self._tick(trade))
+            return stock_exit_paise(
+                close.price_paise, trade.direction, self.bt.slippage_pct, tick
+            ), []
+        option = plan["alert"]["economics"].get("option") or {}
+        fair, why = self._premium(option, close.price_paise, close.at)
+        if fair is None:
+            problem = {"leg": "exit", "underlying_paise": close.price_paise, "error": why}
+            return None, [("PRICING_UNAVAILABLE", close.at, problem)]
+        bt = self.bt
+        return option_exit_paise(
+            fair, bt.option_spread_pct, bt.option_slippage_ticks, self._tick(trade)
+        ), []
 
     def _deadline(self, trade: PaperTrade) -> dt.datetime:
         """expires_at, plus the feed delay for a delayed-grade trade (ADR-001 amendment 3)."""
@@ -796,7 +1015,8 @@ class PaperBook:
     ) -> list[PaperEvent]:
         """NO_FILL is final: no prices, zero money, the reason on the event."""
         reason = decision.reason or "expired"
-        ts = decision.bar_ts if reason == "gap_through_stop" else decision.data_through
+        gap = reason in GAP_CLOSE_REASONS  # a fill bar that gapped: stamped with its open
+        ts = decision.bar_ts if gap else decision.data_through
         detail: dict[str, Any] = {**(extra or {}), "reason": reason}
         if decision.bar_ts is not None:
             detail |= {
@@ -805,7 +1025,7 @@ class PaperBook:
             }
         if decision.data_through is not None:
             detail["data_through"] = decision.data_through.isoformat()
-        close_reason = "GAP_THROUGH_STOP" if reason == "gap_through_stop" else "NO_FILL"
+        close_reason = GAP_CLOSE_REASONS.get(reason, "NO_FILL")
         values = _no_fill_values(close_reason, now)
         return self._commit(trade, values, [("NO_FILL", ts or now, detail)], "no_fill")
 
@@ -914,16 +1134,76 @@ class PaperBook:
 # ── pure helpers ──────────────────────────────────────────────────────────────
 
 
-def _read_bars(bars: BarsFor, series_key: str) -> Bars | None:
-    """bars(series_key), normalised; None (logged) when the callable or the frame is unusable."""
-    try:
-        view = normalise_bars(bars(series_key))
-    except Exception as exc:
+class _SeriesViews:
+    """One series' frame, read ONCE per step and normalised at most once per use: the fill
+    view (opens) for waiting trades, the OHLC view for open ones (AC8). A frame that one use
+    cannot read is logged once and skipped for that use only."""
+
+    def __init__(self, series_key: str, frame: pd.DataFrame) -> None:
+        self.series_key = series_key
+        self.frame = frame
+        self._fill: Bars | None = None
+        self._ohlc: OhlcBars | None = None
+        self._tried: set[str] = set()
+
+    @classmethod
+    def read(cls, bars: BarsFor, series_key: str) -> _SeriesViews | None:
+        """bars(series_key), or None (logged) when the callable fails or gives no rows."""
+        try:
+            frame = bars(series_key)
+        except Exception as exc:
+            log.warning(
+                "paper: no usable bars for %s this step: %s: %s",
+                series_key,
+                type(exc).__name__,
+                exc,
+            )
+            return None
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            return None
+        return cls(series_key, frame)
+
+    @property
+    def fill(self) -> Bars | None:
+        if "fill" not in self._tried:
+            self._tried.add("fill")
+            try:
+                view = normalise_bars(self.frame)
+            except Exception as exc:
+                self._unusable("fill", exc)
+            else:
+                self._fill = view if view is not None and len(view) else None
+        return self._fill
+
+    @property
+    def ohlc(self) -> OhlcBars | None:
+        if "ohlc" not in self._tried:
+            self._tried.add("ohlc")
+            try:
+                view = normalise_ohlc(self.frame)
+            except Exception as exc:
+                self._unusable("ohlc", exc)
+            else:
+                self._ohlc = view if len(view) else None
+        return self._ohlc
+
+    def _unusable(self, use: str, exc: Exception) -> None:
         log.warning(
-            "paper: no usable bars for %s this step: %s: %s", series_key, type(exc).__name__, exc
+            "paper: bars for %s unusable for the %s this step: %s: %s",
+            self.series_key,
+            use,
+            type(exc).__name__,
+            exc,
         )
+
+
+def _gross(trade: PaperTrade, exit_paise: int | None) -> int | None:
+    """sign x (exit - entry) x qty. An option is LONG PREMIUM whatever the direction on the
+    underlying (a BUY_PE gains as the underlying falls); None without an exit price."""
+    if exit_paise is None or trade.entry_paise is None:
         return None
-    return view if view is not None and len(view) else None
+    sign = 1 if trade.kind == "INDEX" or trade.direction == "long" else -1
+    return sign * (exit_paise - trade.entry_paise) * trade.qty
 
 
 def reconcile_since(now: dt.datetime, days: int) -> dt.datetime:

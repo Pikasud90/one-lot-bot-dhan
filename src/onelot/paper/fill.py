@@ -11,7 +11,11 @@ and whose open is a usable price (finite, > 0). Everything is judged on DATA tim
 waits while the data has not reached the end of its window, however far the wall clock
 moves, and closes NO_FILL only once a closed bar proves the window is over. A fill bar that
 opens strictly beyond the stop is NO_FILL (GAP_THROUGH_STOP); an open exactly AT the stop
-fills (Manager decision 4, 2026-11-01).
+fills (Manager decision 4, 2026-11-01). One that opens AT or beyond the alert's target is
+NO_FILL too (GAP_THROUGH_TARGET, US-002 decision 3): its target would be behind the entry.
+
+Exits mirror the entry: `stock_exit_paise` slips a stock exit against the trader (a long
+sells down, a short buys back up) like the Lab; an option sells at `option_exit_paise`.
 
 Times are compared as int64 nanoseconds since the epoch (UTC), so a frame indexed in UTC or
 IST gives the same answer. Prices become integer paise once (`to_paise`), then fills snap to
@@ -45,7 +49,7 @@ NS_PER_MINUTE = 60_000_000_000
 _EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
 
 Outcome = Literal["fill", "wait", "no_fill"]
-NoFillReason = Literal["gap_through_stop", "expired", "session_closed"]
+NoFillReason = Literal["gap_through_stop", "gap_through_target", "expired", "session_closed"]
 
 
 @dataclass(frozen=True)
@@ -167,6 +171,7 @@ def decide_fill(
     now: dt.datetime,
     direction: str,
     stop_paise: int,
+    target_paise: int | None = None,
 ) -> FillDecision:
     """Apply the fill rule to one trade. Uses only bars that have closed by `now`."""
     res_ns = max(int(resolution_min), 1) * NS_PER_MINUTE
@@ -205,10 +210,10 @@ def decide_fill(
         if open_paise <= 0:
             continue
         bar_ts = from_ns(int(ns[i]))
-        gapped = open_paise < stop_paise if direction == "long" else open_paise > stop_paise
+        reason = _gap_reason(direction, open_paise, stop_paise, target_paise)
         return FillDecision(
-            "no_fill" if gapped else "fill",
-            reason="gap_through_stop" if gapped else None,
+            "fill" if reason is None else "no_fill",
+            reason=reason,
             bar_ts=bar_ts,
             bar_open_paise=open_paise,
             window_closed=window_closed,
@@ -219,6 +224,20 @@ def decide_fill(
     return FillDecision(
         "no_fill", reason=window_closed, window_closed=window_closed, data_through=data_through
     )
+
+
+def _gap_reason(
+    direction: str, open_paise: int, stop_paise: int, target_paise: int | None
+) -> NoFillReason | None:
+    """Why a fill bar's open cannot be the entry: strictly beyond the stop (an open AT the
+    stop fills, Manager decision 4), or AT or beyond the alert target (US-002 decision 3:
+    the 'target' would sit on the wrong side of the entry). None when it fills."""
+    sign = 1 if direction == "long" else -1
+    if (open_paise - stop_paise) * sign < 0:
+        return "gap_through_stop"
+    if target_paise is not None and (open_paise - target_paise) * sign >= 0:
+        return "gap_through_target"
+    return None
 
 
 def stock_entry_paise(open_paise: int, direction: str, slippage_pct: float, tick_paise: int) -> int:
@@ -234,6 +253,17 @@ def stock_entry_paise(open_paise: int, direction: str, slippage_pct: float, tick
         ticks = Decimal(int(open_paise)) * factor / Decimal(tick)
         n = ticks.to_integral_value(rounding=ROUND_CEILING if sign > 0 else ROUND_FLOOR)
     return int(n) * tick
+
+
+def stock_exit_paise(level_paise: int, direction: str, slippage_pct: float, tick_paise: int) -> int:
+    """A stock exit at the rule `level_paise`, slipped by `slippage_pct` (a PERCENT) against
+    the trader and snapped to the tick against the trader, exactly: a long SELLS, so the
+    level falls and floors; a short BUYS BACK, so it rises and ceils. The mirror of
+    `stock_entry_paise`, and what `lab.simulator` books for a stop, a gap, an exit at an open
+    or the end of day (Manager decision 2). A target is a limit fill: never call this for it.
+    """
+    covering = "short" if direction == "long" else "long"  # the side of the exit's trade
+    return stock_entry_paise(level_paise, covering, slippage_pct, tick_paise)
 
 
 def option_entry_paise(fair: float, spread_frac: float, slippage_ticks: int, tick: float) -> int:

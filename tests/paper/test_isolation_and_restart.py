@@ -175,9 +175,15 @@ def test_a_reconciled_trade_fills_at_the_first_bar_after_the_alert(make_book, en
 
     events = book.step(ist(THU, 10, 27), series(RELIANCE=frame))
 
-    assert [e.kind for e in events] == ["FILLED"]
     row = rows_by_alert(engine)["late1"]
     assert (row["fill_bar_ts"], row["entry_paise"]) == (ist(THU, 10, 6), 100030)
+    # and, managed in the same step (US-002), the 10:07 bar trades through the 1010.00 target
+    assert [e.kind for e in events] == ["FILLED", "CLOSED"]
+    assert (row["close_reason"], row["exit_ts"], row["exit_paise"]) == (
+        "TARGET",
+        ist(THU, 10, 7),
+        101000,
+    )
 
 
 def test_reconciliation_adds_only_missing_rows_and_never_rewrites_existing_ones(make_book, engine):

@@ -88,24 +88,34 @@ def test_stock_entry_is_exact_and_against_the_trader(open_paise, direction, pct,
 
 
 @pytest.mark.parametrize(
-    ("direction", "stop", "status", "entry", "risk"),
+    ("direction", "stop", "filled", "entry", "risk"),
     [
-        ("long", 1000.00, "OPEN", 100030, 30),  # AT the stop: fills, risk is the slippage
-        ("short", 1000.00, "OPEN", 99970, 30),
-        ("long", 1000.05, "NO_FILL", None, None),  # one tick beyond: gap
-        ("short", 999.95, "NO_FILL", None, None),
-        ("long", 999.95, "OPEN", 100030, 35),  # one tick inside
-        ("short", 1000.05, "OPEN", 99970, 35),
+        ("long", 1000.00, True, 100030, 30),  # AT the stop: fills, risk is the slippage
+        ("short", 1000.00, True, 99970, 30),
+        ("long", 1000.05, False, None, None),  # one tick beyond: gap
+        ("short", 999.95, False, None, None),
+        ("long", 999.95, True, 100030, 35),  # one tick inside
+        ("short", 1000.05, True, 99970, 35),
     ],
 )
-def test_the_stop_boundary_on_the_fill_bar(make_book, engine, direction, stop, status, entry, risk):
+def test_the_stop_boundary_on_the_fill_bar(make_book, engine, direction, stop, filled, entry, risk):
     book = make_book()
     book.on_alert(make_alert("STOCK", direction, stop=stop), ist(THU, 10, 5, 4))
-    book.step(ist(THU, 10, 8), series(RELIANCE=make_bars(ist(THU, 10, 5), [1000.0] * 2)))
+    events = book.step(ist(THU, 10, 8), series(RELIANCE=make_bars(ist(THU, 10, 5), [1000.0] * 2)))
     row = the_row(engine)
-    assert (row["status"], row["entry_paise"], row["risk_paise"]) == (status, entry, risk)
-    if status == "NO_FILL":
-        assert row["close_reason"] == "GAP_THROUGH_STOP"
+    assert (row["entry_paise"], row["risk_paise"]) == (entry, risk)
+    if not filled:
+        assert (row["status"], row["close_reason"]) == ("NO_FILL", "GAP_THROUGH_STOP")
+        assert [e.kind for e in events] == ["NO_FILL"]
+        return
+    # US-002 manages the fill bar in the same step: its range (999.00 .. 1001.00) reaches the
+    # stop, so the trade that filled at the boundary is stopped on that very bar.
+    assert [e.kind for e in events] == ["FILLED", "CLOSED"]
+    assert (row["status"], row["close_reason"], row["exit_ts"]) == (
+        "CLOSED",
+        "STOP",
+        ist(THU, 10, 6),
+    )
 
 
 def test_an_open_at_the_stop_with_zero_slippage_fills_with_risk_null_not_zero(make_book, engine):
@@ -116,7 +126,14 @@ def test_an_open_at_the_stop_with_zero_slippage_fills_with_risk_null_not_zero(ma
     book.on_alert(make_alert("STOCK", "long", stop=1000.00), ist(THU, 10, 5, 4))
     book.step(ist(THU, 10, 8), series(RELIANCE=make_bars(ist(THU, 10, 5), [1000.0] * 2)))
     row = the_row(engine)
-    assert (row["status"], row["entry_paise"], row["risk_paise"]) == ("OPEN", 100000, None)
+    assert (row["entry_paise"], row["risk_paise"]) == (100000, None)
+    # the open AT the stop closes the trade at that open (US-002): no slippage, no gross
+    assert (row["status"], row["close_reason"], row["exit_paise"], row["gross_paise"]) == (
+        "CLOSED",
+        "STOP",
+        100000,
+        0,
+    )
 
 
 # ── data time and the session (amendment 3) ─────────────────────────────────────
