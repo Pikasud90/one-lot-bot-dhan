@@ -715,3 +715,61 @@ def test_another_outbox_never_requeues_a_row_it_did_not_claim(make_rig):
     assert other.drain_once() == 0
 
     assert [r["status"] for r in rig.rows()] == ["sending"], "only its claimer knows it is lost"
+
+
+def _legacy_signal(ttl_s: int = 600) -> Notification:
+    """What Notifier.signal() sends for the legacy Bank Nifty engine: Signal.as_dict() names
+    no symbol or side, so the channel stores the title and body instead."""
+    return Notification(
+        title="BUY BANKNIFTY 52000 CE x1 @ ~126.00",
+        body="Bank Nifty breakout; stop 98.00",
+        level=L.SIGNAL,
+        signal_id="legacy000001",
+        ttl_seconds=ttl_s,
+        created_at=T0,
+        payload={"signal_id": "legacy000001", "strike": 52000.0, "opt_type": "CE"},
+        dedup_key="signal:legacy000001",
+    )
+
+
+@pytest.mark.parametrize(
+    "after_s, line",
+    [
+        (0, "Valid till 10:10 IST (10m left)"),
+        (180, "Valid till 10:10 IST (7m left)"),  # formatted when sent, never stale
+        (545, "Valid till 10:10 IST (expired)"),  # under a minute left reads expired
+    ],
+)
+def test_a_legacy_signal_shows_its_validity_like_a_desk_alert(make_rig, after_s, line):
+    rig = make_rig()
+    channel = channel_for(rig)
+    assert channel.send(_legacy_signal()) is True
+    rig.clock.advance(after_s)
+
+    rig.drain()
+
+    (request,) = rig.requests
+    text = __import__("json").loads(request.read())["text"]
+    assert text.startswith("<b>BUY BANKNIFTY 52000 CE x1 @ ~126.00</b>")
+    assert line in text.splitlines()
+    assert text.splitlines()[-1].startswith("Time 10:00:00 IST"), "the event time stays last"
+
+
+def test_a_legacy_exit_note_has_no_validity_line(make_rig):
+    rig = make_rig()
+    channel = channel_for(rig)
+    legacy_exit = Notification(
+        title="EXIT 52000 CE - STOP",
+        body="close it",
+        level=L.EXIT,
+        position_id="legacy-pos-1",
+        created_at=T0,
+        payload={"reason": "STOP"},
+        dedup_key="exit:legacy-pos-1",
+    )
+    assert channel.send(legacy_exit) is True
+
+    rig.drain()
+
+    (request,) = rig.requests
+    assert "Valid till" not in __import__("json").loads(request.read())["text"]

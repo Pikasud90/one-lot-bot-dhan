@@ -55,6 +55,7 @@ from .telegram import (
     _fit,
     _header,
     _short_id,
+    _ttl_line,
     _when,
     format_alert,
     format_exit,
@@ -180,13 +181,25 @@ def format_critical(event: Mapping[str, Any], now: dt.datetime) -> str:
     return "\n".join(lines)
 
 
-def format_plain(note: Mapping[str, Any], when: dt.datetime) -> str:
+def format_plain(
+    note: Mapping[str, Any],
+    when: dt.datetime,
+    *,
+    valid_till: dt.datetime | None = None,
+    now: dt.datetime | None = None,
+) -> str:
     """A SIGNAL or EXIT that is not a Desk alert (the legacy Bank Nifty engine, BUG-1): its
     Notification title in bold, the body on one line, the event time. Escaped and capped like
-    format_critical, so 'BUY BANKNIFTY 52000 CE x1 @ ~126.00' arrives as the toast shows it."""
+    format_critical, so 'BUY BANKNIFTY 52000 CE x1 @ ~126.00' arrives as the toast shows it.
+
+    With `now` (a SIGNAL), a 'Valid till HH:MM IST (Nm left)' line from `valid_till` comes
+    before the time, exactly the desk alert's rule: floored minutes, 'expired' under one."""
     title = _fit(note.get("title"), _CAP_TITLE) or "OneLot alert"
     body = _fit(note.get("body"), _CAP_BODY)
     lines = [f"<b>{title}</b>", *([body] if body else [])]
+    if now is not None:
+        deadline = to_ist(valid_till) if valid_till is not None else None
+        lines.append(_ttl_line(deadline, to_ist(now)))
     lines.append(f"Time {to_ist(when).strftime('%H:%M:%S')} IST")
     return "\n".join(lines)
 
@@ -561,7 +574,11 @@ class TelegramOutbox:
     def _render(self, row: _Row, now: dt.datetime) -> str:
         payload = row.payload
         note = _plain_of(payload)
-        if note is not None and row.kind in ("alert", "exit"):
+        if note is not None and row.kind == "alert":  # a legacy SIGNAL: it has a deadline
+            text = format_plain(
+                note, row.alert_created_at, valid_till=row.expires_at, now=now
+            ) + _late(row, now)
+        elif note is not None and row.kind == "exit":
             text = format_plain(note, row.alert_created_at) + _late(row, now)
         elif note is not None and row.kind == "missed":
             text = format_missed_plain(payload, note, now)

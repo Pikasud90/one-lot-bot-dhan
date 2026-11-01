@@ -266,6 +266,7 @@ def test_a_legacy_signal_is_sent_as_its_title_and_body(make_rig):
     assert texts(rig) == [
         "<b>BUY BANKNIFTY 52000 CE x1 @ ~126.00</b>\n"
         "BUY BANKNIFTY 11-26 52000 CE x1 lot (30 qty) Entry ~126.00 (ask 125.50)\n"
+        "Valid till 10:02 IST (2m left)\n"  # like a desk alert, from the stored expires_at
         "Time 10:00:00 IST"
     ]
 
