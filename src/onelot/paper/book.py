@@ -1147,19 +1147,23 @@ class PaperBook:
         """One transaction: the guarded change plus its events. Memory after commit.
 
         The guard is the status AND grade this book last saw, so a trade another book on
-        the same database moved first is adopted, never booked twice.
+        the same database moved first is adopted, never booked twice. Managing an OPEN trade
+        keeps its status, so for one the guard is also the management cursor (last_bar_ts):
+        a book with a stale copy can neither re-book a STOP_MOVED nor move the cursor back
+        (review round 1, Tester BUG-2).
         """
         events = [PaperEvent(trade.id, ts, kind, detail) for kind, ts, detail in booked]
+        guard = [
+            paper_trades.c.id == trade.id,
+            paper_trades.c.status == trade.status,
+            paper_trades.c.grade == trade.grade,
+        ]
+        if trade.status == "OPEN":
+            cursor = paper_trades.c.last_bar_ts
+            seen = trade.last_bar_ts
+            guard.append(cursor.is_(None) if seen is None else cursor == seen)
         with self.engine.begin() as conn:
-            changed = conn.execute(
-                paper_trades.update()
-                .where(
-                    paper_trades.c.id == trade.id,
-                    paper_trades.c.status == trade.status,
-                    paper_trades.c.grade == trade.grade,
-                )
-                .values(**values)
-            ).rowcount
+            changed = conn.execute(paper_trades.update().where(*guard).values(**values)).rowcount
             if changed == 1:
                 for event in events:
                     conn.execute(paper_events.insert().values(**_event_row(event)))
