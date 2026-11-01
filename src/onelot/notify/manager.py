@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import logging
 import threading
 from dataclasses import dataclass, field
@@ -24,17 +25,32 @@ class ChannelStats:
     enqueued: int = 0  # accepted by a deferred channel; "sent" only once it is confirmed
 
 
+# A CRITICAL repeated with the same title inside one such bucket is one alarm (US-004
+# decision F): a legacy engine raises 'UNMANAGED' every minute. Buckets start on :00 and :30.
+CRITICAL_BUCKET_S = 30 * 60
+
+
+def _critical_subject(n: Notification) -> str:
+    """'{bucket}-{title hash}': the 30-minute bucket of the event (epoch based, the same in
+    every zone) and a short hash of the title with its spacing normalised (case kept)."""
+    moment = n.created_at or now_ist()
+    bucket = int(moment.timestamp()) // CRITICAL_BUCKET_S
+    title = " ".join(str(n.title).split())
+    return f"{bucket}-{hashlib.sha256(title.encode('utf-8')).hexdigest()[:16]}"
+
+
 def dedup_key_for(n: Notification) -> str:
     """The key that names what `n` is about (US-004 AC4): the signal for a SIGNAL, the position
-    for an EXIT, the notification itself for a CRITICAL (two criticals with the same title are
-    two events and must not swallow each other); the level is always part of it."""
+    for an EXIT, the title and 30-minute bucket for a CRITICAL (decision F: the same alarm
+    repeated within the bucket is one message; a later bucket, or another title, is another);
+    the level is always part of it."""
     level = n.level.value.lower()
     if n.level is NotificationLevel.SIGNAL:
         subject = n.signal_id or n.notification_id
     elif n.level is NotificationLevel.EXIT:
         subject = n.position_id or n.notification_id
     elif n.level is NotificationLevel.CRITICAL:
-        subject = n.notification_id
+        subject = _critical_subject(n)
     else:
         subject = n.signal_id or n.position_id or n.notification_id
     return f"{level}:{subject}"
