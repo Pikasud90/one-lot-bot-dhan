@@ -1,10 +1,12 @@
 """Telegram phone messages for Desk alerts (ADR-002, US-003).
 
 The formatters turn a Desk payload into Telegram HTML that the owner can act on from
-the lock screen. The first line says exactly what to do ("BUY BANKNIFTY 45000 CE ·
-1 lot (30)"); the rest follows the AC1 order:
+the lock screen. The first line names exactly what to type into Dhan: the tradable
+symbol (series_key), the contract and the unit ("BUY BANKNIFTY 25 NOV 52000 CE · 1 lot
+(30)"); a risk-blocked alert is still sent, with "[BLOCKED by risk] " first inside the
+bold. The rest follows the AC1 order:
 
-    <b>{BUY|SELL} {symbol}[ {strike} {CE|PE}] · {1 share | 1 lot (N)}</b>
+    <b>{BUY|SELL} {series_key}[ {DD MMM} {strike} {CE|PE}] · {1 share | 1 lot (N)}</b>
     <i>{label}</i>                          omitted when it repeats the symbol
     Entry {price} {mkt | ask | est.}        stock: mkt; index: ask (live chain) | est. (synthetic)
     Underlying Stop {x} · Target {y|trail}  index only
@@ -31,10 +33,15 @@ from __future__ import annotations
 
 import datetime as dt
 import html
+import math
+import os
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Literal
+
+import httpx
 
 from ..clock import to_ist
 
@@ -44,10 +51,14 @@ ELLIPSIS = "…"
 SEP = " · "
 NA = "n/a"
 DELAYED_TAG = "delayed ~15m"
+BLOCKED_PREFIX = "[BLOCKED by risk] "  # the same words as the desk notification title
 ID_CHARS = 6
+# English and upper case from a table: strftime("%b") follows the process locale.
+_MONTHS = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
 
 # Caps in HTML characters after escaping; with these the fixed part of the longest
-# message (an index alert) stays well under MAX_CHARS whatever the input.
+# message (a blocked index alert) stays well under MAX_CHARS whatever the input
+# (test_the_fixed_part_leaves_the_label_room pins the worst case).
 _CAP_SYMBOL = 32
 _CAP_STRIKE = 12
 _CAP_STRATEGY = 48
@@ -162,18 +173,31 @@ def _clock(moment: dt.datetime | None, pattern: str) -> str:
     return f"{moment.strftime(pattern)} IST" if moment is not None else NA
 
 
+def _expiry(value: Any) -> str:
+    """'03 DEC' — the expiry day (two digits) and month, read in IST — from a date, a
+    datetime or an ISO string; "" when missing or unreadable, so it is simply left out."""
+    if isinstance(value, dt.date) and not isinstance(value, dt.datetime):
+        day: dt.date | None = value
+    else:
+        moment = _when(value.strip() if isinstance(value, str) else value)
+        day = moment.date() if moment is not None else None
+    return "" if day is None else f"{day.day:02d} {_MONTHS[day.month - 1]}"
+
+
 def _short_id(value: Any) -> str:
     return f"id <code>{_esc(_plain(value)[:ID_CHARS])}</code>"
 
 
 # ── shared pieces ────────────────────────────────────────────────────────────
 def _instrument(payload: Mapping[str, Any], option: Mapping[str, Any]) -> tuple[str, str]:
-    """(action word, instrument) for an alert or a position, both escaped. The CE/PE
-    comes from the Desk side ("BUY_CE"), never from free text."""
+    """(action word, instrument) for an alert or a position, both escaped: the tradable
+    symbol, plus expiry, strike and CE/PE for an option. The CE/PE comes from the Desk
+    side ("BUY_CE"), never from free text."""
     side = _plain(payload.get("side")).upper()
     symbol = _fit(payload.get("series_key"), _CAP_SYMBOL) or "?"
     if side in _OPTION_SIDES:
-        return "BUY", f"{symbol} {_strike(option.get('strike'))} {side[-2:]}"
+        contract = (_expiry(option.get("expiry")), _strike(option.get("strike")), side[-2:])
+        return "BUY", " ".join([symbol, *(part for part in contract if part)])
     if side in ("BUY", "SELL"):
         return side, symbol
     return (_fit(side.replace("_", " "), _CAP_STRIKE) or "?"), symbol
@@ -192,7 +216,7 @@ def _unit(kind: str, economics: Mapping[str, Any]) -> str:
 
 
 def _header(alert: Mapping[str, Any]) -> str:
-    """'BUY BANKNIFTY 45000 CE · 1 lot (30)' — escaped, without tags."""
+    """'BUY BANKNIFTY 25 NOV 45000 CE · 1 lot (30)' — escaped, without tags."""
     economics = _fields(alert.get("economics"))
     action, instrument = _instrument(alert, _fields(economics.get("option")))
     kind = _plain(alert.get("kind")).upper()
@@ -210,11 +234,11 @@ def _levels(head: str, stop: Any, target: Any) -> str:
 def format_alert(alert: Mapping[str, Any], now: dt.datetime) -> str:
     """The phone message for a Desk SIGNAL dict (see `Desk._raise_signal`).
 
-    Reads only: id, created_at, expires_at, series_key, label, kind, side,
+    Reads only: id, created_at, expires_at, series_key, label, kind, side, risk_allowed,
     strategy_label (else strategy), timeframe, confidence.{score,label}, data.delayed and
     economics.{qty, entry_price, stop_price, target_price, underlying_stop,
-    underlying_target, synthetic, option.{strike,lot}}. `now` drives the minutes left,
-    so format at send time.
+    underlying_target, synthetic, option.{strike, expiry, lot}}. `now` drives the minutes
+    left, so format at send time. Only risk_allowed exactly False marks it blocked.
     """
     economics = _fields(alert.get("economics"))
     index = _plain(alert.get("kind")).upper() == "INDEX"
@@ -222,8 +246,9 @@ def format_alert(alert: Mapping[str, Any], now: dt.datetime) -> str:
         entry_tag = "mkt"
     else:  # a live-chain premium is the ask you pay; anything else is a model estimate
         entry_tag = "ask" if economics.get("synthetic") is False else "est."
+    blocked = BLOCKED_PREFIX if alert.get("risk_allowed") is False else ""
     lines = [
-        f"<b>{_header(alert)}</b>",
+        f"<b>{blocked}{_header(alert)}</b>",
         f"Entry {_num(economics.get('entry_price'))} {entry_tag}",
     ]
     if index:
@@ -317,3 +342,179 @@ def format_missed(alert: Mapping[str, Any], now: dt.datetime) -> str:
     passed = deadline is None or to_ist(now) >= deadline
     window = f"{'expired' if passed else 'valid till'} {_clock(deadline, '%H:%M')}"
     return SEP.join(["<b>Missed</b>", _header(alert), window, _short_id(alert.get("id"))])
+
+
+# ── TelegramClient ────────────────────────────────────────────────────────────
+API_BASE = "https://api.telegram.org"
+TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
+CHAT_ENV = "TELEGRAM_CHAT_ID"
+TIMEOUT = httpx.Timeout(10.0)  # connect, read, write and pool alike
+# ASCII only: [0-9], never \d (which also matches full-width and other Unicode digits),
+# and always re.fullmatch, never $ (which also matches before a trailing newline).
+_TOKEN_SHAPE = re.compile(r"[0-9]{6,12}:[A-Za-z0-9_-]{30,}")
+_CHAT_SHAPE = re.compile(r"-?[1-9][0-9]{0,18}")
+_CAP_DESCRIPTION = 200
+
+SendKind = Literal["ok", "rate_limited", "permanent", "transient", "unavailable"]
+
+
+@dataclass(frozen=True)
+class SendResult:
+    """The outcome of one sendMessage call. `retry_after` (seconds) is set only for
+    rate_limited; `detail` is built from the HTTP status and Telegram's description
+    only, never from exception text (which can quote the URL, and so the token)."""
+
+    ok: bool
+    kind: SendKind
+    message_id: int | None
+    retry_after: float | None
+    detail: str
+
+
+def _failed(kind: SendKind, detail: str, retry_after: float | None = None) -> SendResult:
+    return SendResult(False, kind, None, retry_after, detail)
+
+
+def _token_problem(token: str) -> str | None:
+    """Why `token` cannot be used, in words that never repeat any part of it."""
+    if not token:
+        return f"{TOKEN_ENV} is not set"
+    if not _TOKEN_SHAPE.fullmatch(token):
+        return (
+            f"{TOKEN_ENV} is not a bot token (expected 6 to 12 digits, a colon, then 30 or"
+            " more letters, digits, '_' or '-')"
+        )
+    return None
+
+
+def _chat_problem(chat_id: str) -> str | None:
+    if not chat_id:
+        return f"{CHAT_ENV} is not set"
+    if not _CHAT_SHAPE.fullmatch(chat_id):
+        return (
+            f"{CHAT_ENV} is not a numeric chat id (expected an optional '-' then 1 to 19"
+            " digits, no leading zero)"
+        )
+    return None
+
+
+def _json_object(response: httpx.Response) -> Mapping[str, Any] | None:
+    """The body as a JSON object, or None for anything else (never raises)."""
+    try:
+        body = response.json()
+    except (ValueError, RecursionError):  # not JSON, bad UTF-8, or absurdly deep nesting
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def _status_detail(status: int, body: Mapping[str, Any] | None, fallback: str = "") -> str:
+    """'HTTP 403: Forbidden: bot was blocked by the user' — status and description only."""
+    raw = body.get("description") if body is not None else None
+    description = _plain(raw)[:_CAP_DESCRIPTION] if isinstance(raw, str) else ""
+    note = description or fallback
+    return f"HTTP {status}: {note}" if note else f"HTTP {status}"
+
+
+def _retry_after(body: Mapping[str, Any] | None) -> float | None:
+    """parameters.retry_after in seconds; None when absent, not a number or absurd."""
+    parameters = body.get("parameters") if body is not None else None
+    raw = parameters.get("retry_after") if isinstance(parameters, Mapping) else None
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    try:
+        seconds = float(raw)
+    except OverflowError:  # a JSON integer too large for a float
+        return None
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
+
+
+def _classify(response: httpx.Response) -> SendResult:
+    """Map one Bot API response to a SendResult (AC3).
+
+    429 is rate_limited; any other 4xx is permanent (the same request fails the same way
+    again), except 408, which a proxy sends when it timed out; 2xx needs ok true and an
+    integer message_id; everything else (5xx, 3xx, 408) is transient.
+    """
+    status = response.status_code
+    body = _json_object(response)
+    if status == 429:
+        return _failed("rate_limited", _status_detail(status, body), _retry_after(body))
+    if 400 <= status < 500 and status != 408:
+        return _failed("permanent", _status_detail(status, body))
+    if not 200 <= status < 300:
+        return _failed("transient", _status_detail(status, body))
+    if body is None:
+        return _failed("transient", _status_detail(status, None, "the body is not a JSON object"))
+    if body.get("ok") is not True:
+        return _failed("transient", _status_detail(status, body, "ok is not true"))
+    result = body.get("result")
+    message_id = result.get("message_id") if isinstance(result, Mapping) else None
+    if not isinstance(message_id, int) or isinstance(message_id, bool):
+        return _failed("transient", _status_detail(status, None, "no message_id in the result"))
+    return SendResult(True, "ok", message_id, None, f"HTTP {status}")
+
+
+class TelegramClient:
+    """Sends one message per call over the Telegram Bot API (ADR-002, US-003).
+
+    Every outcome comes back as a SendResult, never as an exception. The client never
+    retries and never sleeps (the outbox owns back-off and pacing), and it keeps no
+    per-call state, so one instance may serve many threads (httpx.Client is thread-safe).
+    A missing or malformed token or chat id makes it unavailable: it then makes no HTTP
+    call at all, and `unavailable_reason` says which variable is wrong without echoing it.
+    """
+
+    def __init__(self, token: str, chat_id: str, http: httpx.Client | None = None) -> None:
+        problems = [p for p in (_token_problem(token), _chat_problem(chat_id)) if p]
+        self._unavailable_reason = "; ".join(problems) or None
+        self._available = not problems
+        # Only a valid pair is kept, so nothing below can ever echo a malformed value.
+        self._token = token if self._available else ""
+        self._chat_id = chat_id if self._available else ""
+        self._owns_http = http is None and self._available
+        self._http = httpx.Client(timeout=TIMEOUT) if self._owns_http else http
+
+    @classmethod
+    def from_env(
+        cls, env: Mapping[str, str] = os.environ, http: httpx.Client | None = None
+    ) -> TelegramClient:
+        """A client from TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID. Only CR and LF are
+        stripped from the ends (a value saved with a Windows line ending); anything else,
+        a space included, must already be right, so a typo is reported, not repaired."""
+        token = env.get(TOKEN_ENV, "").strip("\r\n")
+        chat_id = env.get(CHAT_ENV, "").strip("\r\n")
+        return cls(token, chat_id, http=http)
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    @property
+    def unavailable_reason(self) -> str | None:
+        return self._unavailable_reason
+
+    def send_message(self, text: str, *, silent: bool = False) -> SendResult:
+        """POST sendMessage with HTML parse mode; `silent` sends it without a sound.
+        Exactly one HTTP request (none when unavailable), with a 10 s timeout on every
+        phase whatever the injected client's own default is."""
+        if not self._available or self._http is None:
+            return _failed("unavailable", self._unavailable_reason or "not configured")
+        payload: dict[str, Any] = {"chat_id": self._chat_id, "text": text, "parse_mode": "HTML"}
+        if silent:
+            payload["disable_notification"] = True
+        try:
+            response = self._http.post(
+                f"{API_BASE}/bot{self._token}/sendMessage", json=payload, timeout=TIMEOUT
+            )
+        except httpx.HTTPStatusError as exc:  # an http client that raises for status
+            return _classify(exc.response)
+        except httpx.HTTPError as exc:  # network, timeout, protocol: the class name only
+            return _failed("transient", f"network error: {type(exc).__name__}")
+        except UnicodeEncodeError:  # a lone surrogate: this text can never be sent
+            return _failed("permanent", "the text is not valid UTF-8")
+        return _classify(response)
+
+    def close(self) -> None:
+        """Close the http client this object built itself; an injected one is the caller's."""
+        if self._owns_http and self._http is not None:
+            self._http.close()

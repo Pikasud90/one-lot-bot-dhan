@@ -8,6 +8,7 @@ Invisible characters are built with chr() so this file holds none literally.
 from __future__ import annotations
 
 import datetime as dt
+import locale
 import re
 from typing import Any
 
@@ -71,7 +72,7 @@ class TestGoldenAlerts:
 
     def test_index_ce_with_a_live_chain_premium(self):
         assert format_alert(index_alert("CE"), NOW) == (
-            "<b>BUY BANKNIFTY 45000 CE · 1 lot (30)</b>\n"
+            "<b>BUY BANKNIFTY 25 NOV 45000 CE · 1 lot (30)</b>\n"
             "<i>NIFTY BANK</i>\n"
             "Entry 312.40 ask\n"
             "Underlying Stop 44,980.00 · Target 45,400.00\n"
@@ -101,7 +102,7 @@ class TestGoldenAlerts:
         alert["economics"]["option"]["strike"] = 45500.0
         later = dt.datetime(2026, 11, 2, 10, 21, 0, tzinfo=IST)
         assert format_alert(alert, later) == (
-            "<b>BUY BANKNIFTY 45500 PE · 1 lot (30)</b>\n"
+            "<b>BUY BANKNIFTY 25 NOV 45500 PE · 1 lot (30)</b>\n"
             "<i>NIFTY BANK</i>\n"
             "Entry 298.75 est.\n"
             "Underlying Stop 45,260.00 · Target 44,780.00\n"
@@ -132,6 +133,87 @@ class TestGoldenAlerts:
     )
     def test_goldens_are_valid_telegram_html(self, alert):
         assert_telegram_html(format_alert(alert, NOW))
+
+
+class TestHeader:
+    """Manager decision 2026-11-01: the tradable symbol, the exact contract and the unit on
+    line 1; the human label on line 2; a risk-blocked alert is prefixed, not dropped."""
+
+    @pytest.mark.parametrize(
+        ("expiry", "shown"),
+        [
+            ("2026-12-03", "03 DEC"),  # DD keeps its leading zero
+            (dt.date(2027, 1, 28), "28 JAN"),
+            (dt.datetime(2026, 11, 25, 15, 30, tzinfo=IST), "25 NOV"),
+            ("2026-11-25T15:30:00+05:30", "25 NOV"),
+            # 20:00 UTC on the 24th is already the 25th in India: the IST date is shown
+            (dt.datetime(2026, 11, 24, 20, 0, tzinfo=dt.timezone.utc), "25 NOV"),
+            ("2026-11-24T20:00:00+00:00", "25 NOV"),
+            (" 2026-11-25 ", "25 NOV"),
+        ],
+    )
+    def test_expiry_is_day_and_upper_case_english_month(self, expiry, shown):
+        alert = index_alert("CE")
+        alert["economics"]["option"]["expiry"] = expiry
+        header = format_alert(alert, NOW).split("\n")[0]
+        assert header == f"<b>BUY BANKNIFTY {shown} 45000 CE · 1 lot (30)</b>"
+
+    @pytest.mark.parametrize(
+        "expiry", [None, "", "soon", "2026-02-30", 20261125, 2.5, ["2026-11-25"], True]
+    )
+    def test_an_unreadable_expiry_is_left_out_without_a_double_space(self, expiry):
+        alert = index_alert("CE")
+        alert["economics"]["option"]["expiry"] = expiry
+        header = format_alert(alert, NOW).split("\n")[0]
+        assert header == "<b>BUY BANKNIFTY 45000 CE · 1 lot (30)</b>"
+
+    def test_month_names_do_not_follow_the_process_locale(self):
+        """strftime('%b') is locale-dependent; the header must read DEC on any Mac."""
+        saved = locale.setlocale(locale.LC_TIME)
+        for name in ("de_DE.UTF-8", "fr_FR.UTF-8", "es_ES.UTF-8"):
+            try:
+                locale.setlocale(locale.LC_TIME, name)
+            except locale.Error:
+                continue
+            try:
+                alert = index_alert("CE")
+                alert["economics"]["option"]["expiry"] = "2026-12-03"
+                assert " 03 DEC 45000 CE " in format_alert(alert, NOW).split("\n")[0]
+            finally:
+                locale.setlocale(locale.LC_TIME, saved)
+            return
+        pytest.skip("no non-English locale installed")
+
+    def test_the_label_never_replaces_the_symbol_on_line_one(self):
+        alert = index_alert("CE", label="BANK NIFTY INDEX", instrument_key="BANKNIFTY_OPT")
+        lines = format_alert(alert, NOW).split("\n")
+        assert lines[0].startswith("<b>BUY BANKNIFTY 25 NOV 45000 CE")
+        assert lines[1] == "<i>BANK NIFTY INDEX</i>"
+        assert "BANKNIFTY_OPT" not in "\n".join(lines)
+
+    def test_a_risk_blocked_alert_is_prefixed_inside_the_bold_and_otherwise_unchanged(self):
+        plain = format_alert(stock_alert(), NOW).split("\n")
+        blocked = format_alert(stock_alert(risk_allowed=False), NOW).split("\n")
+        assert blocked[0] == "<b>[BLOCKED by risk] BUY RELIANCE · 1 share</b>"
+        assert blocked[1:] == plain[1:]
+
+    @pytest.mark.parametrize("flag", [True, None, 0, "", "false", "no"])
+    def test_only_an_explicit_false_blocks(self, flag):
+        """Same strictness as data.delayed: the Desk always writes a bool."""
+        assert "BLOCKED" not in format_alert(stock_alert(risk_allowed=flag), NOW)
+
+    def test_a_blocked_index_alert_keeps_the_contract(self):
+        header = format_alert(index_alert("PE", risk_allowed=False), NOW).split("\n")[0]
+        assert header == "<b>[BLOCKED by risk] BUY BANKNIFTY 25 NOV 45000 PE · 1 lot (30)</b>"
+
+    def test_missed_and_exit_name_the_contract_like_the_header(self):
+        later = dt.datetime(2026, 11, 2, 10, 45, 0, tzinfo=IST)
+        missed = format_missed(index_alert("PE", risk_allowed=False), later)
+        assert missed.startswith("<b>Missed</b> · BUY BANKNIFTY 25 NOV 45000 PE · 1 lot (30) · ")
+        event = exit_event("STOP")
+        event["position"]["option"]["expiry"] = None
+        header = format_exit(event, NOW).split("\n")[0]
+        assert header == "<b>EXIT BANKNIFTY 45000 CE · 1 lot (30)</b>"
 
 
 class TestFieldRules:
@@ -195,7 +277,7 @@ class TestFieldRules:
         index["economics"]["qty"] = None  # falls back to option.lot
         assert format_alert(stock, NOW).split("\n")[0] == "<b>BUY RELIANCE · 1 share</b>"
         header = format_alert(index, NOW).split("\n")[0]
-        assert header == "<b>BUY BANKNIFTY 45000 CE · 1 lot (30)</b>"
+        assert header == "<b>BUY BANKNIFTY 25 NOV 45000 CE · 1 lot (30)</b>"
 
     def test_the_strategy_name_is_the_fallback_for_a_missing_label(self):
         alert = stock_alert()
@@ -333,6 +415,7 @@ class TestBudget:
             confidence={"score": 1e300, "label": huge},
             expires_at="9999-12-31T23:59:59+05:30",
             data={"delayed": True},
+            risk_allowed=False,  # the longest header: blocked prefix + expiry + strike
         )
         alert["economics"].update(
             entry_price=-9.99e11,
@@ -345,8 +428,41 @@ class TestBudget:
         alert["economics"]["option"]["strike"] = huge
         msg = format_alert(alert, NOW)
         assert_telegram_html(msg)
-        assert msg.startswith("<b>BUY ")
+        assert msg.startswith("<b>[BLOCKED by risk] BUY ")
         assert "<i>" in msg  # the label still gets some room
+
+    def test_the_fixed_part_leaves_the_label_room(self):
+        """Every capped field at its cap on the longest template (a blocked index alert with
+        an expiry): the label must still keep at least 100 HTML characters (AC1 budget)."""
+        wide = "W" * 400
+        alert = index_alert(
+            "CE",
+            id=wide,
+            series_key=wide,
+            label="L" * 2000,
+            strategy_label=wide,
+            timeframe=wide,
+            confidence={"score": 100, "label": wide},
+            expires_at="2026-11-02T23:59:59+05:30",
+            created_at="2026-11-02T10:15:00+05:30",
+            data={"delayed": True},
+            risk_allowed=False,
+        )
+        alert["economics"].update(
+            entry_price=-9.99e11,
+            stop_price=-9.99e11,
+            target_price=-9.99e11,
+            underlying_stop=-9.99e11,
+            underlying_target=-9.99e11,
+            qty=10**11,
+        )
+        alert["economics"]["option"]["strike"] = wide
+        msg = format_alert(alert, NOW)
+        assert_telegram_html(msg)
+        assert len(msg) >= 590  # the label really stretched to fill the budget
+        label_line = msg.split("\n")[1]
+        assert label_line.startswith("<i>LLLL") and label_line.endswith("…</i>")
+        assert len(label_line) - len("<i>…</i>") >= 100
 
     @settings(max_examples=150, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     @given(
@@ -381,7 +497,7 @@ class TestExitAndMissed:
     def test_exit_golden_index_stop(self):
         later = dt.datetime(2026, 11, 2, 11, 42, 10, tzinfo=IST)
         assert format_exit(exit_event("STOP"), later) == (
-            "<b>EXIT BANKNIFTY 45000 CE · 1 lot (30)</b>\n"
+            "<b>EXIT BANKNIFTY 25 NOV 45000 CE · 1 lot (30)</b>\n"
             "Reason: STOP\n"
             "Est. P&amp;L -1,235\n"  # -1234.5 rounds half-up, away from zero
             "Time 11:42:10 IST"
@@ -446,7 +562,7 @@ class TestExitAndMissed:
     def test_missed_is_one_line_and_never_starts_with_the_action(self):
         later = dt.datetime(2026, 11, 2, 10, 45, 0, tzinfo=IST)
         assert format_missed(index_alert("CE"), later) == (
-            "<b>Missed</b> · BUY BANKNIFTY 45000 CE · 1 lot (30) · expired 10:20 IST"
+            "<b>Missed</b> · BUY BANKNIFTY 25 NOV 45000 CE · 1 lot (30) · expired 10:20 IST"
             " · id <code>c3d4e5</code>"
         )
 

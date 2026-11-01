@@ -202,3 +202,89 @@ class TestClassification:
         result = client_for(answer(200, OK_BODY))[0].send_message("t")
         with pytest.raises(dataclasses.FrozenInstanceError):
             result.ok = False  # type: ignore[misc]
+
+
+class TestEdgeCases:
+    """Dev Beta T2: boundaries and hostile bodies around the AC3 classification."""
+
+    @pytest.mark.parametrize(
+        ("status", "kind"),
+        [(409, "permanent"), (413, "permanent"), (418, "permanent"), (408, "transient")],
+    )
+    def test_other_client_errors_are_permanent_except_408(self, status, kind):
+        """A 4xx fails the same way on every retry; 408 is a proxy that timed out."""
+        result = client_for(tg_error(status, "nope"))[0].send_message("t")
+        assert (result.ok, result.kind) == (False, kind)
+
+    @pytest.mark.parametrize("status", [301, 302, 304, 307])
+    def test_redirects_are_not_followed_and_are_transient(self, status):
+        respond = lambda request: httpx.Response(  # noqa: E731
+            status, headers={"location": "https://example.invalid/"}
+        )
+        client, wire = client_for(respond)
+        assert client.send_message("t").kind == "transient"
+        assert len(wire.requests) == 1
+
+    def test_any_2xx_with_a_message_id_is_ok(self):
+        result = client_for(answer(201, OK_BODY))[0].send_message("t")
+        assert (result.ok, result.kind, result.message_id) == (True, "ok", 42)
+
+    def test_a_boolean_message_id_is_not_a_message_id(self):
+        respond = answer(200, {"ok": True, "result": {"message_id": True}})
+        assert client_for(respond)[0].send_message("t").kind == "transient"
+
+    def test_a_text_that_cannot_be_encoded_is_permanent_and_sends_nothing(self):
+        client, wire = client_for(answer(200, OK_BODY))
+        result = client.send_message("BUY " + chr(0xD800))  # a lone surrogate
+        assert (result.ok, result.kind, result.message_id) == (False, "permanent", None)
+        assert wire.requests == []
+
+    def test_absurdly_nested_json_is_transient_not_a_crash(self):
+        result = client_for(answer(200, content=b"[" * 100_000))[0].send_message("t")
+        assert result.kind == "transient"
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            (b"1.5", 1.5),
+            (b"0", 0.0),
+            (b"-3", None),
+            (b"NaN", None),
+            (b"Infinity", None),
+            (b"9" * 400, None),  # a JSON integer too large for a float
+            (b"true", None),
+            (b'"7"', None),
+            (b"null", None),
+        ],
+        ids=repr,
+    )
+    def test_retry_after_is_a_finite_non_negative_number_or_none(self, raw, expected):
+        body = b'{"ok": false, "error_code": 429, "parameters": {"retry_after": ' + raw + b"}}"
+        result = client_for(answer(429, content=body))[0].send_message("t")
+        assert (result.kind, result.retry_after) == ("rate_limited", expected)
+
+    def test_detail_is_one_line_and_capped(self):
+        description = "Bad Request:\n" + "x" * 1000
+        result = client_for(tg_error(400, description))[0].send_message("t")
+        assert "\n" not in result.detail
+        assert result.detail.startswith("HTTP 400: Bad Request: xxx")
+        assert len(result.detail) <= len("HTTP 400: ") + 200
+
+    @pytest.mark.parametrize("description", [None, 12, ["a"], {"b": 1}, ""])
+    def test_a_missing_or_odd_description_leaves_just_the_status(self, description):
+        respond = answer(500, {"ok": False, "description": description})
+        assert client_for(respond)[0].send_message("t").detail == "HTTP 500"
+
+    def test_network_errors_name_only_the_error_class(self):
+        respond = raising(lambda req: httpx.ConnectError(f"refused {req.url}", request=req))
+        result = client_for(respond)[0].send_message("t")
+        assert result.detail == "network error: ConnectError"
+
+    def test_close_closes_only_an_http_client_it_built(self):
+        injected = httpx.Client(transport=httpx.MockTransport(answer(200, OK_BODY)))
+        tg.TelegramClient(TOKEN, CHAT, http=injected).close()
+        assert injected.is_closed is False
+        owned = tg.TelegramClient(TOKEN, CHAT)
+        owned.close()
+        assert owned._http is not None and owned._http.is_closed is True
+        tg.TelegramClient("", "").close()  # nothing built, nothing to close

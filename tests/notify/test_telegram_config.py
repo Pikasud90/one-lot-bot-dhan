@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 import pytest
 
-from onelot.config import Secrets
+from onelot.config import Secrets, telegram_token_forms
 from onelot.notify import telegram as tg
 
 TOKEN = "123456789:AAH-" + "x" * 35  # fake, the AC4 shape
@@ -227,3 +227,26 @@ class TestSecretsWiring:
         monkeypatch.setenv("ONELOT_API_TOKEN", "a" * 40)
         s = Secrets.load(tmp_path)
         assert (s.telegram_bot_token, s.telegram_chat_id) == (TOKEN, CHAT)
+
+
+class TestTokenForms:
+    def test_no_token_gives_no_forms(self):
+        assert telegram_token_forms("") == []
+        assert Secrets().secret_values() == []
+
+    def test_a_short_secret_part_is_never_registered_on_its_own(self):
+        """A short literal would scrub ordinary words out of every log line."""
+        assert telegram_token_forms("123456789:abcdef") == ["123456789:abcdef"]
+        assert telegram_token_forms("no-colon-at-all-here") == ["no-colon-at-all-here"]
+
+    def test_the_secret_part_covers_every_other_spelling(self):
+        forms = telegram_token_forms(TOKEN)
+        secret = TOKEN.split(":", 1)[1]
+        assert forms == [TOKEN, TOKEN.replace(":", "%3A"), secret]
+        for spelling in (f"bot{TOKEN}", TOKEN.replace(":", "%3a"), f"/bot{TOKEN}/sendMessage"):
+            assert secret in spelling
+
+    def test_masked_reports_the_chat_id_only_as_set_too(self):
+        assert Secrets(telegram_chat_id=CHAT).masked()["telegram_chat_id"] == "set"
+        assert Secrets().masked()["telegram_chat_id"] is None
+        assert CHAT not in repr(Secrets(telegram_chat_id=CHAT).masked())

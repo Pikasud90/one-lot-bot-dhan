@@ -561,6 +561,22 @@ class AppConfig(Strict):
 
 # ─────────────────────────── secrets ──────────────────────────────────────
 
+# A secret part shorter than this is not registered on its own: a short literal would
+# scrub ordinary words from every log line. Real Telegram secrets have 35 characters.
+_MIN_TELEGRAM_SECRET_PART = 16
+
+
+def telegram_token_forms(token: str) -> list[str]:
+    """The spellings of a Telegram bot token the log redactor must know (ADR-002 #8):
+    the token, its `%3A` (percent-encoded colon) form and the secret part after the
+    colon, which also covers `bot<token>` and a lower-case `%3a`. Empty for no token."""
+    if not token:
+        return []
+    bot_id, colon, secret = token.partition(":")
+    if not colon or len(secret) < _MIN_TELEGRAM_SECRET_PART:
+        return [token]
+    return [token, f"{bot_id}%3A{secret}", secret]
+
 
 class Secrets:
     """Credentials, loaded from the environment (`.env`) only. Never logged.
@@ -581,6 +597,8 @@ class Secrets:
         data_access_token: str = "",
         pin: str = "",
         totp_secret: str = "",
+        telegram_bot_token: str = "",
+        telegram_chat_id: str = "",
     ):
         self.client_id = client_id
         self.access_token = access_token
@@ -589,6 +607,9 @@ class Secrets:
         # Optional: lets the engine mint its own 24-hour tokens (TOTP enabled on Dhan).
         self.pin = pin
         self.totp_secret = totp_secret
+        # Optional: phone alerts (ADR-002). The chat id is configuration, not a secret.
+        self.telegram_bot_token = telegram_bot_token
+        self.telegram_chat_id = telegram_chat_id
 
     @property
     def can_self_renew(self) -> bool:
@@ -624,6 +645,8 @@ class Secrets:
             data_access_token=os.environ.get("DHAN_DATA_ACCESS_TOKEN", "").strip(),
             pin=os.environ.get("DHAN_PIN", "").strip(),
             totp_secret=os.environ.get("DHAN_TOTP_SECRET", "").strip(),
+            telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
+            telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", "").strip(),
         )
 
     ENV_KEYS = (
@@ -632,6 +655,8 @@ class Secrets:
         "DHAN_DATA_ACCESS_TOKEN",
         "DHAN_PIN",
         "DHAN_TOTP_SECRET",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_CHAT_ID",
     )
 
     @classmethod
@@ -669,7 +694,8 @@ class Secrets:
         return path
 
     def masked(self) -> dict:
-        """What the Settings tab may show: presence and the last 4 characters only."""
+        """What the Settings tab may show: presence and the last 4 characters only.
+        The Telegram values are reported only as set or not set (ADR-002 #7)."""
 
         def m(v: str) -> str | None:
             return (f"…{v[-4:]}" if len(v) >= 8 else "set") if v else None
@@ -682,6 +708,8 @@ class Secrets:
             "pin_set": bool(self.pin),
             "totp_set": bool(self.totp_secret),
             "can_self_renew": self.can_self_renew,
+            "telegram_bot_token": "set" if self.telegram_bot_token else None,
+            "telegram_chat_id": "set" if self.telegram_chat_id else None,
         }
 
     @staticmethod
@@ -709,8 +737,11 @@ class Secrets:
         return bool(self.client_id and self.access_token)
 
     def secret_values(self) -> list[str]:
-        """Everything the log redactor must scrub. See logging_setup.py."""
-        return [
+        """Everything the log redactor must scrub. See logging_setup.py.
+
+        The Telegram chat id is deliberately absent: it is not a secret, and as a
+        redaction literal it would corrupt ordinary numbers in logs (ADR-002 #8)."""
+        values = [
             v
             for v in (
                 self.client_id,
@@ -722,6 +753,7 @@ class Secrets:
             )
             if v and len(v) >= 4
         ]
+        return values + telegram_token_forms(self.telegram_bot_token)
 
     def __repr__(self) -> str:  # never leak via repr in a traceback
         return f"<Secrets client_id={'set' if self.client_id else 'unset'} token=***>"
