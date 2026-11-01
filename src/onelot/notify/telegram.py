@@ -351,10 +351,24 @@ def _insert_label(lines: list[str], alert: Mapping[str, Any]) -> None:
 
 
 # ── format_exit / format_missed ───────────────────────────────────────────────
+def _closing(side: str, instrument: str, unit: str) -> str:
+    """'EXIT: SELL SBIN · 1 share' — the order that closes the position: SELL for a long
+    stock or any bought option, BUY for a short stock ('· cover short'). An unknown side
+    names no action ('EXIT SBIN · 1 share'), so a guess can never send the owner the wrong
+    way."""
+    tail = f"{instrument}{SEP}{unit}" if unit else instrument
+    if side in ("BUY", *_OPTION_SIDES):
+        return f"EXIT: SELL {tail}"
+    if side == "SELL":
+        return f"EXIT: BUY {tail}{SEP}cover short"
+    return f"EXIT {tail}"
+
+
 def format_exit(event: Mapping[str, Any], now: dt.datetime) -> str:
     """Four lines for a Desk EXIT payload {"advice": str, "position": {...}}:
-    EXIT and the instrument, the reason, the estimated P&L (whole rupees, as the Desk
-    rounds it) and the time of this message.
+    EXIT with the closing action and the instrument ("EXIT: SELL BANKNIFTY 26 NOV 52000 CE
+    · 1 lot (30)"), the reason, the estimated P&L (whole rupees, as the Desk rounds it)
+    and the time of this message.
 
     Reads only advice and position.{trading_symbol (else series_key), kind, side, qty,
     option.{strike, expiry, lot}, unrealized}.
@@ -363,10 +377,11 @@ def format_exit(event: Mapping[str, Any], now: dt.datetime) -> str:
     option = _fields(position.get("option"))
     _, instrument = _instrument(position, option)
     unit = _unit(_plain(position.get("kind")).upper(), position)
+    side = _plain(position.get("side")).upper()
     advice = _fit(_plain(event.get("advice")).replace("_", " "), _CAP_REASON) or NA
     return "\n".join(
         [
-            f"<b>EXIT {instrument}{SEP}{unit}</b>" if unit else f"<b>EXIT {instrument}</b>",
+            f"<b>{_closing(side, instrument, unit)}</b>",
             f"Reason: {advice}",
             f"Est. P&amp;L {_whole_signed(position.get('unrealized'))}",
             f"Time {_clock(to_ist(now), '%H:%M:%S')}",

@@ -237,6 +237,7 @@ class TestHeader:
             ("SELL", "swing", " · intraday short"),  # stock shorts are intraday only
             ("BUY", None, ""),  # unknown: the product is left out, never guessed
             ("BUY", "weekly", ""),
+            ("HOLD", "intraday", ""),  # an unknown side gets no product either
         ],
     )
     def test_a_stock_header_carries_the_product(self, side, horizon, product):
@@ -259,8 +260,10 @@ class TestHeader:
         assert format_alert(with_symbol, NOW).startswith("<b>BUY M&amp;M · ")
         assert format_alert(without, NOW).startswith("<b>BUY MM · ")
         assert " M&amp;M · " in format_missed(with_symbol, NOW)
-        event = exit_event("STOP", series_key="MM", trading_symbol="M&M", kind="STOCK")
-        assert format_exit(event, NOW).split("\n")[0].startswith("<b>EXIT M&amp;M")
+        event = exit_event(
+            "STOP", series_key="MM", trading_symbol="M&M", kind="STOCK", side="BUY", option={}
+        )
+        assert format_exit(event, NOW).split("\n")[0] == "<b>EXIT: SELL M&amp;M · 1 share</b>"
 
     @pytest.mark.parametrize("unusable", [None, "", "   ", ["M&M"], {"s": 1}], ids=repr)
     def test_an_unusable_trading_symbol_falls_back_to_the_series_key(self, unusable):
@@ -278,7 +281,7 @@ class TestHeader:
         event = exit_event("STOP")
         event["position"]["option"]["expiry"] = None
         header = format_exit(event, NOW).split("\n")[0]
-        assert header == "<b>EXIT BANKNIFTY 45000 CE · 1 lot (30)</b>"
+        assert header == "<b>EXIT: SELL BANKNIFTY 45000 CE · 1 lot (30)</b>"
 
 
 class TestFieldRules:
@@ -609,11 +612,29 @@ class TestExitAndMissed:
     def test_exit_golden_index_stop(self):
         later = dt.datetime(2026, 11, 2, 11, 42, 10, tzinfo=IST)
         assert format_exit(exit_event("STOP"), later) == (
-            "<b>EXIT BANKNIFTY 25 NOV 45000 CE · 1 lot (30)</b>\n"
+            "<b>EXIT: SELL BANKNIFTY 25 NOV 45000 CE · 1 lot (30)</b>\n"
             "Reason: STOP\n"
             "Est. P&amp;L -1,235\n"  # -1234.5 rounds half-up, away from zero
             "Time 11:42:10 IST"
         )
+
+    @pytest.mark.parametrize(
+        ("kind", "side", "line_one"),
+        [
+            ("STOCK", "BUY", "<b>EXIT: SELL SBIN · 1 share</b>"),
+            ("STOCK", "SELL", "<b>EXIT: BUY SBIN · 1 share · cover short</b>"),
+            ("INDEX", "BUY_CE", "<b>EXIT: SELL SBIN 25 NOV 45000 CE · 1 lot (30)</b>"),
+            ("INDEX", "BUY_PE", "<b>EXIT: SELL SBIN 25 NOV 45000 PE · 1 lot (30)</b>"),
+            ("STOCK", "HOLD", "<b>EXIT SBIN · 1 share</b>"),  # unknown side: no action named
+            ("STOCK", None, "<b>EXIT SBIN · 1 share</b>"),
+        ],
+    )
+    def test_exit_line_one_names_the_closing_action(self, kind, side, line_one):
+        """Decision 7: SELL closes a long stock or any bought option; BUY covers a short."""
+        event = exit_event("STOP", series_key="SBIN", kind=kind, side=side)
+        if kind == "STOCK":
+            event["position"].update(qty=1, option={})
+        assert format_exit(event, NOW).split("\n")[0] == line_one
 
     def test_exit_golden_stock_short_at_target(self):
         event = exit_event(
@@ -631,7 +652,8 @@ class TestExitAndMissed:
         )
         later = dt.datetime(2026, 11, 2, 13, 5, 0, tzinfo=IST)
         assert format_exit(event, later) == (
-            "<b>EXIT TCS · 1 share</b>\nReason: TARGET\nEst. P&amp;L +82\nTime 13:05:00 IST"
+            "<b>EXIT: BUY TCS · 1 share · cover short</b>\n"
+            "Reason: TARGET\nEst. P&amp;L +82\nTime 13:05:00 IST"
         )
 
     @pytest.mark.parametrize(
