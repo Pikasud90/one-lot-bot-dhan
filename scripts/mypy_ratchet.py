@@ -48,6 +48,8 @@ EXIT_OK = 0
 EXIT_REGRESSION = 1
 EXIT_TOOL_ERROR = 2
 
+# Changing this needs the owner's sign-off; it must never narrow what is checked
+# (tests/test_mypy_ratchet.py pins the exact tuple and denies suppressing flags).
 # What mypy always runs with; --update records it in _meta.flags and a check refuses a
 # baseline whose flags differ, so editing this tuple needs an --update (commit both together).
 #   --config-file=      ignore any user-level or repo mypy config: same flags, same counts

@@ -12,7 +12,7 @@ import importlib.util
 import json
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -68,6 +68,25 @@ def mypy_output(errors: dict[str, int], checked: int = 7) -> str:
             f"Found {total} error{plural_e} in {files} file{plural_f} (checked {checked} source files)"
         )
     return "\n".join(lines) + "\n"
+
+
+_DENIED = ("--ignore-missing-imports", "--no-strict-optional", "--implicit-optional")
+_DENIED_PREFIXES = ("--allow-", "--disable-error-code", "--exclude")
+_SILENCING_FOLLOW = {"skip", "silent"}
+
+
+def narrowing_flags(flags: Sequence[str]) -> list[str]:
+    """The flags in ``flags`` that would make mypy check less (denylist), by flag name."""
+    found: list[str] = []
+    for i, token in enumerate(flags):
+        name, _, value = token.partition("=")
+        if name == "--follow-imports":
+            value = value or (flags[i + 1] if i + 1 < len(flags) else "")
+            if value in _SILENCING_FOLLOW:
+                found.append(name)
+        elif name in _DENIED or name.startswith(_DENIED_PREFIXES):
+            found.append(name)
+    return found
 
 
 @pytest.fixture(scope="module")
@@ -366,9 +385,48 @@ class TestCheck:
         assert Path(check_call["python"]).resolve() == Path(sys.executable).resolve()
         assert check_call["mypypath"] is None, "a developer's MYPYPATH must not skew the counts"
 
-    def test_flags_include_the_source_tree_and_no_config_file(self, ratchet):
-        assert "src" in ratchet.MYPY_FLAGS
-        assert "--config-file=" in ratchet.MYPY_FLAGS
+    def test_mypy_flags_are_exactly_the_signed_off_tuple(self, ratchet):
+        """Changing MYPY_FLAGS needs the owner's sign-off: update this tuple only then.
+
+        Review MINOR-2: adding --ignore-missing-imports and running --update took the
+        baseline from 198 errors in 63 files to 144 in 25 with exit 0.
+        """
+        assert ratchet.MYPY_FLAGS == (
+            "--config-file=",
+            "--python-version=3.12",
+            "--no-color-output",
+            "--no-pretty",
+            "--show-error-codes",
+            "--hide-error-context",
+            "src",
+        )
+
+    NARROWING = (
+        "--ignore-missing-imports",
+        "--no-strict-optional",
+        "--implicit-optional",
+        "--exclude",
+        "--disable-error-code",
+        "--follow-imports=skip",
+        "--follow-imports=silent",
+    )
+
+    @pytest.mark.parametrize("flag", NARROWING)
+    def test_a_narrowing_flag_is_detected(self, flag: str):
+        assert narrowing_flags([flag, "src"]) == [flag.split("=")[0]]
+
+    @pytest.mark.parametrize("pair", [["--follow-imports", "skip"], ["--follow-imports", "silent"]])
+    def test_a_narrowing_flag_given_as_two_tokens_is_detected(self, pair: list[str]):
+        assert narrowing_flags([*pair, "src"]) == ["--follow-imports"]
+
+    def test_any_allow_flag_is_detected(self):
+        assert narrowing_flags(["--allow-untyped-globals", "--allow-redefinition"]) == [
+            "--allow-untyped-globals",
+            "--allow-redefinition",
+        ]
+
+    def test_mypy_flags_never_narrow_what_is_checked(self, ratchet):
+        assert narrowing_flags(ratchet.MYPY_FLAGS) == []
 
     def test_the_default_baseline_lives_in_scripts_under_root(self, ratchet, rig: Rig, capsys):
         rig.write_baseline({"src/pkg/a.py": 1})
