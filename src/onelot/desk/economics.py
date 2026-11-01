@@ -11,6 +11,7 @@ INDEX  : 1 lot of a delta-selected option (CE for bullish, PE for bearish), pric
 from __future__ import annotations
 
 import datetime as dt
+import math
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -133,8 +134,10 @@ def index_option_economics(
     opt = "CE" if sign > 0 else "PE"
     risk_pts = abs(entry - stop)
     target = entry + sign * target_r * risk_pts if target_r > 0 else None
+    # NaN is truthy: only a finite, positive VIX is used, anything else is no VIX (US-023)
+    usable = vix is not None and math.isfinite(vix) and vix > 0
     vix_series = (
-        pd.Series([vix], index=[pd.Timestamp(now).tz_convert(IST).normalize()]) if vix else None
+        pd.Series([vix], index=[pd.Timestamp(now).tz_convert(IST).normalize()]) if usable else None
     )
     pricer = OptionPricer(bt, vix_series)
     ts = pd.Timestamp(now).tz_convert(IST)
