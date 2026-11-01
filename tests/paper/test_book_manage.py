@@ -306,6 +306,32 @@ class TestASeriesThatGoesQuiet:
         assert row["exit_paise"] == 100_005 and [e.kind for e in events] == ["CLOSED"]
 
 
+class TestASessionThatEndsWithoutAUsableBar:
+    """Review round 1, MINOR-1: no trade stays OPEN forever. One whose session is over without
+    a single usable managed bar closes SESSION_END at the session close with no money (NULL
+    exit and gross, never an invented price) and a PRICING_UNAVAILABLE event that says why,
+    like an option exit that cannot be priced; the warning is logged once."""
+
+    def test_it_closes_with_no_money_and_says_why(self, make_book, engine, caplog):
+        nan = float("nan")
+        book = opened(make_book)
+        book.step(at(8), feed(RELIANCE=bars([(1000.00, nan, nan, nan), (1000.00, nan, nan, nan)])))
+        assert the_row(engine)["status"] == "OPEN"  # filled on the open, nothing managed
+        with caplog.at_level("WARNING", logger="onelot.paper"):
+            events = book.step(ist(THU, 15, 30), feed())
+            assert book.step(ist(THU, 15, 31), feed()) == []
+        row = the_row(engine)
+        assert (row["status"], row["close_reason"], row["exit_ts"]) == (
+            "CLOSED",
+            "SESSION_END",
+            ist(THU, 15, 30),
+        )
+        assert row["exit_paise"] is None and row["gross_paise"] is None
+        assert [e.kind for e in events] == ["CLOSED", "PRICING_UNAVAILABLE"]
+        assert events[1].detail["leg"] == "exit" and "no usable bar" in events[1].detail["error"]
+        assert len([r for r in caplog.records if "no usable bar" in r.getMessage()]) == 1
+
+
 def with_target(alert: dict[str, Any], target: float) -> dict[str, Any]:
     alert["economics"]["underlying_target"] = target
     return alert

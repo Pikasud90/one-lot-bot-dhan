@@ -983,7 +983,16 @@ class PaperBook:
         sold at `option_exit_paise` of the premium at the UNSLIPPED underlying level and the
         close time, the option frozen at the alert; if that premium is unavailable the close
         is still booked, with no exit price and a PRICING_UNAVAILABLE event (amendment 6).
+        A close with no rule level (a session that ended before one usable bar, MINOR-1) is
+        booked the same way.
         """
+        if close.price_paise is None:
+            unpriced: dict[str, Any] = {
+                "leg": "exit",
+                "underlying_paise": None,
+                "error": "no usable bar was managed before the session ended: no price is invented",
+            }
+            return None, [("PRICING_UNAVAILABLE", close.at, unpriced)]
         if trade.kind != "INDEX":
             if close.reason == "TARGET":
                 return close.price_paise, []

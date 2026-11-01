@@ -649,12 +649,26 @@ class TestAC5SessionEndFallback:
         state, _ = manage_step(state, revised, RULES, when(15, 31))
         assert state.closed is not None and state.closed.price_paise == 100_035
 
-    def test_a_position_that_never_saw_a_usable_bar_is_left_open_not_priced(self) -> None:
+    # Review round 1, MINOR-1: a position whose session is over without one usable bar gets a
+    # final state, SESSION_END with NO price (none is invented), at the session's close.
+
+    def test_one_that_never_saw_a_usable_bar_closes_without_a_price(self) -> None:
         nan = float("nan")
         bars = self.bars([(nan, nan, nan, nan)] * 5)
-        state, events = manage_step(self.opened(), bars, RULES, when(15, 31))
-        assert (state.closed, events, state.last_close_paise) == (None, [], None)
+        state, (event,) = manage_step(self.opened(), bars, RULES, when(15, 31))
+        assert state.closed == PaperClose("SESSION_END", None, when(15, 30), gap=False)
+        assert (event.kind, event.ts) == ("CLOSED", when(15, 30))
+        assert (event.detail["price_paise"], event.detail["fallback"]) == (None, "no_usable_bar")
         assert state.last_bar_ts == when(15, 9)  # the cursor still moved past the garbage
+
+    def test_one_that_never_saw_any_bar_closes_without_a_price_too(self) -> None:
+        state, (event,) = manage_step(self.opened(), self.bars().iloc[:0], RULES, when(15, 30))
+        assert state.closed == PaperClose("SESSION_END", None, when(15, 30), gap=False)
+        assert (state.last_bar_ts, event.ts) == (None, when(15, 30))
+
+    def test_not_before_its_session_is_over(self) -> None:
+        state, events = manage_step(self.opened(), self.bars().iloc[:0], RULES, when(15, 29))
+        assert (state.closed, events) == (None, [])
 
     def test_the_last_close_seen_is_remembered_with_its_close_time(self) -> None:
         state, _ = manage_step(self.opened(), self.bars(), RULES, when(15, 10))

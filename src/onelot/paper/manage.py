@@ -38,7 +38,8 @@ No position outlives its session (until US-027): a bar of a later date is never 
 and once the session is over (`now` at or past 15:30 IST on the opening date) a position
 with no bar at or after `exit_time` closes SESSION_END at the close of the last bar it
 managed, stamped with that bar's close time (Manager decisions A5 and T2). A position that
-never saw a usable bar is logged and left open: no price is invented.
+never saw a usable bar closes SESSION_END at the session close with NO price (none is
+invented; review round 1, MINOR-1): it is never left open.
 Deliberate differences from the Lab: a target needs a trade-through and fills at exactly T
 (the Lab fills on a touch, at the open on a gap); no partial exits; the trail activates on
 the strategy-bar close, not on the best price so far; the trail's ATR is FROZEN at the
@@ -132,11 +133,15 @@ class StrategyExit:
 @dataclass(frozen=True)
 class PaperClose:
     """How a position closed: the reason, the level on the managed series, when, and
-    whether the bar opened beyond the level (a gap)."""
+    whether the bar opened beyond the level (a gap).
+
+    `price_paise` is None in one case only: a session that ended before the position saw a
+    single usable bar (SESSION_END at the session close, review round 1 MINOR-1): no price
+    is invented, and the book books the close with no money."""
 
     reason: CloseReason
-    price_paise: int
-    at: dt.datetime  # the open time of the bar the close happened in
+    price_paise: int | None
+    at: dt.datetime  # the open time of the bar the close happened in (see above)
     gap: bool
 
 
@@ -368,19 +373,21 @@ def _manage(
                 events.append(_stop_moved_event(state, stop, trailed, bar, bar_ts, bar_ts + res))
                 stop, trail_active = trailed, True
 
-    session_over = now >= dt.datetime.combine(session_date, SESSION_CLOSE_IST, IST)
-    if closed is None and session_over:
-        if last_close is None or last_close_at is None:
+    session_close = dt.datetime.combine(session_date, SESSION_CLOSE_IST, IST)
+    if closed is None and now >= session_close:
+        if last_close is None or last_close_at is None:  # MINOR-1: a final state, no price
             log.warning(
-                "paper: trade %s: the session of %s is over but no usable bar was managed; "
-                "left open (no price is invented)",
+                "paper: trade %s: the session of %s is over and no usable bar was managed; "
+                "closed SESSION_END with no price (none is invented)",
                 state.trade_id,
                 session_date,
             )
+            closed = PaperClose("SESSION_END", None, session_close, gap=False)
+            events.append(_session_over_event(state, closed, stop, res_min, "no_usable_bar"))
         else:  # no bar at or after exit_time: the last close the position saw (A5)
             closed = PaperClose("SESSION_END", last_close, last_close_at, gap=False)
-            events.append(_session_over_event(state, closed, stop, res_min))
-    if last_ts is None or (hi <= lo and closed is None):
+            events.append(_session_over_event(state, closed, stop, res_min, "session_over"))
+    if closed is None and hi <= lo:
         return replace(state, pending_exit=pending), []  # nothing new: only remember an exit
 
     new_state = replace(
@@ -388,7 +395,9 @@ def _manage(
         stop_paise=stop,
         trail_active=trail_active,
         last_bar_ts=last_ts,
-        bars_held=bars_held(state.opened_at, last_ts + res, rules.tf_min),
+        bars_held=state.bars_held
+        if last_ts is None
+        else bars_held(state.opened_at, last_ts + res, rules.tf_min),
         sessions_held=state.sessions_held + sessions_held(new_dates),
         closed=closed,
         pending_exit=None if closed is not None else pending,
@@ -547,15 +556,17 @@ def _closed_event(
 
 
 def _session_over_event(
-    state: PositionState, close: PaperClose, stop: int, res_min: int
+    state: PositionState, close: PaperClose, stop: int, res_min: int, fallback: str
 ) -> PaperEvent:
-    """The CLOSED event of the session-end fallback: no bar at or after exit_time, the
-    session is over, so the last close the position saw is the price (decision A5)."""
+    """The CLOSED event of the session-end fallbacks: no bar at or after exit_time and the
+    session is over, so the last close the position saw is the price (decision A5,
+    "session_over"); or it never saw a usable bar, so there is no price ("no_usable_bar",
+    stamped at the session close; review round 1 MINOR-1)."""
     detail: dict[str, Any] = {
         "reason": close.reason,
         "price_paise": close.price_paise,
         "gap": close.gap,
-        "fallback": "session_over",  # no bar at or after exit_time on the opening date
+        "fallback": fallback,
         "bar_close_ts": close.at.isoformat(),
         "bar_close_paise": close.price_paise,
         "stop_paise": stop,
