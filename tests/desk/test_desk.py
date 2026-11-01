@@ -6,6 +6,7 @@ Everything runs on synthetic bars through a fake bar source; no network, no brok
 from __future__ import annotations
 
 import datetime as dt
+import zlib
 
 import numpy as np
 import pandas as pd
@@ -64,6 +65,11 @@ def synthetic(
     )
 
 
+def _seed(key: str, salt: int = 0) -> int:
+    """A per-key seed that is the same in every process (str hash() is salted per run)."""
+    return (zlib.crc32(key.encode()) + salt) % 1000
+
+
 def _yesterday_close() -> pd.Timestamp:
     """Deterministic feed end: yesterday 15:30 IST, whatever the wall clock says."""
     return (pd.Timestamp.now(tz=IST).normalize() - pd.Timedelta(days=1)) + pd.Timedelta(
@@ -82,7 +88,7 @@ class FakeSource:
 
     def fetch(self, specs, days, since=None):
         end = _yesterday_close()
-        return {k: self.frames.get(k, synthetic(seed=hash(k) % 1000, end=end)) for k in specs}
+        return {k: self.frames.get(k, synthetic(seed=_seed(k), end=end)) for k in specs}
 
 
 class FakeDhanBars:
@@ -99,7 +105,7 @@ class FakeDhanBars:
         return {
             k: pd.DataFrame(columns=COLUMNS)
             if k in self.empty_for
-            else synthetic(seed=hash(k) % 1000, end=end)
+            else synthetic(seed=_seed(k), end=end)
             for k in specs
         }
 
@@ -112,7 +118,7 @@ class FakeYahooBars:
 
     def fetch(self, specs, days, since=None):
         end = _yesterday_close()
-        return {k: synthetic(seed=hash(k) % 1000 + 1, end=end) for k in specs}
+        return {k: synthetic(seed=_seed(k, salt=1), end=end) for k in specs}
 
 
 class FakeNotifier:
