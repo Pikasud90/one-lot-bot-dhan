@@ -13,13 +13,14 @@ Dependencies are injected (no `current_settings()`), so the book is hermetic.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import json
 import logging
 import math
 import threading
 from collections import OrderedDict
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from functools import partial
 from numbers import Real
@@ -29,7 +30,7 @@ from typing import Any, Literal, NamedTuple, cast
 # error, so a NEW module stays at zero only by naming it here (the flags are untouched).
 import pandas as pd  # type: ignore[import-untyped]
 from sqlalchemy import Engine, Text, inspect, select, type_coerce
-from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 
 from ..clock import IST, now_ist
 from ..config import BacktestCfg, PaperCfg
@@ -227,6 +228,7 @@ class PaperBook:
         self._unpriced: set[tuple[int, dt.datetime]] = set()  # PRICING_UNAVAILABLE said once
         # on_alert calls that failed at runtime, retried by step (review 1, MINOR-3)
         self._retry: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._retry_logged: set[str] = set()  # retries whose traceback was already logged
         self._tracked: frozenset[str] | None = None  # the desk's series (retire_untracked)
         METADATA.create_all(engine, tables=[paper_trades, paper_events])  # no-op if present
         self._load_active()
@@ -241,9 +243,11 @@ class PaperBook:
         PaperAlertError for an alert it cannot record (the desk hook logs and counts it;
         the alert itself is never blocked by the paper book).
 
-        Any OTHER failure (a locked or broken database) re-raises too, but first keeps a
-        deep copy of the alert so the next step retries it: the trade is still booked
-        exactly once, at the alert's own time (review 1, MINOR-3).
+        A DATABASE failure (a locked or broken database, see `is_database_failure`)
+        re-raises too, but first keeps a deep copy of the alert so the next step retries
+        it: the trade is still booked exactly once, at the alert's own time (review 1,
+        MINOR-3). Any other failure is a deterministic bug: it re-raises (the desk logs it
+        once) and is never retried, since a retry would only repeat it (review 2).
         """
         _require_aware(now, "now")
         if not self.cfg.enabled:
@@ -253,11 +257,11 @@ class PaperBook:
             trade, _ = self._open(alert_id, alert, now, opened_by="on_alert")
         except PaperAlertError:
             raise  # an unrecordable alert: a retry cannot fix it
-        except Exception:
-            self._keep_for_retry(alert_id, alert)
+        except Exception as exc:
+            if is_database_failure(exc):
+                self._keep_for_retry(alert_id, alert)
             raise
-        with self._lock:
-            self._retry.pop(alert_id, None)
+        self._forget_retry(alert_id)
         return trade
 
     def step(
@@ -330,6 +334,7 @@ class PaperBook:
             self._retry.move_to_end(alert_id)
             while len(self._retry) > RETRY_CAP:
                 dropped, _ = self._retry.popitem(last=False)
+                self._retry_logged.discard(dropped)
                 log.warning(
                     "paper: retry set full (%d); alert %s dropped, a restart within "
                     "reconcile_days still books it",
@@ -338,33 +343,61 @@ class PaperBook:
                 )
 
     def _retry_failed_alerts(self, now: dt.datetime) -> bool:
-        """Book the alerts whose on_alert failed, oldest first. False on a locked database."""
+        """Book the alerts whose on_alert hit a database failure, oldest first.
+
+        A database failure is not alert-specific, so the phase stops at the first one
+        (as BUG-1 does for fills): its traceback is logged once per alert, later failures of
+        that alert are one-line warnings, and hook_errors counts at most once per step for
+        this phase (review round 2). A non-database error at retry is a deterministic bug:
+        logged once with its traceback and dropped, never retried. Returns False when the
+        database is locked, so the step stops there too.
+        """
         with self._lock:
             pending = list(self._retry.items())
-        for alert_id, alert in pending:
-            try:
-                self._open(alert_id, alert, now, opened_by="on_alert")
-            except OperationalError as exc:
-                if database_locked(exc):
-                    log.error("paper: database is locked retrying alert %s: %s", alert_id, exc.orig)
-                    with self._lock:
-                        self._counts["hook_errors"] += 1
-                    return False
-                self._retry_failed(alert_id)
-                continue
-            except PaperAlertError as exc:  # not kept by on_alert; belt and braces
-                log.warning("paper: alert %s dropped from the retry set: %s", alert_id, exc)
-            except Exception:
-                self._retry_failed(alert_id)
-                continue
-            with self._lock:
-                self._retry.pop(alert_id, None)
-        return True
+        failed = False
+        try:
+            for alert_id, alert in pending:
+                try:
+                    self._open(alert_id, alert, now, opened_by="on_alert")
+                except PaperAlertError as exc:  # not kept by on_alert; belt and braces
+                    log.warning("paper: alert %s dropped from the retry set: %s", alert_id, exc)
+                except Exception as exc:
+                    failed = True
+                    if not is_database_failure(exc):
+                        log.exception(
+                            "paper: retrying alert %s hit a non-database error; dropped from "
+                            "the retry set, never retried",
+                            alert_id,
+                        )
+                    else:
+                        self._log_retry_failure(alert_id, exc)
+                        return not database_locked(exc)
+                self._forget_retry(alert_id)
+            return True
+        finally:
+            if failed:
+                with self._lock:
+                    self._counts["hook_errors"] += 1
 
-    def _retry_failed(self, alert_id: str) -> None:
-        log.exception("paper: retrying alert %s failed; kept for the next step", alert_id)
+    def _log_retry_failure(self, alert_id: str, exc: BaseException) -> None:
+        """The traceback once per alert; a one-line warning on every later failure."""
         with self._lock:
-            self._counts["hook_errors"] += 1
+            first = alert_id not in self._retry_logged
+            self._retry_logged.add(alert_id)
+        if first:
+            log.error(
+                "paper: retrying alert %s failed (database); kept, retried every step: %s",
+                alert_id,
+                _brief(exc),
+                exc_info=exc,
+            )
+        else:
+            log.warning("paper: retrying alert %s still failing: %s", alert_id, _brief(exc))
+
+    def _forget_retry(self, alert_id: str) -> None:
+        with self._lock:
+            self._retry.pop(alert_id, None)
+            self._retry_logged.discard(alert_id)
 
     def _retire_overdue_untracked(self, now: dt.datetime) -> list[PaperEvent]:
         with self._lock:
@@ -453,18 +486,21 @@ class PaperBook:
             known = self._active.get(alert_id)
         if known is not None:
             return known, False
-        stored = self._fetch(alert_id)
+        with _database_io():
+            stored = self._fetch(alert_id)
         if stored is not None:
             with self._lock:
                 return self._remember(stored), False
-        values = trade_values(alert_id, alert, self.specs, now)
+        values = trade_values(alert_id, alert, self.specs, now)  # pure: a bug here is a bug
         if values["kind"] == "INDEX":
             values["plan"]["pricing"] = self._freeze_option_pricing(values["plan"])
         try:
-            trade = self._insert_opened(values, opened_by)
+            with _database_io():
+                trade = self._insert_opened(values, opened_by)
         except IntegrityError:
             # Another thread or PaperBook on this database won the race for the alert id.
-            raced = self._fetch(alert_id)
+            with _database_io():
+                raced = self._fetch(alert_id)
             if raced is None:
                 raise
             with self._lock:
@@ -912,6 +948,33 @@ def _no_fill_values(close_reason: str, now: dt.datetime) -> dict[str, Any]:
         "net_paise": 0,
         "updated_at": now,
     }
+
+
+_DATABASE_FAILURE = "_paper_database_failure"  # set on exceptions raised by database I/O
+
+
+@contextlib.contextmanager
+def _database_io() -> Iterator[None]:
+    """Mark whatever is raised while the book reads or writes the database as a database
+    failure, whatever its type: the cursor, the driver or the disk failed, not the alert."""
+    try:
+        yield
+    except Exception as exc:
+        with contextlib.suppress(AttributeError, TypeError):
+            setattr(exc, _DATABASE_FAILURE, True)
+        raise
+
+
+def is_database_failure(exc: BaseException) -> bool:
+    """A failure a later retry can fix: a DBAPI error, an OS error (a full or vanished
+    disk), or anything raised during the book's database I/O. Everything else is a bug."""
+    return isinstance(exc, (DBAPIError, OSError)) or bool(getattr(exc, _DATABASE_FAILURE, False))
+
+
+def _brief(exc: BaseException) -> str:
+    """One line: the driver's message for a DBAPI error, else the exception's first line."""
+    text = str(getattr(exc, "orig", None) or exc) or type(exc).__name__
+    return text.splitlines()[0]
 
 
 class _StepStopped(Exception):

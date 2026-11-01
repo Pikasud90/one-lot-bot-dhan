@@ -24,16 +24,19 @@ from .conftest import THU, ist, make_alert, make_bars, table_rows
 
 
 @contextlib.contextmanager
-def broken_inserts(engine: Engine) -> Iterator[None]:
-    """Every INSERT into paper_trades raises while the block runs."""
+def broken_inserts(engine: Engine) -> Iterator[dict[str, int]]:
+    """Every INSERT into paper_trades raises at the cursor while the block runs (a failure
+    while talking to the database); yields how many were attempted."""
+    hits = {"n": 0}
 
     def boom(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
         if statement.lstrip().upper().startswith("INSERT") and "paper_trades" in statement:
+            hits["n"] += 1
             raise RuntimeError("injected: database unavailable")
 
     event.listen(engine, "before_cursor_execute", boom)
     try:
-        yield
+        yield hits
     finally:
         event.remove(engine, "before_cursor_execute", boom)
 
@@ -116,3 +119,104 @@ def test_the_retry_set_is_bounded_and_drops_the_oldest_with_a_warning(
     book.step(ist(THU, 10, 5, 30), bars())
 
     assert sorted(r["alert_id"] for r in table_rows(engine, paper_trades)) == ["q2", "q3", "q4"]
+
+
+# ── final fix (review round 2 MINOR): retries are quiet and only for database failures ─
+
+
+def insert_attempts(engine: Engine) -> dict[str, int]:
+    seen = {"n": 0}
+
+    def spy(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+        if statement.lstrip().upper().startswith("INSERT") and "paper_trades" in statement:
+            seen["n"] += 1
+
+    event.listen(engine, "before_cursor_execute", spy, insert=True)
+    return seen
+
+
+def test_a_persistent_database_failure_is_retried_quietly(make_book, engine, caplog):
+    """The Reviewer's probe: 3 failed alerts, the failure persists for 4 steps. Before: every
+    alert every step, 12 tracebacks, hook_errors 12. Now: the retry phase stops at the first
+    database failure (it is not alert-specific), one traceback per alert then one-line
+    warnings, and hook_errors at most once per step."""
+    book = make_book()
+    with broken_inserts(engine) as hits:
+        for i in range(3):
+            with pytest.raises(RuntimeError):
+                book.on_alert(make_alert(alert_id=f"p{i}"), ist(THU, 10, 5, 4))
+        hits["n"] = 0
+        with caplog.at_level(logging.WARNING, logger="onelot.paper.book"):
+            for minute in range(6, 10):
+                book.step(ist(THU, 10, minute), bars())
+
+    assert hits["n"] == 4  # one per step: the oldest alert, then the phase stops
+    assert book.status()["hook_errors"] == 4
+    tracebacks = [r for r in caplog.records if r.exc_info is not None]
+    assert len(tracebacks) == 1 and "p0" in tracebacks[0].getMessage()
+    later = [r for r in caplog.records if r.levelno == logging.WARNING and r.exc_info is None]
+    assert len(later) == 3 and all("p0" in r.getMessage() for r in later)
+
+    book.step(ist(THU, 10, 10), bars())  # the database recovered: all three, oldest first
+    assert [r["alert_id"] for r in table_rows(engine, paper_trades)] == ["p0", "p1", "p2"]
+
+
+def test_a_non_database_bug_is_raised_once_and_never_kept(make_book, engine, monkeypatch):
+    book = make_book()
+
+    def bug(*_a, **_k):
+        raise TypeError("a deterministic bug in the book")
+
+    monkeypatch.setattr("onelot.paper.book.trade_values", bug)
+    with pytest.raises(TypeError):
+        book.on_alert(make_alert(alert_id="b1"), ist(THU, 10, 5, 4))  # the desk logs it once
+    monkeypatch.undo()
+    attempts = insert_attempts(engine)
+
+    book.step(ist(THU, 10, 8), bars())
+
+    assert attempts["n"] == 0 and table_rows(engine, paper_trades) == []
+    assert book.status()["hook_errors"] == 0
+
+
+def test_a_non_database_bug_at_retry_drops_the_alert_after_one_traceback(
+    make_book, engine, monkeypatch, caplog
+):
+    book = make_book()
+    with broken_inserts(engine), pytest.raises(RuntimeError):
+        book.on_alert(make_alert(alert_id="d1"), ist(THU, 10, 5, 4))  # kept: a database failure
+
+    def bug(*_a, **_k):
+        raise TypeError("a deterministic bug in the book")
+
+    monkeypatch.setattr("onelot.paper.book.trade_values", bug)
+    with caplog.at_level(logging.WARNING, logger="onelot.paper.book"):
+        for minute in (6, 7, 8):
+            book.step(ist(THU, 10, minute), bars())
+    monkeypatch.undo()
+    book.step(ist(THU, 10, 9), bars())
+
+    assert [r for r in caplog.records if r.exc_info is not None][0].getMessage().count("d1") == 1
+    assert len([r for r in caplog.records if r.exc_info is not None]) == 1
+    assert book.status()["hook_errors"] == 1  # the step that found the bug, once
+    assert table_rows(engine, paper_trades) == []  # dropped: never retried again
+
+
+def test_an_os_error_while_booking_is_a_database_failure_and_is_retried(
+    make_book, engine, monkeypatch
+):
+    book = make_book()
+    real = book._insert_opened
+    calls = {"n": 0}
+
+    def disk_full(values, opened_by):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError(28, "No space left on device")
+        return real(values, opened_by)
+
+    monkeypatch.setattr(book, "_insert_opened", disk_full)
+    with pytest.raises(OSError):
+        book.on_alert(make_alert(alert_id="o1"), ist(THU, 10, 5, 4))
+    book.step(ist(THU, 10, 8), bars())
+    assert [r["alert_id"] for r in table_rows(engine, paper_trades)] == ["o1"]
