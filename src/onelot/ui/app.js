@@ -499,7 +499,7 @@ function positionsTable(ps) {
       <td>${esc(p.side.replace("_", " "))}</td><td class="n">${fmt(p.entry_price)}</td><td class="n">${fmt(p.last_underlying)}</td>
       <td class="n">${fmt(p.stop_underlying)}${p.trail_active ? " <span class='dim'>trail</span>" : ""}</td><td class="n">${p.target_underlying != null ? fmt(p.target_underlying) : "–"}</td>
       <td class="n ${cls(p.r_now)}">${fmt(p.r_now, 2)}R</td><td class="n ${cls(p.unrealized)}">${rup(p.unrealized)}</td>
-      <td class="${p.exit_advice ? "neg pos-advice" : "muted"}">${p.exit_advice ? "EXIT · " + esc(p.exit_advice.replace("_", " ")) : "hold"}</td><td class="n">${p.bars_held} bars</td>
+      <td class="${p.exit_advice || p.session_over ? "neg pos-advice" : "muted"}">${p.session_over ? esc(p.hold_check || "session over") : p.exit_advice ? "EXIT · " + esc(p.exit_advice.replace("_", " ")) : "hold"}</td><td class="n">${p.bars_held} bars</td>
       <td><input type="number" step="0.05" id="dx_${p.id}" placeholder="exit price" style="width:110px;display:inline-block;margin:0">
         <button class="btn small danger" data-dclose="${p.id}">Closed</button></td></tr>`).join("") + `</tbody></table>`;
 }
@@ -548,7 +548,7 @@ function renderDesk(d) {
   const risk = d.risk || {};
   $("desk-risk-line").textContent = `risk ${risk.state || "–"} · realised ${rup(risk.realized_pnl)} · ${risk.trades_taken || 0} trade(s) today`;
   // positions (re-render only when something changed)
-  const psig = JSON.stringify((d.positions || []).map(p => [p.id, p.exit_advice, p.stop_underlying, p.last_underlying, p.unrealized]));
+  const psig = JSON.stringify((d.positions || []).map(p => [p.id, p.exit_advice, p.session_over, p.stop_underlying, p.last_underlying, p.unrealized]));
   if (desk.sig.pos !== psig) {
     desk.sig.pos = psig;
     $("desk-positions").innerHTML = positionsTable(d.positions || []);

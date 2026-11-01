@@ -23,7 +23,7 @@ from typing import Any
 import pandas as pd
 from sqlalchemy import Engine, select, update
 
-from ..clock import IST, now_ist
+from ..clock import IST, now_ist, to_ist
 from ..data.schema import desk_positions, desk_signals
 from ..data.universe import load_specs
 from ..notify.base import Notification, NotificationLevel, shown_confidence
@@ -44,6 +44,8 @@ log = logging.getLogger(__name__)
 # Leads the title of a SIGNAL notification built on delayed (Yahoo) bars, so a truncated
 # OS toast still shows it. The alert payload keeps the flag in data.delayed / delay_note.
 DELAYED_TITLE_MARKER = "(delayed ~15m)"
+# The card of an intraday position left open from an earlier session (US-004 decision E).
+SESSION_OVER_NOTE = "session over: record the broker square-off"
 
 
 def _iso(v: dt.datetime | None) -> str | None:
@@ -722,12 +724,15 @@ class Desk:
                 and p["sessions_held"] > int(self.cfg.swing_max_sessions)
             ):
                 advice = "TIME_STOP"
-            p["exit_advice"] = advice
             p["hold_check"] = f"strategy {p['strategy']} {p['timeframe']}: " + (
                 "still " + ("long" if sign > 0 else "short") + " — HOLD"
                 if not strat_exit
                 else strat_exit.replace("_", " ").lower()
             )
+            if horizon == "intraday" and to_ist(opened).date() < to_ist(now).date():
+                advice = None  # the broker squared it off at the close: no trading advice
+                self._note_session_over(pid, p)
+            p["exit_advice"] = advice
             if advice:
                 self.notifier.send(
                     Notification(
@@ -746,6 +751,22 @@ class Desk:
                 conn.execute(
                     update(desk_positions).where(desk_positions.c.id == pid).values(payload=p)
                 )
+
+    def _note_session_over(self, pid: str, p: dict) -> None:
+        """An intraday position from an earlier session (US-004 decision E): the broker has
+        squared it off, so it raises no EXIT (nothing to trade, no phone reminders). Its card
+        says so, and the owner is told once, as an INFO (INFO never reaches Telegram); the
+        flag is in the stored payload, so a restart does not say it again."""
+        p["hold_check"] = SESSION_OVER_NOTE
+        if p.get("session_over"):
+            return
+        p["session_over"] = True
+        self.notifier.info(
+            f"Session over: {p['label']} {p['side'].replace('_', ' ')}",
+            "This intraday position is from an earlier session; the broker squared it off "
+            "at the close. Record the square-off price with Closed.",
+            dedup_key=f"desk:session_over:{pid}",
+        )
 
     def _unrealized(self, p: dict, last: float, now: dt.datetime) -> float:
         sign = 1 if p["direction"] == "long" else -1
