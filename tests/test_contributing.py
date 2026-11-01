@@ -31,6 +31,9 @@ GATE_STEPS = [
 ]
 # The same steps as the fake interpreter logs them: "$*" after the shell removed quotes.
 LOGGED_STEPS = [" ".join(shlex.split(step)) for step in GATE_STEPS]
+# The prelude prints the tool versions first, so a wrong interpreter is obvious.
+VERSION_PROBES = ["-m ruff --version", "-m mypy --version"]
+LOGGED_RUN = VERSION_PROBES + LOGGED_STEPS
 
 FAKE_PYTHON = """\
 #!/usr/bin/env bash
@@ -174,18 +177,19 @@ def test_gate_runs_every_step_with_the_venv_python_from_the_repo_root(tmp_path: 
     root, fake = _gate_copy(tmp_path, venv=True)
     proc, steps = _run_gate(root, tmp_path)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert steps == [f"{fake} {step}" for step in LOGGED_STEPS]
+    assert steps == [f"{fake} {step}" for step in LOGGED_RUN]
 
 
 @needs_bash
-@pytest.mark.parametrize("failing", range(len(LOGGED_STEPS)), ids=LOGGED_STEPS)
-def test_gate_stops_with_a_non_zero_exit_at_the_first_failing_step(
+@pytest.mark.parametrize("failing", range(len(LOGGED_RUN)), ids=LOGGED_RUN)
+def test_gate_stops_with_a_non_zero_exit_at_the_first_failing_call(
     tmp_path: Path, failing: int
 ) -> None:
+    """A step failing stops the gate; so does a version probe (wrong or broken interpreter)."""
     root, _ = _gate_copy(tmp_path, venv=True)
-    proc, steps = _run_gate(root, tmp_path, fail_on=LOGGED_STEPS[failing])
+    proc, steps = _run_gate(root, tmp_path, fail_on=LOGGED_RUN[failing])
     assert proc.returncode != 0
-    assert len(steps) == failing + 1, f"steps after the failure still ran: {steps}"
+    assert len(steps) == failing + 1, f"calls after the failure still ran: {steps}"
 
 
 @needs_bash
@@ -193,7 +197,7 @@ def test_gate_falls_back_to_python_on_path_without_a_venv(tmp_path: Path) -> Non
     root, fake = _gate_copy(tmp_path, venv=False)
     proc, steps = _run_gate(root, tmp_path, path_prefix=str(fake.parent))
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert [s.split(" ", 1)[1] for s in steps] == LOGGED_STEPS
+    assert [s.split(" ", 1)[1] for s in steps] == LOGGED_RUN
 
 
 @needs_bash
@@ -209,4 +213,4 @@ def test_gate_falls_back_to_python3_without_a_venv_or_a_bare_python(tmp_path: Pa
         (tools / tool).symlink_to(found)
     proc, steps = _run_gate(root, tmp_path, path=f"{python3.parent}{os.pathsep}{tools}")
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert steps == [f"{python3} {step}" for step in LOGGED_STEPS]
+    assert steps == [f"{python3} {step}" for step in LOGGED_RUN]

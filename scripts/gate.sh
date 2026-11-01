@@ -16,6 +16,9 @@ else
 fi
 trap 'echo "gate: FAIL (exit $?) at: $BASH_COMMAND" >&2' ERR
 echo "gate: $PY in $ROOT"
+# Tool versions first, so a wrong interpreter is obvious before any step runs.
+"$PY" -m ruff --version
+"$PY" -m mypy --version
 
 # --- steps: CONTRIBUTING.md lists exactly these ---
 "$PY" -m ruff format --check .
