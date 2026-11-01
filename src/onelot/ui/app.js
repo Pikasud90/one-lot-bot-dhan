@@ -142,12 +142,14 @@ function tokenBadge() {
   return bd(`token ${left < 1 ? Math.round(left * 60) + "m" : Math.round(left) + "h"} left`, left < 2 ? "warn" : "ok");
 }
 const bd = (t, c = "") => `<span class="badge ${c}"><span>${esc(t)}</span></span>`;
+// US-028: name the instruments on delayed (Yahoo) bars, first 3 keys then "+N". Plain text on purpose: bd() runs esc() on it once and textContent needs none, so escaping here would double-escape (M&M).
+const delayNote = (s) => { const k = (s && s.delayed_keys) || []; return k.length ? `delayed ~15 min: ${k.slice(0, 3).join(", ")}${k.length > 3 ? ` +${k.length - 3}` : ""}` : (s && s.delayed ? "delayed ~15 min" : "live"); };
 function renderBadges(s) {
   const st = s.status || {}, h = s.health || {}, risk = s.risk || {}, d = s.desk || {};
   const b = [];
   b.push(bd(st.mode || "?", st.mode === "LIVE" ? "bad" : "ok"));
   b.push(bd("feed " + (st.broker || "?"), st.broker === "mock" ? "warn" : "ok"));
-  if (d.source) b.push(bd(`desk ${d.source.name}${d.source.delayed ? " ~15m" : " live"}`, d.source.delayed ? "warn" : "ok"));
+  if (d.source) b.push(bd(`desk ${d.source.name} ${delayNote(d.source)}`, d.source.delayed ? "warn" : "ok"));
   const hs = h.state || "?";
   b.push(bd(hs, hs === "HEALTHY" ? "ok" : (hs === "DEAD" ? "bad" : "warn")));
   b.push(bd(risk.state || "?", risk.state === "HALTED" ? "bad" : "ok"));
@@ -540,7 +542,7 @@ function renderDesk(d) {
   if (!desk.force && now - desk.rendered < 4000) return;
   desk.rendered = now; desk.force = false;
   const src = d.source || {}, ses = d.session || {};
-  $("desk-source").textContent = `${src.name} · ${src.resolution} bars${src.delayed ? " · delayed ~15 min" : " · live"} · poll ${src.poll_seconds}s · ` +
+  $("desk-source").textContent = `${src.name} · ${src.resolution} bars · ${delayNote(src)} · poll ${src.poll_seconds}s · ` +
     `${ses.open ? "market open" : (ses.trading_day ? "market closed" : "holiday / weekend")} · ${ses.entries_allowed ? "entries allowed" : "no new entries"} · updated ${hhmm(d.updated_at)}` +
     (src.last_error ? ` · ⚠ ${src.last_error.slice(0, 80)}` : "");
   const risk = d.risk || {};
