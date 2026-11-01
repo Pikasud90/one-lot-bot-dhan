@@ -513,11 +513,30 @@ const todayIST = () => { const p = Object.fromEntries(new Intl.DateTimeFormat("e
 const paperChip = (st) => { const c = st === "PENDING_FILL" ? ["pending", "pending"] : st === "OPEN" ? ["open", "open"] : st === "NO_FILL" ? ["nofill", "no fill"] : st === "CLOSED" ? ["closed", "closed"] : ["", String(st ?? "?").toLowerCase()]; return `<span class="pchip ${c[0]}">${esc(c[1])}</span>`; };
 const paperWhen = (s, today) => !s ? "–" : (String(s).slice(0, 10) === today ? hhmm(s) : tsf(s));
 const paperRow = (t, today = todayIST()) => `<tr><td>${paperChip(t.status)}</td> <td><b>${esc(t.instrument)}</b> <span class="dim">${esc(t.strategy)} · ${esc(t.timeframe)}${t.qty > 1 ? ` · qty ${esc(t.qty)}` : ""}</span></td> <td>${esc(String(t.side ?? "").replace(/_/g, " "))}</td> <td class="${t.grade === "live" ? "pos" : "warn"}">${esc(t.grade)}</td> <td class="n">${esc(inr(t.entry))}</td> <td class="n">${esc(inr(t.exit))}</td> <td class="n ${t.gross == null ? "" : cls(Number(t.gross))}">${esc(inr(t.gross))}</td> <td class="n ${t.net == null ? "" : cls(Number(t.net))}">${esc(inr(t.net))}</td> <td>${esc(t.close_reason ? String(t.close_reason).replace(/_/g, " ") : "–")}</td> <td class="n">${esc(paperWhen(t.created_at, today))}${t.closed_at ? ` → ${esc(paperWhen(t.closed_at, today))}` : ""}</td></tr>`;
-const paperShown = (trades, today) => { const all = Array.isArray(trades) ? trades.filter((t) => t && typeof t === "object") : []; return [...all.filter((t) => t.status === "PENDING_FILL" || t.status === "OPEN"), ...all.filter((t) => (t.status === "CLOSED" || t.status === "NO_FILL") && String(t.closed_at ?? "").slice(0, 10) === today)]; };
-const paperPanel = (p) => { if (!p || !p.enabled) return `<div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sleep"/></svg> Paper trading is off: no new paper trades are opened.</div>`; const today = todayIST(), rows = paperShown(p.trades, today); if (!rows.length) return `<div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sleep"/></svg> ${Array.isArray(p.trades) && p.trades.length ? "Nothing open, and none closed today." : "No paper trades yet."}</div>`; return `<table class="paper"><thead><tr><th>Status</th> <th>Instrument</th> <th>Side</th> <th>Grade</th> <th class="n" title="price per share, or per option unit of the lot">Entry / unit</th> <th class="n" title="price per share, or per option unit of the lot">Exit / unit</th> <th class="n" title="the whole trade before costs: (exit - entry) x qty for a buy or an option, (entry - exit) x qty for a sell">Gross (trade)</th> <th class="n" title="the whole trade after costs; empty until costs are applied">Net (trade)</th> <th>Close reason</th> <th class="n">Time</th></tr></thead><tbody>${rows.map((t) => paperRow(t, today)).join("")}</tbody></table>`; };
-const paperMeta = (p) => { if (!p || !p.enabled) return ""; const s = p.status || {}, d = p.totals_today || {}, errors = (Number(s.hook_errors) || 0) + (Number(s.desk_hook_errors) || 0); return `today: ${d.closed ?? 0} closed · ${d.wins ?? 0} won · ${d.losses ?? 0} lost · gross ${inr(d.gross_rupees)} · net ${inr(d.net_rupees)}${d.net_rupees == null ? " (no costs yet)" : ""} · since restart: ${s.opened ?? 0} opened · ${s.filled ?? 0} filled · ${s.no_fill ?? 0} no fill${errors ? ` · ${errors} errors (see the log)` : ""}`; };
+const paperList = (trades) => Array.isArray(trades) ? trades.filter((t) => t && typeof t === "object") : [];
+const paperOpen = (trades) => paperList(trades).filter((t) => t.status === "PENDING_FILL" || t.status === "OPEN");
+const paperClosedOn = (trades, day) => paperList(trades).filter((t) => (t.status === "CLOSED" || t.status === "NO_FILL") && String(t.closed_at ?? "").slice(0, 10) === day);
+const paperShown = (trades, today) => [...paperOpen(trades), ...paperClosedOn(trades, today)];
+// US-032: a session date "2026-10-30" -> "Fri 30 Oct", read from the string itself (never the browser's zone); anything else is shown as it came.
+const paperDay = (d) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d ?? "")); const t = m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])) : null; return t && t.getUTCMonth() === +m[2] - 1 && t.getUTCDate() === +m[3] ? `${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][t.getUTCDay()]} ${+m[3]} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][+m[2] - 1]}` : (d == null ? "–" : String(d)); };
+const paperSession = (p) => (p && p.last_session && typeof p.last_session === "object" && /^\d{4}-\d{2}-\d{2}$/.test(String(p.last_session.date))) ? p.last_session : null;
+const paperFallback = (p) => !!paperSession(p) && !!p.totals_today && p.totals_today.closed === 0;
+const paperEmpty = (msg) => `<div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sleep"/></svg> ${esc(msg)}</div>`;
+const paperGroup = (label) => `<tr class="pgroup"><td colspan="10">${esc(label)}</td></tr>`;
+const paperHead = (s, note) => `<div class="paper-head"><b>Last session · ${esc(paperDay(s.date))}</b>${note ? ` <span class="dim">${esc(note)}</span>` : ""}</div>`;
+const paperTable = (body) => `<table class="paper"><thead><tr><th>Status</th> <th>Instrument</th> <th>Side</th> <th>Grade</th> <th class="n" title="price per share, or per option unit of the lot">Entry / unit</th> <th class="n" title="price per share, or per option unit of the lot">Exit / unit</th> <th class="n" title="the whole trade before costs: (exit - entry) x qty for a buy or an option, (entry - exit) x qty for a sell">Gross (trade)</th> <th class="n" title="the whole trade after costs; empty until costs are applied">Net (trade)</th> <th>Close reason</th> <th class="n">Time</th></tr></thead><tbody>${body}</tbody></table>`;
+const paperCut = (s, past) => { const listed = paperList(past).filter((t) => t.status === "CLOSED").length, total = Number((s.totals || {}).closed) || 0; return listed < total ? `${listed} of ${total} closes listed (the list holds the 200 newest trades)` : ""; };
+const paperPanel = (p, view = "today") => { if (!p || !p.enabled) return paperEmpty("Paper trading is off: no new paper trades are opened."); const today = todayIST(), all = paperList(p.trades), s = paperSession(p), rows = (ts) => ts.map((t) => paperRow(t, today)).join(""), gone = "None of its trades is in the list (it holds the 200 newest)."; if (!all.length) return paperEmpty("No paper trades yet."); if (view === "all") return paperTable(rows(all)); if (view === "last") { if (!s) return paperEmpty("No earlier session with closed or no-fill paper trades yet."); const past = paperClosedOn(all, s.date); return paperHead(s, paperCut(s, past)) + (past.length ? paperTable(rows(past)) : paperEmpty(gone)); } if (!paperFallback(p)) { const shown = paperShown(all, today); return shown.length ? paperTable(rows(shown)) : paperEmpty("Nothing open, and none closed today."); } const now = [...paperOpen(all), ...paperClosedOn(all, today)], past = paperClosedOn(all, s.date), cut = paperCut(s, past), label = `Last session · ${paperDay(s.date)}`, head = paperHead(s, cut ? `nothing closed today yet · ${cut}` : "nothing closed today yet"); if (!now.length && !past.length) return head + paperEmpty(gone); return head + paperTable(rows(now) + (now.length || !past.length ? paperGroup(past.length ? label : `${label} · none of its trades is in the list`) : "") + rows(past)); };
+const paperSince = (s) => { const errors = (Number(s.hook_errors) || 0) + (Number(s.desk_hook_errors) || 0); return `since restart: ${s.opened ?? 0} opened · ${s.filled ?? 0} filled · ${s.no_fill ?? 0} no fill${errors ? ` · ${errors} errors (see the log)` : ""}`; };
+const paperTotals = (label, d) => `${label}: ${d.closed ?? 0} closed · ${d.wins ?? 0} won · ${d.losses ?? 0} lost · gross ${inr(d.gross_rupees)} · net ${inr(d.net_rupees)}${d.net_rupees == null ? " (no costs yet)" : ""}`;
+const paperMeta = (p, view = "today") => { if (!p || !p.enabled) return ""; const st = p.status || {}, s = paperSession(p), last = s ? paperTotals(`last session ${paperDay(s.date)}`, s.totals || {}) : "last session: none before today"; if (view === "all") return `all: ${paperList(p.trades).length} trades listed, newest first (at most 200) · ${paperSince(st)}`; if (view === "last") return `${last} · ${paperSince(st)}`; if (paperFallback(p)) return `${last} · today: nothing closed yet · ${paperSince(st)}`; return `${paperTotals("today", p.totals_today || {})} · ${paperSince(st)}`; };
+// US-032: which trades the panel shows. Arrow keys / Home / End move along the radio group.
+const PAPER_VIEWS = ["today", "last", "all"];
+const paperViewOf = (v) => PAPER_VIEWS.includes(v) ? v : "today";
+const paperViewKey = (view, key) => { const n = PAPER_VIEWS.length, i = PAPER_VIEWS.indexOf(paperViewOf(view)); return key === "ArrowRight" || key === "ArrowDown" ? PAPER_VIEWS[(i + 1) % n] : key === "ArrowLeft" || key === "ArrowUp" ? PAPER_VIEWS[(i + n - 1) % n] : key === "Home" ? PAPER_VIEWS[0] : key === "End" ? PAPER_VIEWS[n - 1] : null; };
 // Fetched when the desk snapshot's version moves (and on opening the tab), at most every 5 s.
-const paperFeed = { at: 0, timer: null, version: null, shown: false };
+// `view` is the chosen view, `last` the last good answer (re-rendered at once on a switch).
+const paperFeed = { at: 0, timer: null, version: null, shown: false, view: "today", last: null };
 const liveTabActive = () => { const s = document.querySelector('section[data-tab="live"]'); return !!s && s.classList.contains("active"); };
 function wantPaper(force) {
   if (paperFeed.timer || (!force && paperFeed.version === lastDeskVersion)) return;
@@ -535,9 +554,10 @@ async function loadPaper() {
     if (!p || typeof p.enabled !== "boolean") throw new Error("unexpected reply from /api/paper");
     paperFeed.version = version;
     paperFeed.shown = true;
-    $("desk-paper").innerHTML = paperPanel(p);
+    paperFeed.last = p;
+    $("desk-paper").innerHTML = paperPanel(p, paperFeed.view);
     $("desk-paper-meta").className = "muted";
-    $("desk-paper-meta").textContent = paperMeta(p);
+    $("desk-paper-meta").textContent = paperMeta(p, paperFeed.view);
   } catch (e) {
     // The last table stays (still worth reading); the day line turns into a warning, and a
     // panel that never loaded says why instead of "Loading" for ever.
@@ -550,6 +570,27 @@ async function loadPaper() {
     if (paperFeed.version !== lastDeskVersion && liveTabActive()) wantPaper(false);
   }
 }
+// Select a view: one checked, tabbable button (roving tabindex), remembered per browser through
+// `store` (localStorage in a try/catch: a private window simply forgets) unless `remember` is
+// false (the start-up restore), shown at once from the last good answer. A failure line on the
+// day line is left as it is. Keys with Alt / Ctrl / Meta / Shift are the browser's, not ours.
+function showPaperView(view, remember = true) {
+  paperFeed.view = paperViewOf(view);
+  if (remember) store.set("paper.view", paperFeed.view);  // start-up restores, never writes
+  document.querySelectorAll("[data-paper-view]").forEach((b) => {
+    const on = b.dataset.paperView === paperFeed.view;
+    b.setAttribute("aria-checked", on ? "true" : "false");
+    b.tabIndex = on ? 0 : -1;
+  });
+  if (!paperFeed.last) return;
+  $("desk-paper").innerHTML = paperPanel(paperFeed.last, paperFeed.view);
+  if ($("desk-paper-meta").className !== "warn") $("desk-paper-meta").textContent = paperMeta(paperFeed.last, paperFeed.view);
+}
+const paperViewClick = (e) => { const b = e.target && e.target.closest ? e.target.closest("[data-paper-view]") : null; if (b) showPaperView(b.dataset.paperView); };
+const paperViewKeydown = (e) => { if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return; const b = e.target && e.target.closest ? e.target.closest("[data-paper-view]") : null, next = b ? paperViewKey(b.dataset.paperView, e.key) : null; if (!next) return; e.preventDefault(); showPaperView(next); const nb = document.querySelector(`[data-paper-view="${next}"]`); if (nb) nb.focus(); };
+document.addEventListener("click", paperViewClick);
+document.addEventListener("keydown", paperViewKeydown);
+showPaperView(store.get("paper.view", "today"), false);
 function accRow(r, isOpen) {
   const L = r.last || {}, R = r.regime || {}, H = r.health || {}, K = r.risk || {};
   const chips = (r.strategies || []).map(s => `<span class="schip ${s.verdict !== "none" ? s.verdict : ""} ${s.error ? "err" : ""}" title="${esc(s.reason || "")}">${esc(s.name)}@${esc(s.timeframe)}</span>`).join("");

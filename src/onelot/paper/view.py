@@ -86,7 +86,7 @@ def instrument_label(plan: Mapping[str, Any], kind: str, fallback: str) -> str:
 
 
 def totals_view(totals: DayTotals) -> dict[str, Any]:
-    """today_totals() for GET /api/paper: the money as rupee strings (None stays null)."""
+    """A day's totals for GET /api/paper: the money as rupee strings (None stays null)."""
     return {
         "closed": totals["closed"],
         "wins": totals["wins"],
@@ -94,6 +94,11 @@ def totals_view(totals: DayTotals) -> dict[str, Any]:
         "gross_rupees": format_rupees(totals["gross_paise"]),
         "net_rupees": format_rupees(totals["net_paise"]),
     }
+
+
+def last_session_view(day: dt.date, totals: DayTotals) -> dict[str, Any]:
+    """GET /api/paper's `last_session` (US-032): {date: "YYYY-MM-DD" (IST), totals}."""
+    return {"date": day.isoformat(), "totals": totals_view(totals)}
 
 
 def _iso(ts: dt.datetime | None) -> str | None:

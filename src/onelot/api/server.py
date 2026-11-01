@@ -144,14 +144,17 @@ def _iso(v):
 
 
 def _paper_payload(desk: object, now: dt.datetime) -> dict[str, Any]:
-    """GET /api/paper (US-030): {enabled, status, trades, totals_today} for `desk`'s book.
+    """GET /api/paper (US-030, US-032) for `desk`'s book:
+    {enabled, status, trades, totals_today, last_session}.
 
     `status` is the book's counters plus the desk's own `desk_hook_errors` (as in the desk
-    snapshot's paper block), every key present. Without a desk or a book, or with
-    paper.enabled false, it is `enabled: false` with no trades and null totals.
+    snapshot's paper block), every key present. `last_session` is {date (IST, YYYY-MM-DD),
+    totals (the shape of totals_today)} for the most recent earlier day with a closed or
+    no-fill trade, or null. Without a desk or a book, or with paper.enabled false, it is
+    `enabled: false` with no trades and null totals and last session.
     """
     from ..paper.book import RECENT_LIMIT, STATUS_KEYS
-    from ..paper.view import totals_view
+    from ..paper.view import last_session_view, totals_view
 
     book = getattr(desk, "paper", None) if desk is not None else None
     hook_errors = getattr(desk, "hook_errors", 0)
@@ -162,12 +165,22 @@ def _paper_payload(desk: object, now: dt.datetime) -> dict[str, Any]:
     valid = isinstance(hook_errors, int) and not isinstance(hook_errors, bool)
     status["desk_hook_errors"] = hook_errors if valid else 0
     if book is None or not book.enabled:
-        return {"enabled": False, "status": status, "trades": [], "totals_today": None}
+        return {
+            "enabled": False,
+            "status": status,
+            "trades": [],
+            "totals_today": None,
+            "last_session": None,
+        }
+    session = book.last_session(now)
     return {
         "enabled": True,
         "status": status,
         "trades": book.recent(RECENT_LIMIT),
         "totals_today": totals_view(book.today_totals(now)),
+        "last_session": (
+            None if session is None else last_session_view(session, book.day_totals(session))
+        ),
     }
 
 

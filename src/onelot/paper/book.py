@@ -31,7 +31,7 @@ import numpy as np
 # No pandas-stubs are pinned; every pandas module in the mypy baseline carries this one
 # error, so a NEW module stays at zero only by naming it here (the flags are untouched).
 import pandas as pd  # type: ignore[import-untyped]
-from sqlalchemy import Engine, Text, and_, case, inspect, or_, select, type_coerce
+from sqlalchemy import Engine, Text, and_, case, func, inspect, or_, select, type_coerce
 from sqlalchemy.exc import DataError, DBAPIError, IntegrityError, OperationalError
 from sqlalchemy.types import NullType
 
@@ -106,6 +106,7 @@ GAP_CLOSE_REASONS = {
 RECENT_LIMIT = 200  # recent()'s default: the trades the desk's Paper panel is sent
 READ_WARN_CAP = 1000  # corrupt-row reasons a book remembers having warned about (LRU)
 REASON_KEY_CHARS = 200  # a reason is remembered by its first characters only
+LAST_SESSION_SCAN = 50  # close times last_session() decodes, newest first, past bad ones
 
 PremiumAt = Callable[[Mapping[str, Any], float, dt.datetime], float | None]
 CostFor = Callable[[str], CostModel]
@@ -593,15 +594,21 @@ class PaperBook:
         return views
 
     def today_totals(self, now: dt.datetime) -> DayTotals:
-        """The CLOSED trades closed on `now`'s IST calendar date (`closed_totals`).
+        """`day_totals` of `now`'s IST calendar date. A naive `now` is rejected (ValueError)."""
+        _require_aware(now, "now")
+        return self.day_totals(now.astimezone(IST).date())
+
+    def day_totals(self, day: dt.date) -> DayTotals:
+        """The CLOSED trades closed on IST calendar date `day` (`closed_totals`).
 
         A trade is closed at its exit_ts, or at updated_at when it has none. NO_FILL trades
         never filled, so they are not counted. An amount that is not integer paise (a
         corrupt cell) is logged and read as unknown, so that sum is None, as for a missing
-        one. A naive `now` is rejected (ValueError).
+        one. `day` must be a plain date (a datetime carries a zone of its own: TypeError).
         """
-        _require_aware(now, "now")
-        start = dt.datetime.combine(now.astimezone(IST).date(), dt.time(0), tzinfo=IST)
+        if not isinstance(day, dt.date) or isinstance(day, dt.datetime):
+            raise TypeError(f"day={day!r} must be a datetime.date (an IST calendar date)")
+        start = dt.datetime.combine(day, dt.time(0), tzinfo=IST)
         end = start + dt.timedelta(days=1)
         t = paper_trades.c
         closed_today = or_(
@@ -618,6 +625,53 @@ class PaperBook:
             )
             for i, gross, net in rows
         )
+
+    def last_session(self, now: dt.datetime) -> dt.date | None:
+        """The most recent IST date BEFORE `now`'s on which a CLOSED trade closed; only when no
+        CLOSED trade closed before today, the most recent such date with a NO_FILL; else None.
+
+        A trade closes at its exit_ts, or at updated_at when it has none (every NO_FILL), the
+        rule `closed_at` and `day_totals` use. A no-fill alone never outranks a day with
+        closes: a reconcile stamps late NO_FILLs with the day it ran, and that day must not
+        hide the closes of the session before (US-032 review round 1 BLOCKER, the owner's
+        Monday). Today is never the last session: the panel falls back to it when nothing
+        has closed today. A close time that cannot be read is reported once and skipped; the
+        newest LAST_SESSION_SCAN candidates of each kind are looked at. A naive `now` is
+        rejected (ValueError).
+        """
+        _require_aware(now, "now")
+        start = dt.datetime.combine(now.astimezone(IST).date(), dt.time(0), tzinfo=IST)
+        return self._latest_close_day("CLOSED", start) or self._latest_close_day("NO_FILL", start)
+
+    def _latest_close_day(self, status: TradeStatus, before: dt.datetime) -> dt.date | None:
+        """The IST date of the newest readable close of a `status` trade before `before`."""
+        t = paper_trades.c
+        closed_at = func.coalesce(t.exit_ts, t.updated_at)  # typed as the columns: binds in UTC
+        stmt = (
+            select(t.id, type_coerce(closed_at, NullType()).label("closed_at"))  # decoded per row
+            .where(t.status == status, closed_at < before)
+            .order_by(closed_at.desc(), t.id.desc())
+            .limit(LAST_SESSION_SCAN)
+        )
+        with self.engine.connect() as conn:
+            decode = t.exit_ts.type.dialect_impl(conn.dialect).result_processor(conn.dialect, None)
+            rows = conn.execute(stmt).all()
+        for trade_id, raw in rows:
+            try:
+                when = decode(raw) if decode is not None else raw
+                if not isinstance(when, dt.datetime):
+                    raise ValueError(f"not a time: {when!r}")
+                return _ist(when).date()
+            except Exception as exc:  # noqa: BLE001 - one bad cell never hides the session
+                self._warn_once(
+                    trade_id,
+                    f"close time {raw!r} unreadable",
+                    "paper: trade %s close time %r is unreadable; last_session skips it: %s",
+                    trade_id,
+                    raw,
+                    exc,
+                )
+        return None
 
     def _paise_or_unknown(self, trade_id: object, name: str, value: object) -> int | None:
         """today_totals(): a corrupt amount is reported (once) and read as unknown (None)."""

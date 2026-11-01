@@ -286,6 +286,17 @@ table.paper td b{font:20px/1 var(--display);letter-spacing:.05em}
 .pchip.open{color:var(--cyan-ink)} .pchip.open::before{background:var(--cyan-bg)}
 .pchip.nofill{color:var(--muted)} .pchip.nofill::before{background:transparent;border:1px dashed var(--line2)}
 .pchip.closed{color:var(--text)} .pchip.closed::before{background:var(--line2)}
+/* Today | Last session | All (US-032): a radio group; the slanted shape lives on ::before */
+.paper-views{display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 12px}
+.paper-views button{position:relative;isolation:isolate;font:700 14px/1 var(--ui);letter-spacing:.08em;text-transform:uppercase;padding:9px 18px;cursor:pointer;color:var(--muted);background:transparent;border:0;appearance:none}
+.paper-views button::before{content:"";position:absolute;inset:0;z-index:-1;transform:skew(-10deg);background:var(--panel3);border:1px solid var(--line2)}
+.paper-views button:hover{color:var(--text)}
+.paper-views button[aria-checked="true"]{color:var(--text)}
+.paper-views button[aria-checked="true"]::before{background:var(--panel);border-color:var(--accent);box-shadow:inset 0 -3px 0 var(--accent)}
+.paper-views button:focus-visible{outline:2px solid var(--cyan);outline-offset:3px}
+.paper-head{font:20px/1.2 var(--display);letter-spacing:.06em;color:var(--text);border-left:4px solid var(--accent2);padding-left:10px;margin:2px 0 10px}
+.paper-head .dim{font:600 15px/1.2 var(--ui);letter-spacing:0;margin-left:8px}
+table.paper tr.pgroup td{font:18px/1.2 var(--display);letter-spacing:.07em;color:var(--text);background:var(--panel2);box-shadow:inset 4px 0 0 var(--accent2);padding-top:12px}
 .legacy>summary{cursor:pointer;list-style:none}
 .legacy>summary::-webkit-details-marker{display:none}
 .legacy>summary h2{margin:0}

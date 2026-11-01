@@ -13,7 +13,12 @@ with a stub engine whose desk carries a real PaperBook on a throw-away database.
 from __future__ import annotations
 
 import datetime as dt
+import json
+import re
+import shutil
+import subprocess
 import warnings
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
@@ -77,7 +82,7 @@ class TestEnabled:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert set(body) == {"enabled", "status", "trades", "totals_today"}
+        assert set(body) == {"enabled", "status", "trades", "totals_today", "last_session"}
         assert body["enabled"] is True
         assert set(body["status"]) == STATUS_KEYS
         assert body["status"]["opened"] == 1 and body["status"]["desk_hook_errors"] == 2
@@ -198,7 +203,7 @@ class TestEnabled:
 
 
 class TestOff:
-    OFF = {"enabled": False, "trades": [], "totals_today": None}
+    OFF = {"enabled": False, "trades": [], "totals_today": None, "last_session": None}
 
     def test_paper_disabled_serves_no_trades_but_the_counts(self, make_book, engine):
         book_today(make_book(), engine)  # a trade exists in the database
@@ -220,3 +225,160 @@ class TestOff:
         body = resp.json()
         assert {k: body[k] for k in self.OFF} == self.OFF
         assert body["status"] == dict.fromkeys(STATUS_KEYS, 0)
+
+
+# ── last_session (US-032): the latest earlier day with closes, for the panel's fallback ──
+
+
+def closed_on(book, engine, alert_id: str, at: dt.datetime, gross: int, net: int | None = None):
+    """A trade raised five minutes before `at` and closed at `at` (as US-002 writes it)."""
+    created = at - dt.timedelta(minutes=5)
+    book.on_alert(make_alert(alert_id=alert_id, created=created), created)
+    with engine.begin() as conn:
+        conn.execute(
+            paper_trades.update()
+            .where(paper_trades.c.alert_id == alert_id)
+            .values(
+                status="CLOSED",
+                close_reason="STOP" if gross < 0 else "TARGET",
+                entry_paise=100030,
+                exit_paise=100030 + gross,
+                gross_paise=gross,
+                net_paise=net,
+                exit_ts=at,
+                updated_at=at,
+            )
+        )
+
+
+def ist_day(days_ago: int, hour: int) -> dt.datetime:
+    """`hour`:00 IST, `days_ago` IST calendar days before today (never near midnight)."""
+    day = now_ist().date() - dt.timedelta(days=days_ago)
+    return dt.datetime.combine(day, dt.time(hour), tzinfo=now_ist().tzinfo)
+
+
+class TestLastSession:
+    def test_the_latest_earlier_day_with_closes_and_its_exact_totals(self, make_book, engine):
+        book = make_book()
+        closed_on(book, engine, "old", ist_day(3, 11), 5000)
+        closed_on(book, engine, "loss", ist_day(2, 11), -1205)
+        closed_on(book, engine, "win", ist_day(2, 12), 970, net=870)
+
+        body = client_for(stub_desk(book)).get("/api/paper").json()
+
+        assert body["last_session"] == {
+            "date": ist_day(2, 11).date().isoformat(),
+            "totals": {
+                "closed": 2,
+                "wins": 1,
+                "losses": 1,
+                "gross_rupees": "-2.35",  # -1205 + 970 paise, exact
+                "net_rupees": None,  # "loss" has no net yet
+            },
+        }
+        assert body["totals_today"]["closed"] == 0  # unchanged: nothing closed today
+        assert len(body["trades"]) == 3
+
+    def test_no_earlier_close_is_null_and_today_never_counts(self, make_book, engine):
+        book = make_book()
+        assert client_for(stub_desk(book)).get("/api/paper").json()["last_session"] is None
+        book_today(book, engine, close=True)
+        body = client_for(stub_desk(book)).get("/api/paper").json()
+        assert body["last_session"] is None and body["totals_today"]["closed"] == 1
+
+    def test_a_date_is_iso_and_on_the_ist_calendar(self, make_book, engine):
+        book = make_book()
+        closed_on(book, engine, "t", ist_day(1, 0) + dt.timedelta(minutes=10), 100)
+        date = client_for(stub_desk(book)).get("/api/paper").json()["last_session"]["date"]
+        assert date == ist_day(1, 0).date().isoformat()  # 00:10 IST is the IST date, not UTC's
+        assert dt.date.fromisoformat(date)
+
+
+# ── the day after (US-032 review round 1 BLOCKER): a stamped no-fill never hides closes ──
+
+APP_JS = Path(__file__).resolve().parents[2] / "src" / "onelot" / "ui" / "app.js"
+PANEL_HELPERS = [
+    "esc", "cls", "tsf", "hhmm", "inr", "todayIST", "paperChip", "paperWhen", "paperRow",
+    "paperList", "paperOpen", "paperClosedOn", "paperShown", "paperDay", "paperSession",
+    "paperFallback", "paperEmpty", "paperGroup", "paperHead", "paperTable", "paperCut", "paperPanel",
+    "paperTotals", "paperSince", "paperMeta",
+]  # fmt: skip
+
+
+def render(payload: dict[str, Any], expression: str) -> Any:
+    """Run app.js's own Paper helpers in node over an API payload (`P`), at the real now."""
+    source = APP_JS.read_text(encoding="utf-8")
+    lines = []
+    for name in PANEL_HELPERS:
+        found = re.search(rf"^const {name} = .*;$", source, re.M)
+        assert found, f"`const {name} = ...;` not found as a single line in {APP_JS}"
+        lines.append(found.group(0))
+    lines += [
+        "const P = JSON.parse(process.argv[1]);",
+        f"console.log(JSON.stringify({expression}));",
+    ]
+    done = subprocess.run(
+        ["node", "-e", "\n".join(lines), "--", json.dumps(payload)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout)
+
+
+def no_fill_stamped(book, engine, alert_id: str, created: dt.datetime, stamped: dt.datetime):
+    """A NO_FILL booked late: raised `created`, written (updated_at) at `stamped`."""
+    book.on_alert(make_alert(alert_id=alert_id, created=created), created)
+    with engine.begin() as conn:
+        conn.execute(
+            paper_trades.update()
+            .where(paper_trades.c.alert_id == alert_id)
+            .values(
+                status="NO_FILL",
+                close_reason="NO_FILL",
+                gross_paise=0,
+                costs_paise=0,
+                net_paise=0,
+                updated_at=stamped,
+            )
+        )
+
+
+class TestTheDayAfter:
+    """The owner's Monday, shifted to the real clock: closes three and four days ago (the
+    "Friday" and "Thursday"), one no-fill of a "Friday" alert stamped yesterday (the
+    "Sunday" reconcile), nothing closed today."""
+
+    @pytest.fixture
+    def monday(self, make_book, engine):
+        book = make_book()
+        closed_on(book, engine, "thu", ist_day(4, 14), -500)
+        closed_on(book, engine, "fri1", ist_day(3, 15), 1200)
+        closed_on(book, engine, "fri2", ist_day(3, 13), -300)
+        no_fill_stamped(book, engine, "nf", ist_day(3, 15), ist_day(1, 9))
+        return client_for(stub_desk(book)).get("/api/paper").json()
+
+    def test_the_api_names_friday_with_its_exact_totals(self, monday):
+        assert monday["totals_today"]["closed"] == 0
+        assert monday["last_session"] == {
+            "date": ist_day(3, 0).date().isoformat(),
+            "totals": {
+                "closed": 2,
+                "wins": 1,
+                "losses": 1,
+                "gross_rupees": "9.00",
+                "net_rupees": None,
+            },
+        }
+
+    @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+    def test_the_panel_shows_fridays_closes_under_fridays_heading(self, monday):
+        html = render(monday, "paperPanel(P)")
+        day = render(monday, "paperDay(P.last_session.date)")
+        assert f"Last session · {day}" in html
+        assert html.count("pchip closed") == 2
+        assert "pchip nofill" not in html  # stamped yesterday: neither today's nor Friday's
+        line = render(monday, "paperMeta(P)")
+        assert line.startswith(f"last session {day}: 2 closed · 1 won · 1 lost · gross ₹9.00")
