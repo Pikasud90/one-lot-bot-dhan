@@ -96,7 +96,10 @@ def _fields(value: Any) -> Mapping[str, Any]:
 
 def _plain(value: Any) -> str:
     """One line of text from a scalar: whitespace runs (newlines included) become one
-    space, invisible controls go. Containers and None give "" — never their repr."""
+    space, invisible controls go. Containers, None and bools give "" — never their repr,
+    and never True/False (a YAML ticker such as NO or ON arrives as a bool)."""
+    if isinstance(value, bool):
+        return ""
     if isinstance(value, str):
         text = value
     elif isinstance(value, (int, float, Decimal)):
@@ -310,8 +313,11 @@ def format_alert(alert: Mapping[str, Any], now: dt.datetime) -> str:
 
 
 def _strategy_line(alert: Mapping[str, Any]) -> str:
-    name = alert.get("strategy_label") or alert.get("strategy")
-    parts = (_fit(name, _CAP_STRATEGY), _fit(alert.get("timeframe"), _CAP_TIMEFRAME))
+    """'{strategy label} {timeframe}'; the strategy name when the label is not usable text."""
+    name = _fit(alert.get("strategy_label"), _CAP_STRATEGY) or _fit(
+        alert.get("strategy"), _CAP_STRATEGY
+    )
+    parts = (name, _fit(alert.get("timeframe"), _CAP_TIMEFRAME))
     return " ".join(part for part in parts if part) or f"Strategy {NA}"
 
 

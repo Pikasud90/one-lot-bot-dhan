@@ -490,9 +490,31 @@ class TestEscapingAndWhitelist:
 
 
 class TestJunkScalars:
-    """US-003 BUG-5: an astronomically large int where text or a number belongs."""
+    """US-003 BUG-5/6: a bool or an astronomically large int where text belongs."""
 
     HUGE = 10**5000  # str() refuses ints beyond 4300 digits (ValueError)
+
+    @pytest.mark.parametrize("flag", [True, False])
+    def test_a_bool_in_a_text_field_renders_empty_never_as_a_word(self, flag):
+        alert = index_alert(
+            "CE", label=flag, series_key=flag, id=flag, timeframe=flag, strategy_label=flag
+        )
+        alert["confidence"]["label"] = flag
+        msg = format_alert(alert, NOW)
+        assert not re.search(r"\b(True|False)\b", msg), msg
+        lines = msg.split("\n")
+        assert lines[0].startswith("<b>BUY ? 25 NOV 45000 CE · ")  # the symbol reads '?'
+        assert lines[4] == "orb"  # a bool strategy label falls back to the strategy name
+        assert lines[5] == "Conf 66"
+        assert lines[-1].endswith("id <code></code>")
+        assert_telegram_html(msg)
+
+    @pytest.mark.parametrize("flag", [True, False])
+    def test_a_bool_trading_symbol_falls_back_to_the_series_key(self, flag):
+        alert = stock_alert(trading_symbol=flag)
+        assert format_alert(alert, NOW).startswith("<b>BUY RELIANCE · 1 share")
+        event = exit_event("STOP", trading_symbol=flag, series_key=flag)
+        assert format_exit(event, NOW).split("\n")[0].startswith("<b>EXIT: SELL ? ")
 
     @pytest.mark.parametrize(
         "path",
