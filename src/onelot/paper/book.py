@@ -74,6 +74,8 @@ RETRY_CAP = 500  # failed on_alert calls kept in memory for a retry (oldest drop
 STATUS_KEYS = ("opened", "filled", "no_fill", "closed", "hook_errors")
 DEFAULT_TICK = 0.05  # rupees; only when the instrument spec is unknown
 RECENT_LIMIT = 200  # recent()'s default: the trades the desk's Paper panel is sent
+READ_WARN_CAP = 1000  # corrupt-row reasons a book remembers having warned about (LRU)
+REASON_KEY_CHARS = 200  # a reason is remembered by its first characters only
 
 PremiumAt = Callable[[Mapping[str, Any], float, dt.datetime], float | None]
 CostFor = Callable[[str], CostModel]
@@ -233,6 +235,10 @@ class PaperBook:
         self._retry: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._retry_logged: set[str] = set()  # retries whose traceback was already logged
         self._tracked: frozenset[str] | None = None  # the desk's series (retire_untracked)
+        # (trade id, reason) a read already warned about: the panel polls every few seconds,
+        # so a repeat is DEBUG (US-030 review MINOR). Its own lock: reads never take _lock.
+        self._read_warned: OrderedDict[tuple[object, str], None] = OrderedDict()
+        self._read_warn_lock = threading.Lock()
         METADATA.create_all(engine, tables=[paper_trades, paper_events])  # no-op if present
         self._load_active()
         if cfg.enabled:  # a disabled book opens nothing, not even at startup
@@ -516,12 +522,14 @@ class PaperBook:
                 stored = {k: _decoded(k, v, decoders[k]) for k, v in row.items()}
                 views.append(trade_view(PaperTrade.from_row(stored)))
             except Exception as exc:  # noqa: BLE001 - one bad row never hides the others
-                log.warning(
-                    "paper: trade %s (alert %s) not shown: %s: %s",
+                why = f"{type(exc).__name__}: {exc}"
+                self._warn_once(
+                    row["id"],
+                    f"not shown: {why}",
+                    "paper: trade %s (alert %s) not shown: %s",
                     row["id"],
                     row["alert_id"],
-                    type(exc).__name__,
-                    exc,
+                    why,
                 )
         return views
 
@@ -545,9 +553,39 @@ class PaperBook:
         with self.engine.connect() as conn:
             rows = conn.execute(stmt).all()
         return closed_totals(
-            (_paise_or_unknown(i, "gross_paise", gross), _paise_or_unknown(i, "net_paise", net))
+            (
+                self._paise_or_unknown(i, "gross_paise", gross),
+                self._paise_or_unknown(i, "net_paise", net),
+            )
             for i, gross, net in rows
         )
+
+    def _paise_or_unknown(self, trade_id: object, name: str, value: object) -> int | None:
+        """today_totals(): a corrupt amount is reported (once) and read as unknown (None)."""
+        if _is_paise(value):
+            return cast(int | None, value)
+        self._warn_once(
+            trade_id,
+            f"{name}={value!r} read as unknown",
+            "paper: trade %s %s=%r is not integer paise; read as unknown",
+            trade_id,
+            name,
+            value,
+        )
+        return None
+
+    def _warn_once(self, trade_id: object, reason: str, msg: str, *args: object) -> None:
+        """Log `msg` as a WARNING the first time this book reads `reason` on `trade_id`, and at
+        DEBUG after that. The set is an LRU of READ_WARN_CAP entries: a reason it forgot is
+        warned again, so memory stays bounded and nothing is ever silently dropped."""
+        key = (trade_id, reason[:REASON_KEY_CHARS])
+        with self._read_warn_lock:
+            first = key not in self._read_warned
+            self._read_warned[key] = None
+            self._read_warned.move_to_end(key)
+            while len(self._read_warned) > READ_WARN_CAP:
+                self._read_warned.popitem(last=False)
+        log.log(logging.WARNING if first else logging.DEBUG, msg, *args)
 
     # ── opening ───────────────────────────────────────────────────────────
     def _open(
@@ -1133,13 +1171,3 @@ def _decoded(name: str, value: object, decode: Callable[[Any], Any] | None) -> A
     if name.endswith("_paise") and not _is_paise(value):
         raise ValueError(f"{name}={value!r} is not integer paise")
     return value
-
-
-def _paise_or_unknown(trade_id: object, name: str, value: object) -> int | None:
-    """today_totals(): a corrupt amount is logged and read as unknown (None)."""
-    if _is_paise(value):
-        return cast(int | None, value)
-    log.warning(
-        "paper: trade %s %s=%r is not integer paise; read as unknown", trade_id, name, value
-    )
-    return None

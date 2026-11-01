@@ -505,3 +505,142 @@ class TestTodayTotals:
             "net_paise": None,
         }
         assert "gross_paise" in caplog.text
+
+
+# ── a corrupt row is reported once, not on every poll (US-030 review round 1, MINOR) ──
+
+
+def warnings_about(caplog, trade_id: int) -> list[logging.LogRecord]:
+    return [
+        r
+        for r in caplog.records
+        if r.name == "onelot.paper.book"
+        and r.levelno == logging.WARNING
+        and f"trade {trade_id} " in r.getMessage()
+    ]
+
+
+def debugs_about(caplog, trade_id: int) -> list[logging.LogRecord]:
+    return [
+        r
+        for r in caplog.records
+        if r.name == "onelot.paper.book"
+        and r.levelno == logging.DEBUG
+        and f"trade {trade_id} " in r.getMessage()
+    ]
+
+
+def corrupt(engine: Engine, alert_id: str, assignment: str) -> int:
+    """Write a corrupt cell straight into the table; return that trade's id."""
+    with engine.begin() as conn:
+        conn.exec_driver_sql(f"UPDATE paper_trades SET {assignment} WHERE alert_id = '{alert_id}'")
+        row = conn.exec_driver_sql(
+            f"SELECT id FROM paper_trades WHERE alert_id = '{alert_id}'"
+        ).one()
+    return int(row[0])
+
+
+class TestCorruptRowsWarnOnce:
+    """The panel polls every few seconds (about 720 reads an hour): a corrupt row is a
+    WARNING once per (trade id, reason) for each reader, then DEBUG. The remembered set is
+    bounded, and keeping it never takes the book lock."""
+
+    def test_recent_warns_once_then_logs_at_debug(self, make_book, engine, caplog):
+        book = make_book()
+        open_alert(book, "good", ist(THU, 10, 1))
+        open_alert(book, "bad", ist(THU, 10, 2))
+        bad = corrupt(engine, "bad", "status = 'BOGUS'")
+
+        with caplog.at_level(logging.DEBUG, logger="onelot.paper.book"):
+            first, second = book.recent(), book.recent()
+
+        assert [v["alert_id"] for v in first] == [v["alert_id"] for v in second] == ["good"]
+        assert len(warnings_about(caplog, bad)) == 1
+        assert "BOGUS" in warnings_about(caplog, bad)[0].getMessage()
+        assert len(debugs_about(caplog, bad)) == 1
+
+    def test_today_totals_warns_once_then_logs_at_debug(self, make_book, engine, caplog):
+        book = make_book()
+        closed_trade(book, engine, "bad", ist(THU, 12, 0), gross_paise=100)
+        bad = corrupt(engine, "bad", "gross_paise = 'abc'")
+
+        with caplog.at_level(logging.DEBUG, logger="onelot.paper.book"):
+            first = book.today_totals(TestTodayTotals.NOW)
+            second = book.today_totals(TestTodayTotals.NOW)
+
+        assert first == second and first["gross_paise"] is None
+        assert len(warnings_about(caplog, bad)) == 1
+        assert "gross_paise" in warnings_about(caplog, bad)[0].getMessage()
+        assert len(debugs_about(caplog, bad)) == 1
+
+    def test_a_new_reason_for_the_same_trade_warns_again(self, make_book, engine, caplog):
+        book = make_book()
+        open_alert(book, "bad", ist(THU, 10, 2))
+        bad = corrupt(engine, "bad", "status = 'BOGUS'")
+        with caplog.at_level(logging.DEBUG, logger="onelot.paper.book"):
+            book.recent()
+            corrupt(engine, "bad", "status = 'OPEN', entry_paise = 12.5")
+            book.recent()
+            book.recent()
+
+        messages = [r.getMessage() for r in warnings_about(caplog, bad)]
+        assert len(messages) == 2
+        assert "BOGUS" in messages[0] and "entry_paise" in messages[1]
+
+    def test_each_book_reports_for_itself(self, make_book, engine, caplog):
+        book = make_book()
+        open_alert(book, "bad", ist(THU, 10, 2))
+        bad = corrupt(engine, "bad", "status = 'BOGUS'")
+        with caplog.at_level(logging.WARNING, logger="onelot.paper.book"):
+            book.recent()
+            make_book().recent()  # a restart: the new book has not said it yet
+        assert len(warnings_about(caplog, bad)) == 2
+
+    def test_the_remembered_reasons_are_bounded(self, make_book, engine, caplog, monkeypatch):
+        import onelot.paper.book as book_module
+
+        monkeypatch.setattr(book_module, "READ_WARN_CAP", 2)
+        book = make_book()
+        ids = []
+        for alert_id, minute in (("b1", 1), ("b2", 2), ("b3", 3)):
+            open_alert(book, alert_id, ist(THU, 10, minute))
+            ids.append(corrupt(engine, alert_id, "status = 'BOGUS'"))
+
+        with caplog.at_level(logging.WARNING, logger="onelot.paper.book"):
+            book.recent()
+            book.recent()
+
+        assert len(book._read_warned) == 2  # never more than the cap
+        # Three reasons through a set of two: each read evicts the oldest, so a forgotten
+        # one is said again. Bounded memory beats a perfect dedupe; nothing is ever lost.
+        assert all(warnings_about(caplog, i) for i in ids)
+
+    def test_reporting_a_corrupt_row_never_waits_for_the_book_lock(self, make_book, engine):
+        book = make_book()
+        closed_trade(book, engine, "bad", ist(THU, 11, 30), gross_paise=970)
+        corrupt(engine, "bad", "gross_paise = 'abc'")
+        held, release = threading.Event(), threading.Event()
+
+        def hold() -> None:
+            with book._lock:
+                held.set()
+                release.wait(10)
+
+        holder = threading.Thread(target=hold, daemon=True)
+        holder.start()
+        assert held.wait(5)
+        got: dict[str, Any] = {}
+
+        def read() -> None:
+            got["recent"] = book.recent()
+            got["totals"] = book.today_totals(TestTodayTotals.NOW)
+
+        reader = threading.Thread(target=read, daemon=True)
+        try:
+            reader.start()
+            reader.join(5)
+            assert not reader.is_alive(), "reporting a corrupt row waited for the book lock"
+        finally:
+            release.set()
+            holder.join(5)
+        assert got["recent"] == [] and got["totals"]["gross_paise"] is None
