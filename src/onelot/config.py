@@ -388,6 +388,19 @@ class BacktestCfg(Strict):
         return self
 
 
+class PaperCfg(Strict):
+    """The paper book (ADR-001): every desk alert opens a paper trade; no order ever.
+
+    enabled            False stops NEW paper trades only; trades already open are still
+                       managed to a close.
+    feed_delay_minutes extra fill window for delayed-grade (Yahoo) alerts: their bars run
+                       about this far behind the exchange (ADR-001 amendment 3).
+    """
+
+    enabled: bool = True
+    feed_delay_minutes: int = Field(default=15, ge=0)
+
+
 class RiskCfg(Strict):
     """Risk control for a one-lot system.
 
@@ -508,6 +521,7 @@ class AppConfig(Strict):
     risk: RiskCfg = RiskCfg()
     execution_assumptions: ExecAssumptionsCfg = ExecAssumptionsCfg()
     backtest: BacktestCfg = BacktestCfg()
+    paper: PaperCfg = PaperCfg()
     storage: StorageCfg = StorageCfg()
     api: ApiCfg = ApiCfg()
     dashboard: DashboardCfg = DashboardCfg()

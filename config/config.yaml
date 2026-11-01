@@ -187,6 +187,11 @@ execution_assumptions:
   slippage_gate_pct: 0.03
   slippage_gate_spread_mult: 1.5     # tolerance = max(pct, mult x spread)
 
+paper:
+  # Every desk alert opens a paper trade (one share / one lot). Never a real order.
+  enabled: true                      # false: no NEW paper trades; open ones still run
+  feed_delay_minutes: 15             # extra fill window for delayed (Yahoo) alerts
+
 storage:
   db_url: null                       # null => SQLite at data/onelot.db (WAL)
   retention_days_quotes: 30

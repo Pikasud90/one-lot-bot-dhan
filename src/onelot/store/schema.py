@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     Column,
     DateTime,
@@ -537,4 +538,57 @@ desk_positions = Table(
     Column("exit_reason", String(24)),
     Column("payload", JSON),
     Index("ix_desk_positions_status", "status"),
+)
+
+# ── Paper book (ADR-001): one paper trade per desk alert, never an order ──
+# Money is integer PAISE (BIGINT); Decimal only at the cost-model boundary. A NO_FILL
+# row keeps entry/exit NULL and gross/costs/net 0.
+
+paper_trades = Table(
+    "paper_trades",
+    METADATA,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("alert_id", String(32), nullable=False, unique=True),  # desk_signals.id
+    Column("status", String(16), nullable=False),  # PENDING_FILL | OPEN | NO_FILL | CLOSED
+    Column("close_reason", String(24)),  # NO_FILL | GAP_THROUGH_STOP | STOP | TARGET | ...
+    Column("grade", String(8), nullable=False),  # live (dhan*) | delayed
+    Column("data_source", String(32), nullable=False),
+    Column("instrument_key", String(48), nullable=False),
+    Column("series_key", String(32), nullable=False),
+    Column("kind", String(8), nullable=False),  # STOCK | INDEX
+    Column("side", String(8), nullable=False),  # BUY | SELL | BUY_CE | BUY_PE
+    Column("direction", String(8), nullable=False),  # long | short (on the underlying)
+    Column("strategy", String(48), nullable=False),
+    Column("timeframe", String(6), nullable=False),
+    Column("confidence", Float),  # alert confidence score (analytics, not money)
+    Column("product", String(32), nullable=False),  # cost table: equity_intraday | index_options
+    Column("qty", Integer, nullable=False),  # 1 share, or one lot of the alerted option
+    Column("entry_ts", TZDateTime),
+    Column("fill_bar_ts", TZDateTime),
+    Column("exit_ts", TZDateTime),
+    Column("last_bar_ts", TZDateTime),  # management cursor: last bar processed
+    Column("resolution_min", Integer),  # desk fine resolution the alert was built on
+    Column("entry_paise", BigInteger),
+    Column("exit_paise", BigInteger),
+    Column("gross_paise", BigInteger),
+    Column("costs_paise", BigInteger),
+    Column("net_paise", BigInteger),
+    Column("risk_paise", BigInteger),  # excludes costs; R = net / risk
+    Column("created_at", TZDateTime, nullable=False),  # the alert's created_at (data time)
+    Column("expires_at", TZDateTime, nullable=False),
+    Column("plan", JSON, nullable=False),  # alert snapshot + levels in paise (for US-002)
+    Column("updated_at", TZDateTime, nullable=False),
+    Index("ix_paper_trades_status", "status"),
+    Index("ix_paper_trades_created", "created_at"),
+)
+
+paper_events = Table(
+    "paper_events",
+    METADATA,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("trade_id", Integer, nullable=False),  # paper_trades.id
+    Column("ts", TZDateTime, nullable=False),  # bar or decision time, never wall time
+    Column("kind", String(24), nullable=False),  # OPENED | FILLED | NO_FILL | ...
+    Column("detail", JSON),  # why, plus the bar prices used
+    Index("ix_paper_events_trade", "trade_id"),
 )
