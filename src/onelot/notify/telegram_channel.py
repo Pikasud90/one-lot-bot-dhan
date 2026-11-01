@@ -79,6 +79,9 @@ class TelegramChannel:
         self._lock = threading.Lock()  # EXIT episodes; never held by the worker
         self._episodes: dict[str, _ExitEpisode] = {}
         self._exit_numbers = self._load_exit_numbers()
+        self._stats_lock = threading.Lock()  # the enqueue failure counters below
+        self._enqueue_failed = 0
+        self._enqueue_last_error: str | None = None
 
     def _load_exit_numbers(self) -> dict[str, int]:
         try:
@@ -95,18 +98,49 @@ class TelegramChannel:
         return n.level in _PHONE_LEVELS and n.level.value in self._levels
 
     def status(self) -> dict[str, Any]:
-        return self._outbox.status()
+        """The outbox's status (delivery: sent, failed, last_error ...) plus this channel's
+        enqueue failures under their own keys, so a database error while queueing is never
+        hidden behind the outbox's 'failed 0'. The enqueue keys survive a failing outbox."""
+        with self._stats_lock:
+            own: dict[str, Any] = {
+                "enqueue_failed": self._enqueue_failed,
+                "enqueue_last_error": self._enqueue_last_error,
+            }
+        try:
+            return {**self._outbox.status(), **own}
+        except Exception as exc:
+            log.warning("telegram channel: outbox status failed (%s)", type(exc).__name__)
+            return {**own, "status_error": type(exc).__name__}
 
     def send(self, n: Notification) -> bool | SendOutcome:
         """True when a row was queued (or already existed), NOTHING_DUE for an EXIT reminder
-        that is not due, False when it is not for the phone. A database error raises."""
+        that is not due, False when it is not for the phone or was not queued. A database
+        error raises (the Notifier counts it); either failure is also counted here."""
         if not self.accepts(n):
             return False
-        if n.level is NotificationLevel.SIGNAL:
-            return self._send_signal(n)
-        if n.level is NotificationLevel.EXIT:
-            return self._send_exit(n)
-        return self._send_critical(n)
+        outcome: bool | SendOutcome
+        try:
+            if n.level is NotificationLevel.SIGNAL:
+                outcome = self._send_signal(n)
+            elif n.level is NotificationLevel.EXIT:
+                outcome = self._send_exit(n)
+            else:
+                outcome = self._send_critical(n)
+        except Exception as exc:
+            self._note_enqueue(type(exc).__name__)  # the class only: the text quotes SQL
+            raise
+        if outcome is True:
+            self._note_enqueue(None)
+        elif not outcome:
+            self._note_enqueue("not queued")
+        return outcome
+
+    def _note_enqueue(self, error: str | None) -> None:
+        """error None: a row was queued, the current error clears; else count the failure."""
+        with self._stats_lock:
+            if error is not None:
+                self._enqueue_failed += 1
+            self._enqueue_last_error = error
 
     # ── per level ──────────────────────────────────────────────────────────
     def _silent(self, n: Notification, now: dt.datetime, blocked: bool = False) -> bool:

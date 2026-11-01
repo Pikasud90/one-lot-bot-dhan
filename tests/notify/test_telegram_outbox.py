@@ -570,3 +570,71 @@ def test_a_suppressed_exit_reminder_is_not_counted_as_enqueued(make_rig):
     assert len(rig.rows()) == 4
     assert notifier.stats["telegram"].enqueued == 4, "27 polls queued nothing"
     assert notifier.stats["telegram"].failed == 0
+
+
+def _notifier_with(channel: TelegramChannel) -> Any:
+    from types import SimpleNamespace
+
+    from onelot.notify.manager import Notifier
+
+    notifier = Notifier(SimpleNamespace(notify=NotifyCfg(os_toast=False)), dedup_seconds=0.0)
+    notifier.add_channel(channel)
+    return notifier
+
+
+def _signal_note(i: int, rig: Rig) -> Notification:
+    alert = rig.alert(i)
+    return Notification(
+        title="s", body="", level=L.SIGNAL, signal_id=alert["id"], created_at=T0, payload=alert
+    )
+
+
+def _telegram_entry(notifier: Any) -> dict[str, Any]:
+    return next(c for c in notifier.status()["channels"] if c["name"] == "telegram")
+
+
+def test_enqueue_failures_stay_visible_in_the_merged_status(make_rig, monkeypatch):
+    """The outbox's own failed/last_error describe delivery; a database error while queueing
+    must not hide behind them as 'failed 0'."""
+    from sqlalchemy.exc import OperationalError
+
+    rig = make_rig()
+    channel = channel_for(rig)
+    notifier = _notifier_with(channel)
+    real_enqueue = rig.outbox.enqueue
+
+    def locked(**kwargs: Any) -> bool:
+        raise OperationalError("INSERT INTO telegram_outbox", {"risk_reason": "x"}, Exception())
+
+    monkeypatch.setattr(rig.outbox, "enqueue", locked)
+    assert notifier.send(_signal_note(1, rig))["telegram"] is False
+    monkeypatch.setattr(rig.outbox, "enqueue", lambda **kwargs: False)
+    assert notifier.send(_signal_note(2, rig))["telegram"] is False
+
+    entry = _telegram_entry(notifier)
+    assert entry["enqueue_failed"] == 2 and entry["failed"] == 0
+    assert entry["enqueue_last_error"] == "not queued"
+    assert "INSERT" not in str(entry) and "risk_reason" not in str(entry)
+
+    monkeypatch.setattr(rig.outbox, "enqueue", locked)
+    notifier.send(_signal_note(3, rig))
+    assert _telegram_entry(notifier)["enqueue_last_error"] == "OperationalError"
+
+    monkeypatch.setattr(rig.outbox, "enqueue", real_enqueue)
+    assert notifier.send(_signal_note(4, rig))["telegram"] is True
+    entry = _telegram_entry(notifier)
+    assert entry["enqueue_failed"] == 3, "the count is history"
+    assert entry["enqueue_last_error"] is None, "a healthy enqueue clears the current error"
+
+
+def test_enqueue_failures_are_reported_even_when_the_outbox_status_fails(make_rig):
+    rig = make_rig()
+    notifier = _notifier_with(channel_for(rig))
+    with rig.db.engine.begin() as conn:
+        conn.exec_driver_sql("DROP TABLE telegram_outbox")
+
+    notifier.send(_signal_note(1, rig))
+
+    entry = _telegram_entry(notifier)
+    assert entry["enqueue_failed"] == 1 and entry["enqueue_last_error"] == "OperationalError"
+    assert entry["status_error"] == "OperationalError"
