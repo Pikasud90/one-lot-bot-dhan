@@ -515,7 +515,7 @@ const paperShown = (trades, today) => { const all = Array.isArray(trades) ? trad
 const paperPanel = (p) => { if (!p || !p.enabled) return `<div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sleep"/></svg> Paper trading is off: no new paper trades are opened.</div>`; const today = todayIST(), rows = paperShown(p.trades, today); if (!rows.length) return `<div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sleep"/></svg> ${Array.isArray(p.trades) && p.trades.length ? "Nothing open, and none closed today." : "No paper trades yet."}</div>`; return `<table class="paper"><thead><tr><th>Status</th> <th>Instrument</th> <th>Side</th> <th>Grade</th> <th class="n">Entry</th> <th class="n">Exit</th> <th class="n">Gross</th> <th class="n">Net</th> <th>Close reason</th> <th class="n">Time</th></tr></thead><tbody>${rows.map((t) => paperRow(t, today)).join("")}</tbody></table>`; };
 const paperMeta = (p) => { if (!p || !p.enabled) return ""; const s = p.status || {}, d = p.totals_today || {}, errors = (Number(s.hook_errors) || 0) + (Number(s.desk_hook_errors) || 0); return `today: ${d.closed ?? 0} closed · ${d.wins ?? 0} won · ${d.losses ?? 0} lost · gross ${inr(d.gross_rupees)} · net ${inr(d.net_rupees)}${d.net_rupees == null ? " (no costs yet)" : ""} · since restart: ${s.opened ?? 0} opened · ${s.filled ?? 0} filled · ${s.no_fill ?? 0} no fill${errors ? ` · ${errors} errors (see the log)` : ""}`; };
 // Fetched when the desk snapshot's version moves (and on opening the tab), at most every 5 s.
-const paperFeed = { at: 0, timer: null, version: null };
+const paperFeed = { at: 0, timer: null, version: null, shown: false };
 const liveTabActive = () => { const s = document.querySelector('section[data-tab="live"]'); return !!s && s.classList.contains("active"); };
 function wantPaper(force) {
   if (paperFeed.timer || (!force && paperFeed.version === lastDeskVersion)) return;
@@ -529,10 +529,17 @@ async function loadPaper() {
     const p = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(p.detail || `HTTP ${r.status}`);
     paperFeed.version = version;
+    paperFeed.shown = true;
     $("desk-paper").innerHTML = paperPanel(p);
+    $("desk-paper-meta").className = "muted";
     $("desk-paper-meta").textContent = paperMeta(p);
   } catch (e) {
-    $("desk-paper-meta").textContent = `paper trades unavailable: ${e.message}`;
+    // The last table stays (still worth reading); the day line turns into a warning, and a
+    // panel that never loaded says why instead of "Loading" for ever.
+    const why = `paper trades unavailable: ${e.message}`;
+    $("desk-paper-meta").className = "warn";
+    $("desk-paper-meta").textContent = why;
+    if (!paperFeed.shown) $("desk-paper").innerHTML = `<div class="empty-inline"><span class="warn">${esc(why)}</span></div>`;
   } finally {
     paperFeed.timer = null;
     if (paperFeed.version !== lastDeskVersion && liveTabActive()) wantPaper(false);

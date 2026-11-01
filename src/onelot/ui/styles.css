@@ -282,7 +282,7 @@ table.paper td b{font:20px/1 var(--display);letter-spacing:.05em}
 .pchip::before{content:"";position:absolute;inset:0;z-index:-1;transform:skew(-12deg);background:var(--panel3)}
 .pchip.pending{color:var(--warn)} .pchip.pending::before{background:var(--warn-bg)}
 .pchip.open{color:var(--cyan)} .pchip.open::before{background:var(--cyan-bg)}
-.pchip.nofill{color:var(--dim)} .pchip.nofill::before{background:transparent;border:1px dashed var(--line2)}
+.pchip.nofill{color:var(--muted)} .pchip.nofill::before{background:transparent;border:1px dashed var(--line2)}
 .pchip.closed{color:var(--text)} .pchip.closed::before{background:var(--line2)}
 .legacy>summary{cursor:pointer;list-style:none}
 .legacy>summary::-webkit-details-marker{display:none}
