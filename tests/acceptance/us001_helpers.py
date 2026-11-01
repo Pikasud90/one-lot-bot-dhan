@@ -24,7 +24,9 @@ import functools
 import importlib
 import json
 import math
+import shutil
 import socket
+import sqlite3
 import tempfile
 from collections.abc import Callable, Iterator, Sequence
 from decimal import ROUND_HALF_EVEN, Decimal
@@ -140,13 +142,15 @@ def make_book(
     premium_at: Callable | None = None,
     clock: Callable[[], dt.datetime] | None = None,
     cls: type | None = None,
+    reconcile_days: int | None = None,
 ):
     from onelot.config import PaperCfg
 
     specs = specs if specs is not None else SPECS
+    extra = {} if reconcile_days is None else {"reconcile_days": reconcile_days}
     return (cls or paper_book_class())(
         engine,
-        PaperCfg(enabled=enabled, feed_delay_minutes=feed_delay),
+        PaperCfg(enabled=enabled, feed_delay_minutes=feed_delay, **extra),
         bt or BT,
         specs,
         cost_for_specs(specs),
@@ -217,8 +221,11 @@ def make_alert(
     series_key: str | None = None,
     lot: int | None = None,
     eco_qty: int | None = None,
-    premium: float = OPT_P0,
-    iv: float = 0.16,
+    premium: float | None = OPT_P0,
+    iv: float | None = 0.16,
+    drop_iv: bool = False,
+    expiry: str = "2026-11-24",
+    strike: float | None = None,
     strategy: str = "ema_cross",
     timeframe: str = "10m",
 ) -> dict[str, Any]:
@@ -271,18 +278,18 @@ def make_alert(
             "underlying_stop": stop,
             "underlying_target": target,
             "entry_price": premium,
-            "stop_price": round(premium - 97.5, 2),
-            "target_price": round(premium + 195.0, 2),
-            "outlay": round(premium * lot, 2),
+            "stop_price": round((premium or 0.0) - 97.5, 2),
+            "target_price": round((premium or 0.0) + 195.0, 2),
+            "outlay": round((premium or 0.0) * lot, 2),
             "risk_inr": 2925.0,
             "reward_inr": 5850.0,
             "costs_inr": 61.0,
             "rr_net": 1.9,
             "r_target": 2.0,
             "option": {
-                "strike": entry,
+                "strike": entry if strike is None else strike,
                 "opt_type": opt,
-                "expiry": "2026-11-24",
+                "expiry": expiry,
                 "delta": 0.65,
                 "iv": iv,
                 "premium": premium,
@@ -291,6 +298,8 @@ def make_alert(
             "synthetic": True,
             "notes": ["premium is a Black-76 estimate off India VIX"],
         }
+        if drop_iv:
+            del economics["option"]["iv"]
     is_yahoo = str(source or "").lower().startswith("yahoo")
     return {
         "id": alert_id,
@@ -564,18 +573,121 @@ def oracle_option_entry_paise(**kw: Any) -> int:
     return oracle_option_fill(**kw)[0]
 
 
+def lab_fair_premium(
+    *,
+    strike: float,
+    opt_type: str,
+    expiry: str,
+    underlying: float,
+    ts: dt.datetime,
+    iv: float,
+    rate: float | None = None,
+) -> float:
+    """An independent Black-76 premium from the Lab's own pricer (constant IV = `iv`)."""
+    from onelot.lab.execution import OptionPricer, expiry_datetime
+
+    extra = {} if rate is None else {"risk_free_rate": rate}
+    bt = BacktestCfg(option_iv_source="constant", option_iv_constant=iv, **extra)
+    return float(
+        OptionPricer(bt, None).premium(
+            float(underlying),
+            float(strike),
+            pd.Timestamp(ts),
+            expiry_datetime(dt.date.fromisoformat(expiry)),
+            opt_type,
+        )
+    )
+
+
+# ── a real Engine over a throw-away project root (never started) ──────────────────────
+@contextlib.contextmanager
+def real_engine(tmp_path: Path, **paper_overrides: Any) -> Iterator[Any]:
+    """A real `onelot.engine.Engine` (mock broker, never started) whose project root is a
+    copy of config/ in `tmp_path`, so its SQLite file, pid file and costs.yaml are all
+    throw-away. `paper_overrides` replace fields of the config's `paper:` section."""
+    from onelot.config import AppConfig, PaperCfg, Secrets
+    from onelot.engine import Engine
+
+    root = tmp_path / "root"
+    shutil.copytree(ROOT / "config", root / "config")
+    cfg = AppConfig.load(project_root=root)
+    if paper_overrides:
+        cfg = cfg.model_copy(
+            update={"paper": PaperCfg(**{**cfg.paper.model_dump(), **paper_overrides})}
+        )
+    eng = Engine(cfg, Secrets(), use_mock=True)  # registers itself as the process-wide DB
+    try:
+        yield eng
+    finally:
+        eng.db.dispose()
+        from onelot.data.db import get_database
+
+        get_database.__globals__["_db"] = None
+
+
+# ── corrupt rows and a locked database ────────────────────────────────────────────────
+def raw_set_payload(engine: Engine, signal_id: str, payload_text: str | None) -> None:
+    """Overwrite a desk_signals payload with raw text (not JSON-encoded by SQLAlchemy)."""
+    with engine.begin() as conn:
+        conn.execute(
+            text("UPDATE desk_signals SET payload = :p WHERE id = :i"),
+            {"p": payload_text, "i": signal_id},
+        )
+
+
+def short_timeout_engine(db_path: Path | str, seconds: float) -> Engine:
+    """An engine on the same SQLite file as `Database` builds, but with a SHORT busy timeout
+    (the real one is 30 s). Same pragmas otherwise: WAL, synchronous NORMAL."""
+    from sqlalchemy import create_engine
+
+    eng = create_engine(
+        f"sqlite:///{db_path}",
+        future=True,
+        connect_args={"check_same_thread": False, "timeout": float(seconds)},
+    )
+
+    @event.listens_for(eng, "connect")
+    def _pragmas(dbapi_conn, _rec):
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.execute(f"PRAGMA busy_timeout={int(seconds * 1000)}")
+        cur.close()
+
+    return eng
+
+
+@contextlib.contextmanager
+def write_lock(db_path: Path | str) -> Iterator[None]:
+    """Hold SQLite's single write lock from another connection (BEGIN IMMEDIATE) until the
+    block exits: every other writer waits for its busy timeout; readers (WAL) are unaffected."""
+    conn = sqlite3.connect(str(db_path), timeout=5.0, isolation_level=None)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        yield
+    finally:
+        try:
+            conn.execute("ROLLBACK")
+        finally:
+            conn.close()
+
+
 # ── failure injection ─────────────────────────────────────────────────────────────────
 @contextlib.contextmanager
-def failing_sql(engine: Engine, table: str) -> Iterator[dict[str, int]]:
+def failing_sql(
+    engine: Engine, table: str, when: Callable[[str, Any], bool] | None = None
+) -> Iterator[dict[str, int]]:
     """Make every INSERT/UPDATE/REPLACE that targets `table` raise, until the block exits.
-    Works at the cursor, so it is independent of how the book structures its transaction."""
+    Works at the cursor, so it is independent of how the book structures its transaction.
+    `when(statement, parameters)` narrows which statements fail (default: all of them)."""
     state = {"hits": 0}
 
     def boom(conn, cursor, statement, parameters, context, executemany):
         s = statement.lstrip().lower()
         if s.split(None, 1)[0] in ("insert", "update", "replace") and table in s:
-            state["hits"] += 1
-            raise RuntimeError(f"injected failure on {table}")
+            if when is None or when(s, parameters):
+                state["hits"] += 1
+                raise RuntimeError(f"injected failure on {table}")
 
     event.listen(engine, "before_cursor_execute", boom)
     try:

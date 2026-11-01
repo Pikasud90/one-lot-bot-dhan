@@ -236,6 +236,33 @@ class TestHermetic:
         assert not offenders, offenders
 
 
+class TestThePaperBookCannotReachABroker:
+    def test_importing_the_paper_package_loads_no_broker_notifier_or_http_client(self):
+        """The book is evidence, never an order: nothing it imports can talk to a broker, send a
+        notification or open a socket. Checked in a clean interpreter (not this test process)."""
+        import subprocess
+        import sys
+
+        code = (
+            "import sys; sys.path.insert(0, {!r})\n"
+            "import onelot.paper, onelot.paper.factory\n"
+            "bad = sorted(m for m in sys.modules if m.split('.')[0] in "
+            "('requests', 'httpx', 'yfinance', 'dhanhq', 'websocket', 'websockets', 'urllib3', "
+            "'aiohttp') or m.startswith(('onelot.broker', 'onelot.notify', 'onelot.market', "
+            "'onelot.trade', 'onelot.engine', 'onelot.api')))\n"
+            "print(bad)\n"
+        ).format(str(H.ROOT / "src"))
+        done = subprocess.run(
+            [sys.executable, "-I", "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        assert done.returncode == 0, done.stderr
+        assert done.stdout.strip() == "[]", done.stdout
+
+
 class TestPerformanceProxies:
     def test_bars_is_called_once_per_series_per_step(self, db):
         book = H.make_book(db.engine)
