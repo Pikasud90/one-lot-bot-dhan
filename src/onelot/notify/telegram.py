@@ -64,7 +64,7 @@ _MONTHS = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT",
 # message (a blocked index alert) stays well under MAX_CHARS whatever the input
 # (test_the_fixed_part_leaves_the_label_room pins the worst case).
 _CAP_SYMBOL = 32
-_CAP_STRIKE = 12
+_CAP_ACTION = 12  # an unknown side shown as the action word
 _CAP_STRATEGY = 48
 _CAP_TIMEFRAME = 24
 _CAP_CONF_LABEL = 24
@@ -157,11 +157,10 @@ def _whole_signed(value: Any) -> str:
 
 
 def _strike(value: Any) -> str:
-    """52000.0 -> 52000, 22.5 -> 22.5."""
+    """52000.0 -> 52000, 22.5 -> 22.5. The strike is typed into Dhan, so anything that is
+    not a finite number (nan, inf, a bool, free text, missing) shows '?', never a word."""
     q = _rounded(value, _CENT)
-    if q is None:
-        return _fit(value, _CAP_STRIKE) or "?"
-    return f"{q.normalize():f}"
+    return "?" if q is None else f"{q.normalize():f}"
 
 
 def _when(value: Any) -> dt.datetime | None:
@@ -207,7 +206,7 @@ def _instrument(payload: Mapping[str, Any], option: Mapping[str, Any]) -> tuple[
         return "BUY", " ".join([symbol, *(part for part in contract if part)])
     if side in ("BUY", "SELL"):
         return side, symbol
-    return (_fit(side.replace("_", " "), _CAP_STRIKE) or "?"), symbol
+    return (_fit(side.replace("_", " "), _CAP_ACTION) or "?"), symbol
 
 
 def _unit(kind: str, economics: Mapping[str, Any]) -> str:

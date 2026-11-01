@@ -209,6 +209,25 @@ class TestHeader:
         header = format_alert(index_alert("PE", risk_allowed=False), NOW).split("\n")[0]
         assert header == "<b>[BLOCKED by risk] BUY BANKNIFTY 25 NOV 45000 PE · 1 lot (30)</b>"
 
+    @pytest.mark.parametrize("strike", ["abc", "52k", None, [52000], float("nan"), True], ids=repr)
+    def test_an_unreadable_strike_shows_a_question_mark_never_a_word(self, strike):
+        """The strike is typed into Dhan: only a number is shown, anything else is '?'."""
+        alert = index_alert("CE")
+        alert["economics"]["option"]["strike"] = strike
+        event = exit_event("STOP")
+        event["position"]["option"]["strike"] = strike
+        for text in (
+            format_alert(alert, NOW).split("\n")[0],
+            format_missed(alert, NOW),
+            format_exit(event, NOW).split("\n")[0],
+        ):
+            assert " ? CE" in text, text
+
+    def test_a_numeric_string_strike_is_still_a_number(self):
+        alert = index_alert("CE")
+        alert["economics"]["option"]["strike"] = "52000.0"
+        assert " 52000 CE" in format_alert(alert, NOW).split("\n")[0]
+
     def test_missed_and_exit_name_the_contract_like_the_header(self):
         later = dt.datetime(2026, 11, 2, 10, 45, 0, tzinfo=IST)
         missed = format_missed(index_alert("PE", risk_allowed=False), later)
