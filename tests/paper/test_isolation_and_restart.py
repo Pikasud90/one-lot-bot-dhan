@@ -14,6 +14,7 @@ desk) need the AC8 wiring and live in the acceptance suite.
 from __future__ import annotations
 
 import copy
+import datetime as dt
 import logging
 from typing import Any
 
@@ -255,3 +256,50 @@ def test_a_database_without_desk_tables_still_builds_a_book(tmp_path):
         assert book.open_trades() == []
     finally:
         engine.dispose()
+
+
+# ── review round 1, MINOR-2: who opened a trade, and when it was booked ──────────
+
+
+def opened_detail(engine, alert_id: str) -> dict[str, Any]:
+    trade_id = rows_by_alert(engine)[alert_id]["id"]
+    (opened,) = [
+        e
+        for e in table_rows(engine, paper_events)
+        if e["trade_id"] == trade_id and e["kind"] == "OPENED"
+    ]
+    return opened
+
+
+def test_an_opened_event_says_it_came_from_on_alert_and_when_it_was_booked(make_book, engine):
+    book = make_book()
+    book.on_alert(make_alert(alert_id="live1"), ist(THU, 10, 5, 4).astimezone(dt.timezone.utc))
+    event = opened_detail(engine, "live1")
+    assert event["detail"]["opened_by"] == "on_alert"
+    assert event["detail"]["booked_at"] == ist(THU, 10, 5, 4).isoformat()  # IST, wall time
+    assert event["ts"] == ist(THU, 10, 5, 3)  # the event itself stays on the alert's time
+
+
+def test_a_reconciled_trade_says_so_and_is_booked_at_startup(make_book, engine):
+    store_desk_signal(engine, make_alert(alert_id="late1"))
+    make_book()  # clock: THU 10:08
+    event = opened_detail(engine, "late1")
+    assert event["detail"]["opened_by"] == "reconcile"
+    assert event["detail"]["booked_at"] == ist(THU, 10, 8).isoformat()
+    assert event["ts"] == ist(THU, 10, 5, 3)
+
+
+def test_an_alert_raised_while_paper_was_disabled_is_backfilled_at_the_next_enabled_start(
+    make_book, engine
+):
+    """Documented in docs/14_LIVE_DESK.md: switching paper.enabled back on books the alerts
+    raised meanwhile, within reconcile_days, as if the hook had run."""
+    disabled = make_book(enabled=False)
+    alert = make_alert(alert_id="while_off")
+    store_desk_signal(engine, alert)  # the desk stored it; the disabled book opened nothing
+    assert disabled.on_alert(alert, ist(THU, 10, 5, 4)) is None
+    assert table_rows(engine, paper_trades) == []
+
+    enabled = make_book(clock=lambda: ist(THU, 10, 30))
+    assert [t.alert_id for t in enabled.open_trades()] == ["while_off"]
+    assert opened_detail(engine, "while_off")["detail"]["opened_by"] == "reconcile"

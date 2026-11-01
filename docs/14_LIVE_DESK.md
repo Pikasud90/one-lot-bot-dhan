@@ -80,7 +80,10 @@ writes to your desk journal.
 * **Grade:** `live` when Dhan served the bars, `delayed` otherwise; a live trade whose feed
   turns out to mix 1- and 2-minute bars is regraded `delayed` (a `REGRADED` event says when).
 * **Restart:** open paper trades reload; alerts from the last `paper.reconcile_days` days that
-  never got a paper trade (a crash in between) are booked at the alert's own time.
+  never got a paper trade (a crash in between) are booked at the alert's own time. This also
+  covers alerts raised while `paper.enabled` was false: switching it back on and restarting
+  backfills the ones from the last `reconcile_days` days. The `OPENED` event says which path
+  booked a trade (`opened_by`: `on_alert` or `reconcile`) and when (`booked_at`).
 
 Config (`config/config.yaml`, section `paper:`): `enabled` (false stops *new* paper trades; open
 ones still run), `feed_delay_minutes` (15), and `reconcile_days` (3, not listed in the file;

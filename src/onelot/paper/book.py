@@ -75,6 +75,7 @@ StrategyExitFor = Callable[["PaperTrade", dt.datetime], Any]
 
 
 Booked = tuple[str, dt.datetime, dict[str, Any]]  # (event kind, data time, detail)
+OpenedBy = Literal["on_alert", "reconcile"]  # OPENED detail.opened_by
 
 
 class _Priced(NamedTuple):
@@ -236,7 +237,7 @@ class PaperBook:
         _require_aware(now, "now")
         if not self.cfg.enabled:
             return None
-        trade, _ = self._open(alert_id_of(alert), alert, now)
+        trade, _ = self._open(alert_id_of(alert), alert, now, opened_by="on_alert")
         return trade
 
     def step(
@@ -310,7 +311,7 @@ class PaperBook:
 
     # ── opening ───────────────────────────────────────────────────────────
     def _open(
-        self, alert_id: str, alert: Mapping[str, Any], now: dt.datetime
+        self, alert_id: str, alert: Mapping[str, Any], now: dt.datetime, opened_by: OpenedBy
     ) -> tuple[PaperTrade, bool]:
         """The trade for `alert_id`: the existing one, or a new PENDING_FILL one.
 
@@ -334,7 +335,7 @@ class PaperBook:
         if values["kind"] == "INDEX":
             values["plan"]["pricing"] = self._freeze_option_pricing(values["plan"])
         try:
-            trade = self._insert_opened(values)
+            trade = self._insert_opened(values, opened_by)
         except IntegrityError:
             # Another thread or PaperBook on this database won the race for the alert id.
             raced = self._fetch(alert_id)
@@ -420,7 +421,7 @@ class PaperBook:
         for signal_id, raw in rows:
             try:
                 alert = alert_from_desk_signal(str(signal_id), raw)
-                opened += self._open(str(signal_id), alert, now)[1]
+                opened += self._open(str(signal_id), alert, now, opened_by="reconcile")[1]
             except Exception as exc:
                 log.warning(
                     "paper: desk signal %s not reconciled (skipped): %s: %s",
@@ -454,7 +455,7 @@ class PaperBook:
             self._active[trade.alert_id] = trade
         return trade
 
-    def _insert_opened(self, values: Mapping[str, Any]) -> PaperTrade:
+    def _insert_opened(self, values: Mapping[str, Any], opened_by: OpenedBy) -> PaperTrade:
         """Insert the trade and its OPENED event in ONE transaction; return the stored row."""
         detail = {
             "alert_status": values["plan"]["alert"].get("status"),
@@ -464,6 +465,10 @@ class PaperBook:
             "resolution_min": values["resolution_min"],
             "qty": values["qty"],
             "product": values["product"],
+            # who booked it, and the wall time it was booked at (the event ts stays the
+            # alert's created_at): a reconciled trade is visibly late (review 1, MINOR-2)
+            "opened_by": opened_by,
+            "booked_at": values["updated_at"].astimezone(IST).isoformat(),
         }
         with self.engine.begin() as conn:
             pk = conn.execute(paper_trades.insert().values(**values)).inserted_primary_key
