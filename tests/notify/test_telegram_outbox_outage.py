@@ -137,3 +137,94 @@ def test_a_signal_alert_is_still_formatted_at_send_time(make_rig):
 
 
 _2_MIN = dt.timedelta(minutes=2)
+
+
+# ========================= (B) a newer EXIT supersedes the older unsent ones ==============
+class Switch:
+    """A transport that answers 502 (transient) while down, then 200."""
+
+    def __init__(self) -> None:
+        self.down = True
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if self.down:
+            return httpx.Response(502, json={"ok": False, "description": "Bad Gateway"})
+        return ok()
+
+
+def exit_rows(rig: Rig) -> list[tuple[str, str, str | None]]:
+    return [
+        (r["alert_id"], r["status"], r["last_error"]) for r in rig.rows() if r["kind"] == "exit"
+    ]
+
+
+def test_a_newer_exit_for_a_position_supersedes_its_older_unsent_ones(make_rig):
+    switch = Switch()
+    rig = make_rig(switch)
+    enqueue_event(rig, "exit", exit_event(100.0), key="p1#1")
+    rig.drain()  # fails: p1#1 waits for its retry
+    rig.clock.advance(300)
+    enqueue_event(rig, "exit", exit_event(-50.0), key="p1#2")
+
+    rig.outbox.drain_once()
+
+    assert exit_rows(rig)[0] == ("p1#1", "skipped", "superseded")
+    switch.down = False
+    rig.clock.advance(60)
+    rig.drain()
+    assert [s for _, s, _ in exit_rows(rig)] == ["skipped", "sent"]
+    texts = [json.loads(r.read())["text"] for r in rig.requests]
+    assert ["+100" in t for t in texts] == [True, False, False], "p1#1 is never tried again"
+    assert "-50" in texts[-1]
+
+
+def test_each_position_keeps_its_own_newest_exit(make_rig):
+    rig = make_rig(Switch())
+    for key in ("p1#1", "p2#1", "p1#2", "p2#2", "p3#1"):
+        enqueue_event(rig, "exit", exit_event(), key=key)
+        rig.clock.advance(1)
+
+    rig.outbox.drain_once()
+
+    status = {alert_id: s for alert_id, s, _ in exit_rows(rig)}
+    assert status["p1#1"] == status["p2#1"] == "skipped"
+    assert {status["p1#2"], status["p2#2"], status["p3#1"]} <= {"queued", "sending"}
+
+
+def test_an_outage_gives_the_phone_one_exit_not_a_burst(make_rig):
+    """The Desk raises STOP every minute for 30 minutes while Telegram is down: the channel
+    queues the first EXIT and 3 reminders, and after recovery the phone gets one message,
+    the newest, stamped with its own event time and flagged late."""
+    from onelot.config import NotifyCfg
+    from onelot.notify.base import Notification, NotificationLevel
+    from onelot.notify.telegram_channel import TelegramChannel
+
+    switch = Switch()
+    rig = make_rig(switch)
+    channel = TelegramChannel(
+        rig.client, rig.outbox, NotifyCfg(), lambda moment: True, clock=rig.clock
+    )
+    for minute in range(31):
+        rig.clock.now = T0 + dt.timedelta(minutes=minute)
+        channel.send(
+            Notification(
+                title="EXIT",
+                body="",
+                level=NotificationLevel.EXIT,
+                position_id="p1",
+                created_at=rig.clock(),
+                payload=exit_event(float(minute)),
+                dedup_key="exit:p1",
+            )
+        )
+        rig.outbox.drain_once()
+    switch.down = False
+    rig.clock.now = T0 + dt.timedelta(minutes=40)
+
+    rig.drain()
+
+    sent = [r for r in rig.rows() if r["status"] == "sent"]
+    assert [r["alert_id"] for r in sent] == ["p1#4"]
+    assert [s for _, s, _ in exit_rows(rig)] == ["skipped", "skipped", "skipped", "sent"]
+    text = json.loads(rig.requests[-1].read())["text"]
+    assert "Time 10:15:00 IST" in text and text.endswith(f"{SEP}sent late 10:40")

@@ -427,8 +427,9 @@ class TelegramOutbox:
 
     # ── one step ───────────────────────────────────────────────────────────
     def drain_once(self) -> int:
-        """Settle expired rows, fold an oversized burst, then claim the best due row and send
-        it. Returns the rows claimed (0 or 1). Never sleeps except to keep the spacing."""
+        """Settle expired rows, drop superseded EXITs, fold an oversized burst, then claim the
+        best due row and send it. Returns the rows claimed (0 or 1). Never sleeps except to
+        keep the spacing."""
         if not self._client.available:
             return 0
         with self._drain_lock:
@@ -436,6 +437,8 @@ class TelegramOutbox:
             now = self._clock()
             queued = self._queued()
             if self._settle_expired(queued, now):
+                queued = self._queued()
+            if self._supersede_exits(queued):
                 queued = self._queued()
             if self._fold_burst(queued, now):
                 queued = self._queued()
@@ -626,6 +629,23 @@ class TelegramOutbox:
                 now=now,
             )
 
+    def _supersede_exits(self, queued: list[_Row]) -> bool:
+        """Only the newest queued EXIT of a position goes (decision B): the older unsent ones
+        end skipped 'superseded', so an outage gives the phone one EXIT, not a burst of
+        stale ones. A row in flight is never touched."""
+        exits = [r for r in queued if r.kind == "exit"]
+        newest: dict[str, int] = {}
+        for r in exits:
+            newest[_position_of(r)] = max(newest.get(_position_of(r), 0), r.id)
+        older = [r for r in exits if r.id != newest[_position_of(r)]]
+        if not older:
+            return False
+        with self._engine.begin() as conn:
+            for r in older:
+                self._mark(conn, r.id, "queued", "skipped", "superseded")
+        log.info("telegram outbox: %d older EXIT row(s) superseded", len(older))
+        return True
+
     def _fold_burst(self, queued: list[_Row], now: dt.datetime) -> bool:
         """More than BURST_CAP queued SIGNAL alerts: keep the best BURST_CAP, fold the rest
         into one digest (they end skipped). EXIT and CRITICAL are never folded."""
@@ -742,6 +762,13 @@ class TelegramOutbox:
             "skipped": counts.get("skipped", 0),
             "rate_limited_until": to_ist(paused).isoformat() if paused is not None else None,
         }
+
+
+def _position_of(row: _Row) -> str:
+    """The position an EXIT row is about: its alert_id '{position_id}#n' without the number
+    (the dedup_key, which is unique, when there is no such id)."""
+    position, sep, _ = (row.alert_id or "").rpartition("#")
+    return position if sep and position else f"key:{row.dedup_key}"
 
 
 def _late(row: _Row, now: dt.datetime) -> str:
