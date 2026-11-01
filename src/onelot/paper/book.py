@@ -19,8 +19,9 @@ import logging
 import math
 import threading
 from collections import OrderedDict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
+from functools import partial
 from numbers import Real
 from typing import Any, Literal, NamedTuple, cast
 
@@ -226,6 +227,7 @@ class PaperBook:
         self._unpriced: set[tuple[int, dt.datetime]] = set()  # PRICING_UNAVAILABLE said once
         # on_alert calls that failed at runtime, retried by step (review 1, MINOR-3)
         self._retry: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._tracked: frozenset[str] | None = None  # the desk's series (retire_untracked)
         METADATA.create_all(engine, tables=[paper_trades, paper_events])  # no-op if present
         self._load_active()
         if cfg.enabled:  # a disabled book opens nothing, not even at startup
@@ -273,45 +275,53 @@ class PaperBook:
         a whole busy timeout (30 s) while the Desk lock is held, so the step stops at the
         first one, counts and logs it once, and the next poll retries (BUG-1, review 1).
         A naive `now` is rejected (ValueError), never guessed.
+
+        Order: failed on_alert calls are retried, waiting trades on series the desk no
+        longer tracks are retired (`retire_untracked`), then the rest are filled.
         """
         _require_aware(now, "now")
         now = now.astimezone(IST)
-        if not self._retry_failed_alerts(now):
-            return []  # the database is locked: nothing else can be written this poll
-        with self._lock:
-            waiting = sorted(
-                (t for t in self._active.values() if t.status == "PENDING_FILL"),
-                key=lambda t: (t.created_at, t.id),
-            )
-        by_series: dict[str, list[PaperTrade]] = {}
-        for trade in waiting:
-            by_series.setdefault(trade.series_key, []).append(trade)
         events: list[PaperEvent] = []
-        for series_key, trades in by_series.items():
-            view = _read_bars(bars, series_key)
-            if view is None:
-                continue
-            for trade in trades:
-                try:
-                    events.extend(self._step_waiting(trade, view, now))
-                except OperationalError as exc:
-                    if not database_locked(exc):
-                        self._step_failed(trade)
-                        continue
-                    log.error(
-                        "paper: database is locked at trade %s (alert %s); step stopped, "
-                        "%d waiting trade(s) retried on the next poll: %s",
-                        trade.id,
-                        trade.alert_id,
-                        len(waiting),
-                        exc.orig,
+        try:
+            if not self._retry_failed_alerts(now):
+                return []  # the database is locked: nothing else can be written this poll
+            events.extend(self._retire_overdue_untracked(now))
+            with self._lock:
+                waiting = sorted(
+                    (t for t in self._active.values() if t.status == "PENDING_FILL"),
+                    key=lambda t: (t.created_at, t.id),
+                )
+            by_series: dict[str, list[PaperTrade]] = {}
+            for trade in waiting:
+                by_series.setdefault(trade.series_key, []).append(trade)
+            for series_key, trades in by_series.items():
+                view = _read_bars(bars, series_key)
+                if view is None:
+                    continue
+                for trade in trades:
+                    events.extend(
+                        self._guarded(trade, partial(self._step_waiting, trade, view, now))
                     )
-                    with self._lock:
-                        self._counts["hook_errors"] += 1
-                    return events
-                except Exception:
-                    self._step_failed(trade)
+        except _StepStopped:
+            pass  # logged and counted once; every untouched trade is retried next poll
         return events
+
+    def retire_untracked(self, series_keys: Iterable[str], now: dt.datetime) -> list[PaperEvent]:
+        """Learn the series the desk tracks; retire waiting trades on any other series.
+
+        An untracked series gets no bars, so it has no data time: a PENDING_FILL trade on it
+        closes NO_FILL (detail reason "series_untracked") once the WALL clock is past its
+        deadline (expires_at, + feed delay when delayed), here and at every later step.
+        This is the one documented exception to decision 3 (review round 1, MINOR-4).
+        Called by the Desk after it is built, and again after a watchlist reload.
+        """
+        _require_aware(now, "now")
+        with self._lock:
+            self._tracked = frozenset(str(key) for key in series_keys)
+        try:
+            return self._retire_overdue_untracked(now.astimezone(IST))
+        except _StepStopped:
+            return []
 
     def _keep_for_retry(self, alert_id: str, alert: Mapping[str, Any]) -> None:
         """Remember a failed alert (a deep JSON-safe copy); the oldest goes beyond RETRY_CAP."""
@@ -355,6 +365,59 @@ class PaperBook:
         log.exception("paper: retrying alert %s failed; kept for the next step", alert_id)
         with self._lock:
             self._counts["hook_errors"] += 1
+
+    def _retire_overdue_untracked(self, now: dt.datetime) -> list[PaperEvent]:
+        with self._lock:
+            tracked = self._tracked
+            if tracked is None:  # the desk has not said: decision 3 alone applies
+                return []
+            overdue = sorted(
+                (
+                    t
+                    for t in self._active.values()
+                    if t.status == "PENDING_FILL"
+                    and t.series_key not in tracked
+                    and now > self._deadline(t)
+                ),
+                key=lambda t: (t.created_at, t.id),
+            )
+        events: list[PaperEvent] = []
+        for trade in overdue:
+            events.extend(self._guarded(trade, partial(self._close_untracked, trade, now)))
+        return events
+
+    def _close_untracked(self, trade: PaperTrade, now: dt.datetime) -> list[PaperEvent]:
+        detail = {
+            "reason": "series_untracked",
+            "series_key": trade.series_key,
+            "deadline": self._deadline(trade).isoformat(),
+            "clock": "wall",  # no bars, no data time: the documented exception
+        }
+        values = _no_fill_values("NO_FILL", now)
+        return self._commit(trade, values, [("NO_FILL", now, detail)], "no_fill")
+
+    def _guarded(self, trade: PaperTrade, work: Callable[[], list[PaperEvent]]) -> list[PaperEvent]:
+        """One trade's work. A failure is logged, counted and skipped; a LOCKED database
+        stops the whole step (BUG-1): logged once without a traceback, then _StepStopped."""
+        try:
+            return work()
+        except OperationalError as exc:
+            if not database_locked(exc):
+                self._step_failed(trade)
+                return []
+            log.error(
+                "paper: database is locked at trade %s (alert %s); step stopped, the rest "
+                "are retried on the next poll: %s",
+                trade.id,
+                trade.alert_id,
+                exc.orig,
+            )
+            with self._lock:
+                self._counts["hook_errors"] += 1
+            raise _StepStopped from None
+        except Exception:
+            self._step_failed(trade)
+            return []
 
     def _step_failed(self, trade: PaperTrade) -> None:
         log.exception("paper: step failed for trade %s (alert %s)", trade.id, trade.alert_id)
@@ -710,16 +773,8 @@ class PaperBook:
             }
         if decision.data_through is not None:
             detail["data_through"] = decision.data_through.isoformat()
-        values = {
-            "status": "NO_FILL",
-            "close_reason": "GAP_THROUGH_STOP" if reason == "gap_through_stop" else "NO_FILL",
-            "entry_paise": None,
-            "exit_paise": None,
-            "gross_paise": 0,
-            "costs_paise": 0,
-            "net_paise": 0,
-            "updated_at": now,
-        }
+        close_reason = "GAP_THROUGH_STOP" if reason == "gap_through_stop" else "NO_FILL"
+        values = _no_fill_values(close_reason, now)
         return self._commit(trade, values, [("NO_FILL", ts or now, detail)], "no_fill")
 
     def _entry_unpriced(
@@ -843,6 +898,24 @@ def reconcile_since(now: dt.datetime, days: int) -> dt.datetime:
     """Midnight IST `days` calendar days before `now`'s IST date: the reconciliation horizon."""
     day = now.astimezone(IST).date() - dt.timedelta(days=max(int(days), 0))
     return dt.datetime.combine(day, dt.time(0), tzinfo=IST)
+
+
+def _no_fill_values(close_reason: str, now: dt.datetime) -> dict[str, Any]:
+    """A NO_FILL row: final, no prices, zero money."""
+    return {
+        "status": "NO_FILL",
+        "close_reason": close_reason,
+        "entry_paise": None,
+        "exit_paise": None,
+        "gross_paise": 0,
+        "costs_paise": 0,
+        "net_paise": 0,
+        "updated_at": now,
+    }
+
+
+class _StepStopped(Exception):
+    """The database is locked: the step ends here (logged and counted once)."""
 
 
 def database_locked(exc: BaseException) -> bool:

@@ -303,3 +303,36 @@ def test_failing_steps_are_counted_and_every_poll_finishes(cfg, db):
         d.poll()  # must not raise
         assert d.version > version
     assert d.hook_errors == 2 and d.polls == 4
+
+
+# ── review round 1, MINOR-4: the book learns which series the desk tracks ─────────
+
+
+class TrackingBook(Book):
+    def __init__(self, fail: bool = False) -> None:
+        super().__init__()
+        self.fail = fail
+        self.told: list[tuple[set[str], dt.datetime]] = []
+
+    def retire_untracked(self, series_keys, now):
+        self.told.append((set(series_keys), now))
+        if self.fail:
+            raise RuntimeError("retire exploded")
+        return []
+
+
+def test_the_desk_tells_the_book_its_series_once_built_and_after_a_reload(cfg, db, monkeypatch):
+    book = TrackingBook()
+    d, _ = make_desk(cfg, db, paper=book)
+    assert [keys for keys, _ in book.told] == [{"BANKNIFTY", "SBIN"}]
+    assert book.told[0][1].tzinfo is not None
+
+    monkeypatch.setattr("onelot.desk.desk.load_desk_config", lambda: d.cfg)
+    d.reload()
+    assert [keys for keys, _ in book.told] == [{"BANKNIFTY", "SBIN"}] * 2
+    assert d.hook_errors == 0
+
+
+def test_a_failing_retire_untracked_is_counted_and_never_stops_the_desk(cfg, db):
+    d, _ = make_desk(cfg, db, paper=TrackingBook(fail=True))
+    assert d.hook_errors == 1 and d.polls == 1

@@ -133,6 +133,7 @@ class Desk:
         self.last_error: str | None = None
         self.polls = 0
         self._recover()
+        self._tell_paper_tracked()
         from .pulse import MarketPulse
 
         self.pulse = MarketPulse(engine, self, self._adapter_getter, self._data_api_active)
@@ -164,6 +165,7 @@ class Desk:
                 t.fine_minutes = self.fine_minutes
                 if k in old:
                     t.bars = old[k]
+            self._tell_paper_tracked()
             self._wake.set()
         return {"instruments": len(self.trackers), "path": self.cfg.path}
 
@@ -1066,6 +1068,19 @@ class Desk:
         """The bars the book fills from: a tracker's own frame (read-only), else None."""
         tracker = self.trackers.get(series_key)
         return tracker.bars if tracker is not None else None
+
+    def _tell_paper_tracked(self) -> None:
+        """Tell the book which series this desk tracks: a waiting paper trade on any other
+        series gets no bars, so the book retires it on the wall clock (review 1, MINOR-4).
+        A duck-typed book without retire_untracked is left alone."""
+        retire = getattr(self.paper, "retire_untracked", None)
+        if retire is None:
+            return
+        try:
+            retire(set(self.trackers), now_ist())
+        except Exception:  # noqa: BLE001 - the desk runs whatever the book does
+            self.hook_errors += 1
+            log.exception("paper: retire_untracked failed")
 
     def _step_paper(self, now: dt.datetime) -> None:
         if self.paper is None:

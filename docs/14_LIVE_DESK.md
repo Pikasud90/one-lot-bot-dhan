@@ -76,7 +76,10 @@ writes to your desk journal.
 * **No fill:** a fill bar that opens beyond the stop closes the trade `NO_FILL` /
   `GAP_THROUGH_STOP`; no eligible bar before the deadline or the session end closes it `NO_FILL`
   (`expired` / `session_closed`). No price is ever invented while waiting, and these rules
-  follow the bars' time, not the wall clock.
+  follow the bars' time, not the wall clock. The one exception: a waiting trade on a series
+  the desk no longer tracks (taken off the watchlist) never gets bars, so it closes `NO_FILL`
+  (`series_untracked`) once the wall clock passes its deadline (plus the feed delay when
+  delayed).
 * **Grade:** `live` when Dhan served the bars, `delayed` otherwise; a live trade whose feed
   turns out to mix 1- and 2-minute bars is regraded `delayed` (a `REGRADED` event says when).
 * **Restart:** open paper trades reload; alerts from the last `paper.reconcile_days` days that
