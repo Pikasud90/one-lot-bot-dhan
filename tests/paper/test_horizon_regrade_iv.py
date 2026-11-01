@@ -242,3 +242,28 @@ def test_implied_iv_refuses_unusable_inputs(option, premium, underlying):
 def test_implied_iv_refuses_a_naive_time():
     option = {"strike": 45000.0, "opt_type": "CE", "expiry": "2026-11-24"}
     assert implied_iv(option, 312.34, 45210.35, dt.datetime(2026, 10, 29, 10, 5), 0.065) is None
+
+
+def test_a_premium_below_the_one_percent_vol_price_is_refused_not_clamped():
+    """Review round 1, MINOR-5. Between the discounted intrinsic and the 1 %-vol price the
+    solver returns its lower bound EXACTLY; that is a clamp, not an IV, so it is refused."""
+    import math
+
+    from onelot.analytics.blackscholes import implied_vol
+    from onelot.analytics.blackscholes import price as b76_price
+    from onelot.lab.execution import expiry_datetime, year_frac
+    from onelot.paper.pricing import IV_FLOOR
+
+    option = {"strike": 45000.0, "opt_type": "CE", "expiry": "2026-11-24"}
+    ts, spot, rate = ist(THU, 10, 5, 3), 45210.35, BT.risk_free_rate
+    t = year_frac(ts, expiry_datetime(dt.date(2026, 11, 24)))
+    intrinsic = (spot - 45000.0) * math.exp(-rate * t)
+    at_floor = b76_price(spot, 45000.0, t, IV_FLOOR, rate, "CE")
+    premium = (intrinsic + at_floor) / 2
+    assert intrinsic < premium < at_floor  # the band exists
+    assert (
+        implied_vol(premium, spot, 45000.0, t, rate, "CE", lo=IV_FLOOR, hi=IV_CEILING) == IV_FLOOR
+    )
+    assert implied_iv(option, premium, spot, ts, rate) is None
+    just_above = black76_premium(option | {"iv": 0.0105}, spot, ts, rate)
+    assert implied_iv(option, just_above, spot, ts, rate) == pytest.approx(0.0105, abs=1e-6)
