@@ -321,8 +321,8 @@ def format_exit(event: Mapping[str, Any], now: dt.datetime) -> str:
     EXIT and the instrument, the reason, the estimated P&L (whole rupees, as the Desk
     rounds it) and the time of this message.
 
-    Reads only advice and position.{series_key, kind, side, qty, option.{strike,lot},
-    unrealized}.
+    Reads only advice and position.{series_key, kind, side, qty,
+    option.{strike, expiry, lot}, unrealized}.
     """
     position = _fields(event.get("position"))
     option = _fields(position.get("option"))
