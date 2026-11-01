@@ -20,6 +20,8 @@ const hhmm = (s) => s ? String(s).slice(11, 16) : "–";
 const tile = (l, v, i = "", c = "") => `<div class="tile"><small>${l}</small><b class="${c}">${v}</b><i>${i}</i></div>`;
 // A rupee STRING from the API ("-12.05", exact from integer paise) for display: "−₹12.05", Indian digit grouping, never through a float. Plain text: esc() it in HTML.
 const inr = (s) => (s === null || s === undefined || s === "") ? "–" : (String(s).startsWith("-") ? "−₹" : "₹") + String(s).replace(/^-/, "").replace(/^\d+/, (w) => w.replace(/(\d)(?=(\d\d)*\d{3}$)/g, "$1,"));
+// The alert confidence as every surface shows it (notify.base.shown_confidence, US-003): floored and clamped to 0..100, so 64.9 shows 64 and never crosses a label threshold; null when not a finite number.
+const confShown = (v) => (typeof v !== "number" || !Number.isFinite(v)) ? null : Math.min(100, Math.max(0, Math.floor(v)));
 const store = { get(k, d) { try { return JSON.parse(localStorage.getItem("onelot." + k)) ?? d; } catch (e) { return d; } },
                 set(k, v) { try { localStorage.setItem("onelot." + k, JSON.stringify(v)); } catch (e) {} } };
 const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -257,7 +259,7 @@ async function renderHomeJournal() {
 /* ── Home: alerts (pending cards, monitoring, archive with audited outcomes) ── */
 const alerts = { open: store.get("alerts.open", {}), rows: [], scoreboard: {}, loadedAt: 0 };
 const srcTag = (d) => d ? `${esc(d.source)} ${esc(d.resolution)}${d.delayed ? " · <span class='warn'>~15 min delayed</span>" : " · live"}` : "–";
-function confBadge(c) { return c ? `<div class="conf ${c.label}" title="${esc(JSON.stringify(c.parts))}">${fmt(c.score, 0)} ${esc(c.label)}</div>` : `<div class="conf medium">–</div>`; }
+function confBadge(c) { return c ? `<div class="conf ${c.label}" title="${esc(JSON.stringify(c.parts))}">${fmt(confShown(c.score), 0)} ${esc(c.label)}</div>` : `<div class="conf medium">–</div>`; }
 function outcomeCell(s) {
   const o = s.outcome;
   if (s.status === "PENDING") return `<span class="countdown" data-exp="${esc(s.expires_at)}">…</span>`;
@@ -277,7 +279,7 @@ function alertRow(s) {
       <div><h4>One-unit economics</h4>${kv("Unit", esc(e.unit_label || ""))}${kv(s.kind === "INDEX" ? "Est. premium" : "Entry", rup2(e.entry_price))}${kv(s.kind === "INDEX" ? "Premium at stop" : "Stop", rup2(e.stop_price), "neg")}
         ${kv(s.kind === "INDEX" ? "Premium at target" : "Target", e.target_price != null ? rup2(e.target_price) : "trail", "pos")}${kv("Risk ₹ (incl. charges)", rup(e.risk_inr), "neg")}${kv("Net reward ₹", e.reward_inr != null ? rup(e.reward_inr) : "–", "pos")}${kv("Net R/R", fmt(e.rr_net))}
         ${s.kind === "INDEX" ? kv("Underlying entry / stop / target", `${fmt(e.underlying_entry, 0)} / ${fmt(e.underlying_stop, 0)} / ${e.underlying_target != null ? fmt(e.underlying_target, 0) : "–"}`) : ""}${e.synthetic ? `<div class="hint warn">premium synthetic (Black-76) — no live chain at alert time</div>` : (o.spread_pct != null ? kv("Chain spread", pct(o.spread_pct)) : "")}</div>
-      <div><h4>Confidence ${fmt(c.score, 0)} <span class="dim">${esc(c.label || "")}</span></h4>
+      <div><h4>Confidence ${fmt(confShown(c.score), 0)} <span class="dim">${esc(c.label || "")}</span></h4>
         ${["signal_strength", "backtest_evidence", "live_record", "regime_fit"].map(k => `<div class="kv"><span>${k.replace("_", " ")}</span><span>${fmt(parts[k], 0)}</span></div><div class="conf-bar"><i style="width:${Math.max(0, Math.min(100, parts[k] || 0))}%"></i></div>`).join("")}
         <div class="hint">${esc(parts.backtest_note || "")}<br>${esc(parts.live_note || "")}</div>
         <h4>Outcome at the alerted levels</h4>${out.outcome ? kv("Result", outcomeCell(s)) + kv("Best / worst excursion", `${fmt(out.mfe_r, 2)}R / −${fmt(out.mae_r, 2)}R`) + kv("Est. P&L (1 unit)", rup(out.pnl_est), cls(out.pnl_est)) + kv("Resolved", out.exit_ts ? tsf(out.exit_ts) : "–") : `<div class="muted">audited once the next bars arrive</div>`}</div>
@@ -690,7 +692,7 @@ function renderFocus(d) {
     </div>
     <h4>Strategies</h4><div class="tbl">${table([{ l: "Strategy", f: s => `<b>${esc(s.label)}</b>` }, { l: "TF", k: "timeframe" }, { l: "Bar", f: s => hhmm(s.last_bar_ts) },
       { l: "Verdict", f: s => `<span class="schip ${s.verdict !== "none" ? s.verdict : ""}">${esc(s.verdict)}</span>` }, { l: "Why", f: s => esc(s.error || s.reason || "") }], r.strategies || [])}</div>
-    ${r.signal ? `<div class="notice mt"><b>Pending alert:</b> ${esc(r.signal.side.replace("_", " "))} · ${esc(r.signal.strategy)} ${esc(r.signal.timeframe)} · conf ${fmt((r.signal.confidence || {}).score, 0)} — act on it from <a href="#home">Home</a>.</div>` : ""}
+    ${r.signal ? `<div class="notice mt"><b>Pending alert:</b> ${esc(r.signal.side.replace("_", " "))} · ${esc(r.signal.strategy)} ${esc(r.signal.timeframe)} · conf ${fmt(confShown((r.signal.confidence || {}).score), 0)} — act on it from <a href="#home">Home</a>.</div>` : ""}
     ${r.position ? `<div class="notice mt"><b>Monitoring:</b> ${esc(r.position.side.replace("_", " "))} from ${fmt(r.position.entry_price)} · ${fmt(r.position.r_now, 2)}R · ${esc(r.position.hold_check || "")}${r.position.exit_advice ? ` · <b class="neg">EXIT: ${esc(r.position.exit_advice)}</b>` : ""}</div>` : ""}`;
   const tf = $("focus-tf").value;
   if (focus.lastKey !== r.key || focus.lastTf !== tf || Date.now() - focus.lastAt > 55000) {
