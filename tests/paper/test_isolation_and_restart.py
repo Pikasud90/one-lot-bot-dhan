@@ -303,3 +303,15 @@ def test_an_alert_raised_while_paper_was_disabled_is_backfilled_at_the_next_enab
     enabled = make_book(clock=lambda: ist(THU, 10, 30))
     assert [t.alert_id for t in enabled.open_trades()] == ["while_off"]
     assert opened_detail(engine, "while_off")["detail"]["opened_by"] == "reconcile"
+
+
+# ── review round 1 NIT: an event always belongs to a trade ──────────────────────
+
+
+def test_paper_events_trade_id_is_a_foreign_key_to_paper_trades(engine):
+    from sqlalchemy.exc import IntegrityError
+
+    (fk,) = paper_events.c.trade_id.foreign_keys
+    assert fk.column is paper_trades.c.id
+    with pytest.raises(IntegrityError), engine.begin() as conn:  # foreign_keys=ON in the app
+        conn.execute(paper_events.insert().values(trade_id=999, ts=ist(THU, 10, 0), kind="OPENED"))

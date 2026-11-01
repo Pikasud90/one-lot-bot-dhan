@@ -18,6 +18,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Float,
+    ForeignKey,
     Index,
     Integer,
     MetaData,
@@ -586,7 +587,7 @@ paper_events = Table(
     "paper_events",
     METADATA,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("trade_id", Integer, nullable=False),  # paper_trades.id
+    Column("trade_id", Integer, ForeignKey("paper_trades.id"), nullable=False),
     Column("ts", TZDateTime, nullable=False),  # bar or decision time, never wall time
     Column("kind", String(24), nullable=False),  # OPENED | FILLED | NO_FILL | ...
     Column("detail", JSON),  # why, plus the bar prices used
