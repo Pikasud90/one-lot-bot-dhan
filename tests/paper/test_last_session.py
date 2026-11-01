@@ -2,10 +2,15 @@
 
     day_totals(day)    the CLOSED trades closed on IST date `day` (today_totals generalised:
                        today_totals(now) == day_totals(now's IST date))
-    last_session(now)  the most recent IST date BEFORE now's IST date on which a final trade
-                       (CLOSED or NO_FILL) closed, or None. A trade closes at its exit_ts, or at
+    last_session(now)  the most recent IST date BEFORE now's IST date on which a CLOSED trade
+                       closed; only when no CLOSED trade closed before today, the most recent
+                       such date with a NO_FILL; else None. A trade closes at its exit_ts, or at
                        updated_at when it has none (a NO_FILL never has one): the same rule as
                        the API's closed_at, so the panel and the server agree on the day.
+
+Review round 1 BLOCKER (the owner's Monday): Sunday's reconcile stamped a Friday NO_FILL with
+Sunday's time, so "any close" made Sunday the last session on Monday (0 closes) and hid
+Friday's 33 closes again. A no-fill alone never outranks a day with closes.
 
 Why (found at the owner's first launch, a Sunday): the book reconciled 68 Thursday/Friday
 alerts and closed 67 of them on their own bar times, so "today" showed none of it. Both
@@ -23,7 +28,7 @@ import pytest
 
 from onelot.store.schema import paper_trades
 
-from .conftest import FRI, THU, ist, make_alert, make_bars
+from .conftest import FRI, MON, THU, ist, make_alert, make_bars
 from .test_book_reads import WED, ZERO_TOTALS, closed_trade, open_alert, write_closed
 
 SUN = dt.date(2026, 11, 1)
@@ -106,6 +111,46 @@ class TestLastSession:
     def test_a_no_fill_alone_makes_a_session(self, make_book, engine):
         book = make_book()
         no_fill(book, engine, "n", ist(WED, 10, 0), ist(WED, 10, 20))
+        assert book.last_session(ist(FRI, 12, 0)) == WED
+
+    def test_the_owners_monday(self, make_book, engine):
+        """The day after: Sunday's stamped NO_FILL must not make Sunday the last session."""
+        book = make_book()
+        closed_trade(book, engine, "thu", ist(THU, 14, 0), gross_paise=-500, reason="STOP")
+        closed_trade(book, engine, "fri1", ist(FRI, 15, 20), gross_paise=1200, reason="SESSION_END")
+        closed_trade(book, engine, "fri2", ist(FRI, 13, 5), gross_paise=-300, reason="TIME_STOP")
+        no_fill(book, engine, "nf", ist(FRI, 15, 10), ist(SUN, 9, 1))
+        now = ist(MON, 9, 20)
+
+        assert book.today_totals(now)["closed"] == 0
+        assert book.last_session(now) == FRI
+        assert book.day_totals(FRI) == {
+            "closed": 2,
+            "wins": 1,
+            "losses": 1,
+            "gross_paise": 900,
+            "net_paise": None,
+        }
+
+    def test_a_later_no_fill_only_day_never_outranks_a_day_with_closes(self, make_book, engine):
+        book = make_book()
+        closed_trade(book, engine, "thu", ist(THU, 14, 0), gross_paise=100)
+        no_fill(book, engine, "nf", ist(FRI, 10, 0), ist(FRI, 10, 11))
+        assert book.last_session(ist(MON, 9, 20)) == THU
+
+    def test_with_no_close_before_today_the_latest_no_fill_day_is_the_session(
+        self, make_book, engine
+    ):
+        book = make_book()
+        no_fill(book, engine, "w", ist(WED, 10, 0), ist(WED, 10, 11))
+        no_fill(book, engine, "t", ist(THU, 10, 0), ist(THU, 10, 11))
+        closed_trade(book, engine, "today", ist(FRI, 11, 0), gross_paise=100)
+        assert book.last_session(ist(FRI, 12, 0)) == THU
+
+    def test_a_close_today_does_not_count_against_an_earlier_no_fill_day(self, make_book, engine):
+        book = make_book()
+        no_fill(book, engine, "w", ist(WED, 10, 0), ist(WED, 10, 11))
+        closed_trade(book, engine, "today", ist(FRI, 11, 0), gross_paise=100)
         assert book.last_session(ist(FRI, 12, 0)) == WED
 
     def test_the_owners_sunday(self, make_book, engine):

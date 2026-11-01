@@ -85,7 +85,7 @@ from .position import (
     strategy_exit_of,
 )
 from .pricing import frozen_iv, implied_iv
-from .view import TERMINAL_STATUSES, DayTotals, trade_view
+from .view import DayTotals, trade_view
 
 # The public contract of this module (PaperAlertError and grade_for live in .alert).
 __all__ = ["PaperAlertError", "PaperBook", "PaperEvent", "PaperTrade", "grade_for"]
@@ -627,21 +627,29 @@ class PaperBook:
         )
 
     def last_session(self, now: dt.datetime) -> dt.date | None:
-        """The most recent IST date BEFORE `now`'s on which a final trade closed, or None.
+        """The most recent IST date BEFORE `now`'s on which a CLOSED trade closed; only when no
+        CLOSED trade closed before today, the most recent such date with a NO_FILL; else None.
 
-        Final = CLOSED or NO_FILL; a trade closes at its exit_ts, or at updated_at when it
-        has none (every NO_FILL), the rule `closed_at` and `day_totals` use. Today is never
-        the last session: the panel falls back to it when nothing has closed today (US-032).
-        A close time that cannot be read is reported once and skipped; the newest
-        LAST_SESSION_SCAN candidates are looked at. A naive `now` is rejected (ValueError).
+        A trade closes at its exit_ts, or at updated_at when it has none (every NO_FILL), the
+        rule `closed_at` and `day_totals` use. A no-fill alone never outranks a day with
+        closes: a reconcile stamps late NO_FILLs with the day it ran, and that day must not
+        hide the closes of the session before (US-032 review round 1 BLOCKER, the owner's
+        Monday). Today is never the last session: the panel falls back to it when nothing
+        has closed today. A close time that cannot be read is reported once and skipped; the
+        newest LAST_SESSION_SCAN candidates of each kind are looked at. A naive `now` is
+        rejected (ValueError).
         """
         _require_aware(now, "now")
         start = dt.datetime.combine(now.astimezone(IST).date(), dt.time(0), tzinfo=IST)
+        return self._latest_close_day("CLOSED", start) or self._latest_close_day("NO_FILL", start)
+
+    def _latest_close_day(self, status: TradeStatus, before: dt.datetime) -> dt.date | None:
+        """The IST date of the newest readable close of a `status` trade before `before`."""
         t = paper_trades.c
         closed_at = func.coalesce(t.exit_ts, t.updated_at)  # typed as the columns: binds in UTC
         stmt = (
             select(t.id, type_coerce(closed_at, NullType()).label("closed_at"))  # decoded per row
-            .where(t.status.in_(TERMINAL_STATUSES), closed_at < start)
+            .where(t.status == status, closed_at < before)
             .order_by(closed_at.desc(), t.id.desc())
             .limit(LAST_SESSION_SCAN)
         )

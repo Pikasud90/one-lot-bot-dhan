@@ -13,7 +13,12 @@ with a stub engine whose desk carries a real PaperBook on a throw-away database.
 from __future__ import annotations
 
 import datetime as dt
+import json
+import re
+import shutil
+import subprocess
 import warnings
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
@@ -287,3 +292,93 @@ class TestLastSession:
         date = client_for(stub_desk(book)).get("/api/paper").json()["last_session"]["date"]
         assert date == ist_day(1, 0).date().isoformat()  # 00:10 IST is the IST date, not UTC's
         assert dt.date.fromisoformat(date)
+
+
+# ── the day after (US-032 review round 1 BLOCKER): a stamped no-fill never hides closes ──
+
+APP_JS = Path(__file__).resolve().parents[2] / "src" / "onelot" / "ui" / "app.js"
+PANEL_HELPERS = [
+    "esc", "cls", "tsf", "hhmm", "inr", "todayIST", "paperChip", "paperWhen", "paperRow",
+    "paperList", "paperOpen", "paperClosedOn", "paperShown", "paperDay", "paperSession",
+    "paperFallback", "paperEmpty", "paperGroup", "paperHead", "paperTable", "paperPanel",
+    "paperTotals", "paperSince", "paperMeta",
+]  # fmt: skip
+
+
+def render(payload: dict[str, Any], expression: str) -> Any:
+    """Run app.js's own Paper helpers in node over an API payload (`P`), at the real now."""
+    source = APP_JS.read_text(encoding="utf-8")
+    lines = []
+    for name in PANEL_HELPERS:
+        found = re.search(rf"^const {name} = .*;$", source, re.M)
+        assert found, f"`const {name} = ...;` not found as a single line in {APP_JS}"
+        lines.append(found.group(0))
+    lines += [
+        "const P = JSON.parse(process.argv[1]);",
+        f"console.log(JSON.stringify({expression}));",
+    ]
+    done = subprocess.run(
+        ["node", "-e", "\n".join(lines), "--", json.dumps(payload)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout)
+
+
+def no_fill_stamped(book, engine, alert_id: str, created: dt.datetime, stamped: dt.datetime):
+    """A NO_FILL booked late: raised `created`, written (updated_at) at `stamped`."""
+    book.on_alert(make_alert(alert_id=alert_id, created=created), created)
+    with engine.begin() as conn:
+        conn.execute(
+            paper_trades.update()
+            .where(paper_trades.c.alert_id == alert_id)
+            .values(
+                status="NO_FILL",
+                close_reason="NO_FILL",
+                gross_paise=0,
+                costs_paise=0,
+                net_paise=0,
+                updated_at=stamped,
+            )
+        )
+
+
+class TestTheDayAfter:
+    """The owner's Monday, shifted to the real clock: closes three and four days ago (the
+    "Friday" and "Thursday"), one no-fill of a "Friday" alert stamped yesterday (the
+    "Sunday" reconcile), nothing closed today."""
+
+    @pytest.fixture
+    def monday(self, make_book, engine):
+        book = make_book()
+        closed_on(book, engine, "thu", ist_day(4, 14), -500)
+        closed_on(book, engine, "fri1", ist_day(3, 15), 1200)
+        closed_on(book, engine, "fri2", ist_day(3, 13), -300)
+        no_fill_stamped(book, engine, "nf", ist_day(3, 15), ist_day(1, 9))
+        return client_for(stub_desk(book)).get("/api/paper").json()
+
+    def test_the_api_names_friday_with_its_exact_totals(self, monday):
+        assert monday["totals_today"]["closed"] == 0
+        assert monday["last_session"] == {
+            "date": ist_day(3, 0).date().isoformat(),
+            "totals": {
+                "closed": 2,
+                "wins": 1,
+                "losses": 1,
+                "gross_rupees": "9.00",
+                "net_rupees": None,
+            },
+        }
+
+    @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+    def test_the_panel_shows_fridays_closes_under_fridays_heading(self, monday):
+        html = render(monday, "paperPanel(P)")
+        day = render(monday, "paperDay(P.last_session.date)")
+        assert f"Last session · {day}" in html
+        assert html.count("pchip closed") == 2
+        assert "pchip nofill" not in html  # stamped yesterday: neither today's nor Friday's
+        line = render(monday, "paperMeta(P)")
+        assert line.startswith(f"last session {day}: 2 closed · 1 won · 1 lost · gross ₹9.00")
