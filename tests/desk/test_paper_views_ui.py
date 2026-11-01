@@ -50,6 +50,7 @@ HELPERS = [
     "paperGroup",
     "paperHead",
     "paperTable",
+    "paperCut",
     "paperPanel",
     "paperTotals",
     "paperSince",
@@ -231,6 +232,21 @@ class TestTodayView:
         payload = {**sunday(), "trades": sunday()["trades"][:2]}
         html = js("paperPanel(P)", payload)
         assert "none of its trades is in the list" in text(html)
+
+    def test_the_fallback_says_how_many_closes_are_listed(self):
+        # review round 1 NIT: the same note as the Last session view
+        payload = sunday()
+        payload["last_session"]["totals"] = {**FRI_TOTALS, "closed": 230}
+        assert "2 of 230 closes listed" in text(js("paperPanel(P)", payload))
+        assert "closes listed" not in text(js("paperPanel(P)", sunday()))
+
+    def test_a_fallback_with_nothing_to_list_is_an_empty_message_not_an_empty_table(self):
+        payload = {**sunday(), "trades": [t for t in sunday()["trades"] if t["alert_id"] == "t1"]}
+        html = js("paperPanel(P)", payload)
+        assert "<table" not in html and 'class="empty-inline"' in html
+        assert html.startswith('<div class="paper-head"><b>Last session · Fri 30 Oct</b>')
+        assert "None of its trades is in the list" in text(html)
+        assert "0 of 2 closes listed" in text(html)
 
 
 class TestLastSessionView:

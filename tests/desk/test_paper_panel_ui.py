@@ -44,6 +44,7 @@ HELPERS = [
     "paperGroup",
     "paperHead",
     "paperTable",
+    "paperCut",
     "paperPanel",
     "paperTotals",
     "paperSince",
