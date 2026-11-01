@@ -790,14 +790,14 @@ class PaperBook:
         with self._lock:
             if key in self._unpriced:
                 return []
-        event = PaperEvent(
-            trade.id, decision.bar_ts, "PRICING_UNAVAILABLE", detail | {"leg": "entry"}
-        )
-        with self.engine.begin() as conn:
-            conn.execute(paper_events.insert().values(**_event_row(event)))
-        with self._lock:
-            self._unpriced.add(key)
-        return [event]
+        # Guarded like every other write: if another book moved the trade first, the event
+        # is not booked and this book adopts the stored row (review round 1 NIT).
+        booked = [("PRICING_UNAVAILABLE", decision.bar_ts, detail | {"leg": "entry"})]
+        events = self._commit(trade, {"updated_at": now}, booked, counter=None)
+        if events:
+            with self._lock:
+                self._unpriced.add(key)
+        return events
 
     def _premium(
         self, option: Mapping[str, Any], underlying_paise: int, ts: dt.datetime

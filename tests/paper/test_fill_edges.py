@@ -480,3 +480,19 @@ def test_a_naive_now_is_rejected_not_guessed(make_book, engine):
     with pytest.raises(ValueError, match="timezone-aware"):
         book.step(dt.datetime(2026, 10, 29, 10, 8), series())
     assert the_row(engine)["status"] == "PENDING_FILL"
+
+
+def test_a_stale_book_books_no_pricing_unavailable_on_a_trade_already_filled(make_book, engine):
+    """Review round 1 NIT: the PRICING_UNAVAILABLE insert is guarded like every other write
+    (status AND grade as this book last saw them), so it never lands on an OPEN trade."""
+    priced = make_book()
+    priced.on_alert(make_alert("INDEX", "long"), ist(THU, 10, 5, 4))
+    stale = make_book(premium_at=lambda option, underlying, ts: None)  # holds PENDING_FILL
+    bars = series(BANKNIFTY=make_bars(ist(THU, 10, 5), [45200.0, 45224.65]))
+
+    assert [e.kind for e in priced.step(ist(THU, 10, 8), bars)] == ["FILLED"]
+    assert stale.step(ist(THU, 10, 8), bars) == []
+
+    assert kinds(engine) == ["OPENED", "FILLED"]
+    (held,) = stale.open_trades()
+    assert (held.status, held.entry_paise) == ("OPEN", 31435)  # adopted, not overwritten
