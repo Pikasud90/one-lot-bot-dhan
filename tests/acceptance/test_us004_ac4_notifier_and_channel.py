@@ -138,7 +138,9 @@ def test_notifier_send_marks_the_kind_of_signal_exit_and_critical_notifications(
 
 def test_two_criticals_never_share_a_dedup_key_so_neither_is_lost():
     """A CRITICAL has no signal or position id. If its key were built from the level alone the
-    second 'Clock problem' of the week would be swallowed as a duplicate of the first."""
+    second 'Clock problem' of the week would be swallowed as a duplicate of the first. (Review
+    decision F: the same title inside ONE 30-minute bucket is one alarm and shares its key on
+    purpose; these two are hours apart, the third has another title.)"""
     notifier = bare_notifier()
     first = critical_notification("Clock problem", "drift 3 s", NOW)
     second = critical_notification("Clock problem", "drift 9 s", NOW.replace(hour=14))
@@ -246,9 +248,11 @@ def test_the_convenience_critical_call_is_delivered_too(make_rig):
     assert "Clock problem" in visible(rig.rec.texts()[0])
 
 
-def test_two_criticals_with_the_same_title_are_both_delivered(make_rig):
+def test_two_criticals_with_the_same_title_an_hour_apart_are_both_delivered(make_rig):
     rig = make_rig()
     notifier, _ = build_notifier(rig)
+    # an hour apart is always another 30-minute bucket (decision F; the same bucket is one alarm,
+    # see test_us004_modeb_decisions.py)
     notifier.send(critical_notification("Clock problem", "first", rig.clock()))
     rig.clock.advance(3600)
     notifier.send(critical_notification("Clock problem", "second", rig.clock()))

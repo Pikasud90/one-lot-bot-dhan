@@ -31,6 +31,7 @@ import shutil
 import sqlite3
 import threading
 import time
+import zlib
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -39,6 +40,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import httpx
+import numpy as np
+import pandas as pd
 import pytest
 from sqlalchemy import Engine as SqlEngine
 from sqlalchemy import event, select
@@ -57,11 +60,17 @@ from us003_helpers import (
     truthy_flag,
 )
 
-from onelot.clock import IST
-from onelot.config import NotifyCfg
+from onelot.clock import IST, now_ist
+from onelot.config import AppConfig, NotifyCfg
+from onelot.desk import Desk
+from onelot.desk.config import DeskConfig, DeskInstrumentCfg, StrategySlotCfg
+from onelot.desk.data import COLUMNS, CompositeBars
+from onelot.desk.tracker import Verdict
 from onelot.notify.base import Notification, NotificationLevel
 from onelot.notify.manager import Notifier
+from onelot.risk.governor import RiskGovernor
 from onelot.store import init_database
+from onelot.store.repo import Repo
 
 REPO = Path(__file__).resolve().parents[2]
 RESEND = chr(0x21BB) + " resend"  # ADR-002 amendment 1: the text of a re-sent row starts with it
@@ -152,6 +161,24 @@ def scripted(*outcomes: Any) -> Callable[[httpx.Request], httpx.Response]:
         return httpx.Response(outcome.status_code, content=outcome.content, headers=outcome.headers)
 
     return respond
+
+
+class Outage:
+    """A transport that is down (502 Bad Gateway) until `down` is cleared. `calls` counts every
+    request, `delivered` holds the texts of the ones that were answered 200: what the phone
+    actually received (rig.rec.texts() also lists the attempts that failed)."""
+
+    def __init__(self, down: bool = True) -> None:
+        self.down = down
+        self.calls = 0
+        self.delivered: list[str] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.calls += 1
+        if self.down:
+            return httpx.Response(502, json={"ok": False, "description": "Bad Gateway"})
+        self.delivered.append(payload_of(request)["text"])
+        return ok_response(1000 + self.calls)
 
 
 # ========================= the table ====================================================
@@ -348,20 +375,30 @@ class Rig:
         clock: FakeClock,
         token: str,
         chat: str,
+        outbox_kwargs: dict[str, Any] | None = None,
     ) -> None:
         self.path = tmp_path / f"outbox{index}.db"
         self.db = init_database(f"sqlite:///{self.path}")
         self.clock = clock
+        self._token, self._chat = token, chat
+        self._outbox_kwargs = dict(outbox_kwargs or {})
         self._extra: list[Any] = []
         try:
-            self.rec = TimedRecorder(respond, clock)
-            self.client = telegram().TelegramClient(token, chat, http=make_http(self.rec))
-            self.outbox = telegram().TelegramOutbox(
-                self.db.engine, self.client, clock=clock, sleep=clock.sleep
-            )
+            self._build(respond)
         except BaseException:
             self.db.dispose()
             raise
+
+    def _build(self, respond: Callable[[httpx.Request], httpx.Response] | None) -> None:
+        self.rec = TimedRecorder(respond, self.clock)
+        self.client = telegram().TelegramClient(self._token, self._chat, http=make_http(self.rec))
+        self.outbox = telegram().TelegramOutbox(
+            self.db.engine,
+            self.client,
+            clock=self.clock,
+            sleep=self.clock.sleep,
+            **self._outbox_kwargs,
+        )
 
     # -- queueing ---------------------------------------------------------------------
     def enqueue_alert(
@@ -410,13 +447,16 @@ class Rig:
         self,
         respond: Callable[[httpx.Request], httpx.Response] | None = None,
         clock: FakeClock | None = None,
+        **outbox_kwargs: Any,
     ) -> tuple[Any, TimedRecorder]:
         """A second TelegramOutbox (a "restarted" process, or a competing worker) on the SAME
         database file, with its own recorder."""
         clk = clock or self.clock
         rec = TimedRecorder(respond, clk)
         client = telegram().TelegramClient(TOKEN, CHAT, http=make_http(rec))
-        worker = telegram().TelegramOutbox(self.db.engine, client, clock=clk, sleep=clk.sleep)
+        worker = telegram().TelegramOutbox(
+            self.db.engine, client, clock=clk, sleep=clk.sleep, **outbox_kwargs
+        )
         self._extra.append(worker)
         return worker, rec
 
@@ -439,8 +479,9 @@ def rig_factory(tmp_path: Path) -> Iterator[Callable[..., Rig]]:
         clock: FakeClock | None = None,
         token: str = TOKEN,
         chat: str = CHAT,
+        **outbox_kwargs: Any,
     ) -> Rig:
-        rig = Rig(tmp_path, len(made), respond, clock or FakeClock(), token, chat)
+        rig = Rig(tmp_path, len(made), respond, clock or FakeClock(), token, chat, outbox_kwargs)
         made.append(rig)
         return rig
 
@@ -622,3 +663,149 @@ def make_engine(
     monkeypatch.setattr(data_db, "_db", None)  # Engine.__init__ points the Lab at its database
     engine = Engine(cfg, Secrets(), use_mock=True)
     return EngineRig(engine, rec, root / "data" / "onelot.db", from_env_calls)
+
+
+# ========================= the Desk harness (synthetic bars, no network) ================
+# A compact copy of how tests/desk/test_desk.py drives the real Desk.
+def _synthetic(
+    days: int = 12, base: float = 1000.0, seed: int = 3, end: Any = None
+) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    end = end or pd.Timestamp.now(tz=IST).floor("2min")
+    day, sessions = end.normalize(), []
+    while len(sessions) < days:
+        if day.weekday() < 5:
+            sessions.append(day)
+        day -= pd.Timedelta(days=1)
+    idx: list[pd.Timestamp] = []
+    for d in sorted(sessions):
+        idx.extend(pd.date_range(d + pd.Timedelta(hours=9, minutes=15), periods=188, freq="2min"))
+    index = pd.DatetimeIndex([t for t in idx if t + pd.Timedelta(minutes=2) <= end])
+    n = len(index)
+    close = base * np.exp(np.cumsum(rng.normal(0.0, 0.0012, n)))
+    open_ = np.r_[base, close[:-1]]
+    spread = np.abs(rng.normal(0, 0.0012, n)) * close
+    return pd.DataFrame(
+        {
+            "open": open_,
+            "high": np.maximum(open_, close) + spread,
+            "low": np.minimum(open_, close) - spread,
+            "close": close,
+            "volume": rng.integers(1000, 5000, n).astype(float),
+        },
+        index=index,
+    )
+
+
+def _yesterday_close() -> pd.Timestamp:
+    return (pd.Timestamp.now(tz=IST).normalize() - pd.Timedelta(days=1)) + pd.Timedelta(
+        hours=15, minutes=30
+    )
+
+
+class StubBars:
+    """A bar source that serves synthetic bars (none for the keys in `empty_for`)."""
+
+    delayed = False
+    resolution = "2m"
+    last_error = None
+
+    def __init__(self, name: str, salt: int, empty_for: set[str] | None = None) -> None:
+        self.name = name
+        self.salt = salt
+        self.empty_for = empty_for or set()
+
+    def fetch(self, specs: Any, days: int, since: Any = None) -> dict[str, pd.DataFrame]:
+        end = _yesterday_close()
+        return {
+            k: pd.DataFrame(columns=COLUMNS)
+            if k in self.empty_for
+            else _synthetic(seed=(zlib.crc32(k.encode()) + self.salt) % 1000, end=end)
+            for k in specs
+        }
+
+
+class OpenClock:
+    """A session clock whose window is always open (what Desk._manage_positions asks for)."""
+
+    class W:
+        def __init__(self, now: dt.datetime) -> None:
+            self.open_at = now - dt.timedelta(hours=1)
+            self.close_at = now + dt.timedelta(hours=3)
+            self.mandatory_squareoff_at = now + dt.timedelta(hours=2)
+
+        def is_open(self, ts: Any) -> bool:
+            return True
+
+        def entries_allowed(self, ts: Any) -> bool:
+            return True
+
+        def past_squareoff(self, ts: Any) -> bool:
+            return False
+
+    def current_window(self, ts: dt.datetime | None = None) -> Any:
+        return OpenClock.W(ts or now_ist())
+
+
+def desk_config(key: str = "SBIN", stock_horizon: str = "swing") -> DeskConfig:
+    return DeskConfig(
+        poll_seconds=60,
+        history_days=10,
+        source="yahoo",
+        signal_valid_minutes=10,
+        stock_horizon=stock_horizon,
+        context=(),
+        indices=(),
+        stocks=(DeskInstrumentCfg(key, key, "STOCK", (StrategySlotCfg("ema_cross", "10m"),)),),
+    )
+
+
+def build_desk(
+    db: Any,
+    notifier: Any,
+    *,
+    monkeypatch: pytest.MonkeyPatch,
+    delayed: bool = False,
+    blocked: bool = False,
+    key: str = "SBIN",
+    stock_horizon: str = "swing",
+) -> Any:
+    """The real Desk on `db` (any Database, so it can share a file with the outbox), polled
+    once so its tracker has bars. `delayed`: Dhan has no bars for `key`, Yahoo serves it;
+    `blocked`: the risk governor is halted."""
+    cfg = AppConfig.load()
+    repo = Repo(db)
+    governor = RiskGovernor(
+        cfg.risk, cfg.account.capital_inr, cfg.mode, now_ist().date().isoformat(), repo
+    )
+    desk = Desk(
+        db.engine,
+        cfg,
+        notifier,
+        governor,
+        OpenClock(),
+        repo=repo,
+        desk_cfg=desk_config(key, stock_horizon),
+    )
+    primary = StubBars("dhan", 0, empty_for={key} if delayed else set())
+    desk.source = CompositeBars(primary, StubBars("yahoo", 1))
+    desk.fine_minutes = 2
+    monkeypatch.setattr(desk, "_maybe_switch_source", lambda: None)
+    desk.poll()
+    if blocked:
+        governor.manual_panic_halt()
+    return desk
+
+
+def raise_signal(
+    desk: Any, now: dt.datetime, *, key: str = "SBIN", direction: str = "long"
+) -> dict[str, Any]:
+    """Make the Desk raise one signal on `key` (as the strategy would) and return the alert."""
+    t = desk.trackers[key]
+    close = float(t.bars["close"].iloc[-1])
+    stop = close * (0.99 if direction == "long" else 1.01)
+    verdict = Verdict(
+        direction, "test", t.bars.index[-1].to_pydatetime(), stop, close, 60.0, [], True
+    )
+    desk._raise_signal(t, t.slots[0], verdict, now)
+    return list(desk.signals.values())[-1]
