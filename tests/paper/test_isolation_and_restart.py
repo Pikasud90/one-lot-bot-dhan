@@ -14,7 +14,6 @@ desk) need the AC8 wiring and live in the acceptance suite.
 from __future__ import annotations
 
 import copy
-import datetime as dt
 import logging
 from typing import Any
 
@@ -24,34 +23,23 @@ from sqlalchemy import Engine, create_engine
 from onelot.config import PaperCfg, RiskCfg
 from onelot.paper.book import PaperBook
 from onelot.risk.governor import RiskGovernor
-from onelot.store.schema import desk_signals, paper_events, paper_trades
+from onelot.store.schema import paper_events, paper_trades
 
-from .conftest import BT, SPECS, THU, FakePricer, ist, make_alert, make_bars, table_rows
+from .conftest import (
+    BT,
+    SPECS,
+    THU,
+    FakePricer,
+    ist,
+    make_alert,
+    make_bars,
+    store_desk_signal,
+    table_rows,
+)
 
 
 def series(**frames):
     return lambda key: frames.get(key)
-
-
-def store_desk_signal(engine: Engine, alert: dict[str, Any], payload: Any = ...) -> None:
-    """A desk_signals row as Desk._raise_signal writes it (payload = the alert dict)."""
-    with engine.begin() as conn:
-        conn.execute(
-            desk_signals.insert().values(
-                id=alert["id"],
-                created_at=dt.datetime.fromisoformat(alert["created_at"]),
-                expires_at=dt.datetime.fromisoformat(alert["expires_at"]),
-                instrument_key=alert["instrument_key"],
-                series_key=alert["series_key"],
-                kind=alert["kind"],
-                side=alert["side"],
-                strategy=alert["strategy"],
-                timeframe=alert["timeframe"],
-                bar_ts=dt.datetime.fromisoformat(alert["bar_ts"]),
-                status=alert["status"],
-                payload=alert if payload is ... else payload,
-            )
-        )
 
 
 def rows_by_alert(engine: Engine) -> dict[str, dict[str, Any]]:

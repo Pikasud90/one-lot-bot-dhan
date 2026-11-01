@@ -395,10 +395,14 @@ class PaperCfg(Strict):
                        managed to a close.
     feed_delay_minutes extra fill window for delayed-grade (Yahoo) alerts: their bars run
                        about this far behind the exchange (ADR-001 amendment 3).
+    reconcile_days     at startup, desk alerts with no paper trade are booked only if they
+                       were raised on or after midnight IST this many calendar days ago
+                       (default 3 covers a weekend); older ones are not backfilled.
     """
 
     enabled: bool = True
     feed_delay_minutes: int = Field(default=15, ge=0)
+    reconcile_days: int = Field(default=3, ge=0)
 
 
 class RiskCfg(Strict):

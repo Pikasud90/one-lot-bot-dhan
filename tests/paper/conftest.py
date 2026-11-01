@@ -208,15 +208,43 @@ def make_book(engine: Engine, cost_cfg: CostConfig, pricer: FakePricer) -> Calla
         feed_delay_minutes: int = 15,
         bt: BacktestCfg = BT,
         premium_at: Callable[..., float | None] | None = None,
+        reconcile_days: int = 3,
+        clock: Callable[[], dt.datetime] | None = None,
     ) -> PaperBook:
+        cfg = PaperCfg(
+            enabled=enabled, feed_delay_minutes=feed_delay_minutes, reconcile_days=reconcile_days
+        )
         return PaperBook(
             engine,
-            PaperCfg(enabled=enabled, feed_delay_minutes=feed_delay_minutes),
+            cfg,
             bt,
             SPECS,
             models.__getitem__,
             premium_at or pricer,
-            clock=lambda: ist(THU, 10, 8),
+            clock=clock or (lambda: ist(THU, 10, 8)),
         )
 
     return _make
+
+
+def store_desk_signal(engine: Engine, alert: Mapping[str, Any], payload: Any = ...) -> None:
+    """A desk_signals row as Desk._raise_signal writes it (payload = the alert dict)."""
+    from onelot.store.schema import desk_signals
+
+    with engine.begin() as conn:
+        conn.execute(
+            desk_signals.insert().values(
+                id=alert["id"],
+                created_at=dt.datetime.fromisoformat(alert["created_at"]),
+                expires_at=dt.datetime.fromisoformat(alert["expires_at"]),
+                instrument_key=alert["instrument_key"],
+                series_key=alert["series_key"],
+                kind=alert["kind"],
+                side=alert["side"],
+                strategy=alert["strategy"],
+                timeframe=alert["timeframe"],
+                bar_ts=dt.datetime.fromisoformat(alert["bar_ts"]),
+                status=alert["status"],
+                payload=alert if payload is ... else payload,
+            )
+        )

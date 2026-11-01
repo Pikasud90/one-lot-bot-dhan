@@ -54,6 +54,7 @@ from .fill import (
     stock_entry_paise,
 )
 from .money import to_paise
+from .pricing import frozen_iv, implied_iv
 
 # The public contract of this module (PaperAlertError and grade_for live in .alert).
 __all__ = ["PaperAlertError", "PaperBook", "PaperEvent", "PaperTrade", "grade_for"]
@@ -302,6 +303,8 @@ class PaperBook:
             if known is not None:
                 return self._remember(known), False
             values = trade_values(alert_id, alert, self.specs, now)
+            if values["kind"] == "INDEX":
+                values["plan"]["pricing"] = self._freeze_option_pricing(values["plan"])
             try:
                 trade = self._insert_opened(values)
             except IntegrityError:
@@ -324,6 +327,39 @@ class PaperBook:
         )
         return trade, True
 
+    def _freeze_option_pricing(self, plan: dict[str, Any]) -> dict[str, Any]:
+        """Freeze how the alerted option is priced, once, at the alert. Mutates `plan`, the
+        book's own deep copy, and returns the plan's "pricing" record.
+
+        IV: the alert's own, else implied from its chain premium (economics.entry_price) at
+        the underlying entry and created_at (Manager decision h); if that fails the IV stays
+        missing and every repricing is PRICING_UNAVAILABLE, never a constant IV.
+        Basis: for a live-chain alert, chain premium minus the model premium at the alert,
+        in paise. Only RECORDED here (ADR-001 amendment 6); US-023 applies it.
+        """
+        alert = plan["alert"]
+        eco = alert["economics"]
+        option = eco.get("option")
+        if not isinstance(option, dict) or not option:
+            return {"iv_source": "missing"}
+        created = dt.datetime.fromisoformat(alert["created_at"])
+        chain = eco.get("entry_price") or option.get("premium")
+        underlying_paise = int(plan["levels"]["underlying_entry_paise"])
+        pricing: dict[str, Any] = {"iv_source": "alert"}
+        if frozen_iv(option) is None:
+            rate = self.bt.risk_free_rate
+            option["iv"] = implied_iv(option, chain, underlying_paise / 100, created, rate)
+            pricing["iv_source"] = "implied" if option["iv"] is not None else "missing"
+        if eco.get("synthetic") is False:  # a live-chain premium
+            model, _ = self._premium(option, underlying_paise, created)
+            try:
+                pricing["basis_paise"] = (
+                    None if model is None else to_paise(chain) - to_paise(model)
+                )
+            except ValueError:  # an unusable chain premium: no basis, never a guess
+                pricing["basis_paise"] = None
+        return pricing
+
     def _reconcile(self) -> int:
         """Open a trade for every desk_signals row that has none (ADR-001 amendment 10).
 
@@ -331,23 +367,25 @@ class PaperBook:
         raised before any book existed. The trade is stamped with the ALERT's created_at
         (Manager decision 1), so it fills exactly as if the hook had run. Rows already
         booked are never touched. One unreadable row is logged and skipped, never fatal.
-        Returns how many trades were opened.
+        Only rows raised since `reconcile_since(clock(), cfg.reconcile_days)` are looked at
+        (Manager decision f): older alerts are not backfilled. Returns how many were opened.
         """
         if not inspect(self.engine).has_table(desk_signals.name):
             return 0  # a paper-only database: nothing to reconcile
+        now = self.clock()
+        _require_aware(now, "clock()")
+        since = reconcile_since(now, self.cfg.reconcile_days)  # Manager decision (f)
         joined = desk_signals.outerjoin(paper_trades, paper_trades.c.alert_id == desk_signals.c.id)
         stmt = (
             select(desk_signals.c.id, type_coerce(desk_signals.c.payload, Text))  # raw JSON text
             .select_from(joined)
-            .where(paper_trades.c.id.is_(None))
+            .where(paper_trades.c.id.is_(None), desk_signals.c.created_at >= since)
             .order_by(desk_signals.c.created_at, desk_signals.c.id)
         )
         with self.engine.connect() as conn:
             rows = conn.execute(stmt).all()
         if not rows:
             return 0
-        now = self.clock()
-        _require_aware(now, "clock()")
         opened = 0
         for signal_id, raw in rows:
             try:
@@ -701,6 +739,12 @@ def _read_bars(bars: BarsFor, series_key: str) -> Bars | None:
         )
         return None
     return view if view is not None and len(view) else None
+
+
+def reconcile_since(now: dt.datetime, days: int) -> dt.datetime:
+    """Midnight IST `days` calendar days before `now`'s IST date: the reconciliation horizon."""
+    day = now.astimezone(IST).date() - dt.timedelta(days=max(int(days), 0))
+    return dt.datetime.combine(day, dt.time(0), tzinfo=IST)
 
 
 def _event_row(event: PaperEvent) -> dict[str, Any]:

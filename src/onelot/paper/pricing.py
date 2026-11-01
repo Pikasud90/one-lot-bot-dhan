@@ -46,12 +46,17 @@ def option_terms(option: Mapping[str, Any]) -> OptionTerms | None:
     return OptionTerms(strike, cast(OptionType, opt_type), expiry_datetime(expiry))
 
 
+def frozen_iv(option: Mapping[str, Any]) -> float | None:
+    """The IV frozen on the alert's option, or None when it is missing or unusable."""
+    return _positive(option.get("iv"))
+
+
 def black76_premium(
     option: Mapping[str, Any], underlying: float, ts: dt.datetime, rate: float
 ) -> float | None:
     """Black-76 fair premium of the alerted option at `underlying` and `ts`, its IV frozen."""
     terms = option_terms(option)
-    iv = _positive(option.get("iv"))
+    iv = frozen_iv(option)
     spot = _positive(underlying)
     if terms is None or iv is None or spot is None or not _aware(ts):
         return None
