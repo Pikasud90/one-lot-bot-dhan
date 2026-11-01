@@ -79,6 +79,9 @@ P95_WINDOW = 100  # the last N sent rows
 # The SLO is alert to phone: notes the worker makes itself (missed, digest) are sent at ~0 ms
 # after they are made and would only pull the p95 down (review round 1, decision D).
 SLO_KINDS = ("alert", "exit", "critical")
+# EXIT and CRITICAL texts carry the time of the event (decision A): one delivered more than
+# this after it also says when it was sent, so a late EXIT is never read as a fresh one.
+SENT_LATE_AFTER = dt.timedelta(seconds=60)
 SEND_DEADLINE_S = 15.0  # total time one request may hold the worker
 IDLE_WAIT_S = 1.0  # the worker's nap when nothing is due (a new row wakes it at once)
 RESEND_MARKER = chr(0x21BB) + " resend"  # "↻ resend"
@@ -511,9 +514,9 @@ class TelegramOutbox:
         if row.kind == "alert":
             text = format_alert(payload, now)
         elif row.kind == "exit":
-            text = format_exit(payload, now)
+            text = format_exit(payload, row.alert_created_at) + _late(row, now)
         elif row.kind == "critical":
-            text = format_critical(payload, now)
+            text = format_critical(payload, row.alert_created_at) + _late(row, now)
         elif row.kind == "missed":
             text = format_missed(payload, now)
         elif row.kind == "digest":
@@ -739,6 +742,13 @@ class TelegramOutbox:
             "skipped": counts.get("skipped", 0),
             "rate_limited_until": to_ist(paused).isoformat() if paused is not None else None,
         }
+
+
+def _late(row: _Row, now: dt.datetime) -> str:
+    """' · sent late 10:30' on the Time line of an event delivered over SENT_LATE_AFTER late."""
+    if now - row.alert_created_at <= SENT_LATE_AFTER:
+        return ""
+    return f"{SEP}sent late {to_ist(now).strftime('%H:%M')}"
 
 
 def _unrenderable(exc: Exception) -> str:

@@ -10,12 +10,17 @@ it, httpx.MockTransport. No network, no real sleeping.
 
 from __future__ import annotations
 
+import datetime as dt
+import json
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
+
+from onelot.notify.telegram import SEP, format_alert, format_exit
+from onelot.notify.telegram_outbox import format_critical
 
 from .test_telegram_outbox import T0, Rig, ok
 
@@ -74,3 +79,61 @@ def test_p95_is_none_while_only_notes_were_sent(make_rig):
     status = rig.outbox.status()
 
     assert status["p95_latency_ms"] is None and status["last_ok_at"] == T0.isoformat()
+
+
+# ========================= (A) EXIT and CRITICAL show when the event happened =============
+def exit_event(unrealized: float = 150.0) -> dict[str, Any]:
+    position = {"series_key": "SBIN", "kind": "STOCK", "side": "BUY", "unrealized": unrealized}
+    return {"advice": "STOP", "position": position}
+
+
+def enqueue_event(rig: Rig, kind: str, payload: dict[str, Any], key: str = "p1#1") -> None:
+    rig.outbox.enqueue(
+        dedup_key=f"{kind}:{key}",
+        kind=kind,  # type: ignore[arg-type]
+        alert_id=key,
+        payload=payload,
+        alert_created_at=rig.clock(),
+        expires_at=None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "payload", "formatter"),
+    [
+        ("exit", exit_event(), format_exit),
+        ("critical", {"title": "Feed down", "body": "no ticks"}, format_critical),
+    ],
+    ids=["exit", "critical"],
+)
+@pytest.mark.parametrize(
+    ("delay_s", "late"), [(0, None), (60, None), (61, "10:01"), (3 * 3600, "13:00")]
+)
+def test_an_event_message_carries_the_event_time_and_says_when_it_is_sent_late(
+    make_rig, kind, payload, formatter, delay_s, late
+):
+    rig = make_rig()
+    enqueue_event(rig, kind, payload)
+    rig.clock.advance(delay_s)
+
+    rig.drain()
+
+    (request,) = rig.requests
+    text = json.loads(request.read())["text"]
+    expected = formatter(payload, T0)  # Time 10:00:00 IST: the event, not the delivery
+    assert text == (expected if late is None else f"{expected}{SEP}sent late {late}")
+
+
+def test_a_signal_alert_is_still_formatted_at_send_time(make_rig):
+    """The alert's 'time left' must be current: (A) is for EXIT and CRITICAL only."""
+    rig = make_rig()
+    alert = rig.alert(minutes=10)
+    rig.enqueue(alert)
+    rig.clock.advance(120)
+
+    rig.drain()
+
+    assert json.loads(rig.requests[0].read())["text"] == format_alert(alert, T0 + _2_MIN)
+
+
+_2_MIN = dt.timedelta(minutes=2)
