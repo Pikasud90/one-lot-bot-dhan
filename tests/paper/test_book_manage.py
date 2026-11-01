@@ -230,3 +230,20 @@ class TestStepping:
             at(8), feed(RELIANCE=bars(rows)), lambda t, n: StrategyExit("SIGNAL_EXIT", at(30))
         )
         assert the_row(engine)["status"] == "OPEN" and the_row(engine)["last_bar_ts"] == at(7)
+
+
+class TestASeriesThatGoesQuiet:
+    def test_an_open_trade_without_bars_still_closes_once_its_session_is_over(
+        self, make_book, engine
+    ):
+        """The desk dropped the series (or the feed died): no bar will come, yet no paper
+        trade is carried overnight. The last close it saw is the price (A5)."""
+        book = opened(make_book)
+        book.step(at(8), feed(RELIANCE=bars([FILL, (1000.00, 1001.00, 999.00, 1000.40)])))
+        assert the_row(engine)["status"] == "OPEN"
+        assert book.step(ist(THU, 15, 29), feed()) == []  # not over yet: nothing changes
+        events = book.step(ist(THU, 15, 30), feed())
+        row = the_row(engine)
+        assert (row["close_reason"], row["exit_ts"]) == ("SESSION_END", at(8))
+        # 1000.40 x 0.9997 = 1000.0999 -> 1000.05 for a seller
+        assert row["exit_paise"] == 100_005 and [e.kind for e in events] == ["CLOSED"]

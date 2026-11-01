@@ -26,6 +26,8 @@ from functools import partial
 from numbers import Real
 from typing import Any, Literal, NamedTuple, cast
 
+import numpy as np
+
 # No pandas-stubs are pinned; every pandas module in the mypy baseline carries this one
 # error, so a NEW module stays at zero only by naming it here (the flags are untouched).
 import pandas as pd  # type: ignore[import-untyped]
@@ -317,9 +319,9 @@ class PaperBook:
             for trade in active:
                 by_series.setdefault(trade.series_key, []).append(trade)
             for series_key, trades in by_series.items():
-                views = _SeriesViews.read(bars, series_key)
-                if views is None:
-                    continue
+                # no bars at all: nothing fills, but an OPEN trade can still reach its
+                # session-over close on the last close it saw (no overnight carry, AC5)
+                views = _SeriesViews.read(bars, series_key) or _SeriesViews.empty(series_key)
                 for trade in trades:
                     events.extend(self._step_trade(trade.alert_id, views, now, strategy_exit))
         except _StepStopped:
@@ -1155,6 +1157,11 @@ class _SeriesViews:
         self._tried: set[str] = set()
 
     @classmethod
+    def empty(cls, series_key: str) -> _SeriesViews:
+        """No frame this step: no fill view, and an OHLC view with no bars."""
+        return cls(series_key, pd.DataFrame(columns=["open", "high", "low", "close"]))
+
+    @classmethod
     def read(cls, bars: BarsFor, series_key: str) -> _SeriesViews | None:
         """bars(series_key), or None (logged) when the callable fails or gives no rows."""
         try:
@@ -1185,14 +1192,17 @@ class _SeriesViews:
 
     @property
     def ohlc(self) -> OhlcBars | None:
+        """The OHLC view, possibly with no bars (management can still end a session on
+        an empty one); None only for a frame that cannot be read at all."""
         if "ohlc" not in self._tried:
             self._tried.add("ohlc")
-            try:
-                view = normalise_ohlc(self.frame)
-            except Exception as exc:
-                self._unusable("ohlc", exc)
+            if self.frame.empty:
+                self._ohlc = _NO_BARS
             else:
-                self._ohlc = view if len(view) else None
+                try:
+                    self._ohlc = normalise_ohlc(self.frame)
+                except Exception as exc:
+                    self._unusable("ohlc", exc)
         return self._ohlc
 
     def _unusable(self, use: str, exc: Exception) -> None:
@@ -1203,6 +1213,16 @@ class _SeriesViews:
             type(exc).__name__,
             exc,
         )
+
+
+_NO_BARS = OhlcBars(
+    ns=np.empty(0, dtype=np.int64),
+    open=np.empty(0),
+    high=np.empty(0),
+    low=np.empty(0),
+    close=np.empty(0),
+    usable=np.empty(0, dtype=bool),
+)
 
 
 def _gross(trade: PaperTrade, exit_paise: int | None) -> int | None:
