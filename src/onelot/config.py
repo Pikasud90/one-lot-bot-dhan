@@ -484,11 +484,22 @@ class DashboardCfg(Strict):
     theme: Literal["shonen", "plain"] = "shonen"
 
 
+TelegramLevel = Literal["SIGNAL", "EXIT", "CRITICAL"]
+
+
 class NotifyCfg(Strict):
     os_toast: bool = True
     dashboard: bool = True
-    telegram: bool = False
+    # The master switch for phone alerts (US-004): false never builds the channel; true
+    # builds it when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are usable.
+    telegram: bool = True
     webhook: bool = False
+    # What reaches the phone: a subset of the three urgent levels (INFO and WARNING stay in
+    # the app). A misspelled level is a startup error, never a silently missing alert.
+    telegram_levels: tuple[TelegramLevel, ...] = ("SIGNAL", "EXIT", "CRITICAL")
+    # Outside market hours (holidays included) SIGNAL and EXIT arrive without a sound;
+    # nothing is dropped, and CRITICAL always sounds.
+    telegram_quiet_outside_session: bool = True
 
 
 class LoggingCfg(Strict):

@@ -205,7 +205,10 @@ dashboard:
 notify:
   os_toast: true
   dashboard: true
-  telegram: false                    # not implemented in this build
+  telegram: true                     # phone alerts; needs TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env
+  # Defaults (set them here to change them):
+  #   telegram_levels: [SIGNAL, EXIT, CRITICAL]    INFO and WARNING always stay in the app
+  #   telegram_quiet_outside_session: true         silent, never dropped, outside market hours
   webhook: false
 
 logging:
