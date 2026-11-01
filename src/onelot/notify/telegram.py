@@ -585,3 +585,14 @@ class TelegramClient:
         """Close the http client this object built itself; an injected one is the caller's."""
         if self._owns_http and self._http is not None:
             self._http.close()
+
+
+def __getattr__(name: str) -> Any:
+    """TelegramOutbox and TelegramChannel (US-004) live in .telegram_outbox, which imports
+    this module; they are reachable from here as the story's contract names them, loaded on
+    first use so the import stays one-way."""
+    if name in ("TelegramOutbox", "TelegramChannel"):
+        from . import telegram_outbox
+
+        return getattr(telegram_outbox, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
