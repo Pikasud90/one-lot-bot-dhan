@@ -9,7 +9,8 @@ and the EXIT payloads {advice, position} that _manage_positions produces for a s
 index option.
 
 Expected texts are rebuilt here from the alert's own numbers with independent code (Decimal
-half-up, a month table), never by calling the formatter again.
+half-up for prices, the floor for the confidence number, a month table), never by calling the
+formatter again.
 """
 
 from __future__ import annotations
@@ -71,6 +72,20 @@ def money(value: float) -> str:
     return f"{q:,.2f}"
 
 
+def product(alert: dict[str, Any]) -> str:
+    """The stock product suffix of line 1 (Manager decision, review round 1)."""
+    if alert["kind"] != "STOCK":
+        return ""
+    if alert["side"] == "SELL":
+        return f" {DOT} intraday short"
+    return {"intraday": f" {DOT} intraday", "swing": f" {DOT} delivery"}.get(alert["horizon"], "")
+
+
+def shown_confidence(score: float) -> int:
+    """The number both surfaces show: the score floored and clamped to 0..100."""
+    return int(min(max(Decimal(str(score)), Decimal(0)), Decimal(100)))
+
+
 def whole(value: float) -> str:
     q = Decimal(str(value)).quantize(Decimal(1), rounding=ROUND_HALF_UP)
     return f"{'+' if q > 0 else '-' if q < 0 else ''}{abs(q):,.0f}"
@@ -103,8 +118,8 @@ def expected_lines(alert: dict[str, Any], now: dt.datetime) -> list[str]:
         out.append(levels("Underlying Stop", eco["underlying_stop"], eco["underlying_target"]))
     out.append(levels("Stop", eco["stop_price"], eco["target_price"]))
     out.append(html.escape(f"{alert['strategy_label']} {alert['timeframe']}", quote=False))
-    score = Decimal(str(alert["confidence"]["score"])).quantize(Decimal(1), ROUND_HALF_UP)
-    out.append(f"Conf {score} {html.escape(alert['confidence']['label'], quote=False)}")
+    shown = shown_confidence(alert["confidence"]["score"])
+    out.append(f"Conf {shown} {html.escape(alert['confidence']['label'], quote=False)}")
     out.append(
         f"Valid till {expires:%H:%M} IST ({left}m left)"
         if left > 0
@@ -179,7 +194,10 @@ def test_a_dhan_served_stock_alert_reads_live(app_cfg, db, monkeypatch):
     notification = sent_alert(notifier)
     assert notification.payload is alert  # the formatter reads exactly what the desk sent
     assert alert["data"]["delayed"] is False
-    text = check_alert_text(notification, f"BUY SBIN {DOT} 1 share", "State Bank of India")
+    assert alert["horizon"] == "swing"  # the harness desk holds stocks for swing: delivery
+    header = f"BUY SBIN {DOT} 1 share{product(alert)}"
+    assert header == f"BUY SBIN {DOT} 1 share {DOT} delivery"
+    text = check_alert_text(notification, header, "State Bank of India")
     assert "Data live" in text.split("\n")
     assert "delayed" not in text
 
@@ -189,7 +207,8 @@ def test_a_yahoo_served_stock_alert_reads_delayed_on_the_desks_own_flag(app_cfg,
     alert = harness.raise_alert(desk, "SBIN")
     notification = sent_alert(notifier)
     assert alert["data"]["source"] == "yahoo" and alert["data"]["delayed"] is True
-    text = check_alert_text(notification, f"BUY SBIN {DOT} 1 share", "State Bank of India")
+    header = f"BUY SBIN {DOT} 1 share{product(alert)}"
+    text = check_alert_text(notification, header, "State Bank of India")
     assert "Data <b>delayed ~15m</b>" in text.split("\n")
     # the in-app title and the phone message carry the same flag
     assert notification.title.startswith(DELAYED_TITLE_MARKER)
@@ -254,7 +273,7 @@ def test_a_risk_blocked_alert_is_still_sent_and_prefixed_like_the_desk_title(
     now = clock_for(alert)
     text = telegram().format_alert(alert, now)
     lines = text.split("\n")
-    assert visible(lines[0]) == f"{BLOCKED}BUY SBIN {DOT} 1 share"
+    assert visible(lines[0]) == f"{BLOCKED}BUY SBIN {DOT} 1 share{product(alert)}"
     assert lines[2:] == expected_lines(alert, now)
     assert "daily loss limit" not in text  # the reason stays in the app
     assert_budget(text)
@@ -291,13 +310,14 @@ def test_a_blocked_index_alert_keeps_the_contract_in_the_header(app_cfg, db, mon
 # ==========================================================================================
 # one alert, two surfaces: the confidence number must agree
 # ==========================================================================================
-@pytest.mark.parametrize("score", [0.5, 1.5, 2.5, 56.5, 57.5, 72.5, 71.6, 44.9])
-def test_the_phone_and_the_desk_title_show_the_same_confidence_number(
+@pytest.mark.parametrize(
+    "score", [0.5, 1.5, 2.5, 56.5, 57.5, 72.5, 71.6, 44.9, 64.9, 65.0, 99.9, 100.0, 0.0]
+)
+def test_the_phone_and_the_desk_title_show_the_same_floored_confidence_number(
     score, app_cfg, db, monkeypatch
 ):
-    """The desk title rounds the score with f'{score:.0f}' (half to even: 56.5 -> 56) and the
-    Telegram line rounds half up (56.5 -> 57), so for the same alert the owner reads two
-    different numbers in the app and on the phone whenever the score ends in .5."""
+    """One helper (notify.base.shown_confidence) feeds the desk SIGNAL title and the phone
+    line: the score floored, so 56.5 reads 56 on both and 64.9 never reads 65."""
     import re
 
     monkeypatch.setattr(
@@ -312,7 +332,7 @@ def test_the_phone_and_the_desk_title_show_the_same_confidence_number(
         for ln in telegram().format_alert(alert, clock_for(alert)).split("\n")
         if ln.startswith("Conf ")
     )
-    assert phone_line.split()[1] == title_number
+    assert phone_line.split()[1] == title_number == str(shown_confidence(score))
 
 
 # ==========================================================================================
@@ -342,13 +362,29 @@ def test_the_missed_note_for_a_real_alert_is_one_line_with_symbol_contract_and_i
 # ==========================================================================================
 # EXIT payloads from _manage_positions
 # ==========================================================================================
-def _take_and_trigger_stop(desk: Any, notifier: Any, key: str) -> Any:
-    alert = harness.raise_alert(desk, key)
+def raise_short_alert(d: Any, key: str) -> dict[str, Any]:
+    """The harness's raise_alert, for a SHORT verdict (stop above the close)."""
+    from onelot.desk.tracker import Verdict
+
+    t = d.trackers[key]
+    close = float(t.bars["close"].iloc[-1])
+    ts = t.bars.index[-1].to_pydatetime()
+    verdict = Verdict("short", "test", ts, close * 1.005, close, 60.0, ["test"], True)
+    d._raise_signal(t, t.slots[0], verdict, now_ist())
+    alerts = [s for s in d.signals.values() if s["series_key"] == key]
+    assert len(alerts) == 1, f"harness: no short alert was raised for {key} ({t.last_error})"
+    return alerts[0]
+
+
+def _take_and_trigger_stop(desk: Any, notifier: Any, key: str, short: bool = False) -> Any:
+    alert = raise_short_alert(desk, key) if short else harness.raise_alert(desk, key)
     reply = desk.acknowledge(alert["id"], "TAKE")
     assert reply["accepted"], reply
     position = desk.positions[reply["position_id"]]
-    # move the stop through the market on the long side so the next poll advises STOP
-    position["stop_underlying"] = float(position["entry_underlying"]) * 10
+    # move the stop through the market so the next poll advises STOP: above the price for a
+    # long, below it for a short
+    entry = float(position["entry_underlying"])
+    position["stop_underlying"] = entry * (0.1 if short else 10)
     now = now_ist()
     desk._manage_positions(now, harness.OpenClock().current_window(now))
     exits = [n for n in notifier.sent if n.level is NotificationLevel.EXIT]
@@ -364,7 +400,7 @@ def test_the_exit_payload_of_a_stock_position_formats_to_four_lines(app_cfg, db,
     text = telegram().format_exit(payload, now)
     lines = text.split("\n")
     assert len(lines) == 4
-    assert visible(lines[0]).startswith("EXIT SBIN")
+    assert lines[0] == f"<b>EXIT: SELL SBIN {DOT} 1 share</b>"  # a long stock is closed by a SELL
     assert lines[1] == "Reason: STOP"
     assert lines[2] == f"Est. P&amp;L {whole(payload['position']['unrealized'])}"
     assert lines[3] == f"Time {now:%H:%M:%S} IST"
@@ -380,13 +416,25 @@ def test_the_exit_payload_of_an_index_option_names_the_contract(app_cfg, db, mon
     text = telegram().format_exit(notification.payload, now)
     lines = text.split("\n")
     assert len(lines) == 4
-    want = f"EXIT BANKNIFTY {dd_mmm(option['expiry'])} {strike(option['strike'])} CE"
-    assert visible(lines[0]).startswith(want), lines[0]
+    want = f"EXIT: SELL BANKNIFTY {dd_mmm(option['expiry'])} {strike(option['strike'])} CE"
+    assert visible(lines[0]) == f"{want} {DOT} 1 lot ({option['lot']})", lines[0]  # sell the call
     assert lines[1] == "Reason: STOP"
     assert lines[2] == f"Est. P&amp;L {whole(position['unrealized'])}"
     assert_budget(text, max_lines=4)
     assert_well_formed(text)
     assert "BANKNIFTY_OPT" not in text
+
+
+def test_the_exit_payload_of_a_short_stock_says_buy_to_cover(app_cfg, db, monkeypatch):
+    desk, notifier, _, _ = make(app_cfg, db, monkeypatch, {"SBIN", "BANKNIFTY"})
+    notification, now = _take_and_trigger_stop(desk, notifier, "SBIN", short=True)
+    position = notification.payload["position"]
+    assert position["side"] == "SELL" and position["direction"] == "short"
+    assert notification.payload["advice"] == "STOP"
+    lines = telegram().format_exit(notification.payload, now).split("\n")
+    assert len(lines) == 4
+    assert lines[0] == f"<b>EXIT: BUY SBIN {DOT} 1 share {DOT} cover short</b>"
+    assert lines[2] == f"Est. P&amp;L {whole(position['unrealized'])}"
 
 
 def test_the_exit_payload_is_not_changed_by_formatting_it(app_cfg, db, monkeypatch):

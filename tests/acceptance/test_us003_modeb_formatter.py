@@ -473,6 +473,8 @@ def test_the_worst_case_alert_fits_the_budget_and_keeps_every_fixed_line():
     big = 999_999_999_999.99
     a.update(
         series_key="&" * 80,
+        trading_symbol="&" * 80,
+        horizon="&" * 80,
         label="&" * 5000,
         strategy_label="&" * 200,
         timeframe="&" * 80,
@@ -501,6 +503,65 @@ def test_the_worst_case_alert_fits_the_budget_and_keeps_every_fixed_line():
     assert visible(lines[0]).startswith("[BLOCKED by risk] BUY ")
 
 
+def test_the_worst_case_stock_alert_with_every_new_field_full_fits_too():
+    """A blocked, delayed SELL (the longest product, 'intraday short') with a hostile symbol,
+    trading_symbol and horizon, the widest numbers and '&' in every capped field."""
+    a = stock_buy()
+    big = 999_999_999_999.99
+    a.update(
+        side="SELL",
+        series_key="&" * 80,
+        trading_symbol="&" * 80,
+        horizon="<script>" * 20,
+        label="&" * 5000,
+        strategy_label="&" * 200,
+        timeframe="&" * 80,
+        id="&" * 20,
+        risk_allowed=False,
+    )
+    a["confidence"] = {"score": 999_999_999_999.4, "label": "&" * 80}
+    a["data"]["delayed"] = True
+    a["economics"].update(entry_price=big, stop_price=big, target_price=big)
+    text = fmt(a)
+    assert_budget(text)
+    assert_well_formed(text)
+    assert "<script>" not in text and "script" not in text  # the horizon is never echoed
+    head = visible(header_of(text))
+    assert head.startswith("[BLOCKED by risk] SELL ") and head.endswith("intraday short")
+
+
+def test_the_label_keeps_at_least_80_characters_in_the_worst_case_index_alert():
+    """The fixed part of the longest message (every capped field full, the widest numbers,
+    blocked and delayed) must leave the label real room. Independent of the pair's own pin."""
+    a = index_ce_live()
+    big = 999_999_999_999.99
+    a.update(
+        series_key="Q" * 80,
+        trading_symbol="Q" * 80,
+        label="L" * 600,
+        strategy_label="S" * 200,
+        timeframe="T" * 80,
+        id="I" * 20,
+        risk_allowed=False,
+    )
+    a["confidence"] = {"score": 999_999_999_999.4, "label": "C" * 80}
+    a["data"]["delayed"] = True
+    a["economics"].update(
+        entry_price=big,
+        stop_price=big,
+        target_price=big,
+        underlying_stop=big,
+        underlying_target=big,
+        qty=999_999_999_999,
+    )
+    a["economics"]["option"].update(strike=big, expiry="2026-11-26")
+    text = fmt(a)
+    assert_budget(text)
+    label_line = text.split("\n")[1]
+    assert label_line.startswith("<i>LLLL"), label_line
+    assert label_line.count("L") >= 80, len(label_line)
+
+
 def test_a_realistic_maximum_alert_still_has_room_for_a_long_label():
     a = index_ce_live()
     a["label"] = "NIFTY MIDCAP SELECT INDEX FUTURES AND OPTIONS PRODUCT"
@@ -517,7 +578,7 @@ def test_a_realistic_maximum_alert_still_has_room_for_a_long_label():
 SCALARS = st.one_of(
     st.none(),
     st.booleans(),
-    st.integers(),
+    st.integers(min_value=-(10**30), max_value=10**30),
     st.floats(),
     st.text(max_size=40),
     st.dates(),
@@ -536,9 +597,11 @@ ALERT_KEYS = [
     "created_at",
     "expires_at",
     "series_key",
+    "trading_symbol",
     "label",
     "kind",
     "side",
+    "horizon",
     "strategy",
     "strategy_label",
     "timeframe",
@@ -547,7 +610,18 @@ ALERT_KEYS = [
     "data",
     "economics",
 ]
-EVENT_KEYS = ["advice", "position", "series_key", "unrealized"]
+POSITION_KEYS = [
+    "trading_symbol",
+    "series_key",
+    "kind",
+    "side",
+    "qty",
+    "option",
+    "unrealized",
+    "label",
+]
+POSITION = st.dictionaries(st.sampled_from(POSITION_KEYS), JSON_LIKE, max_size=len(POSITION_KEYS))
+EVENT = st.fixed_dictionaries({}, optional={"advice": JSON_LIKE, "position": POSITION | JSON_LIKE})
 HEALTH = [HealthCheck.too_slow, HealthCheck.data_too_large, HealthCheck.large_base_example]
 
 
@@ -563,7 +637,7 @@ def test_format_alert_and_format_missed_survive_any_json_like_alert(alert):
     assert not html_problems(missed), (html_problems(missed), missed)
 
 
-@given(st.dictionaries(st.sampled_from(EVENT_KEYS), JSON_LIKE, max_size=len(EVENT_KEYS)))
+@given(EVENT)
 @settings(max_examples=300, deadline=None, derandomize=True, suppress_health_check=HEALTH)
 def test_format_exit_survives_any_json_like_event(event):
     text = telegram().format_exit(event, NOW)
@@ -586,6 +660,6 @@ def test_an_exit_for_a_position_with_no_option_still_names_the_symbol():
     p = index_position()
     p["option"] = {}
     text = telegram().format_exit(exit_event(p, "STOP"), T_EXIT)
-    assert visible(text.split("\n")[0]).startswith("EXIT BANKNIFTY")
+    assert visible(text.split("\n")[0]).startswith("EXIT: SELL BANKNIFTY")
     assert len(text.split("\n")) == 4
     assert_well_formed(text)
