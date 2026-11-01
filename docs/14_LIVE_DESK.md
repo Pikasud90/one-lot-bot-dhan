@@ -57,6 +57,38 @@ governor's daily loss / drawdown / consecutive-loss counters update.
 Option premiums are **synthetic** (Black-76 off India VIX, the same model the Lab uses) until the
 Dhan option chain is wired into the desk; the alert says so. Place the order off the live chain.
 
+## Paper trades (every alert, never an order)
+
+Every alert the desk raises also opens a **paper trade**, automatically, so strategy evidence
+builds up without you clicking anything (ADR-001, US-001). That includes alerts the risk
+governor blocked and alerts you skipped or let expire: the paper book is evidence, not
+permission. It never sends an order, never touches the risk governor's counters and never
+writes to your desk journal.
+
+* **Unit:** 1 share for a stock, one lot of the alerted option for an index (the lot the alert
+  names; a lot that disagrees with `universe.yaml` is kept and logged), whatever `risk.lots_per_trade` says.
+* **Fill:** the open of the first desk bar that **closed after the alert**, on the same trading
+  day, within the alert's validity (plus `paper.feed_delay_minutes` for delayed-grade alerts,
+  whose bars arrive late). Stocks pay `backtest.slippage_pct` (a percent) against you, snapped to
+  the tick; options are priced like the Lab (`fair × (1 + option_spread_pct) +
+  option_slippage_ticks × tick`, rounded up) with the strike, expiry and IV frozen at the alert.
+  When the alert carries no IV it is implied once from the alert's premium.
+* **No fill:** a fill bar that opens beyond the stop closes the trade `NO_FILL` /
+  `GAP_THROUGH_STOP`; no eligible bar before the deadline or the session end closes it `NO_FILL`
+  (`expired` / `session_closed`). No price is ever invented while waiting, and these rules
+  follow the bars' time, not the wall clock.
+* **Grade:** `live` when Dhan served the bars, `delayed` otherwise; a live trade whose feed
+  turns out to mix 1- and 2-minute bars is regraded `delayed` (a `REGRADED` event says when).
+* **Restart:** open paper trades reload; alerts from the last `paper.reconcile_days` days that
+  never got a paper trade (a crash in between) are booked at the alert's own time.
+
+Config (`config/config.yaml`, section `paper:`): `enabled` (false stops *new* paper trades; open
+ones still run), `feed_delay_minutes` (15), and `reconcile_days` (3, not listed in the file;
+add it under `paper:` to change it). Trades and their events are in the `paper_trades` and
+`paper_events` tables (money in integer paise); the desk snapshot's `paper` block shows the
+book's counters next to the desk's own `desk_hook_errors`. Managing an open paper trade to its
+close (stop, target, session end) is US-002.
+
 ## Data
 
 * Without the Data API the desk polls **Yahoo 2-minute bars** (one batched request per minute,
