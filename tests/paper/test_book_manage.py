@@ -224,13 +224,47 @@ class TestStepping:
         assert the_row(engine)["close_reason"] == "STOP"  # managed anyway
         assert book.status()["hook_errors"] == 1
 
-    def test_a_look_ahead_answer_is_dropped_not_fatal(self, make_book, engine):
+    def test_an_answer_ahead_of_the_data_waits_as_pending_and_is_not_fatal(self, make_book, engine):
+        """Tester BUG-1: an exit whose bar closes after the trade's data time is remembered
+        (it closes only at an open the data reaches), never dropped and never an error."""
         rows = [FILL, QUIET]
         book = opened(make_book)
         book.step(
             at(8), feed(RELIANCE=bars(rows)), lambda t, n: StrategyExit("SIGNAL_EXIT", at(30))
         )
-        assert the_row(engine)["status"] == "OPEN" and the_row(engine)["last_bar_ts"] == at(7)
+        row = the_row(engine)
+        assert row["status"] == "OPEN" and row["last_bar_ts"] == at(7)
+        pending = row["plan"]["position"]["pending_exit"]
+        assert pending == {"reason": "SIGNAL_EXIT", "bar_close_ts": at(30).isoformat()}
+        assert book.status()["hook_errors"] == 0
+
+    def test_a_failing_callback_is_counted_every_time_but_logged_once_per_trade(
+        self, make_book, engine, caplog
+    ):
+        def broken(trade: Any, now: dt.datetime) -> None:
+            raise RuntimeError("strategy state unavailable")
+
+        book = opened(make_book)
+        frame = bars([FILL, QUIET, QUIET, QUIET])
+        with caplog.at_level("DEBUG", logger="onelot.paper"):
+            for minute in (8, 9, 10):
+                book.step(at(minute), feed(RELIANCE=frame), broken)
+        failed = [r for r in caplog.records if "strategy_exit failed" in r.getMessage()]
+        assert [r.levelname for r in failed] == ["ERROR", "DEBUG", "DEBUG"]
+        assert book.status()["hook_errors"] == 3 and the_row(engine)["status"] == "OPEN"
+
+    def test_remembering_an_exit_before_the_fill_bar_is_managed_keeps_the_rows_cursor(
+        self, make_book, engine
+    ):
+        """NIT: on data time a delayed trade's fill bar is not managed yet; a write that only
+        remembers an exit must not reset the row's cursor (the fill bar) to NULL."""
+        book = opened(make_book, make_alert(source="yahoo"), feed_delay_minutes=15)
+        frame = bars([FILL, QUIET])
+        book.step(at(8), feed(RELIANCE=frame))  # fills at 10:06; data time 09:53
+        book.step(at(9), feed(RELIANCE=frame), lambda t, n: StrategyExit("SIGNAL_EXIT", at(9)))
+        row = the_row(engine)
+        assert row["plan"]["position"]["pending_exit"] is not None
+        assert row["last_bar_ts"] == at(6)
 
 
 class TestASeriesThatGoesQuiet:
@@ -270,3 +304,120 @@ class TestASeriesThatGoesQuiet:
         row = the_row(engine)
         assert (row["close_reason"], row["exit_ts"]) == ("SESSION_END", at(8))
         assert row["exit_paise"] == 100_005 and [e.kind for e in events] == ["CLOSED"]
+
+
+def with_target(alert: dict[str, Any], target: float) -> dict[str, Any]:
+    alert["economics"]["underlying_target"] = target
+    return alert
+
+
+class TestTheStockTargetLevel:
+    """Review round 1: MINOR-3 snaps a stock target once, against the trader (a long's floors,
+    a short's ceils); MAJOR-2 judges the target against the SLIPPED entry."""
+
+    @pytest.mark.parametrize(
+        ("direction", "target", "snapped"),
+        [("long", 1010.03, 101_000), ("short", 989.97, 99_000)],
+    )
+    def test_an_off_tick_target_is_snapped_once_in_the_levels(
+        self, make_book, direction, target, snapped
+    ):
+        book = make_book()
+        trade = book.on_alert(
+            with_target(make_alert(direction=direction), target), ist(THU, 10, 5, 4)
+        )
+        assert trade is not None and trade.plan["levels"]["underlying_target_paise"] == snapped
+
+    def test_the_target_exit_and_its_trade_through_use_the_snapped_level(self, make_book, engine):
+        book = opened(make_book, with_target(make_alert(), 1010.03))  # T = 1010.00
+        book.step(at(8), feed(RELIANCE=bars([FILL, (1005.00, 1010.05, 1004.00, 1009.00)])))
+        row = the_row(engine)  # 1010.05 trades through 1010.00 (not through 1010.03 + 1 tick)
+        assert (row["close_reason"], row["exit_paise"]) == ("TARGET", 101_000)
+
+    @pytest.mark.parametrize(
+        ("direction", "target", "fills"),
+        [
+            ("long", 1000.30, False),  # the fill 1000.30 is AT the target
+            ("long", 1000.35, True),  # one tick inside
+            ("short", 999.70, False),  # the short's fill 999.70 is AT the target
+            ("short", 999.65, True),
+        ],
+    )
+    def test_a_slipped_entry_at_or_beyond_the_target_is_no_fill(
+        self, make_book, engine, direction, target, fills
+    ):
+        book = opened(make_book, with_target(make_alert(direction=direction), target))
+        events = book.step(at(7), feed(RELIANCE=bars([FILL])))
+        row = the_row(engine)
+        if fills:
+            assert row["entry_paise"] is not None and "FILLED" in [e.kind for e in events]
+            return
+        assert (row["status"], row["close_reason"]) == ("NO_FILL", "GAP_THROUGH_TARGET")
+        assert row["entry_paise"] is None and row["gross_paise"] == 0
+        (event,) = events
+        assert (event.kind, event.ts, event.detail["reason"]) == (
+            "NO_FILL",
+            at(6),
+            "gap_through_target",
+        )
+        assert event.detail["entry_paise"] == event.detail["target_paise"]
+
+
+class TestNoFillAtOrAfterExitTime:
+    """Review round 1, MINOR-2: the Lab never fills at or after exit_time; nor does paper."""
+
+    def test_a_fill_bar_opening_at_exit_time_is_no_fill_session_end(self, make_book, engine):
+        book = make_book()
+        book.on_alert(make_alert(created=ist(THU, 15, 14, 30)), ist(THU, 15, 14, 31))
+        frame = bars([QUIET, QUIET], start=ist(THU, 15, 14))  # 15:14 is before the alert
+        events = book.step(ist(THU, 15, 16), feed(RELIANCE=frame))
+        row = the_row(engine)
+        assert (row["status"], row["close_reason"], row["entry_paise"]) == (
+            "NO_FILL",
+            "NO_FILL",
+            None,
+        )
+        assert [(e.kind, e.ts, e.detail["reason"]) for e in events] == [
+            ("NO_FILL", ist(THU, 15, 15), "session_end")
+        ]
+
+    def test_the_bar_before_exit_time_still_fills_and_ends_at_the_next_open(
+        self, make_book, engine
+    ):
+        book = make_book()
+        book.on_alert(make_alert(created=ist(THU, 15, 13, 30)), ist(THU, 15, 13, 31))
+        frame = bars([QUIET, QUIET, (1000.20, 1001.00, 999.00, 1000.50)], start=ist(THU, 15, 13))
+        events = book.step(ist(THU, 15, 16), feed(RELIANCE=frame))
+        assert [e.kind for e in events] == ["FILLED", "CLOSED"]
+        row = the_row(engine)
+        assert (row["entry_ts"], row["close_reason"], row["exit_ts"]) == (
+            ist(THU, 15, 14),
+            "SESSION_END",
+            ist(THU, 15, 15),
+        )
+
+
+class TestTheRulesAreReadOnce:
+    """Review round 1 NIT: the exit rules are parsed from the alert once, into the plan, and
+    a step never re-parses them (nor re-warns about a value it could not read)."""
+
+    def test_the_plan_carries_the_rules_from_the_open(self, make_book):
+        alert = make_alert()
+        alert["manage"] |= {"atr": 4.2, "atr_trail": 1.7, "trail_atr_mult": 1.5, "max_bars": 6}
+        trade = make_book().on_alert(alert, ist(THU, 10, 5, 4))
+        assert trade is not None
+        rules = trade.plan["rules"]
+        assert (rules["atr"], rules["trail_atr_mult"], rules["max_bars"]) == (1.7, 1.5, 6)
+        assert (rules["tf_min"], rules["exit_time"], rules["tick_paise"]) == (5, "15:15", 5)
+
+    def test_an_unreadable_value_is_warned_about_once_not_every_step(
+        self, make_book, engine, caplog
+    ):
+        alert = make_alert()
+        alert["manage"]["max_bars"] = "lots"
+        with caplog.at_level("WARNING", logger="onelot.paper"):
+            book = opened(make_book, alert)
+            for minute in (7, 8, 9, 10):
+                book.step(at(minute), feed(RELIANCE=bars([FILL, QUIET, QUIET, QUIET])))
+        warned = [r for r in caplog.records if "max_bars" in r.getMessage()]
+        assert len(warned) == 1 and the_row(engine)["status"] == "OPEN"

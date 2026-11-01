@@ -13,6 +13,8 @@ moves, and closes NO_FILL only once a closed bar proves the window is over. A fi
 opens strictly beyond the stop is NO_FILL (GAP_THROUGH_STOP); an open exactly AT the stop
 fills (Manager decision 4, 2026-11-01). One that opens AT or beyond the alert's target is
 NO_FILL too (GAP_THROUGH_TARGET, US-002 decision 3): its target would be behind the entry.
+A first bar opening at or after the strategy's exit_time is NO_FILL "session_end" (the Lab
+never fills there; US-002 review round 1, MINOR-2).
 
 Exits mirror the entry: `stock_exit_paise` slips a stock exit against the trader (a long
 sells down, a short buys back up) like the Lab; an option sells at `option_exit_paise`.
@@ -49,7 +51,9 @@ NS_PER_MINUTE = 60_000_000_000
 _EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
 
 Outcome = Literal["fill", "wait", "no_fill"]
-NoFillReason = Literal["gap_through_stop", "gap_through_target", "expired", "session_closed"]
+NoFillReason = Literal[
+    "gap_through_stop", "gap_through_target", "session_end", "expired", "session_closed"
+]
 
 
 @dataclass(frozen=True)
@@ -172,11 +176,17 @@ def decide_fill(
     direction: str,
     stop_paise: int,
     target_paise: int | None = None,
+    exit_time: dt.time | None = None,
 ) -> FillDecision:
-    """Apply the fill rule to one trade. Uses only bars that have closed by `now`."""
+    """Apply the fill rule to one trade. Uses only bars that have closed by `now`.
+
+    With the strategy's `exit_time`, a first eligible bar opening at or after it on the
+    alert's date is NO_FILL "session_end": the Lab never fills at or after its square-off
+    minute (US-002 review round 1, MINOR-2)."""
     res_ns = max(int(resolution_min), 1) * NS_PER_MINUTE
     created_ist = created_at.astimezone(IST)
     day = created_ist.date()
+    exit_ns = None if exit_time is None else to_ns(dt.datetime.combine(day, exit_time, IST))
     midnight_ns = to_ns(dt.datetime.combine(day + dt.timedelta(days=1), dt.time(0), tzinfo=IST))
     close_at = dt.datetime.combine(day, SESSION_CLOSE_IST, tzinfo=IST)
     # An alert raised after the close (a special session) is bounded by the date alone.
@@ -210,7 +220,11 @@ def decide_fill(
         if open_paise <= 0:
             continue
         bar_ts = from_ns(int(ns[i]))
-        reason = _gap_reason(direction, open_paise, stop_paise, target_paise)
+        reason: NoFillReason | None
+        if exit_ns is not None and int(ns[i]) >= exit_ns:
+            reason = "session_end"
+        else:
+            reason = _gap_reason(direction, open_paise, stop_paise, target_paise)
         return FillDecision(
             "fill" if reason is None else "no_fill",
             reason=reason,
@@ -253,6 +267,16 @@ def stock_entry_paise(open_paise: int, direction: str, slippage_pct: float, tick
         ticks = Decimal(int(open_paise)) * factor / Decimal(tick)
         n = ticks.to_integral_value(rounding=ROUND_CEILING if sign > 0 else ROUND_FLOOR)
     return int(n) * tick
+
+
+def stock_target_paise(target_paise: int, direction: str, tick_paise: int) -> int:
+    """A stock target on the tick grid, snapped against the trader: a long's target (a sell
+    limit) floors, a short's (a buy-back limit) ceils. Exact integer arithmetic; an on-tick
+    target is unchanged (US-002 review round 1, MINOR-3)."""
+    whole, rest = divmod(int(target_paise), int(tick_paise))
+    if rest == 0:
+        return int(target_paise)
+    return whole * tick_paise if direction == "long" else (whole + 1) * tick_paise
 
 
 def stock_exit_paise(level_paise: int, direction: str, slippage_pct: float, tick_paise: int) -> int:

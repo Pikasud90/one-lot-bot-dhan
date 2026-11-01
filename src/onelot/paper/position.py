@@ -4,7 +4,8 @@ state as JSON, and the strategy-exit answer. Pure: no I/O.
 The state a restart must not lose (a trailed stop, a pending strategy exit, the cursor,
 the last close seen) lives in the trade's `plan["position"]`, written in the same
 transaction as the events it explains. Every price is integer paise on the managed
-series (the underlying for an option).
+series (the underlying for an option). The exit rules are read from the alert ONCE, when
+the trade opens, into `plan["rules"]` (review round 1 NIT): a step never re-parses them.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from .manage import Direction, Kind, ManageRules, PositionState, StrategyExit
 log = logging.getLogger(__name__)
 
 POSITION_VERSION = 1
+RULES_VERSION = 1
 DEFAULT_EXIT_TIME = dt.time(15, 15)  # the desk's default exit_time (config/desk.yaml)
 
 
@@ -50,6 +52,39 @@ def rules_from_alert(
         tf_min=_whole(manage.get("tf_min"), tf_default, "tf_min") or tf_default,
         exit_time=_exit_time(manage.get("exit_time")),
         tick_paise=int(tick_paise),
+        resolution_min=resolution,
+    )
+
+
+def rules_to_json(rules: ManageRules) -> dict[str, Any]:
+    """The rules as the plan stores them, JSON-safe (the resolution is the trade's own)."""
+    return {
+        "version": RULES_VERSION,
+        "target_r": rules.target_r,
+        "trail_atr_mult": rules.trail_atr_mult,
+        "trail_activate_r": rules.trail_activate_r,
+        "atr": rules.atr,
+        "max_bars": rules.max_bars,
+        "tf_min": rules.tf_min,
+        "exit_time": rules.exit_time.strftime("%H:%M"),
+        "tick_paise": rules.tick_paise,
+    }
+
+
+def rules_from_json(data: Mapping[str, Any], *, resolution: int | None) -> ManageRules:
+    """`rules_to_json` read back: values already checked at the open, so no defaults here."""
+    if data.get("version") != RULES_VERSION:
+        raise ValueError(f"paper rules version {data.get('version')!r} is not supported")
+    atr = data["atr"]
+    return ManageRules(
+        target_r=float(data["target_r"]),
+        trail_atr_mult=float(data["trail_atr_mult"]),
+        trail_activate_r=float(data["trail_activate_r"]),
+        atr=None if atr is None else float(atr),
+        max_bars=int(data["max_bars"]),
+        tf_min=int(data["tf_min"]),
+        exit_time=dt.time.fromisoformat(str(data["exit_time"])),
+        tick_paise=int(data["tick_paise"]),
         resolution_min=resolution,
     )
 

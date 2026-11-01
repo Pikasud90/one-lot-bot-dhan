@@ -398,6 +398,18 @@ def _manage(
     return new_state, events
 
 
+def remember_exit(state: PositionState, reported: StrategyExit | None) -> PositionState:
+    """`state` also waiting for `reported`, without managing any bar: for a caller whose DATA
+    lags the report (a delayed feed: the signal bar closes after the data time). Remembering
+    is no look-ahead, since the exit closes only at an open the data has reached; dropping
+    it would lose it once the strategy stops reporting it (review round 1, Tester BUG-1).
+    The earliest exit wins, ties by precedence; a stale report is ignored, as in manage_step.
+    """
+    if reported is not None and not isinstance(reported, StrategyExit):
+        raise ValueError(f"strategy_exit={reported!r} must be a StrategyExit or None")
+    return replace(state, pending_exit=_earliest_exit(state, reported))
+
+
 def _earliest_exit(state: PositionState, reported: StrategyExit | None) -> StrategyExit | None:
     """The strategy exit the position now waits for: the pending one or the newly reported
     one, whichever bar closed first (on a tie, the higher precedence). A report whose bar

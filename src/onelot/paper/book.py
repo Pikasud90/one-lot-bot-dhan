@@ -60,15 +60,18 @@ from .fill import (
     spacing_gaps,
     stock_entry_paise,
     stock_exit_paise,
+    stock_target_paise,
 )
 from .manage import (
     CLOSED,
+    ManageRules,
     OhlcBars,
     PaperClose,
     PositionState,
     StrategyExit,
     manage_view,
     normalise_ohlc,
+    remember_exit,
 )
 from .money import to_paise
 from .position import (
@@ -76,6 +79,8 @@ from .position import (
     position_from_json,
     position_to_json,
     rules_from_alert,
+    rules_from_json,
+    rules_to_json,
     strategy_exit_of,
 )
 from .pricing import frozen_iv, implied_iv
@@ -245,6 +250,7 @@ class PaperBook:
         self._retry: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._retry_logged: set[str] = set()  # retries whose traceback was already logged
         self._tracked: frozenset[str] | None = None  # the desk's series (retire_untracked)
+        self._callback_failed: set[int] = set()  # trades whose strategy_exit traceback is logged
         METADATA.create_all(engine, tables=[paper_trades, paper_events])  # no-op if present
         self._load_active()
         if cfg.enabled:  # a disabled book opens nothing, not even at startup
@@ -550,6 +556,7 @@ class PaperBook:
             with self._lock:
                 return self._remember(stored), False
         values = trade_values(alert_id, alert, self.specs, now)  # pure: a bug here is a bug
+        self._freeze_rules(values)
         if values["kind"] == "INDEX":
             values["plan"]["pricing"] = self._freeze_option_pricing(values["plan"])
         try:
@@ -577,6 +584,36 @@ class PaperBook:
             trade.qty,
         )
         return trade, True
+
+    def _freeze_rules(self, values: dict[str, Any]) -> None:
+        """Read the exit rules from the alert once, into the plan, and put a stock target on
+        the tick grid against the trader (review round 1, MINOR-3 and NIT). Mutates `values`,
+        the book's own new row."""
+        plan = values["plan"]
+        tick_paise = to_paise(self._tick_for(values["instrument_key"]))
+        rules = rules_from_alert(
+            plan["alert"], tick_paise=tick_paise, resolution=None, timeframe=values["timeframe"]
+        )
+        plan["rules"] = rules_to_json(rules)
+        levels = plan["levels"]
+        target = levels.get("underlying_target_paise")
+        if values["kind"] == "STOCK" and target is not None:
+            levels["underlying_target_paise"] = stock_target_paise(
+                target, values["direction"], tick_paise
+            )
+
+    def _rules(self, trade: PaperTrade, plan: Mapping[str, Any]) -> ManageRules:
+        """The rules frozen in the plan at the open; a row opened before that (US-001) has
+        none, so its alert is read here instead (the step then stores them)."""
+        stored = plan.get("rules")
+        if isinstance(stored, Mapping):
+            return rules_from_json(stored, resolution=trade.resolution_min)
+        return rules_from_alert(
+            plan["alert"],
+            tick_paise=to_paise(self._tick(trade)),
+            resolution=trade.resolution_min,
+            timeframe=trade.timeframe,
+        )
 
     def _freeze_option_pricing(self, plan: dict[str, Any]) -> dict[str, Any]:
         """Freeze how the alerted option is priced, once, at the alert. Mutates `plan`, the
@@ -749,6 +786,7 @@ class PaperBook:
     ) -> list[PaperEvent]:
         """Fill, close NO_FILL, or keep waiting one PENDING_FILL trade."""
         plan = trade.plan
+        rules = self._rules(trade, plan)
         stop_paise = int(plan["levels"]["underlying_stop_paise"])
         target = plan["levels"].get("underlying_target_paise")
         decision = decide_fill(
@@ -760,6 +798,7 @@ class PaperBook:
             direction=trade.direction,
             stop_paise=stop_paise,
             target_paise=None if target is None else int(target),
+            exit_time=rules.exit_time,
         )
         if decision.outcome == "wait":
             return []
@@ -779,6 +818,13 @@ class PaperBook:
                 return self._entry_unpriced(trade, decision, detail | {"error": priced}, now)
         else:
             priced = self._price_stock(trade, open_paise, stop_paise)
+            sign = 1 if trade.direction == "long" else -1
+            if target is not None and (priced.entry_paise - int(target)) * sign >= 0:
+                # the SLIPPED fill is at or past the target: a 'target' behind the entry
+                # would book a loss as TARGET (review round 1, MAJOR-2)
+                behind = replace(decision, outcome="no_fill", reason="gap_through_target")
+                extra = {"entry_paise": priced.entry_paise, "target_paise": int(target)}
+                return self._close_no_fill(trade, behind, now, extra)
         position = initial_position(
             trade_id=trade.id,
             direction=trade.direction,
@@ -798,7 +844,7 @@ class PaperBook:
             "last_bar_ts": bar_ts,
             "resolution_min": resolution,
             "risk_paise": priced.risk_paise,
-            "plan": plan | {"position": position_to_json(position)},
+            "plan": plan | {"position": position_to_json(position), "rules": rules_to_json(rules)},
             "updated_at": now,
         }
         detail |= priced.inputs | {
@@ -818,19 +864,22 @@ class PaperBook:
         """Manage one OPEN trade over the bars closed by its data time; book what changed."""
         plan = trade.plan
         state = self._position(trade, plan)
-        rules = rules_from_alert(
-            plan["alert"],
-            tick_paise=to_paise(self._tick(trade)),
-            resolution=trade.resolution_min,
-            timeframe=trade.timeframe,
-        )
+        rules = self._rules(trade, plan)
         data_now = self._data_now(trade, now)
-        reported = self._ask_strategy(trade, now, data_now, strategy_exit)
-        new, managed = manage_view(state, view, rules, data_now, reported)
-        if new == state and not managed:
+        reported = self._ask_strategy(trade, now, strategy_exit)
+        start = state
+        if reported is not None and reported.bar_close_ts > data_now:
+            # ahead of the trade's data time (a delayed feed fresher than feed_delay): kept
+            # as pending, never dropped; it closes only at an open data time has reached
+            start, reported = remember_exit(state, reported), None
+        new, managed = manage_view(start, view, rules, data_now, reported)
+        if new == state and not managed and "rules" in plan:
             return []  # nothing new: no write at all
         plan["position"] = position_to_json(new)
-        values: dict[str, Any] = {"plan": plan, "last_bar_ts": new.last_bar_ts, "updated_at": now}
+        plan["rules"] = rules_to_json(rules)  # already there, unless opened before US-002
+        # the row's cursor never goes back to None before the fill bar is managed (NIT)
+        last_bar_ts = new.last_bar_ts or trade.last_bar_ts
+        values: dict[str, Any] = {"plan": plan, "last_bar_ts": last_bar_ts, "updated_at": now}
         booked: list[Booked] = [(e.kind, e.ts, dict(e.detail)) for e in managed]
         if new.closed is None:
             return self._commit(trade, values, booked, counter=None)
@@ -899,36 +948,30 @@ class PaperBook:
         return now
 
     def _ask_strategy(
-        self,
-        trade: PaperTrade,
-        now: dt.datetime,
-        data_now: dt.datetime,
-        ask: StrategyExitFor | None,
+        self, trade: PaperTrade, now: dt.datetime, ask: StrategyExitFor | None
     ) -> StrategyExit | None:
         """The strategy's exit for an OPEN trade, or None. A callback that raises or answers
-        nonsense is logged and counted (the trade is still managed); an exit whose signal bar
-        closes after the trade's data time is not known yet and waits for a later step."""
+        nonsense is counted every time, logged with its traceback once per trade and quietly
+        after that (review round 1 NIT), and the trade is still managed."""
         if ask is None:
             return None
         try:
-            reported = strategy_exit_of(ask(trade, now))
+            return strategy_exit_of(ask(trade, now))
         except Exception:
-            log.exception(
-                "paper: strategy_exit failed for trade %s (alert %s)", trade.id, trade.alert_id
-            )
             with self._lock:
                 self._counts["hook_errors"] += 1
+                first = trade.id not in self._callback_failed
+                self._callback_failed.add(trade.id)
+            if first:
+                log.exception(
+                    "paper: strategy_exit failed for trade %s (alert %s); further failures "
+                    "for it are logged at debug",
+                    trade.id,
+                    trade.alert_id,
+                )
+            else:
+                log.debug("paper: strategy_exit failed again for trade %s", trade.id)
             return None
-        if reported is not None and reported.bar_close_ts > data_now:
-            log.info(
-                "paper: trade %s: strategy exit on a bar closing %s is ahead of data time %s; "
-                "not used this step",
-                trade.id,
-                reported.bar_close_ts.isoformat(),
-                data_now.isoformat(),
-            )
-            return None
-        return reported
 
     def _price_exit(
         self, trade: PaperTrade, plan: Mapping[str, Any], close: PaperClose
@@ -1023,8 +1066,10 @@ class PaperBook:
     ) -> list[PaperEvent]:
         """NO_FILL is final: no prices, zero money, the reason on the event."""
         reason = decision.reason or "expired"
-        gap = reason in GAP_CLOSE_REASONS  # a fill bar that gapped: stamped with its open
-        ts = decision.bar_ts if gap else decision.data_through
+        # a fill bar that decided it (a gap, the session end) stamps it with its open; a
+        # window that ran out, with the data time that proves it
+        decided_by_the_bar = reason in GAP_CLOSE_REASONS or reason == "session_end"
+        ts = decision.bar_ts if decided_by_the_bar else decision.data_through
         detail: dict[str, Any] = {**(extra or {}), "reason": reason}
         if decision.bar_ts is not None:
             detail |= {
@@ -1076,7 +1121,10 @@ class PaperBook:
         return fair, None
 
     def _tick(self, trade: PaperTrade) -> float:
-        spec = self.specs.get(trade.instrument_key)
+        return self._tick_for(trade.instrument_key)
+
+    def _tick_for(self, instrument_key: str) -> float:
+        spec = self.specs.get(instrument_key)
         tick = float(spec.tick_size) if spec is not None and spec.tick_size else 0.0
         return tick if math.isfinite(tick) and tick > 0 else DEFAULT_TICK
 

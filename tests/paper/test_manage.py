@@ -57,6 +57,7 @@ from onelot.paper.manage import (
     PositionState,
     StrategyExit,
     manage_step,
+    remember_exit,
 )
 
 from .conftest import FRI, THU, ist
@@ -517,6 +518,30 @@ class TestAC4StrategyExit:
         state, _ = step(position(), rows, now=at(12))  # 10:06 .. 10:11 managed
         state, _ = step(state, rows, now=at(13), strategy_exit=exit_at(10))
         assert state.closed == PaperClose("SIGNAL_EXIT", 100_100, at(12), gap=False)
+
+    # Tester BUG-1 (review round 1): a report AHEAD of the caller's data time (a delayed feed)
+    # is remembered with remember_exit, never dropped, and closes only at an open the data
+    # has reached.
+
+    def test_an_exit_ahead_of_the_data_is_remembered_and_closes_once_the_data_gets_there(
+        self,
+    ) -> None:
+        rows = [*FOUR_QUIET, (1002.00, 1003.00, 1001.00, 1002.50), QUIET]  # .. 10:11
+        waiting = remember_exit(position(), exit_at(10))  # the data has only reached 10:05
+        assert waiting.pending_exit == exit_at(10)
+        state, events = step(waiting, rows, now=at(10))  # data 10:10: the exit bar not closed
+        assert (state.closed, events, state.pending_exit) == (None, [], exit_at(10))
+        state, _ = step(state, rows, now=at(11))
+        assert state.closed == PaperClose("SIGNAL_EXIT", 100_200, at(10), gap=False)
+
+    def test_remembering_keeps_the_earliest_exit_and_ignores_a_stale_one(self) -> None:
+        early = remember_exit(position(), exit_at(10, "OPPOSITE_SIGNAL"))
+        assert remember_exit(early, exit_at(12)).pending_exit == exit_at(10, "OPPOSITE_SIGNAL")
+        assert remember_exit(position(), exit_at(6)).pending_exit is None  # at the fill: stale
+
+    def test_remembering_rejects_anything_but_a_strategy_exit(self) -> None:
+        with pytest.raises(ValueError, match="StrategyExit"):
+            remember_exit(position(), ("SIGNAL_EXIT", at(10)))  # type: ignore[arg-type]
 
 
 # ── AC5: the session end and the time stop (written red for Dev Beta, T3) ──────
