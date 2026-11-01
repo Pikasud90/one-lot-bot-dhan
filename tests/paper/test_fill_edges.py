@@ -19,6 +19,7 @@ from sqlalchemy import Engine, event
 
 from onelot.paper.fill import (
     Bars,
+    FillDecision,
     decide_fill,
     normalise_bars,
     stock_entry_paise,
@@ -165,6 +166,41 @@ def test_an_alert_raised_after_the_close_is_not_closed_by_the_clock_alone():
     created = ist(THU, 18, 0, 3)
     d = decide(make_bars(ist(THU, 18, 0), [1000.0] * 4), created, ist(THU, 18, 3))
     assert (d.outcome, d.bar_ts) == ("fill", ist(THU, 18, 1))
+
+
+@pytest.mark.parametrize("ttl_min", [10, 3 * 24 * 60], ids=["ttl-10", "ttl-to-monday"])
+def test_a_bar_opening_at_the_1530_close_never_fills(ttl_min):
+    """Review round 1, MINOR-1: a feed that prints a 15:30 bar (a closing-auction print)
+    must not fill an alert raised before the close; the window ends AT 15:30."""
+    created = ist(FRI, 15, 29, 10)
+    frame = make_bars(ist(FRI, 15, 25), [1000.0] * 6)  # 15:25 .. 15:30
+    d = decide(frame, created, ist(FRI, 15, 31, 5), ttl_min=ttl_min)
+    assert (d.outcome, d.reason, d.bar_ts) == ("no_fill", "session_closed", None)
+
+
+def test_the_reviewers_probe_closes_no_fill_session_closed_not_filled_at_1530(make_book, engine):
+    book = make_book()
+    book.on_alert(make_alert(created=ist(FRI, 15, 29, 10)), ist(FRI, 15, 29, 11))
+    events = book.step(ist(FRI, 15, 31, 5), series(RELIANCE=make_bars(ist(FRI, 15, 25), [1e3] * 6)))
+    row = the_row(engine)
+    assert (row["status"], row["close_reason"], row["fill_bar_ts"]) == ("NO_FILL", "NO_FILL", None)
+    assert [(e.kind, e.detail["reason"]) for e in events] == [("NO_FILL", "session_closed")]
+
+
+def test_a_bar_just_before_the_close_still_fills():
+    created = ist(FRI, 15, 28, 10)
+    frame = make_bars(ist(FRI, 15, 25), [1000.0] * 6)  # 15:29 is the last eligible bar
+    d = decide(frame, created, ist(FRI, 15, 31, 5))
+    assert (d.outcome, d.bar_ts) == ("fill", ist(FRI, 15, 29))
+
+
+def test_with_no_closed_bar_yet_the_trade_waits_and_knows_no_data_time():
+    """fill.decide_fill: nothing has closed by `now` (review round 1, MINOR-5)."""
+    created = ist(THU, 10, 5, 3)
+    frame = make_bars(ist(THU, 10, 6), [1000.0] * 3)  # 10:06 closes at 10:07
+    d = decide(frame, created, ist(THU, 10, 6, 59))
+    assert d == FillDecision("wait")
+    assert (d.window_closed, d.data_through, d.bar_ts) == (None, None, None)
 
 
 def test_an_unusable_bar_on_the_deadline_closes_the_window_without_a_price():

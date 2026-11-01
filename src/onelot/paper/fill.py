@@ -193,7 +193,9 @@ def decide_fill(
     lo = int(np.searchsorted(ns, to_ns(created_at), side="right"))
     hi = min(
         int(np.searchsorted(ns, deadline_ns, side="right")),
-        int(np.searchsorted(ns, midnight_ns, side="left")),
+        # Strictly before the session end: a bar opening AT 15:30 (a closing print) never
+        # fills. session_end_ns is midnight for an alert raised after the close.
+        int(np.searchsorted(ns, session_end_ns, side="left")),
         n_closed,
     )
     for i in range(lo, hi):
