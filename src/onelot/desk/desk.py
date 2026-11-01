@@ -1046,10 +1046,10 @@ class Desk:
     def _rebuild_snapshot(self, now: dt.datetime, window) -> None:
         market_open = bool(window and window.is_open(now))
         served = {k: self._served_by(k) for k in self.trackers}
-        delayed_keys = sorted(k for k, src in served.items() if is_delayed_source(src))
+        delayed = {k for k, src in served.items() if is_delayed_source(src)}
+        delayed_keys = sorted(delayed)  # snapshot output order; the set serves the lookups
         trackers = [
-            t.as_dict(now, served[k], k in delayed_keys, market_open)
-            for k, t in self.trackers.items()
+            t.as_dict(now, served[k], k in delayed, market_open) for k, t in self.trackers.items()
         ]
         pending = {s["instrument_key"]: s for s in self.signals.values()}
         open_by = {p["instrument_key"]: p for p in self.positions.values()}
