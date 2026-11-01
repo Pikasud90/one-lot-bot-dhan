@@ -387,6 +387,9 @@ class Desk:
             "expires_at": _iso(expires),
             "instrument_key": t.instrument.key,
             "series_key": t.series.key,
+            # What to type into Dhan (US-004): universe.yaml's trading_symbol (MM -> M&M),
+            # else the key itself.
+            "trading_symbol": str(t.series.extra.get("trading_symbol") or t.series.key),
             "label": t.series.label,
             "kind": t.cfg.kind,
             "side": eco.side,
@@ -573,6 +576,7 @@ class Desk:
                 "signal_id": sid,
                 "instrument_key": s["instrument_key"],
                 "series_key": s["series_key"],
+                "trading_symbol": s.get("trading_symbol") or s["series_key"],  # older alerts
                 "label": s["label"],
                 "kind": s["kind"],
                 "side": s["side"],
