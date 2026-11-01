@@ -11,68 +11,13 @@ BUG-2  (test_busy_reads.py) open_trades() / status() never wait for the database
 
 from __future__ import annotations
 
-import contextlib
 import logging
-import sqlite3
-from collections.abc import Iterator
-from pathlib import Path
 
-import pytest
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import Engine, event
 
-from onelot.store import init_database
 from onelot.store.schema import paper_events
 
-from .conftest import BT, SPECS, THU, FakePricer, ist, make_alert, make_bars, table_rows
-
-BUSY = 0.2  # seconds: the book engine's busy timeout in these tests
-
-
-def short_engine(path: Path) -> Engine:
-    eng = create_engine(
-        f"sqlite:///{path}", connect_args={"check_same_thread": False, "timeout": BUSY}
-    )
-
-    @event.listens_for(eng, "connect")
-    def _pragmas(dbapi_conn, _rec):  # noqa: ANN001
-        cur = dbapi_conn.cursor()
-        cur.execute("PRAGMA journal_mode=WAL")
-        cur.execute(f"PRAGMA busy_timeout={int(BUSY * 1000)}")
-        cur.close()
-
-    return eng
-
-
-@contextlib.contextmanager
-def write_lock(path: Path) -> Iterator[None]:
-    """Hold SQLite's write lock from another connection until the block exits."""
-    conn = sqlite3.connect(str(path), timeout=5.0, isolation_level=None)
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        yield
-    finally:
-        conn.execute("ROLLBACK")
-        conn.close()
-
-
-@pytest.fixture
-def busy(tmp_path, cost_cfg):
-    """(db file, a PaperBook on a short-busy-timeout engine, that engine)."""
-    from onelot.config import PaperCfg
-    from onelot.costs import CostModel
-    from onelot.paper.book import PaperBook
-
-    path = tmp_path / "busy.db"
-    init_database(f"sqlite:///{path}").dispose()  # the full schema, WAL
-    eng = short_engine(path)
-    models = {k: CostModel(cost_cfg.product(s.product)) for k, s in SPECS.items()}
-    book = PaperBook(
-        eng, PaperCfg(), BT, SPECS, models.__getitem__, FakePricer(), clock=lambda: ist(THU, 10, 8)
-    )
-    try:
-        yield path, book, eng
-    finally:
-        eng.dispose()
+from .conftest import THU, ist, make_alert, make_bars, table_rows, write_lock
 
 
 def count_writes(eng: Engine, table: str) -> dict[str, int]:

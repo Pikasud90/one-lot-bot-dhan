@@ -7,14 +7,17 @@ network, no `current_settings()`, a fixed clock.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
+import sqlite3
 from collections.abc import Callable, Iterator, Mapping
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import pytest
-from sqlalchemy import Engine, Table, select
+from sqlalchemy import Engine, Table, create_engine, event, select
 
 from onelot.clock import IST
 from onelot.config import BacktestCfg, CostConfig, PaperCfg
@@ -248,3 +251,54 @@ def store_desk_signal(engine: Engine, alert: Mapping[str, Any], payload: Any = .
                 payload=alert if payload is ... else payload,
             )
         )
+
+
+# ── a busy SQLite database (US-001 review round 1: BUG-1, BUG-2) ──────────────────
+BUSY = 0.2  # seconds: the busy timeout of the `busy` book's engine
+
+
+def short_engine(path: Path) -> Engine:
+    eng = create_engine(
+        f"sqlite:///{path}", connect_args={"check_same_thread": False, "timeout": BUSY}
+    )
+
+    @event.listens_for(eng, "connect")
+    def _pragmas(dbapi_conn, _rec):  # noqa: ANN001
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute(f"PRAGMA busy_timeout={int(BUSY * 1000)}")
+        cur.close()
+
+    return eng
+
+
+@contextlib.contextmanager
+def write_lock(path: Path) -> Iterator[None]:
+    """Hold SQLite's write lock from another connection until the block exits."""
+    conn = sqlite3.connect(str(path), timeout=5.0, isolation_level=None)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        yield
+    finally:
+        conn.execute("ROLLBACK")
+        conn.close()
+
+
+@pytest.fixture
+def busy(tmp_path, cost_cfg):
+    """(db file, a PaperBook on a short-busy-timeout engine, that engine)."""
+    from onelot.config import PaperCfg
+    from onelot.costs import CostModel
+    from onelot.paper.book import PaperBook
+
+    path = tmp_path / "busy.db"
+    init_database(f"sqlite:///{path}").dispose()  # the full schema, WAL
+    eng = short_engine(path)
+    models = {k: CostModel(cost_cfg.product(s.product)) for k, s in SPECS.items()}
+    book = PaperBook(
+        eng, PaperCfg(), BT, SPECS, models.__getitem__, FakePricer(), clock=lambda: ist(THU, 10, 8)
+    )
+    try:
+        yield path, book, eng
+    finally:
+        eng.dispose()

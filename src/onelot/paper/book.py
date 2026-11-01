@@ -316,22 +316,33 @@ class PaperBook:
 
         Returns (trade, created). Shared by on_alert and the startup reconciliation, so both
         size, grade and stamp a trade the same way.
+
+        The database is touched OUTSIDE `self._lock`, so open_trades() / status() never
+        queue behind a write stuck on a busy database (BUG-2, review 1). Idempotency rests
+        on the UNIQUE alert_id: a racing caller's insert fails and adopts the winner's row.
+        Memory changes only after the commit.
         """
         with self._lock:
-            known = self._active.get(alert_id) or self._fetch(alert_id)
-            if known is not None:
-                return self._remember(known), False
-            values = trade_values(alert_id, alert, self.specs, now)
-            if values["kind"] == "INDEX":
-                values["plan"]["pricing"] = self._freeze_option_pricing(values["plan"])
-            try:
-                trade = self._insert_opened(values)
-            except IntegrityError:
-                # Another PaperBook on this database won the race for the same alert id.
-                raced = self._fetch(alert_id)
-                if raced is None:
-                    raise
+            known = self._active.get(alert_id)
+        if known is not None:
+            return known, False
+        stored = self._fetch(alert_id)
+        if stored is not None:
+            with self._lock:
+                return self._remember(stored), False
+        values = trade_values(alert_id, alert, self.specs, now)
+        if values["kind"] == "INDEX":
+            values["plan"]["pricing"] = self._freeze_option_pricing(values["plan"])
+        try:
+            trade = self._insert_opened(values)
+        except IntegrityError:
+            # Another thread or PaperBook on this database won the race for the alert id.
+            raced = self._fetch(alert_id)
+            if raced is None:
+                raise
+            with self._lock:
                 return self._remember(raced), False
+        with self._lock:
             self._counts["opened"] += 1
             self._remember(trade)
         log.info(
