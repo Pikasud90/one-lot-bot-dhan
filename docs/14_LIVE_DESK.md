@@ -83,7 +83,9 @@ writes to your desk journal.
   never got a paper trade (a crash in between) are booked at the alert's own time. This also
   covers alerts raised while `paper.enabled` was false: switching it back on and restarting
   backfills the ones from the last `reconcile_days` days. The `OPENED` event says which path
-  booked a trade (`opened_by`: `on_alert` or `reconcile`) and when (`booked_at`).
+  booked a trade (`opened_by`: `on_alert` or `reconcile`) and when (`booked_at`). A paper
+  trade that could not be written when its alert fired (a locked database) is retried on the
+  following polls (up to 500 kept in memory) and booked once, at the alert's own time.
 
 Config (`config/config.yaml`, section `paper:`): `enabled` (false stops *new* paper trades; open
 ones still run), `feed_delay_minutes` (15), and `reconcile_days` (3, not listed in the file;

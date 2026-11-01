@@ -18,6 +18,7 @@ import json
 import logging
 import math
 import threading
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from numbers import Real
@@ -40,6 +41,7 @@ from .alert import (
     alert_from_desk_signal,
     alert_id_of,
     grade_for,
+    jsonable,
     trade_values,
 )
 from .fill import (
@@ -64,6 +66,7 @@ log = logging.getLogger(__name__)
 TradeStatus = Literal["PENDING_FILL", "OPEN", "NO_FILL", "CLOSED"]
 TRADE_STATUSES: frozenset[str] = frozenset(("PENDING_FILL", "OPEN", "NO_FILL", "CLOSED"))
 ACTIVE_STATUSES: tuple[TradeStatus, ...] = ("PENDING_FILL", "OPEN")
+RETRY_CAP = 500  # failed on_alert calls kept in memory for a retry (oldest dropped)
 STATUS_KEYS = ("opened", "filled", "no_fill", "closed", "hook_errors")
 DEFAULT_TICK = 0.05  # rupees; only when the instrument spec is unknown
 
@@ -221,6 +224,8 @@ class PaperBook:
         self._active: dict[str, PaperTrade] = {}  # non-closed trades, by alert id
         self._counts: dict[str, int] = dict.fromkeys(STATUS_KEYS, 0)
         self._unpriced: set[tuple[int, dt.datetime]] = set()  # PRICING_UNAVAILABLE said once
+        # on_alert calls that failed at runtime, retried by step (review 1, MINOR-3)
+        self._retry: OrderedDict[str, dict[str, Any]] = OrderedDict()
         METADATA.create_all(engine, tables=[paper_trades, paper_events])  # no-op if present
         self._load_active()
         if cfg.enabled:  # a disabled book opens nothing, not even at startup
@@ -233,11 +238,24 @@ class PaperBook:
         Returns None and writes nothing when `paper.enabled` is false. Raises
         PaperAlertError for an alert it cannot record (the desk hook logs and counts it;
         the alert itself is never blocked by the paper book).
+
+        Any OTHER failure (a locked or broken database) re-raises too, but first keeps a
+        deep copy of the alert so the next step retries it: the trade is still booked
+        exactly once, at the alert's own time (review 1, MINOR-3).
         """
         _require_aware(now, "now")
         if not self.cfg.enabled:
             return None
-        trade, _ = self._open(alert_id_of(alert), alert, now, opened_by="on_alert")
+        alert_id = alert_id_of(alert)
+        try:
+            trade, _ = self._open(alert_id, alert, now, opened_by="on_alert")
+        except PaperAlertError:
+            raise  # an unrecordable alert: a retry cannot fix it
+        except Exception:
+            self._keep_for_retry(alert_id, alert)
+            raise
+        with self._lock:
+            self._retry.pop(alert_id, None)
         return trade
 
     def step(
@@ -258,6 +276,8 @@ class PaperBook:
         """
         _require_aware(now, "now")
         now = now.astimezone(IST)
+        if not self._retry_failed_alerts(now):
+            return []  # the database is locked: nothing else can be written this poll
         with self._lock:
             waiting = sorted(
                 (t for t in self._active.values() if t.status == "PENDING_FILL"),
@@ -292,6 +312,49 @@ class PaperBook:
                 except Exception:
                     self._step_failed(trade)
         return events
+
+    def _keep_for_retry(self, alert_id: str, alert: Mapping[str, Any]) -> None:
+        """Remember a failed alert (a deep JSON-safe copy); the oldest goes beyond RETRY_CAP."""
+        with self._lock:
+            self._retry[alert_id] = jsonable(alert)
+            self._retry.move_to_end(alert_id)
+            while len(self._retry) > RETRY_CAP:
+                dropped, _ = self._retry.popitem(last=False)
+                log.warning(
+                    "paper: retry set full (%d); alert %s dropped, a restart within "
+                    "reconcile_days still books it",
+                    RETRY_CAP,
+                    dropped,
+                )
+
+    def _retry_failed_alerts(self, now: dt.datetime) -> bool:
+        """Book the alerts whose on_alert failed, oldest first. False on a locked database."""
+        with self._lock:
+            pending = list(self._retry.items())
+        for alert_id, alert in pending:
+            try:
+                self._open(alert_id, alert, now, opened_by="on_alert")
+            except OperationalError as exc:
+                if database_locked(exc):
+                    log.error("paper: database is locked retrying alert %s: %s", alert_id, exc.orig)
+                    with self._lock:
+                        self._counts["hook_errors"] += 1
+                    return False
+                self._retry_failed(alert_id)
+                continue
+            except PaperAlertError as exc:  # not kept by on_alert; belt and braces
+                log.warning("paper: alert %s dropped from the retry set: %s", alert_id, exc)
+            except Exception:
+                self._retry_failed(alert_id)
+                continue
+            with self._lock:
+                self._retry.pop(alert_id, None)
+        return True
+
+    def _retry_failed(self, alert_id: str) -> None:
+        log.exception("paper: retrying alert %s failed; kept for the next step", alert_id)
+        with self._lock:
+            self._counts["hook_errors"] += 1
 
     def _step_failed(self, trade: PaperTrade) -> None:
         log.exception("paper: step failed for trade %s (alert %s)", trade.id, trade.alert_id)
