@@ -382,3 +382,29 @@ def test_the_channel_declines_levels_outside_the_config_without_touching_the_db(
     assert channel.accepts(signal) is False and channel.accepts(exit_note()) is True
     assert channel.send(Notification(title="i", body="", level=L.INFO)) is False
     assert rig.rows() == []
+
+
+def test_a_worker_whose_drain_keeps_failing_logs_the_streak_once(make_rig, monkeypatch, caplog):
+    import time as real_time
+
+    import onelot.notify.telegram_outbox as module
+
+    rig = make_rig()
+    calls: list[int] = []
+
+    def broken() -> int:
+        calls.append(1)
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(module, "IDLE_WAIT_S", 0.005)
+    monkeypatch.setattr(rig.outbox, "drain_once", broken)
+    with caplog.at_level("WARNING", logger=module.__name__):
+        rig.outbox.start()
+        deadline = real_time.monotonic() + 20
+        while len(calls) < 5 and real_time.monotonic() < deadline:
+            real_time.sleep(0.01)
+        rig.outbox.stop()
+
+    assert len(calls) >= 5
+    failures = [r for r in caplog.records if "drain failed" in r.getMessage()]
+    assert len(failures) == 1, "one line per streak, not one per second"

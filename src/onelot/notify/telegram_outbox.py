@@ -362,11 +362,15 @@ class TelegramOutbox:
             log.warning("telegram outbox: the worker did not stop in time")
 
     def _run(self) -> None:
+        failing: str | None = None  # the error class of the current streak, logged once
         while not self._stopping.is_set():
             try:
                 busy = self.drain_once() > 0
+                failing = None
             except Exception as exc:  # a database hiccup must not kill the worker
-                log.warning("telegram outbox: drain failed (%s)", type(exc).__name__)
+                if type(exc).__name__ != failing:
+                    failing = type(exc).__name__
+                    log.warning("telegram outbox: drain failed (%s), retrying", failing)
                 busy = False
             if not busy:
                 self._wake.wait(IDLE_WAIT_S)
