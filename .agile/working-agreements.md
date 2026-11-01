@@ -26,3 +26,5 @@ Updated at each retrospective. The Manager copies the relevant lines into delega
 - Coverage threshold: 80%
 
 ## Retrospective log
+- Sprint 0 (2026-11-01): smaller driver turns; commit .agile before launching agents; inner-loop tests while pairing, the full gate only before PROPOSE_READY.
+- Sprint 1 (2026-11-02): a short decision pass on edge semantics before Tester mode A; merge each closed story into the integration branch right away; edit .agile text with the Edit tool or Python, never perl capture groups; every UI story includes an acceptance scenario on the owner's real data path (weekend, Monday morning); ad-hoc runs in a worktree need PYTHONPATH=<worktree>/src.
