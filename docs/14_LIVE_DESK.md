@@ -99,6 +99,21 @@ add it under `paper:` to change it). Trades and their events are in the `paper_t
 book's counters next to the desk's own `desk_hook_errors`. Managing an open paper trade to its
 close (stop, target, session end) is US-002.
 
+**On the desk (US-030):** the Live Desk tab has a **Paper trades** panel under the signals. It
+lists the open paper trades (chips *pending* and *open*) and the ones closed today, IST
+(*no fill* and *closed*), with instrument (an index trade names its option: *BANKNIFTY 45000 CE
+2026-11-24*), side, strategy, grade (*live* / *delayed*), *Entry / unit* and *Exit / unit*
+(per share, or per option unit of the lot), *Gross (trade)* and *Net (trade)* for the whole
+trade (green / red), the close reason and the times. The line above the table
+gives today's closed count, wins, losses, gross and net, and the book's counters since the last
+restart. Net shows "–" until costs are applied (US-023): a trade with no net counts as a win or
+a loss on its gross, and the day's net stays empty while any closed trade lacks one. The panel
+refreshes when the desk takes a new snapshot, at most every 5 seconds; it says *No paper trades
+yet* on an empty book and *Paper trading is off* when `paper.enabled` is false (or no paper book
+is running). When `/api/paper` cannot be read, or answers without saying whether paper is on,
+the line above the table turns into a warning (*paper trades unavailable: …*), the last table
+stays, and the panel tries again at most every 5 seconds.
+
 ## Data
 
 * Without the Data API the desk polls **Yahoo 2-minute bars** (one batched request per minute,
@@ -126,6 +141,7 @@ equality test (which the 1-minute Bank Nifty engine uses) would never fire.
 | `POST /api/desk/context` | `{"key":"GIFTNIFTY","last":25410,"change_pct":0.3}` — manual slot |
 | `POST /api/desk/reload` · `POST /api/desk/poll` | reload `desk.yaml` · poll now |
 | `GET /api/desk/journal` | closed desk trades |
+| `GET /api/paper` | the paper book, read-only: `{enabled, status, trades, totals_today}`; at most 200 trades, newest first; the selection keeps the open trades (however old) before the newest closed ones; money as rupee strings (`"1000.30"`) from integer paise, `null` where not known yet; `enabled: false` with no trades when paper is off |
 
 GIFT NIFTY has no free feed (it trades on NSE IX); the slot exists so your own scraper or a paid
 feed can post it.
@@ -138,7 +154,9 @@ Every alert, F&O or stock, is handled the same way:
    ~15 min delayed` or `dhan-ws 1m · live`), the strategy and timeframe, the signal strength and a
    **confidence** score (0–100: 35 % signal strength, 30 % saved-backtest evidence for that
    strategy/instrument/timeframe, 20 % the strategy's own archived-alert record, 15 % regime
-   fit; neutral 50 where there is no evidence yet — the parts are shown).
+   fit; neutral 50 where there is no evidence yet — the parts are shown). The number shown is
+   floored to a whole number on every surface, the web app and the phone alike, so 64.9 shows
+   64 and never reads as a *high* 65.
 2. **Time-to-live** (`signal_valid_minutes`, default 10): a countdown on the card. **Trade taken**
    (with your fill) or **Skipped**; otherwise it **expires**. Either way it is archived.
 3. **Taken → Monitoring**: the position is re-checked every poll with the live price (the
