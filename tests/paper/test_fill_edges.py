@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import datetime as dt
 from collections.abc import Callable, Iterator
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -283,9 +284,87 @@ def test_option_risk_uses_the_premium_at_the_underlying_stop_with_the_frozen_opt
     alert = make_alert("INDEX", "long")  # underlying stop 45110.35
     book.on_alert(alert, ist(THU, 10, 5, 4))
     book.step(ist(THU, 10, 8), series(BANKNIFTY=make_bars(ist(THU, 10, 5), [45200.0, 45224.65])))
-    assert the_row(engine)["risk_paise"] == (31435 - 31234) * 30
+    # Manager decision (a): risk = entry - the stop EXIT fill the Lab would book,
+    # floor_tick(312.34 x (1 - 0.006) - 2 x 0.05) = floor_tick(310.36596) = 310.35
+    assert the_row(engine)["risk_paise"] == (31435 - 31035) * 30
     option, underlying, ts = pricer.calls[1]
     assert (option, underlying, ts) == (alert["economics"]["option"], 45110.35, ist(THU, 10, 6))
+
+
+def _linear_premium(option, underlying, ts):
+    """Delta 0.65 around 312.34 at 45224.65: a CE gains with the underlying, a PE loses."""
+    sign = 1.0 if option["opt_type"] == "CE" else -1.0
+    return max(0.05, 312.34 + sign * 0.65 * (float(underlying) - 45224.65))
+
+
+def _lab_risk_paise(direction: str, underlying_open: float, underlying_stop: float) -> int:
+    """The differential oracle: the risk `lab.execution.execute_trade` books, in paise."""
+    from onelot.config import CostConfig
+    from onelot.costs import CostModel
+    from onelot.lab.execution import execute_trade
+    from onelot.lab.simulator import Leg, SimTrade
+    from onelot.paper.money import to_paise
+
+    from .conftest import BT, SPECS
+
+    ROOT = Path(__file__).resolve().parents[2]
+
+    class Pricer:
+        def iv_for(self, ts):
+            return 0.1532
+
+        def premium(self, spot, k, ts, expiry, opt):
+            return _linear_premium({"opt_type": opt}, spot, ts)
+
+        def delta(self, spot, k, ts, expiry, opt):
+            return 0.65
+
+    ts = pd.Timestamp(ist(THU, 10, 6))
+    trade = SimTrade(
+        symbol="BANKNIFTY",
+        strategy="ema_cross",
+        side=1 if direction == "long" else -1,
+        signal_ts=ts,
+        entry_ts=ts,
+        entry_price=underlying_open,
+        stop_initial=underlying_stop,
+        risk_ps=abs(underlying_open - underlying_stop),
+        target=None,
+        strength=60.0,
+        atr=1.0,
+        legs=[Leg(ts + pd.Timedelta(minutes=5), underlying_open, 1.0, "test")],
+    )
+    costs = CostModel(CostConfig.load(ROOT / "config" / "costs.yaml").product("index_options"))
+    row = execute_trade(trade, SPECS["BANKNIFTY_OPT"], costs, BT, BT.slippage_pct, Pricer())
+    return to_paise(row["risk_inr"])
+
+
+@pytest.mark.parametrize("direction", ["long", "short"])
+def test_option_risk_equals_the_risk_lab_execute_trade_books(make_book, engine, direction):
+    """Manager decision (a): paper R and Lab R are comparable for the promotion gate."""
+    book = make_book(premium_at=_linear_premium)
+    alert = make_alert("INDEX", direction)  # underlying stop 45110.35 (long) / 45310.35 (short)
+    stop = alert["economics"]["underlying_stop"]
+    book.on_alert(alert, ist(THU, 10, 5, 4))
+    book.step(ist(THU, 10, 8), series(BANKNIFTY=make_bars(ist(THU, 10, 5), [45200.0, 45224.65])))
+    row = the_row(engine)
+    assert row["entry_paise"] == 31435
+    assert row["risk_paise"] == _lab_risk_paise(direction, 45224.65, stop)
+    # long : stop fair 312.34 - 0.65 x 114.30 = 238.045 -> floor_tick(236.51673) = 236.50
+    # short: stop fair 312.34 - 0.65 x  85.70 = 256.635 -> floor_tick(254.99519) = 254.95
+    want = {"long": (31435 - 23650) * 30, "short": (31435 - 25495) * 30}
+    assert row["risk_paise"] == want[direction]
+
+
+def test_option_stop_exit_fill_is_floored_at_one_tick(make_book, engine):
+    def collapses_at_the_stop(option, underlying, ts):
+        return 312.34 if underlying == 45224.65 else 0.01
+
+    book = make_book(premium_at=collapses_at_the_stop)
+    book.on_alert(make_alert("INDEX", "long"), ist(THU, 10, 5, 4))
+    book.step(ist(THU, 10, 8), series(BANKNIFTY=make_bars(ist(THU, 10, 5), [45200.0, 45224.65])))
+    # floor_tick(0.01 x 0.994 - 0.10) is negative: the Lab floors the exit at one tick (5 paise)
+    assert the_row(engine)["risk_paise"] == (31435 - 5) * 30
 
 
 def test_a_stop_premium_not_below_the_entry_leaves_risk_null_and_says_so(make_book, engine):

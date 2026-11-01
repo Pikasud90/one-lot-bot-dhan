@@ -126,7 +126,8 @@ def test_an_index_risk_is_one_lot_even_when_the_alert_claims_five(make_book, eng
     book.on_alert(alert, ist(THU, 10, 5, 4))
     book.step(ist(THU, 10, 8), series(BANKNIFTY=make_bars(ist(THU, 10, 5), [45200.0, 45224.65])))
     row = rows_by_alert(engine)[alert["id"]]
-    assert (row["qty"], row["risk_paise"]) == (30, (31435 - 31234) * 30)
+    # stop exit fill floor_tick(312.34 x 0.994 - 0.10) = 310.35 (Manager decision (a))
+    assert (row["qty"], row["risk_paise"]) == (30, (31435 - 31035) * 30)
 
 
 def test_a_lot_that_disagrees_with_the_spec_is_kept_and_warned(make_book, caplog):

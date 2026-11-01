@@ -20,23 +20,28 @@ import math
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
-from decimal import Decimal
-from numbers import Integral, Real
+from numbers import Real
 from typing import Any, Literal, NamedTuple, cast
-
-import numpy as np
 
 # No pandas-stubs are pinned; every pandas module in the mypy baseline carries this one
 # error, so a NEW module stays at zero only by naming it here (the flags are untouched).
 import pandas as pd  # type: ignore[import-untyped]
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, Text, inspect, select, type_coerce
 from sqlalchemy.exc import IntegrityError
 
 from ..clock import IST, now_ist
-from ..config import PRODUCT_FOR_CATEGORY, BacktestCfg, PaperCfg
+from ..config import BacktestCfg, PaperCfg
 from ..costs import CostModel
 from ..data.universe import InstrumentSpec
-from ..store.schema import METADATA, paper_events, paper_trades
+from ..store.schema import METADATA, desk_signals, paper_events, paper_trades
+from .alert import (
+    Grade,
+    PaperAlertError,
+    alert_from_desk_signal,
+    alert_id_of,
+    grade_for,
+    trade_values,
+)
 from .fill import (
     Bars,
     FillDecision,
@@ -44,23 +49,20 @@ from .fill import (
     infer_resolution_min,
     normalise_bars,
     option_entry_paise,
+    option_exit_paise,
     stock_entry_paise,
 )
 from .money import to_paise
 
+# The public contract of this module (PaperAlertError and grade_for live in .alert).
+__all__ = ["PaperAlertError", "PaperBook", "PaperEvent", "PaperTrade", "grade_for"]
+
 log = logging.getLogger(__name__)
 
 TradeStatus = Literal["PENDING_FILL", "OPEN", "NO_FILL", "CLOSED"]
-Grade = Literal["live", "delayed"]
 TRADE_STATUSES: frozenset[str] = frozenset(("PENDING_FILL", "OPEN", "NO_FILL", "CLOSED"))
 ACTIVE_STATUSES: tuple[TradeStatus, ...] = ("PENDING_FILL", "OPEN")
 STATUS_KEYS = ("opened", "filled", "no_fill", "closed", "hook_errors")
-# Fallback cost table per alert kind when the instrument spec is unknown (Lab naming).
-PRODUCT_FOR_KIND = {
-    "STOCK": PRODUCT_FOR_CATEGORY["STOCK"],
-    "INDEX": PRODUCT_FOR_CATEGORY["OPTIONS"],
-}
-DIRECTIONS = ("long", "short")
 DEFAULT_TICK = 0.05  # rupees; only when the instrument spec is unknown
 
 PremiumAt = Callable[[Mapping[str, Any], float, dt.datetime], float | None]
@@ -68,10 +70,6 @@ CostFor = Callable[[str], CostModel]
 BarsFor = Callable[[str], pd.DataFrame | None]
 # US-002 narrows the return type to `onelot.paper.manage.StrategyExit | None`.
 StrategyExitFor = Callable[["PaperTrade", dt.datetime], Any]
-
-
-class PaperAlertError(ValueError):
-    """An alert the paper book cannot record: a missing field, a naive time, a bad level."""
 
 
 Booked = tuple[str, dt.datetime, dict[str, Any]]  # (event kind, data time, detail)
@@ -222,6 +220,8 @@ class PaperBook:
         self._unpriced: set[tuple[int, dt.datetime]] = set()  # PRICING_UNAVAILABLE said once
         METADATA.create_all(engine, tables=[paper_trades, paper_events])  # no-op if present
         self._load_active()
+        if cfg.enabled:  # a disabled book opens nothing, not even at startup
+            self._reconcile()
 
     # ── public API ────────────────────────────────────────────────────────
     def on_alert(self, alert: Mapping[str, Any], now: dt.datetime) -> PaperTrade | None:
@@ -234,32 +234,7 @@ class PaperBook:
         _require_aware(now, "now")
         if not self.cfg.enabled:
             return None
-        alert_id = _alert_id(alert)
-        with self._lock:
-            known = self._active.get(alert_id) or self._fetch(alert_id)
-            if known is not None:
-                return self._remember(known)
-            values = self._new_trade_values(alert_id, alert, now)
-            try:
-                trade = self._insert_opened(values)
-            except IntegrityError:
-                # Another PaperBook on this database won the race for the same alert id.
-                raced = self._fetch(alert_id)
-                if raced is None:
-                    raise
-                return self._remember(raced)
-            self._counts["opened"] += 1
-            self._remember(trade)
-        log.info(
-            "paper: opened trade %s for alert %s (%s %s %s, %s, qty %d)",
-            trade.id,
-            alert_id,
-            trade.instrument_key,
-            trade.side,
-            trade.strategy,
-            trade.grade,
-            trade.qty,
-        )
+        trade, _ = self._open(alert_id_of(alert), alert, now)
         return trade
 
     def step(
@@ -311,6 +286,81 @@ class PaperBook:
         """Counters since this book was built: opened, filled, no_fill, closed, hook_errors."""
         with self._lock:
             return dict(self._counts)
+
+    # ── opening ───────────────────────────────────────────────────────────
+    def _open(
+        self, alert_id: str, alert: Mapping[str, Any], now: dt.datetime
+    ) -> tuple[PaperTrade, bool]:
+        """The trade for `alert_id`: the existing one, or a new PENDING_FILL one.
+
+        Returns (trade, created). Shared by on_alert and the startup reconciliation, so both
+        size, grade and stamp a trade the same way.
+        """
+        with self._lock:
+            known = self._active.get(alert_id) or self._fetch(alert_id)
+            if known is not None:
+                return self._remember(known), False
+            values = trade_values(alert_id, alert, self.specs, now)
+            try:
+                trade = self._insert_opened(values)
+            except IntegrityError:
+                # Another PaperBook on this database won the race for the same alert id.
+                raced = self._fetch(alert_id)
+                if raced is None:
+                    raise
+                return self._remember(raced), False
+            self._counts["opened"] += 1
+            self._remember(trade)
+        log.info(
+            "paper: opened trade %s for alert %s (%s %s %s, %s, qty %d)",
+            trade.id,
+            alert_id,
+            trade.instrument_key,
+            trade.side,
+            trade.strategy,
+            trade.grade,
+            trade.qty,
+        )
+        return trade, True
+
+    def _reconcile(self) -> int:
+        """Open a trade for every desk_signals row that has none (ADR-001 amendment 10).
+
+        A crash between the desk's insert and on_alert leaves such a row; so does an alert
+        raised before any book existed. The trade is stamped with the ALERT's created_at
+        (Manager decision 1), so it fills exactly as if the hook had run. Rows already
+        booked are never touched. One unreadable row is logged and skipped, never fatal.
+        Returns how many trades were opened.
+        """
+        if not inspect(self.engine).has_table(desk_signals.name):
+            return 0  # a paper-only database: nothing to reconcile
+        joined = desk_signals.outerjoin(paper_trades, paper_trades.c.alert_id == desk_signals.c.id)
+        stmt = (
+            select(desk_signals.c.id, type_coerce(desk_signals.c.payload, Text))  # raw JSON text
+            .select_from(joined)
+            .where(paper_trades.c.id.is_(None))
+            .order_by(desk_signals.c.created_at, desk_signals.c.id)
+        )
+        with self.engine.connect() as conn:
+            rows = conn.execute(stmt).all()
+        if not rows:
+            return 0
+        now = self.clock()
+        _require_aware(now, "clock()")
+        opened = 0
+        for signal_id, raw in rows:
+            try:
+                alert = alert_from_desk_signal(str(signal_id), raw)
+                opened += self._open(str(signal_id), alert, now)[1]
+            except Exception as exc:
+                log.warning(
+                    "paper: desk signal %s not reconciled (skipped): %s: %s",
+                    signal_id,
+                    type(exc).__name__,
+                    exc,
+                )
+        log.info("paper: reconciled %d of %d unbooked desk signal(s)", opened, len(rows))
+        return opened
 
     # ── persistence ───────────────────────────────────────────────────────
     def _load_active(self) -> None:
@@ -436,9 +486,11 @@ class PaperBook:
     ) -> _Priced | str:
         """One lot, priced like `execute_trade`; or why the fill bar cannot be priced.
 
-        risk = (entry premium - premium at the underlying stop) x qty, IV frozen at the alert
-        (Manager decision, US-001). If that repricing fails the trade still fills, with
-        risk_paise NULL and a PRICING_UNAVAILABLE event (ADR-001 amendment 6).
+        risk = (entry premium - the stop EXIT fill the Lab would book) x qty, the stop leg
+        priced at the underlying stop with the option frozen at the alert (Manager decision
+        (a): paper R and Lab R are comparable). If that repricing fails, or the stop exit is
+        not below the entry, the trade still fills with risk_paise NULL and a
+        PRICING_UNAVAILABLE event (ADR-001 amendment 6).
         """
         option = plan["alert"]["economics"].get("option") or {}
         fair, why = self._premium(option, open_paise, bar_ts)
@@ -453,7 +505,10 @@ class PaperBook:
             "option_slippage_ticks": bt.option_slippage_ticks,
         }
         stop_fair, why = self._premium(option, stop_paise, bar_ts)
-        risk = None if stop_fair is None else (entry - to_paise(stop_fair)) * trade.qty
+        risk = None
+        if stop_fair is not None:
+            spread, ticks = bt.option_spread_pct, bt.option_slippage_ticks
+            risk = (entry - option_exit_paise(stop_fair, spread, ticks, tick)) * trade.qty
         if risk is not None and risk > 0:
             return _Priced(entry, risk, inputs)
         problem = {
@@ -585,61 +640,8 @@ class PaperBook:
             self._active.pop(trade.alert_id, None)
             self._unpriced = {key for key in self._unpriced if key[0] != trade.id}
 
-    # ── alert -> row ──────────────────────────────────────────────────────
-    def _new_trade_values(
-        self, alert_id: str, alert: Mapping[str, Any], now: dt.datetime
-    ) -> dict[str, Any]:
-        """Validate `alert` and build the PENDING_FILL row. Pure: no I/O."""
-        snapshot = _jsonable(alert)  # a deep, JSON-safe copy: later desk mutations can't leak
-        kind = _req_str(snapshot, "kind", alert_id)
-        if kind not in PRODUCT_FOR_KIND:
-            raise PaperAlertError(f"alert {alert_id}: kind={kind!r} is not STOCK or INDEX")
-        direction = _req_str(snapshot, "direction", alert_id)
-        if direction not in DIRECTIONS:
-            raise PaperAlertError(f"alert {alert_id}: direction={direction!r} is not long/short")
-        created_at = _aware_ts(snapshot.get("created_at"), "created_at", alert_id)
-        expires_at = _aware_ts(snapshot.get("expires_at"), "expires_at", alert_id)
-        if expires_at < created_at:
-            raise PaperAlertError(f"alert {alert_id}: expires_at is before created_at")
-        instrument_key = _req_str(snapshot, "instrument_key", alert_id)
-        eco = snapshot.get("economics")
-        if not isinstance(eco, dict):
-            raise PaperAlertError(f"alert {alert_id}: economics missing")
-        data = snapshot.get("data") if isinstance(snapshot.get("data"), dict) else {}
-        source = str(data.get("source") or "")
-        spec = self.specs.get(instrument_key)
-        # The cost table cost_for(instrument_key) charges from; by kind if the spec is unknown.
-        product = spec.product if spec is not None and spec.product else PRODUCT_FOR_KIND[kind]
-        return {
-            "alert_id": alert_id,
-            "status": "PENDING_FILL",
-            "close_reason": None,
-            "grade": grade_for(source),
-            "data_source": source,
-            "instrument_key": instrument_key,
-            "series_key": _req_str(snapshot, "series_key", alert_id),
-            "kind": kind,
-            "side": _req_str(snapshot, "side", alert_id),
-            "direction": direction,
-            "strategy": _req_str(snapshot, "strategy", alert_id),
-            "timeframe": _req_str(snapshot, "timeframe", alert_id),
-            "confidence": _confidence_score(snapshot.get("confidence")),
-            "product": product,
-            "qty": _unit_qty(kind, eco, spec, alert_id),
-            "resolution_min": _resolution_min(data.get("resolution")),
-            "created_at": created_at,
-            "expires_at": expires_at,
-            "plan": {"alert": snapshot, "levels": _levels(eco, alert_id)},
-            "updated_at": now,
-        }
-
 
 # ── pure helpers ──────────────────────────────────────────────────────────────
-
-
-def grade_for(source: str | None) -> Grade:
-    """`live` iff the bars came from Dhan (`dhan`, `dhan-ws`, ...); anything else is delayed."""
-    return "live" if (source or "").strip().lower().startswith("dhan") else "delayed"
 
 
 def _read_bars(bars: BarsFor, series_key: str) -> Bars | None:
@@ -661,110 +663,6 @@ def _event_row(event: PaperEvent) -> dict[str, Any]:
 def _require_aware(ts: dt.datetime, name: str) -> None:
     if not isinstance(ts, dt.datetime) or ts.tzinfo is None or ts.utcoffset() is None:
         raise ValueError(f"{name}={ts!r} must be a timezone-aware datetime")
-
-
-def _alert_id(alert: Mapping[str, Any]) -> str:
-    raw = alert.get("id") if isinstance(alert, Mapping) else None
-    if raw is None or not str(raw).strip():
-        raise PaperAlertError("alert has no id")
-    return str(raw).strip()
-
-
-def _req_str(alert: Mapping[str, Any], key: str, alert_id: str) -> str:
-    value = alert.get(key)
-    if value is None or not str(value).strip():
-        raise PaperAlertError(f"alert {alert_id}: {key} missing")
-    return str(value)
-
-
-def _aware_ts(value: object, name: str, alert_id: str) -> dt.datetime:
-    """An ISO-8601 string (or datetime) with an offset -> IST. Naive input is rejected."""
-    if isinstance(value, dt.datetime):
-        ts = value
-    elif isinstance(value, str):
-        try:
-            ts = dt.datetime.fromisoformat(value)
-        except ValueError as exc:
-            raise PaperAlertError(f"alert {alert_id}: {name}={value!r} is not ISO-8601") from exc
-    else:
-        raise PaperAlertError(f"alert {alert_id}: {name} missing")
-    if ts.tzinfo is None or ts.utcoffset() is None:
-        raise PaperAlertError(
-            f"alert {alert_id}: {name}={value!r} has no timezone; refusing to guess"
-        )
-    return ts.astimezone(IST)
-
-
-def _confidence_score(conf: object) -> float | None:
-    score = conf.get("score") if isinstance(conf, Mapping) else conf
-    if isinstance(score, Real) and not isinstance(score, bool) and math.isfinite(float(score)):
-        return float(score)
-    return None
-
-
-def _resolution_min(value: object) -> int | None:
-    """'1m' -> 1, '2m' -> 2; anything unreadable -> None (step infers it from the bars)."""
-    text = str(value or "").strip().lower()
-    if text.endswith("m") and text[:-1].isdigit() and int(text[:-1]) > 0:
-        return int(text[:-1])
-    return None
-
-
-def _unit_qty(kind: str, eco: Mapping[str, Any], spec: InstrumentSpec | None, alert_id: str) -> int:
-    """One share for a stock; one lot of the alerted option for an index. Never sized."""
-    if kind == "STOCK":
-        return 1
-    option = eco.get("option")
-    lot = option.get("lot") if isinstance(option, Mapping) else None
-    if lot is None and spec is not None:
-        lot = spec.lot_size
-    size = float(lot) if isinstance(lot, Real) and not isinstance(lot, bool) else math.nan
-    if size.is_integer() and size > 0:
-        return int(size)
-    raise PaperAlertError(f"alert {alert_id}: no usable option lot size ({lot!r})")
-
-
-def _levels(eco: Mapping[str, Any], alert_id: str) -> dict[str, int | None]:
-    """The alert's underlying levels converted to paise once (ADR-001 amendment 5)."""
-    out: dict[str, int | None] = {}
-    for name, required in (
-        ("underlying_entry", True),
-        ("underlying_stop", True),
-        ("underlying_target", False),
-    ):
-        value = eco.get(name)
-        if value is None and not required:
-            out[f"{name}_paise"] = None
-            continue
-        try:
-            out[f"{name}_paise"] = to_paise(value)
-        except ValueError as exc:
-            raise PaperAlertError(f"alert {alert_id}: economics.{name}: {exc}") from exc
-    return out
-
-
-def _jsonable(value: object) -> Any:
-    """A deep, JSON-safe copy: numpy scalars -> Python, NaN/inf -> None, times -> ISO."""
-    if value is None or isinstance(value, (bool, str)):
-        return value
-    if isinstance(value, np.bool_):
-        return bool(value)
-    if isinstance(value, Integral):
-        return int(value)
-    if isinstance(value, Decimal):
-        return str(value)
-    if isinstance(value, Real):
-        f = float(value)
-        return f if math.isfinite(f) else None
-    if isinstance(value, (dt.datetime, dt.date, dt.time)):
-        return value.isoformat()
-    if isinstance(value, Mapping):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    if isinstance(value, np.ndarray):
-        return [_jsonable(v) for v in value.tolist()]
-    return str(value)
 
 
 def _ist(value: dt.datetime) -> dt.datetime:

@@ -209,3 +209,14 @@ def option_entry_paise(fair: float, spread_frac: float, slippage_ticks: int, tic
     (it is the differential oracle), so it uses the Lab's own `round_to_tick`.
     """
     return to_paise(round_to_tick(fair * (1 + spread_frac) + slippage_ticks * tick, tick, "up"))
+
+
+def option_exit_paise(fair: float, spread_frac: float, slippage_ticks: int, tick: float) -> int:
+    """The premium `execute_trade` receives when it SELLS the option back:
+    floor_tick(fair*(1-spread) - ticks*tick), never below one tick (the Lab's own floor).
+
+    Used for the stop leg of option risk, so paper R and Lab R are comparable (Manager
+    decision (a), US-001).
+    """
+    sold = round_to_tick(fair * (1 - spread_frac) - slippage_ticks * tick, tick, "down")
+    return to_paise(max(sold, tick))
