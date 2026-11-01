@@ -1,5 +1,5 @@
 # Board
-_Generated 2026-11-01T18:07+05:30 by agile_board.py; do not edit by hand._
+_Generated 2026-11-02T01:08+05:30 by agile_board.py; do not edit by hand._
 
 ## backlog — 26 stories, 107 pts
 | ID | Title | Pts | Priority | Sprint | Protocol |
@@ -13,10 +13,10 @@ _Generated 2026-11-01T18:07+05:30 by agile_board.py; do not edit by hand._
 | US-019 | Resumable five-year Dhan backfill | 5 | Must | 2 | driver-navigator |
 | US-020 | Matrix sweep at scale with pre-registered gate | 8 | Must | 4 | driver-navigator |
 | US-021 | Verify the charge table against a real contract note | 3 | Must | 6 | ping-pong-tdd |
-| US-023 | Paper ledger in integer paise, with correct costs and option repricing | 3 | Must | 2 | ping-pong-tdd |
 | US-024 | Telegram settings, test message, status and quiet hours | 3 | Must | 2 | driver-navigator |
 | US-026 | Desk poll never blocks on notifications; SQLite contention bounded | 3 | Must | 3 | driver-navigator |
 | US-027 | Swing carry rules for stocks: shorts intraday, delivery costs, gap quarantine | 3 | Must | 3 | ping-pong-tdd |
+| US-031 | Lab option runs do not slip the underlying before pricing the option | 3 | Must | 2 | ping-pong-tdd |
 | SP-002 | Spike: which Data API features add edge and ergonomics | 3 | Should | 6 | driver-navigator |
 | US-007 | Observability: metrics, health and a system status panel | 3 | Should | 5 | driver-navigator |
 | US-009 | Schema migrations and backups | 5 | Should | 5 | driver-navigator |
@@ -31,23 +31,17 @@ _Generated 2026-11-01T18:07+05:30 by agile_board.py; do not edit by hand._
 | SP-001 | Spike: review fnolab.in end to end for reference ideas | 2 | Could | 5 | driver-navigator |
 | US-012 | Paper vs taken reconciliation and slippage report | 3 | Could | 6 | ping-pong-tdd |
 
-## ready — 4 stories, 17 pts
-| ID | Title | Pts | Priority | Sprint | Protocol |
-|---|---|---|---|---|---|
-| US-002 | Paper trades are managed to a close by the strategy exit rules | 5 | Must | 1 | ping-pong-tdd |
-| US-003 | Telegram client and compact alert formatter, with redaction hardening | 5 | Must | 1 | ping-pong-tdd |
-| US-004 | Alerts reach Telegram through a durable outbox | 5 | Must | 1 | driver-navigator |
-| US-030 | Paper trades visible on the desk (thin slice of US-016) | 2 | Must | 1 | driver-navigator |
-
-## in-progress — 1 story, 5 pts
-| ID | Title | Pts | Priority | Sprint | Protocol |
-|---|---|---|---|---|---|
-| US-001 | Every alert opens a paper trade | 5 | Must | 1 | ping-pong-tdd |
-
-## done — 2 stories, 4 pts
+## done — 9 stories, 31 pts
 | ID | Title | Pts | Priority | Sprint | Protocol |
 |---|---|---|---|---|---|
 | US-000 | Quality gate baseline is green: format, pins, mypy ratchet, repo hygiene | 3 | Must | 0 | driver-navigator |
+| US-001 | Every alert opens a paper trade | 5 | Must | 1 | ping-pong-tdd |
+| US-002 | Paper trades are managed to a close by the strategy exit rules | 5 | Must | 1 | ping-pong-tdd |
+| US-003 | Telegram client and compact alert formatter, with redaction hardening | 5 | Must | 1 | ping-pong-tdd |
+| US-004 | Alerts reach Telegram through a durable outbox | 5 | Must | 1 | driver-navigator |
+| US-023 | Paper ledger in integer paise, with correct costs and option repricing | 3 | Must | 1 | ping-pong-tdd |
 | US-028 | Fix: alerts served by the Yahoo fallback are labelled live | 1 | Must | 1 | ping-pong-tdd |
+| US-030 | Paper trades visible on the desk (thin slice of US-016) | 2 | Must | 1 | driver-navigator |
+| US-032 | Paper panel shows the last session when nothing closed today | 2 | Must | 1 | driver-navigator |
 
-**Total:** 33 stories, 4/133 points done
+**Total:** 35 stories, 31/138 points done
