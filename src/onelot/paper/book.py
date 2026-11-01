@@ -49,7 +49,7 @@ from .alert import (
     jsonable,
     trade_values,
 )
-from .charges import round_trip_paise
+from .charges import leg_sides, round_trip_paise
 from .events import PaperEvent
 from .fill import (
     Bars,
@@ -262,6 +262,7 @@ class PaperBook:
         self._read_warned: OrderedDict[tuple[object, str], None] = OrderedDict()
         self._read_warn_lock = threading.Lock()
         METADATA.create_all(engine, tables=[paper_trades, paper_events])  # no-op if present
+        self._backfill_costs()  # also when disabled: it completes closes, it opens nothing
         self._load_active()
         if cfg.enabled:  # a disabled book opens nothing, not even at startup
             self._reconcile()
@@ -804,6 +805,121 @@ class PaperBook:
                 )
         log.info("paper: reconciled %d of %d unbooked desk signal(s)", opened, len(rows))
         return opened
+
+    # ── the startup backfill of costs and net (US-023 NFR) ────────────────
+    def _backfill_costs(self) -> int:
+        """Book costs and net, once, for CLOSED rows a close left without them.
+
+        US-002 closed trades with costs_paise/net_paise NULL; a close whose cost model failed
+        (T1) does too. Each priced one (entry, exit and gross known, costs AND net NULL) gets
+        exactly what a close books today: `charges.round_trip_paise` on its real sides from
+        `cost_for(instrument_key)`, and net = gross - costs. It runs at every start, also with
+        paper.enabled false (it opens nothing), and is idempotent: a costed row is never a
+        candidate again, so a later start, even with other rates, changes nothing.
+
+        Never a guess: a money cell that is not whole paise (`money.stored_paise`), a gross
+        that disagrees with sign x (exit - entry) x qty, or a cost model that fails leaves the
+        row NULL, warned and counted in hook_errors, with no event (Manager); a later start
+        retries it. The costs are computed before any write, then every row is written in one
+        transaction by an UPDATE guarded on the money it was computed from and on costs and net
+        still being NULL, so a value another book wrote meanwhile is never overwritten. A
+        database that fails defers the whole backfill to the next start (logged, counted);
+        it never stops the book. Returns how many rows were written.
+        """
+        t = paper_trades.c
+        stmt = (
+            select(*(t[name] for name in _BACKFILL_COLUMNS))
+            .where(
+                t.status == "CLOSED",
+                t.costs_paise.is_(None),
+                t.net_paise.is_(None),
+                t.entry_paise.is_not(None),
+                t.exit_paise.is_not(None),
+                t.gross_paise.is_not(None),
+            )
+            .order_by(t.id)
+        )
+        try:
+            with self.engine.connect() as conn:
+                rows = conn.execute(stmt).mappings().all()
+        except DBAPIError as exc:
+            self._backfill_deferred(exc)
+            return 0
+        if not rows:
+            return 0
+        planned: list[tuple[_Uncosted, int]] = []
+        for row in rows:
+            item = _uncosted(row)
+            costs = None if item is None else self._backfill_leg_costs(item)
+            if item is not None and costs is not None:
+                planned.append((item, costs))
+        failed = len(rows) - len(planned)
+        written = self._write_backfill(planned)
+        if failed:
+            with self._lock:
+                self._counts["hook_errors"] += failed
+        log.info(
+            "paper: backfilled costs and net for %d of %d closed trade(s); %d left NULL",
+            written,
+            len(rows),
+            failed,
+        )
+        return written
+
+    def _backfill_leg_costs(self, item: _Uncosted) -> int | None:
+        """round_trip_paise for one candidate, or None (warned) when the cost model fails."""
+        try:
+            model = self.cost_for(item.instrument_key)
+            return round_trip_paise(
+                model, item.kind, item.direction, item.entry_paise, item.exit_paise, item.qty
+            )
+        except Exception as exc:
+            log.warning(
+                "paper: paper_trades.id=%s (alert %s) not backfilled, costs stay NULL until a "
+                "start that can price them: %s: %s",
+                item.trade_id,
+                item.alert_id,
+                type(exc).__name__,
+                exc,
+            )
+            return None
+
+    def _write_backfill(self, planned: list[tuple[_Uncosted, int]]) -> int:
+        """Write the planned costs in one transaction, each UPDATE guarded; rows written."""
+        if not planned:
+            return 0
+        t = paper_trades.c
+        written = 0
+        try:
+            with self.engine.begin() as conn:
+                for item, costs in planned:
+                    guarded = paper_trades.update().where(
+                        t.id == item.trade_id,
+                        t.status == "CLOSED",
+                        t.costs_paise.is_(None),
+                        t.net_paise.is_(None),
+                        t.entry_paise == item.entry_paise,
+                        t.exit_paise == item.exit_paise,
+                        t.gross_paise == item.gross_paise,
+                    )
+                    net = item.gross_paise - costs
+                    changed = conn.execute(guarded.values(costs_paise=costs, net_paise=net))
+                    if changed.rowcount != 1:  # another book costed (or changed) it first
+                        log.info("paper: trade %s costed elsewhere; left as it is", item.trade_id)
+                    written += max(changed.rowcount, 0)
+        except DBAPIError as exc:
+            self._backfill_deferred(exc)
+            return 0
+        return written
+
+    def _backfill_deferred(self, exc: DBAPIError) -> None:
+        log.error(
+            "paper: the costs backfill could not use the database; deferred to the next start "
+            "(nothing was written): %s",
+            _brief(exc),
+        )
+        with self._lock:
+            self._counts["hook_errors"] += 1
 
     # ── persistence ───────────────────────────────────────────────────────
     def _load_active(self) -> None:
@@ -1557,6 +1673,91 @@ def _gross(trade: PaperTrade, exit_paise: int | None) -> int | None:
         return None
     sign = 1 if trade.kind == "INDEX" or trade.direction == "long" else -1
     return sign * (exit_paise - trade.entry_paise) * trade.qty
+
+
+# The cells the costs backfill reads: plain integers and strings, so no column decoder (JSON,
+# times) runs and one corrupt plan or time elsewhere in a row cannot stop it.
+_BACKFILL_COLUMNS = (
+    "id",
+    "alert_id",
+    "instrument_key",
+    "kind",
+    "direction",
+    "qty",
+    "entry_paise",
+    "exit_paise",
+    "gross_paise",
+)
+
+
+class _Uncosted(NamedTuple):
+    """A CLOSED row with a priced exit and no costs yet, its cells checked."""
+
+    trade_id: int
+    alert_id: str
+    instrument_key: str
+    kind: str
+    direction: str
+    qty: int
+    entry_paise: int
+    exit_paise: int
+    gross_paise: int
+
+
+def _uncosted(row: Mapping[Any, Any]) -> _Uncosted | None:
+    """The checked candidate, or None (warned) when a cell would make its net a guess: money
+    or a qty that is not a whole number, a kind or direction with no cost sides, a qty below
+    one, or a gross that is not sign x (exit - entry) x qty."""
+    trade_id = row["id"]
+    whole: dict[str, int] = {}
+    for column in ("qty", "entry_paise", "exit_paise", "gross_paise"):
+        try:
+            value = stored_paise(row[column])
+        except ValueError:
+            value = None
+        if value is None:
+            log.warning(
+                "paper: paper_trades.id=%s not backfilled: %s=%r is not a whole number; "
+                "left as it is, never truncated",
+                trade_id,
+                column,
+                row[column],
+            )
+            return None
+        whole[column] = value
+    kind, direction = str(row["kind"]), str(row["direction"])
+    try:
+        entry_side, _ = leg_sides(kind, direction)
+    except ValueError as exc:
+        log.warning("paper: paper_trades.id=%s not backfilled: %s", trade_id, exc)
+        return None
+    qty, entry, exit_, gross = (
+        whole[c] for c in ("qty", "entry_paise", "exit_paise", "gross_paise")
+    )
+    sign = 1 if entry_side == "buy" else -1
+    if qty < 1 or gross != sign * (exit_ - entry) * qty:
+        log.warning(
+            "paper: paper_trades.id=%s not backfilled: gross_paise=%s is not %+d x (%s - %s) x "
+            "%s; a net from it would be a guess",
+            trade_id,
+            gross,
+            sign,
+            exit_,
+            entry,
+            qty,
+        )
+        return None
+    return _Uncosted(
+        int(trade_id),
+        str(row["alert_id"]),
+        str(row["instrument_key"]),
+        kind,
+        direction,
+        qty,
+        entry,
+        exit_,
+        gross,
+    )
 
 
 def closed_totals(trades: Iterable[tuple[object, object]]) -> DayTotals:

@@ -1,4 +1,4 @@
-"""US-023 NFR (developer tests, red for T3): the startup backfill of costs and net.
+"""US-023 NFR (developer tests): the startup backfill of costs and net.
 
     CLOSED rows written by US-002 with costs_paise/net_paise NULL get them computed ONCE when a
     PaperBook starts (idempotent), with the very charges a close books today
@@ -182,3 +182,83 @@ def test_the_first_today_totals_after_a_restart_shows_the_net(make_book, engine,
         1970,
         1970 - costs,
     )
+
+
+# ── T3 (Dev Beta): the boundaries the implementation added ────────────────────────────
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"gross_paise": 1971},  # one paisa off sign x (exit - entry) x qty
+        {"gross_paise": -1970},  # the sign of a short on a long row
+        {"direction": "flat"},  # no cost sides: never guessed
+        {"qty": 0},
+    ],
+    ids=["gross-off-by-one", "gross-wrong-sign", "unknown-direction", "qty-zero"],
+)
+def test_a_row_whose_money_does_not_add_up_is_left_null_warned_and_counted(
+    make_book, engine, cost_cfg, caplog, over
+):
+    """A net derived from a gross that disagrees with its own legs would be a guess."""
+    legacy(engine, "ODD", **over)
+    legacy(engine, "GOOD")
+    with caplog.at_level(logging.WARNING, logger="onelot.paper"):
+        book = make_book()
+    rows = by_alert(engine)
+    assert (rows["ODD"]["costs_paise"], rows["ODD"]["net_paise"]) == (None, None)
+    assert rows["GOOD"]["costs_paise"] == oracle_costs(cost_cfg)
+    assert book.status()["hook_errors"] == 1
+    assert any("paper_trades.id=1" in r.getMessage() for r in caplog.records), caplog.text
+
+
+def test_a_short_stock_is_backfilled_sell_then_buy(make_book, engine, cost_cfg):
+    """The backfill uses the real sides, like the close: STT on a short's ENTRY leg."""
+    entry, exit_ = 9_997_000, 9_800_000  # sold at 99,970.00, bought back at 98,000.00
+    legacy(
+        engine,
+        "SHORT",
+        side="SELL",
+        direction="short",
+        entry_paise=entry,
+        exit_paise=exit_,
+        gross_paise=entry - exit_,
+    )
+    make_book()
+    row = by_alert(engine)["SHORT"]
+    assert (row["costs_paise"], row["net_paise"]) == (8254, 197_000 - 8254)
+
+
+def test_a_locked_database_defers_the_backfill_and_never_stops_the_book(tmp_path, cost_cfg):
+    """SQLite's write lock held by another process: the book starts (reads still work), the
+    backfill writes nothing, says so once and counts it; the next start completes it."""
+    from onelot.config import PaperCfg
+    from onelot.paper.book import PaperBook
+    from onelot.store import init_database
+
+    from .conftest import BT, FakePricer, short_engine, write_lock
+
+    path = tmp_path / "locked.db"
+    init_database(f"sqlite:///{path}").dispose()
+    eng = short_engine(path)
+    try:
+        legacy(eng, "A")
+        models = {k: CostModel(cost_cfg.product(s.product)) for k, s in SPECS.items()}
+
+        def start() -> PaperBook:
+            return PaperBook(
+                eng,
+                PaperCfg(),
+                BT,
+                SPECS,
+                models.__getitem__,
+                FakePricer(),
+                clock=lambda: ist(THU, 15, 0),
+            )
+
+        with write_lock(path):
+            book = start()
+            assert by_alert(eng)["A"]["costs_paise"] is None
+        assert book.status()["hook_errors"] == 1
+        start()
+        assert by_alert(eng)["A"]["costs_paise"] == oracle_costs(cost_cfg)
+    finally:
+        eng.dispose()
