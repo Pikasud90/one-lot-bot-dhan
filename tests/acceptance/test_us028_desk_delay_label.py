@@ -21,19 +21,29 @@ hide behind itself.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
+import itertools
 import json
+import re
+import shutil
 import socket
+import subprocess
+import warnings
+from pathlib import Path
+from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from onelot.api.server import create_app
+from onelot.broker.base import Bar
 from onelot.clock import IST, now_ist
 from onelot.config import AppConfig
 from onelot.desk import Desk
-from onelot.desk.config import DeskConfig, DeskInstrumentCfg, StrategySlotCfg
-from onelot.desk.data import COLUMNS, CompositeBars, YahooBars
+from onelot.desk.config import ContextCfg, DeskConfig, DeskInstrumentCfg, StrategySlotCfg
+from onelot.desk.data import COLUMNS, CompositeBars, DhanBars, YahooBars
 from onelot.desk.tracker import Verdict
 from onelot.notify.base import Notification
 from onelot.risk.governor import RiskGovernor
@@ -83,12 +93,15 @@ def feed_end() -> pd.Timestamp:
     )
 
 
-def make_frames() -> dict[str, pd.DataFrame]:
+def make_frames(with_vix: bool = False) -> dict[str, pd.DataFrame]:
     end = feed_end()
-    return {
+    frames = {
         "BANKNIFTY": session_bars(54000.0, seed=11, end=end),
         "SBIN": session_bars(950.0, seed=12, end=end),
     }
+    if with_vix:  # a context-strip series: shown on the desk, never traded
+        frames["INDIAVIX"] = session_bars(15.0, seed=13, end=end)
+    return frames
 
 
 class OfflineDhan:
@@ -113,6 +126,26 @@ class OfflineDhan:
         }
 
 
+class FakeDhanAdapter:
+    """Just enough of the Dhan adapter for the REAL DhanBars class: `historical_intraday`
+    returns bars for the series in `serves`, none for the others (Dhan has no data for the
+    instrument) and raises for the series in `fail` (a Dhan API error)."""
+
+    def __init__(self, frames: dict[str, pd.DataFrame], serves, fail=()) -> None:
+        self.frames, self.serves, self.fail = frames, set(serves), set(fail)
+
+    def historical_intraday(self, contract, interval, start, end):
+        key = contract.symbol
+        if key in self.fail:
+            raise RuntimeError("DH-904 rate limit exceeded")
+        if key not in self.serves:
+            return []
+        return [
+            Bar(ts.to_pydatetime(), r.open, r.high, r.low, r.close, r.volume)
+            for ts, r in self.frames[key].iterrows()
+        ]
+
+
 class OfflineYahoo(YahooBars):
     """The real YahooBars class (name "yahoo", delayed True) with the network cut off."""
 
@@ -124,6 +157,22 @@ class OfflineYahoo(YahooBars):
     def fetch(self, specs, days, since=None):
         self.requested.append(sorted(specs))
         return {k: self.frames[k] for k in specs if k in self.frames}
+
+
+class FlakyYahoo(OfflineYahoo):
+    """OfflineYahoo that can go down like a real Yahoo outage: no bars and a last_error."""
+
+    def __init__(self, frames: dict[str, pd.DataFrame]) -> None:
+        super().__init__(frames)
+        self.down = False
+
+    def fetch(self, specs, days, since=None):
+        if self.down:
+            self.requested.append(sorted(specs))
+            self.last_error = "ConnectionError: yahoo is down"
+            return {}
+        self.last_error = None
+        return super().fetch(specs, days, since)
 
 
 class FakeNotifier:
@@ -158,6 +207,16 @@ class OpenClock:
 
     def current_window(self, ts=None):
         return OpenClock.W(ts or now_ist())
+
+
+class ClosedWindow(OpenClock.W):
+    """A session window that is shut: market closed, no entries."""
+
+    def is_open(self, ts):
+        return False
+
+    def entries_allowed(self, ts):
+        return False
 
 
 # ── fixtures and builders ─────────────────────────────────────────────────────────────
@@ -209,28 +268,48 @@ def small_cfg() -> DeskConfig:
     )
 
 
-def new_desk(app_cfg, db, notifier=None) -> tuple[Desk, FakeNotifier]:
+def new_desk(app_cfg, db, notifier=None, desk_cfg=None) -> tuple[Desk, FakeNotifier]:
     repo = Repo(db)
     gov = RiskGovernor(
         app_cfg.risk, app_cfg.account.capital_inr, app_cfg.mode, now_ist().date().isoformat(), repo
     )
     notifier = notifier or FakeNotifier()
-    desk = Desk(db.engine, app_cfg, notifier, gov, OpenClock(), repo=repo, desk_cfg=small_cfg())
+    desk = Desk(
+        db.engine, app_cfg, notifier, gov, OpenClock(), repo=repo, desk_cfg=desk_cfg or small_cfg()
+    )
     return desk, notifier
 
 
-def make_desk(app_cfg, db, monkeypatch, serves, primary_name="dhan"):
+def make_desk(
+    app_cfg,
+    db,
+    monkeypatch,
+    serves,
+    primary_name="dhan",
+    *,
+    yahoo_cls=None,
+    dhan_factory=None,
+    with_vix=False,
+    expect_served="derive",
+):
     """A polled Desk on a CompositeBars.
 
     serves is None  -> no Dhan primary at all (a Yahoo-only desk, as without a Dhan plan);
     serves is a set -> a Dhan primary that has bars for those keys and none for the others,
                        so the Yahoo fallback serves the rest.
+    with_vix adds the INDIAVIX context series (key in `serves` -> Dhan serves it, else Yahoo);
+    yahoo_cls swaps the fallback (default OfflineYahoo); dhan_factory(frames, serves, name)
+    swaps the primary (default OfflineDhan); expect_served overrides the harness
+    sanity check of `served_by` for scenarios with outages.
     Returns (desk, notifier, dhan, yahoo).
     """
-    d, notifier = new_desk(app_cfg, db)
-    frames = make_frames()
-    yahoo = OfflineYahoo(frames)
-    dhan = None if serves is None else OfflineDhan(frames, serves, primary_name)
+    desk_cfg = dataclasses.replace(
+        small_cfg(), context=(ContextCfg("INDIAVIX", "India VIX"),) if with_vix else ()
+    )
+    d, notifier = new_desk(app_cfg, db, desk_cfg=desk_cfg)
+    frames = make_frames(with_vix)
+    yahoo = (yahoo_cls or OfflineYahoo)(frames)
+    dhan = None if serves is None else (dhan_factory or OfflineDhan)(frames, serves, primary_name)
     d.source = CompositeBars(dhan, yahoo)
     d.fine_minutes = BAR_MIN
     # small_cfg says source "yahoo" and there is no adapter, so a poll would swap in a real
@@ -238,7 +317,12 @@ def make_desk(app_cfg, db, monkeypatch, serves, primary_name="dhan"):
     monkeypatch.setattr(d, "_maybe_switch_source", lambda: None)
     d.poll()
     # harness sanity: the provenance is what the scenario says it is
-    want = {k: (primary_name if k in (serves or ()) else "yahoo") for k in KEYS}
+    every_key = KEYS + (("INDIAVIX",) if with_vix else ())
+    want = (
+        {k: (primary_name if k in (serves or ()) else "yahoo") for k in every_key}
+        if expect_served == "derive"
+        else expect_served
+    )
     assert d.source.served_by == want, f"harness: served_by is {d.source.served_by}, want {want}"
     assert not d.signals, "harness: a stray signal fired during the poll"
     return d, notifier, dhan, yahoo
@@ -259,6 +343,16 @@ def raise_alert(d: Desk, key: str) -> dict:
 
 def clear_alert(d: Desk, alert: dict) -> None:
     assert d.acknowledge(alert["id"], "SKIP")["accepted"]
+
+
+def api_client(desk: Desk):
+    """The real FastAPI app over a stub engine that only carries the desk (no network)."""
+    with warnings.catch_warnings():  # starlette warns that its test client prefers httpx2
+        warnings.simplefilter("ignore")
+        from fastapi.testclient import TestClient
+    engine = MagicMock()
+    engine.desk = desk
+    return TestClient(create_app(engine, "test-token"))
 
 
 def snapshot_now(d: Desk, now=None) -> dict:
@@ -543,3 +637,417 @@ class TestTrackerHealthUsesThePerTrackerFlag:
         health = rows_by_key(snapshot_now(d, self._at(d, 1)))["SBIN"]["health"]
         assert health["state"] == "OK" and health["delayed"] is False
         assert health["note"] == "live"
+
+
+# ══ mode B: outages ═══════════════════════════════════════════════════════════════════
+class TestYahooOutageNextToADhanOutage:
+    """Dhan having no bars sends a series to Yahoo; Yahoo can be down as well. The label must
+    follow the bars the tracker actually holds, and an outage must never launder delayed bars
+    into a "live" label or crash the poll."""
+
+    @staticmethod
+    def _yahoo_down(monkeypatch):
+        def boom(*_a, **_k):
+            raise ConnectionError("yahoo is down")
+
+        monkeypatch.setattr("yfinance.download", boom)
+
+    def test_neither_provider_has_bars_the_poll_survives_and_nothing_is_called_delayed(
+        self, app_cfg, db, monkeypatch
+    ):
+        self._yahoo_down(monkeypatch)
+        d, _, _, _ = make_desk(
+            app_cfg,
+            db,
+            monkeypatch,
+            serves=set(),
+            yahoo_cls=lambda _frames: YahooBars(),  # the real class; its download() raises
+            expect_served={},
+        )
+        snap = d.snapshot()
+        rows = rows_by_key(snap)
+        assert all(r["health"]["state"] == "NO DATA" for r in rows.values())
+        assert all(r["health"]["delayed"] is False for r in rows.values())
+        assert snap["source"]["delayed"] is False and snap["source"]["delayed_keys"] == []
+        assert "ConnectionError" in snap["source"]["last_error"]
+        assert "yahoo is down" in snap["source"]["last_error"]
+        assert d.signals == {}
+
+    def test_yahoo_outage_leaves_the_dhan_served_instrument_live_and_the_other_without_data(
+        self, app_cfg, db, monkeypatch
+    ):
+        self._yahoo_down(monkeypatch)
+        d, _, _, _ = make_desk(
+            app_cfg,
+            db,
+            monkeypatch,
+            serves={"SBIN"},
+            yahoo_cls=lambda _frames: YahooBars(),
+            expect_served={"SBIN": "dhan"},
+        )
+        snap = snapshot_now(d)
+        rows = rows_by_key(snap)
+        assert rows["BANKNIFTY"]["health"]["state"] == "NO DATA"
+        assert rows["BANKNIFTY"]["health"]["delayed"] is False
+        assert rows["SBIN"]["health"]["delayed"] is False
+        assert snap["source"]["delayed"] is False and snap["source"]["delayed_keys"] == []
+        assert "yahoo is down" in snap["source"]["last_error"]
+        data = raise_alert(d, "SBIN")["data"]
+        assert data["source"] == "dhan" and data["delayed"] is False
+        assert_live_note(data)
+
+    def test_a_yahoo_outage_does_not_launder_held_yahoo_bars_into_a_live_label(
+        self, app_cfg, db, monkeypatch
+    ):
+        d, _, _, yahoo = make_desk(app_cfg, db, monkeypatch, {"SBIN"}, yahoo_cls=FlakyYahoo)
+        held = len(d.trackers["BANKNIFTY"].bars)
+        yahoo.down = True
+        d.poll()  # BANKNIFTY: Dhan has none, Yahoo is down -> nothing new arrives
+        assert len(d.trackers["BANKNIFTY"].bars) == held, "harness: the outage added bars"
+        assert "yahoo is down" in (d.snapshot()["source"]["last_error"] or "")
+        alert = raise_alert(d, "BANKNIFTY")  # built on the Yahoo bars the tracker still holds
+        assert alert["data"]["source"] == "yahoo" and alert["data"]["delayed"] is True
+        assert_yahoo_note(alert["data"])
+        snap = snapshot_now(d)
+        assert snap["source"]["delayed"] is True and snap["source"]["delayed_keys"] == ["BANKNIFTY"]
+        assert rows_by_key(snap)["BANKNIFTY"]["health"]["delayed"] is True
+
+    def test_both_providers_dropping_a_dhan_series_keeps_dhan_bars_live_but_health_goes_stale(
+        self, app_cfg, db, monkeypatch
+    ):
+        d, _, dhan, yahoo = make_desk(app_cfg, db, monkeypatch, set(KEYS), yahoo_cls=FlakyYahoo)
+        dhan.serves.discard("BANKNIFTY")
+        yahoo.down = True
+        d.poll()  # the series is now in nobody's hands: the held Dhan bars just age
+        assert d.source.served_by["BANKNIFTY"] == "dhan"
+        alert = raise_alert(d, "BANKNIFTY")
+        assert alert["data"]["source"] == "dhan" and alert["data"]["delayed"] is False
+        last_close = d.trackers["BANKNIFTY"].bars.index[-1] + pd.Timedelta(minutes=BAR_MIN)
+        rows = rows_by_key(snapshot_now(d, last_close + pd.Timedelta(minutes=60)))
+        # a live Dhan series with an hour-old bar is a dead feed, whatever the label says
+        assert rows["BANKNIFTY"]["health"]["state"] == "STALE"
+        assert rows["BANKNIFTY"]["health"]["delayed"] is False
+
+
+# ══ mode B: market-closed health branch ═══════════════════════════════════════════════
+class TestMarketClosedHealth:
+    """CLOSED beats the age rules, but must not erase which provider a tracker is on."""
+
+    @pytest.mark.parametrize("window_kind", ["shut-session", "no-window-holiday"])
+    @pytest.mark.parametrize("minutes_after_close", [5, 600])
+    def test_closed_market_reads_closed_for_both_providers_and_keeps_each_trackers_label(
+        self, app_cfg, db, monkeypatch, window_kind, minutes_after_close
+    ):
+        d, _, _, _ = make_desk(app_cfg, db, monkeypatch, serves={"SBIN"})
+        last_close = d.trackers["SBIN"].bars.index[-1] + pd.Timedelta(minutes=BAR_MIN)
+        now = last_close + pd.Timedelta(minutes=minutes_after_close)
+        window = ClosedWindow(now) if window_kind == "shut-session" else None
+        d._rebuild_snapshot(now, window)
+        snap = d.snapshot()
+        assert snap["session"]["open"] is False
+        rows = rows_by_key(snap)
+        for key, delayed in {"BANKNIFTY": True, "SBIN": False}.items():
+            health = rows[key]["health"]
+            assert health["state"] == "CLOSED", f"{key}: {health}"
+            assert health["note"].startswith("market closed")
+            assert health["delayed"] is delayed, f"{key}: CLOSED must not erase the label"
+        assert snap["source"]["delayed"] is True
+        assert snap["source"]["delayed_keys"] == ["BANKNIFTY"]
+
+    def test_an_alert_is_still_labelled_by_its_provider_while_the_market_is_closed(
+        self, app_cfg, db, monkeypatch
+    ):
+        d, _, _, _ = make_desk(app_cfg, db, monkeypatch, serves={"SBIN"})
+        assert raise_alert(d, "BANKNIFTY")["data"]["delayed"] is True
+        d._rebuild_snapshot(now_ist(), ClosedWindow(now_ist()))
+        rows = rows_by_key(d.snapshot())
+        assert rows["BANKNIFTY"]["signal"]["data"]["delayed"] is True
+        assert rows["BANKNIFTY"]["health"]["state"] == "CLOSED"
+
+
+# ══ mode B: context-strip series are not trackers ═════════════════════════════════════
+class TestContextSeriesNeverLeakIntoTheHeader:
+    """INDIAVIX/USDINR come from Yahoo even with a Dhan plan. The header badge and
+    delayed_keys speak about TRACKER keys only (Manager decision), so a Yahoo-served context
+    series must not flag the desk, and a Dhan-served one must not hide a delayed tracker."""
+
+    @pytest.mark.parametrize(
+        "serves, vix_source, delayed, delayed_keys",
+        [
+            (set(KEYS), "yahoo", False, []),  # trackers live, VIX on Yahoo: header stays live
+            ({"INDIAVIX"}, "dhan", True, ["BANKNIFTY", "SBIN"]),  # trackers on Yahoo, VIX on Dhan
+            (None, "yahoo", True, ["BANKNIFTY", "SBIN"]),  # Yahoo-only desk
+            ({"SBIN", "INDIAVIX"}, "dhan", True, ["BANKNIFTY"]),
+        ],
+        ids=["live-trackers-yahoo-vix", "yahoo-trackers-dhan-vix", "yahoo-only", "mixed"],
+    )
+    def test_delayed_keys_lists_tracker_keys_only(
+        self, app_cfg, db, monkeypatch, serves, vix_source, delayed, delayed_keys
+    ):
+        d, _, _, _ = make_desk(app_cfg, db, monkeypatch, serves, with_vix=True)
+        assert d.source.served_by["INDIAVIX"] == vix_source, "harness"
+        snap = d.snapshot()
+        assert snap["source"]["delayed"] is delayed
+        assert snap["source"]["delayed_keys"] == delayed_keys
+        assert "INDIAVIX" not in snap["source"]["delayed_keys"]
+        assert {r["key"] for r in snap["indices"] + snap["stocks"]} == set(KEYS)
+
+    def test_the_context_row_still_reports_which_provider_served_it(self, app_cfg, db, monkeypatch):
+        d, _, _, _ = make_desk(app_cfg, db, monkeypatch, set(KEYS), with_vix=True)
+        (vix,) = [r for r in d.snapshot()["context"] if r["key"] == "INDIAVIX"]
+        assert vix["source"] == "yahoo" and vix["last"] is not None
+        assert d.snapshot()["source"]["delayed"] is False  # ...without flagging the desk
+
+    def test_alerts_on_live_trackers_stay_live_while_the_vix_strip_is_on_yahoo(
+        self, app_cfg, db, monkeypatch
+    ):
+        d, _, _, _ = make_desk(app_cfg, db, monkeypatch, set(KEYS), with_vix=True)
+        for key in KEYS:
+            data = raise_alert(d, key)["data"]
+            assert data["delayed"] is False
+            assert_live_note(data)
+
+
+# ══ mode B: the SIGNAL notification title ═════════════════════════════════════════════
+MARKER = "(delayed ~15m) "
+BLOCKED = "[BLOCKED by risk] "
+
+
+class TestSignalTitleMarker:
+    def test_a_delayed_title_differs_from_the_live_title_only_by_the_leading_marker(
+        self, app_cfg, db, monkeypatch
+    ):
+        d, notifier, dhan, _ = make_desk(app_cfg, db, monkeypatch, set(KEYS))
+        raise_alert(d, "SBIN")
+        live_title = notifier.sent[-1].title
+        clear_alert(d, next(iter(d.signals.values())))
+        dhan.serves.discard("SBIN")
+        d.poll()  # SBIN now served by Yahoo, identical bars, identical verdict
+        alert = raise_alert(d, "SBIN")
+        assert alert["data"]["delayed"] is True
+        assert MARKER not in live_title and "delayed" not in live_title
+        assert notifier.sent[-1].title == MARKER + live_title
+        assert notifier.sent[-1].title.count("(delayed ~15m)") == 1
+
+    @pytest.mark.parametrize("key", ["BANKNIFTY", "SBIN"])
+    def test_both_stock_and_index_alerts_lead_with_the_marker_only_when_yahoo_served(
+        self, app_cfg, db, monkeypatch, key
+    ):
+        other = "SBIN" if key == "BANKNIFTY" else "BANKNIFTY"
+        d, notifier, _, _ = make_desk(app_cfg, db, monkeypatch, serves={other})
+        raise_alert(d, key)
+        assert notifier.sent[-1].title.startswith(MARKER)
+        raise_alert(d, other)
+        assert not notifier.sent[-1].title.startswith(MARKER)
+        assert "delayed" not in notifier.sent[-1].title
+
+    def test_blocked_stays_first_then_delayed_then_the_unchanged_title(
+        self, app_cfg, db, monkeypatch
+    ):
+        d, notifier, dhan, _ = make_desk(app_cfg, db, monkeypatch, set(KEYS))
+        raise_alert(d, "SBIN")
+        base = notifier.sent[-1].title  # live, not blocked
+        clear_alert(d, next(iter(d.signals.values())))
+        d.governor.manual_panic_halt()
+        blocked_live = raise_alert(d, "SBIN")
+        assert blocked_live["risk_allowed"] is False
+        assert notifier.sent[-1].title == BLOCKED + base
+        clear_alert(d, blocked_live)
+        dhan.serves.discard("SBIN")
+        d.poll()
+        blocked_delayed = raise_alert(d, "SBIN")
+        assert blocked_delayed["risk_allowed"] is False and blocked_delayed["data"]["delayed"]
+        title = notifier.sent[-1].title
+        assert title == BLOCKED + MARKER + base
+        assert title.split()[0] == "[BLOCKED" and title.count("(delayed ~15m)") == 1
+
+    def test_title_marker_changes_nothing_else_in_the_notification_or_the_alert(
+        self, app_cfg, db, monkeypatch
+    ):
+        d, notifier, _, _ = make_desk(app_cfg, db, monkeypatch, serves={"SBIN"})
+        alert = raise_alert(d, "BANKNIFTY")  # Yahoo-served
+        sent = notifier.sent[-1]
+        assert sent.title.startswith(MARKER)
+        assert sent.level.value == "SIGNAL" and sent.signal_id == alert["id"]
+        assert sent.ttl_seconds == 10 * 60  # signal_valid_minutes of small_cfg
+        assert sent.payload is alert
+        assert sent.body == alert["text"], "the body is the alert text, no marker added"
+        assert "(delayed ~15m)" not in alert["text"] and "(delayed ~15m)" not in sent.body
+        assert "(delayed ~15m)" not in json.dumps(alert, default=str), "title-only change"
+        assert alert["data"]["delay_note"] == "Yahoo bars run ~15 minutes behind the exchange"
+
+    def test_a_blocked_delayed_notification_body_is_still_text_plus_the_risk_line(
+        self, app_cfg, db, monkeypatch
+    ):
+        d, notifier, _, _ = make_desk(app_cfg, db, monkeypatch, serves={"SBIN"})
+        d.governor.manual_panic_halt()
+        alert = raise_alert(d, "BANKNIFTY")
+        sent = notifier.sent[-1]
+        assert sent.title.startswith(BLOCKED + MARKER)
+        assert sent.body == alert["text"] + f"\nRisk governor: {alert['risk_reason']}"
+        assert not sent.body.startswith(("(delayed", "[BLOCKED"))
+
+
+# ══ mode B: end to end through the HTTP API and the UI helper ═════════════════════════
+class TestEndToEnd:
+    def test_get_api_desk_serves_every_label_the_ui_reads(self, app_cfg, db, monkeypatch):
+        d, _, _, _ = make_desk(app_cfg, db, monkeypatch, serves={"SBIN"})
+        for key in KEYS:
+            raise_alert(d, key)
+        snapshot_now(d)
+        body = api_client(d).get("/api/desk").json()
+        assert body["source"]["delayed"] is True
+        assert body["source"]["delayed_keys"] == ["BANKNIFTY"]
+        rows = rows_by_key(body)
+        assert rows["BANKNIFTY"]["health"]["delayed"] is True
+        assert rows["SBIN"]["health"]["delayed"] is False
+        assert rows["BANKNIFTY"]["signal"]["data"]["delayed"] is True
+        assert rows["SBIN"]["signal"]["data"]["delayed"] is False
+        assert "15 minutes" in rows["BANKNIFTY"]["signal"]["data"]["delay_note"]
+
+    def test_the_sse_encoding_of_the_desk_snapshot_keeps_the_flags_as_json_booleans(
+        self, app_cfg, db, monkeypatch
+    ):
+        d, _, _, _ = make_desk(app_cfg, db, monkeypatch, serves={"SBIN"})
+        wire = json.loads(json.dumps({"state": {"desk": snapshot_now(d)}}, default=str))
+        header = wire["state"]["desk"]["source"]
+        assert header["delayed"] is True and header["delayed_keys"] == ["BANKNIFTY"]
+
+
+APP_JS = Path(__file__).resolve().parents[2] / "src" / "onelot" / "ui" / "app.js"
+needs_node = pytest.mark.skipif(
+    shutil.which("node") is None, reason="node is not installed; UI helper not exercised"
+)
+
+
+def run_app_js(lines: list[str], expression: str, payload) -> object:
+    """Evaluate `expression` (JS, `payload` available as `P`) in node after loading the named
+    one-line helpers from src/onelot/ui/app.js. No browser, no DOM."""
+    js = APP_JS.read_text(encoding="utf-8")
+    helpers = []
+    for name in lines:
+        m = re.search(rf"^const {name} = .*;$", js, re.M)
+        assert m, f"`const {name} = ...;` not found as one line in {APP_JS}"
+        helpers.append(m.group(0))
+    script = "\n".join([*helpers, "const P = JSON.parse(process.argv[1]);", expression])
+    done = subprocess.run(
+        ["node", "-e", script, json.dumps(payload)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout)
+
+
+@needs_node
+class TestHeaderTextFromTheRealSnapshot:
+    """The very `snapshot()["source"]` a polled Desk produces, rendered by app.js's own
+    delayNote(): what the header badge and the desk-source line will say."""
+
+    @pytest.mark.parametrize(
+        "serves, text",
+        [
+            (set(KEYS), "live"),
+            ({"SBIN"}, "delayed ~15 min: BANKNIFTY"),
+            ({"BANKNIFTY"}, "delayed ~15 min: SBIN"),
+            (set(), "delayed ~15 min: BANKNIFTY, SBIN"),
+            (None, "delayed ~15 min: BANKNIFTY, SBIN"),
+        ],
+        ids=["live", "index-on-yahoo", "stock-on-yahoo", "dhan-empty", "yahoo-only"],
+    )
+    def test_the_header_text_names_exactly_the_delayed_instruments(
+        self, app_cfg, db, monkeypatch, serves, text
+    ):
+        d, _, _, _ = make_desk(app_cfg, db, monkeypatch, serves)
+        header = json.loads(json.dumps(d.snapshot()["source"], default=str))
+        assert (
+            run_app_js(["delayNote"], "console.log(JSON.stringify(delayNote(P)))", header) == text
+        )
+
+
+# ══ mode B: the real DhanBars class, not a stand-in ═══════════════════════════════════
+class TestWithTheRealDhanBarsClass:
+    """Everything above uses a fake primary. Here the primary is the real DhanBars (name
+    "dhan", `_clean`, `can_serve`, error handling) over a fake Dhan adapter, so the claim
+    "Dhan returned no bars so Yahoo served it" is exercised through production code."""
+
+    @staticmethod
+    def _real_dhan(fail=()):
+        return lambda frames, serves, _name: DhanBars(
+            FakeDhanAdapter(frames, serves, fail), pause_s=0.0
+        )
+
+    def test_no_bars_from_dhan_for_one_series_sends_it_to_yahoo_and_labels_it_delayed(
+        self, app_cfg, db, monkeypatch
+    ):
+        d, _, _, _ = make_desk(
+            app_cfg, db, monkeypatch, serves={"SBIN"}, dhan_factory=self._real_dhan()
+        )
+        assert d.source.name == "dhan+yahoo" and d.source.served_by["BANKNIFTY"] == "yahoo"
+        banknifty, sbin = raise_alert(d, "BANKNIFTY")["data"], raise_alert(d, "SBIN")["data"]
+        assert (banknifty["source"], banknifty["delayed"]) == ("yahoo", True)
+        assert (sbin["source"], sbin["delayed"]) == ("dhan", False)
+        assert_yahoo_note(banknifty)
+        assert_live_note(sbin)
+        header = snapshot_now(d)["source"]
+        assert header["delayed"] is True and header["delayed_keys"] == ["BANKNIFTY"]
+
+    def test_a_dhan_api_error_on_one_series_falls_back_and_is_labelled_delayed(
+        self, app_cfg, db, monkeypatch
+    ):
+        d, _, _, _ = make_desk(
+            app_cfg,
+            db,
+            monkeypatch,
+            serves=set(KEYS),
+            dhan_factory=self._real_dhan(fail={"BANKNIFTY"}),
+            expect_served={"SBIN": "dhan", "BANKNIFTY": "yahoo"},
+        )
+        data = raise_alert(d, "BANKNIFTY")["data"]
+        assert (data["source"], data["delayed"]) == ("yahoo", True)
+        header = snapshot_now(d)["source"]
+        assert header["delayed_keys"] == ["BANKNIFTY"]
+        assert "BANKNIFTY" in header["last_error"] and "DH-904" in header["last_error"]
+        assert rows_by_key(d.snapshot())["SBIN"]["health"]["delayed"] is False
+
+
+# ══ mode B: every combination of who served what ══════════════════════════════════════
+ALL_SERVES = [
+    frozenset(c)
+    for n in range(4)
+    for c in itertools.combinations(("BANKNIFTY", "SBIN", "INDIAVIX"), n)
+]
+
+
+@pytest.mark.parametrize(
+    "serves",
+    [*ALL_SERVES, None],
+    ids=[("dhan:" + "+".join(sorted(c)) if c else "dhan:none") for c in ALL_SERVES]
+    + ["yahoo-only"],
+)
+def test_every_combination_of_dhan_and_yahoo_served_series_is_labelled_consistently(
+    app_cfg, db, monkeypatch, serves
+):
+    """Equivalence classes of provenance: for each subset of {two trackers, one context series}
+    served by Dhan (the rest by Yahoo), the alert flag, the SIGNAL title marker, the tracker
+    health flag and the header badge all agree with the independent oracle "a tracker is
+    delayed iff Yahoo served it"."""
+    d, notifier, _, _ = make_desk(
+        app_cfg, db, monkeypatch, None if serves is None else set(serves), with_vix=True
+    )
+    delayed_trackers = sorted(k for k in KEYS if serves is None or k not in serves)
+    for key in KEYS:
+        expected = key in delayed_trackers
+        alert = raise_alert(d, key)
+        assert alert["data"]["delayed"] is expected, key
+        assert alert["data"]["source"] == ("yahoo" if expected else "dhan"), key
+        assert notifier.sent[-1].title.startswith(MARKER) is expected, key
+    snap = snapshot_now(d)
+    assert snap["source"]["delayed"] is bool(delayed_trackers)
+    assert snap["source"]["delayed_keys"] == delayed_trackers
+    for key, row in rows_by_key(snap).items():
+        expected = key in delayed_trackers
+        assert row["health"]["delayed"] is expected, key
+        assert row["signal"]["data"]["delayed"] is expected, key
