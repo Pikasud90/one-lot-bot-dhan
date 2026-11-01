@@ -346,20 +346,71 @@ def test_exit_numbers_continue_after_a_restart_so_a_new_episode_is_not_swallowed
     assert [r["alert_id"] for r in rig.rows()] == ["p1#1", "p1#2"]
 
 
-def test_an_exhausted_budget_stays_quiet_until_the_advice_changes(make_rig):
-    """As decided: 1 message + 3 reminders per advice. Only a different advice (or a restart)
-    opens a new budget; the same advice hours later is still the same budget."""
+def raise_every_minute(channel: TelegramChannel, rig: Rig, minutes: int, **kw: Any) -> None:
+    """The Desk's poll: the same advice raised once a minute, `minutes` + 1 times."""
+    for k in range(minutes + 1):
+        if k:
+            rig.clock.advance(60)
+        assert channel.send(exit_note(**kw)) is True, "a suppressed reminder is not a failure"
+
+
+def test_an_exhausted_budget_stays_quiet_while_the_advice_persists(make_rig):
+    """As decided: 1 message + 3 reminders per advice while the Desk keeps raising it, hours
+    on end; a different advice (or a restart) opens a new budget."""
     rig = make_rig()
     channel = channel_for(rig)
-    for _ in range(31):  # every minute for half an hour
-        assert channel.send(exit_note()) is True
-        rig.clock.advance(60)
-    rig.clock.advance(3 * 3600)
 
-    assert channel.send(exit_note()) is True, "a suppressed reminder is not a failure"
+    raise_every_minute(channel, rig, 4 * 60)
+
     assert len(rig.rows()) == 4
     channel.send(exit_note(advice="TARGET"))
     assert [r["alert_id"] for r in rig.rows()][-1] == "p1#5"
+
+
+def test_an_advice_absent_for_an_hour_then_raised_again_starts_a_fresh_budget(make_rig):
+    """Manager decision (1) after T1: the same advice back after at least 60 minutes without
+    it is a new episode: a first message at once, then its own 3 reminders."""
+    rig = make_rig()
+    channel = channel_for(rig)
+    raise_every_minute(channel, rig, 30)  # 0, 5, 10, 15 min; the last raise at 30 min
+    assert len(rig.rows()) == 4
+
+    rig.clock.now = T0 + dt.timedelta(minutes=90)  # absent 60 minutes
+    raise_every_minute(channel, rig, 30)
+
+    rows = rig.rows()
+    assert [r["alert_id"] for r in rows[4:]] == ["p1#5", "p1#6", "p1#7", "p1#8"]
+    assert [r["created_at"] for r in rows[4:]] == [
+        T0 + dt.timedelta(minutes=m) for m in (90, 95, 100, 105)
+    ]
+
+
+@pytest.mark.parametrize(("gap_s", "rows"), [(3599, 4), (3600, 5)])
+def test_the_absence_that_restarts_the_budget_is_at_least_sixty_minutes(make_rig, gap_s, rows):
+    rig = make_rig()
+    channel = channel_for(rig)
+    raise_every_minute(channel, rig, 30)
+
+    rig.clock.now = T0 + dt.timedelta(minutes=30, seconds=gap_s)
+    channel.send(exit_note())
+
+    assert len(rig.rows()) == rows
+
+
+def test_a_shorter_absence_continues_the_same_budget(make_rig):
+    """STOP raised at 0-5 min (2 messages), gone for 59 minutes, back at 64 min: the next two
+    messages are the remaining reminders, then the phone goes quiet."""
+    rig = make_rig()
+    channel = channel_for(rig)
+    raise_every_minute(channel, rig, 5)
+    assert len(rig.rows()) == 2
+
+    rig.clock.now = T0 + dt.timedelta(minutes=64)
+    raise_every_minute(channel, rig, 60)
+
+    assert [r["created_at"] for r in rig.rows()][2:] == [
+        T0 + dt.timedelta(minutes=m) for m in (64, 69)
+    ]
 
 
 def test_a_session_probe_that_raises_never_mutes_an_alert(make_rig):

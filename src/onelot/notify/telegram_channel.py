@@ -24,6 +24,9 @@ log = logging.getLogger(__name__)
 
 EXIT_REMINDER_EVERY = dt.timedelta(minutes=5)
 EXIT_MAX_REMINDERS = 3  # after the first EXIT message
+# The same advice raised again after this long without it is a new episode (Manager decision
+# (1) after T1): a first message at once and a fresh reminder budget.
+EXIT_EPISODE_GAP = dt.timedelta(minutes=60)
 _PHONE_LEVELS = frozenset(
     (NotificationLevel.SIGNAL, NotificationLevel.EXIT, NotificationLevel.CRITICAL)
 )
@@ -36,6 +39,7 @@ class _ExitEpisode:
     advice: str
     messages: int  # the first EXIT plus reminders so far
     last_message_at: dt.datetime
+    last_raised_at: dt.datetime  # the last poll that raised it, a message or not
 
 
 class TelegramChannel:
@@ -48,8 +52,9 @@ class TelegramChannel:
 
     EXIT advice is raised on every Desk poll. The phone gets the first message at once,
     then at most EXIT_MAX_REMINDERS reminders, each EXIT_REMINDER_EVERY after the previous
-    message. A different advice for the position starts a fresh budget; a restart starts
-    one too (the budget is in memory, accepted). Each message is its own row with alert_id
+    message. A different advice for the position starts a fresh budget, and so does the same
+    advice raised again after EXIT_EPISODE_GAP without it; a restart starts one too (the
+    budget is in memory, accepted). Each message is its own row with alert_id
     '{position_id}#n'; n continues across restarts, so a new message never collides with an
     old row.
     """
@@ -146,9 +151,12 @@ class TelegramChannel:
         advice = _plain(event.get("advice"))
         with self._lock:
             episode = self._episodes.get(pid)
-            if episode is not None and episode.advice != advice:
-                episode = None  # a different advice: a fresh budget, sent at once
+            if episode is not None and (
+                episode.advice != advice or now - episode.last_raised_at >= EXIT_EPISODE_GAP
+            ):
+                episode = None  # a different advice, or back after an hour: a fresh budget
             if episode is not None:
+                episode.last_raised_at = now
                 if episode.messages > EXIT_MAX_REMINDERS:
                     return True  # first + every reminder already queued: nothing to do
                 if now - episode.last_message_at < EXIT_REMINDER_EVERY:
@@ -166,7 +174,7 @@ class TelegramChannel:
             if queued:
                 self._exit_numbers[pid] = number
                 sent_before = 0 if episode is None else episode.messages
-                self._episodes[pid] = _ExitEpisode(advice, sent_before + 1, now)
+                self._episodes[pid] = _ExitEpisode(advice, sent_before + 1, now, now)
             return queued
 
     def _send_critical(self, n: Notification) -> bool:
