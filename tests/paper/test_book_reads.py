@@ -237,6 +237,33 @@ class TestRecentOrderAndLimit:
             make_book().recent(bad)
 
 
+class TestRecentKeepsManagedTrades:
+    """Manager decision 2026-11-01T21:20: an old open trade never drops off the panel. The
+    limit is filled with the managed trades (PENDING_FILL, OPEN) first, then the newest final
+    ones; the list is still newest first and never longer than `limit`."""
+
+    @pytest.mark.parametrize("status", ["PENDING_FILL", "OPEN"])
+    def test_an_old_managed_trade_outlives_newer_final_ones(self, make_book, engine, status):
+        book = make_book()
+        open_alert(book, "old", ist(THU, 9, 20))
+        with engine.begin() as conn:
+            conn.execute(
+                paper_trades.update().where(paper_trades.c.alert_id == "old").values(status=status)
+            )
+        for alert_id in ("f1", "f2", "f3"):  # raised 10:05:03, closed 11:00: all newer
+            closed_trade(book, engine, alert_id, ist(THU, 11, 0), gross_paise=100)
+
+        assert [v["alert_id"] for v in book.recent(2)] == ["f3", "old"]
+
+    def test_more_managed_trades_than_the_limit_lists_the_newest_managed(self, make_book, engine):
+        book = make_book()
+        for alert_id, minute in (("w1", 20), ("w2", 21), ("w3", 22)):
+            open_alert(book, alert_id, ist(THU, 9, minute))
+        closed_trade(book, engine, "final", ist(THU, 11, 0), gross_paise=100)  # the newest
+
+        assert [v["alert_id"] for v in book.recent(2)] == ["w3", "w2"]
+
+
 class TestRecentRobustness:
     def test_an_unreadable_row_is_skipped_and_logged_never_fatal(self, make_book, engine, caplog):
         book = make_book()

@@ -138,7 +138,7 @@ equality test (which the 1-minute Bank Nifty engine uses) would never fire.
 | `POST /api/desk/context` | `{"key":"GIFTNIFTY","last":25410,"change_pct":0.3}` — manual slot |
 | `POST /api/desk/reload` · `POST /api/desk/poll` | reload `desk.yaml` · poll now |
 | `GET /api/desk/journal` | closed desk trades |
-| `GET /api/paper` | the paper book, read-only: `{enabled, status, trades, totals_today}`; the 200 newest trades, money as rupee strings (`"1000.30"`) from integer paise, `null` where not known yet; `enabled: false` with no trades when paper is off |
+| `GET /api/paper` | the paper book, read-only: `{enabled, status, trades, totals_today}`; at most 200 trades, newest first: every open one (however old), then the newest closed ones, money as rupee strings (`"1000.30"`) from integer paise, `null` where not known yet; `enabled: false` with no trades when paper is off |
 
 GIFT NIFTY has no free feed (it trades on NSE IX); the slot exists so your own scraper or a paid
 feed can post it.

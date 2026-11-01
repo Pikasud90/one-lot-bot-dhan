@@ -29,7 +29,7 @@ from typing import Any, Literal, NamedTuple, cast
 # No pandas-stubs are pinned; every pandas module in the mypy baseline carries this one
 # error, so a NEW module stays at zero only by naming it here (the flags are untouched).
 import pandas as pd  # type: ignore[import-untyped]
-from sqlalchemy import Engine, Text, and_, inspect, or_, select, type_coerce
+from sqlalchemy import Engine, Text, and_, case, inspect, or_, select, type_coerce
 from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 
 from ..clock import IST, now_ist
@@ -484,7 +484,11 @@ class PaperBook:
     # Both read the database only. They never take `self._lock` (an API read must not
     # queue behind a step, BUG-2) and never touch the Desk.
     def recent(self, limit: int = RECENT_LIMIT) -> list[dict[str, Any]]:
-        """The latest `limit` trades, newest first (created_at, then id), as display dicts.
+        """Up to `limit` trades, newest first (created_at, then id), as display dicts.
+
+        The trades still managed (PENDING_FILL, OPEN) are picked first, whatever their age,
+        then the newest final ones fill the rest: an old open trade never drops off the
+        panel behind newer closed ones (Manager decision, 2026-11-01).
 
         Each is `onelot.paper.view.trade_view`: money as rupee strings from paise, times
         ISO-8601 IST, None for what is not known yet. A row that cannot be read (an unknown
@@ -492,13 +496,13 @@ class PaperBook:
         """
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
             raise ValueError(f"limit={limit!r} must be a positive int")
-        plan_text = type_coerce(paper_trades.c.plan, Text).label("plan")  # parsed per row
+        t = paper_trades.c
+        newest_first = (t.created_at.desc(), t.id.desc())
+        managed_first = case((t.status.in_(ACTIVE_STATUSES), 0), else_=1)
+        shown = select(t.id).order_by(managed_first, *newest_first).limit(limit)
+        plan_text = type_coerce(t.plan, Text).label("plan")  # parsed per row
         columns = [c for c in paper_trades.c if c.name != "plan"] + [plan_text]
-        stmt = (
-            select(*columns)
-            .order_by(paper_trades.c.created_at.desc(), paper_trades.c.id.desc())
-            .limit(limit)
-        )
+        stmt = select(*columns).where(t.id.in_(shown)).order_by(*newest_first)
         with self.engine.connect() as conn:
             rows = conn.execute(stmt).mappings().all()
         views: list[dict[str, Any]] = []
