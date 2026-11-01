@@ -344,20 +344,26 @@ class TestTheExitSlippageRule:
 
 
 class TestAFillBarOpeningAtOrBeyondTheTarget:
-    """Manager decision 3: the owner was told stop and target as the alert's underlying levels. A fill
-    bar that opens AT or BEYOND the target (long: open >= T; short: open <= T) is NO_FILL, reason
-    gap_through_target (symmetric with gap_through_stop): it would be a 'target' below the entry."""
+    """Manager decision 3, widened by review round 1 (MAJOR-2): the owner was told stop and target
+    as the alert's underlying levels. A stock whose fill bar opens AT or BEYOND the target (long:
+    open >= T; short: open <= T), or whose SLIPPED entry is at or beyond it, is NO_FILL, reason
+    gap_through_target (symmetric with gap_through_stop): it would be a 'target' behind the entry.
+    The index rows below are judged on the underlying open alone (the entry is a premium)."""
 
     @pytest.mark.parametrize(
         "direction, fill_open, no_fill",
         [
             ("long", 1020.0, True),
             ("long", 1025.0, True),
-            ("long", 1019.95, False),
+            ("long", 1019.95, True),  # open below T, but the slipped entry 1020.25 is past it
+            ("long", 1019.65, True),  # 1019.9559 -> 1020.00: the entry lands AT the target
+            ("long", 1019.60, False),  # 1019.9058 -> 1019.95: one tick inside, fills
             ("long", 1000.0, False),
             ("short", 980.0, True),
             ("short", 975.0, True),
-            ("short", 980.05, False),
+            ("short", 980.05, True),  # the slipped entry 979.75 is past the target
+            ("short", 980.30, True),  # 980.0059 -> 980.00: AT the target
+            ("short", 980.35, False),  # 980.0559 -> 980.05: one tick inside, fills
             ("short", 1000.0, False),
         ],
     )

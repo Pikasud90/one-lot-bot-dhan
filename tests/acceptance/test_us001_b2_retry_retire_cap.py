@@ -107,6 +107,10 @@ class TestTheCloseCap:
         alert = H.make_alert(
             "A1", created=created, source=source, ttl_min=ttl, resolution=f"{res}m"
         )
+        # this class tests the 15:30 cap: the strategy's exit_time is moved to the close so that
+        # it cannot be what refuses the late bars (a first bar at or after exit_time 15:15 is
+        # NO_FILL 'session_end', US-002 review 1 MINOR-2; see TestTheExitTimeCap below)
+        alert["manage"]["exit_time"] = "15:30"
         book = H.make_book(db.engine)
         H.open_trade(book, alert)
         book.step(now, H.Feed(SBIN=H.bars_at(opens, [1000.0 + i for i in range(len(opens))])))
@@ -125,20 +129,99 @@ class TestTheCloseCap:
         does not apply and its first later bar of the same date fills."""
         created = H.at(18, 20, 3)
         alert = H.make_alert("A1", created=created)
+        alert["manage"]["exit_time"] = "23:00"  # the special session's own square-off
         book = H.make_book(db.engine)
         H.open_trade(book, alert)
         frame = H.minute_bars(H.at(18, 19), [1000.0, 1001.0, 1002.0])
         book.step(H.at(18, 30), H.Feed(SBIN=frame))
         row = H.trade_row(db.engine, "A1")
-        H.assert_filled(row, at_ts=H.at(18, 21))  # (a bar after exit_time: closed on the spot)
+        H.assert_filled(row, at_ts=H.at(18, 21))  # (closed on the spot: the session is over)
+
+    def test_the_same_late_alert_with_the_default_exit_time_is_no_fill_session_end(self, db):
+        """With the desk's default exit_time (15:15) an evening alert has no bar before it."""
+        alert = H.make_alert("A1", created=H.at(18, 20, 3))
+        book = H.make_book(db.engine)
+        H.open_trade(book, alert)
+        frame = H.minute_bars(H.at(18, 19), [1000.0, 1001.0, 1002.0])
+        events = book.step(H.at(18, 30), H.Feed(SBIN=frame))
+        row = H.trade_row(db.engine, "A1")
+        assert H.val(row["status"]) == "NO_FILL" and row["entry_paise"] is None
+        assert [H.val(e.kind) for e in events] == ["NO_FILL"]
+        assert "session_end" in H.blob(events[0].detail)
 
     def test_the_last_session_bars_still_fill_when_the_frame_also_holds_post_close_bars(self, db):
         frame = H.minute_bars(H.at(15, 20), [1000.0] * 20)  # 15:20 .. 15:39
         book = H.make_book(db.engine)
-        H.open_trade(book, H.make_alert("A1", created=H.at(15, 27, 3)))
+        alert = H.make_alert("A1", created=H.at(15, 27, 3))
+        alert["manage"]["exit_time"] = "15:30"  # the 15:30 cap is under test, not exit_time
+        H.open_trade(book, alert)
         events = book.step(H.at(15, 45), H.Feed(SBIN=frame))
         assert len(H.fills(events)) == 1  # the step may also close it: session over (US-002)
         H.assert_filled(H.trade_row(db.engine, "A1"), at_ts=H.at(15, 28))
+
+
+class TestTheExitTimeCap:
+    """US-002 review 1 MINOR-2: the Lab never fills at or after its square-off minute, so a first
+    eligible bar opening at or after the strategy's exit_time (manage.exit_time, default 15:15)
+    on the alert's date is NO_FILL, reason 'session_end', stamped with that bar's open."""
+
+    @pytest.mark.parametrize(
+        "exit_time, created, first_open, fills",
+        [
+            ("15:15", H.at(15, 10, 3), H.at(15, 11), True),
+            ("15:15", H.at(15, 14, 3), H.at(15, 15), False),  # opens AT exit_time
+            ("15:15", H.at(15, 14, 59), H.at(15, 15), False),
+            ("15:15", H.at(15, 13, 3), H.at(15, 14), True),  # the last bar before it
+            ("14:45", H.at(14, 40, 3), H.at(14, 41), True),
+            ("14:45", H.at(14, 44, 3), H.at(14, 45), False),  # a custom exit_time is honoured
+        ],
+    )
+    def test_a_first_bar_at_or_after_exit_time_never_fills(
+        self, db, exit_time, created, first_open, fills
+    ):
+        alert = H.make_alert("A1", created=created)
+        alert["manage"]["exit_time"] = exit_time
+        book = H.make_book(db.engine)
+        H.open_trade(book, alert)
+        frame = H.minute_bars(first_open - dt.timedelta(minutes=1), [1000.0] * 6)
+        events = book.step(first_open + dt.timedelta(minutes=10), H.Feed(SBIN=frame))
+        row = H.trade_row(db.engine, "A1")
+        if fills:
+            H.assert_filled(row, at_ts=first_open)
+            return
+        assert (H.val(row["status"]), H.val(row["close_reason"])) == ("NO_FILL", "NO_FILL")
+        assert row["entry_paise"] is None and row["costs_paise"] == 0 == row["net_paise"]
+        assert [H.val(e.kind) for e in events] == ["NO_FILL"]
+        assert "session_end" in H.blob(events[0].detail)
+        assert H.same_instant(events[0].ts, first_open)
+
+    def test_only_the_FIRST_eligible_bar_decides(self, db):
+        """A bar before exit_time that is not eligible does not rescue the trade: the first
+        eligible bar (after created_at) is at exit_time."""
+        alert = H.make_alert("A1", created=H.at(15, 14, 30))
+        book = H.make_book(db.engine)
+        H.open_trade(book, alert)
+        frame = H.minute_bars(H.at(15, 13), [1000.0] * 5)  # 15:13 .. 15:17
+        book.step(H.at(15, 25), H.Feed(SBIN=frame))
+        assert H.val(H.trade_row(db.engine, "A1")["status"]) == "NO_FILL"
+
+    def test_an_alert_without_a_manage_block_uses_the_desks_default_exit_time(self, db):
+        alert = H.make_alert("A1", created=H.at(15, 14, 3))
+        del alert["manage"]
+        book = H.make_book(db.engine)
+        H.open_trade(book, alert)
+        book.step(H.at(15, 25), H.Feed(SBIN=H.minute_bars(H.at(15, 14), [1000.0] * 6)))
+        assert H.val(H.trade_row(db.engine, "A1")["status"]) == "NO_FILL"
+
+    def test_an_index_option_is_judged_the_same_way(self, db):
+        alert = H.make_alert("O1", kind="INDEX", created=H.at(15, 14, 3))
+        book = H.make_book(db.engine)
+        H.open_trade(book, alert)
+        events = book.step(
+            H.at(15, 25), H.Feed(BANKNIFTY=H.minute_bars(H.at(15, 14), [54000.0] * 6))
+        )
+        assert H.val(H.trade_row(db.engine, "O1")["status"]) == "NO_FILL"
+        assert "session_end" in H.blob(events[0].detail)
 
 
 # ── opened_by and booked_at ───────────────────────────────────────────────────────────

@@ -19,6 +19,8 @@ from __future__ import annotations
 import copy
 import dataclasses
 import datetime as dt
+import math
+from fractions import Fraction
 
 import pandas as pd
 import pytest
@@ -110,9 +112,16 @@ class Rig:
 
 
 def levels(alert):
+    """The alert's stop and target in paise. A STOCK target lives on the tick grid, snapped once
+    against the trader (long floors, short ceils: review 1 MINOR-3); an option's underlying
+    target and every stop are the alert's own levels."""
     eco = alert["economics"]
     stop = H.to_paise(eco["underlying_stop"])
-    target = None if eco.get("underlying_target") is None else H.to_paise(eco["underlying_target"])
+    if eco.get("underlying_target") is None:
+        return stop, None
+    target = H.to_paise(eco["underlying_target"])
+    if alert["kind"] == "STOCK":
+        target = U.snap_target(target, alert["direction"])
     return stop, target
 
 
@@ -235,25 +244,81 @@ class TestStockThroughTheDeskPoll:
         assert block["closed"] == 1 and block["hook_errors"] == 0 and block["desk_hook_errors"] == 0
         assert rig.row(alert)["status"] == "CLOSED"
 
-    def test_ac3_the_trail_uses_the_atr_frozen_in_the_alert(self, rig):
-        """Differential: the book's close equals manage_step on the same bars with the rules read
-        out of the alert's manage block by this test, not by the book."""
+    def first_strategy_bar_close(self, rig, key, after, tf_min, res=2):
+        """The first fine bar at or after offset `after` that closes a strategy bar, found by
+        minute arithmetic on the 09:15 anchor (independent of the book)."""
+        for offset in range(after, 38):
+            ts = rig.bar_ts(key, offset)
+            minutes = (ts.hour * 60 + ts.minute) - (9 * 60 + 15)
+            if (minutes + res) % tf_min == 0:
+                return offset
+        raise AssertionError("no strategy-bar close among the scripted bars")
+
+    def test_ac3_the_trail_arms_at_a_strategy_bar_close_with_the_alerts_frozen_trail_atr(self, rig):
+        """The alert freezes the strategy's TRAIL ATR (manage.atr_trail, a tracker feature the desk
+        now records). Two fine bars before a strategy-bar close the price closes in profit (the
+        old per-fine-bar trail would arm there) and dips to that would-be stop: nothing happens.
+        The strategy-bar close then arms the trail, and the NEXT bar's dip is a TRAIL_STOP at
+        close - mult x atr_trail snapped down to the tick, hand-derived here with Fractions."""
         alert = rig.alert("SBIN")
         stop, target = levels(alert)
         manage = alert["manage"]
-        assert manage["trail_atr_mult"] > 0 and manage["atr"], "the alert must freeze an ATR"
+        assert manage["tf_min"] == 10 and manage["trail_atr_mult"] > 0
+        atr = manage.get("atr_trail")
+        assert isinstance(atr, float) and atr > 0, "the desk must freeze atr_trail in the alert"
         o = rig.fill_open("SBIN")
         entry = H.expected_stock_entry(o, "long", rig.slippage())
         risk = entry - stop
-        arm_close = entry + int(manage["trail_activate_r"] * risk) + 40
-        distance = round(manage["trail_atr_mult"] * manage["atr"] * 100)
-        trailed = arm_close - distance
-        # bar 0 closes in profit (arms the trail iff the candidate beats the stop), bar 1 dips to it
+        distance = Fraction(str(atr)) * 100 * Fraction(str(manage["trail_atr_mult"]))
+        arm_close = max(
+            entry + math.ceil(manage["trail_activate_r"] * risk) + 40,
+            stop + math.ceil(distance) + 120,
+        )
+        trailed = 5 * math.floor((arm_close - distance) / 5)
+        assert arm_close < target and trailed - 50 > stop, "the scenario must trail, not target"
+        k = self.first_strategy_bar_close(rig, "SBIN", after=3, tf_min=10)
         up = (o, rupees(arm_close) + 0.05, o - 0.05, rupees(arm_close))
-        dip = (rupees(arm_close), rupees(arm_close) + 0.05, rupees(trailed) - 0.5, rupees(trailed))
-        # keep the target out of the way: this test is about the trail
-        overrides = {0: up, 1: dip}
-        frame = rig.script("SBIN", overrides)
+        dip = (
+            rupees(arm_close),
+            rupees(arm_close) + 0.05,
+            rupees(trailed) - 0.5,
+            rupees(arm_close),
+        )
+        arms = (
+            rupees(arm_close),
+            rupees(arm_close) + 0.05,
+            rupees(trailed) + 0.5,
+            rupees(arm_close),
+        )
+        stops = (
+            rupees(arm_close),
+            rupees(arm_close) + 0.05,
+            rupees(trailed) - 0.5,
+            rupees(trailed),
+        )
+        rig.script("SBIN", {k - 2: up, k - 1: dip, k: arms, k + 1: stops})
+        rig.poll()
+        row = rig.row(alert)
+        assert row["close_reason"] == "TRAIL_STOP", row["close_reason"]
+        assert H.same_instant(row["exit_ts"], rig.bar_ts("SBIN", k + 1)), "not at the early dip"
+        assert row["exit_paise"] == U.expected_stock_exit(
+            trailed, "long", "TRAIL_STOP", rig.slippage()
+        )
+        moved = [e for e in H.event_rows(rig.engine, alert["id"]) if e["kind"] == "STOP_MOVED"]
+        assert len(moved) == 1 and U.mentions(moved[0]["detail"], trailed)
+        assert H.same_instant(moved[0]["ts"], rig.bar_ts("SBIN", k) + dt.timedelta(minutes=2))
+
+    def test_ac3_the_book_equals_manage_step_with_the_rules_read_from_the_alert(self, rig):
+        alert = rig.alert("SBIN")
+        stop, target = levels(alert)
+        manage = alert["manage"]
+        o = rig.fill_open("SBIN")
+        entry = H.expected_stock_entry(o, "long", rig.slippage())
+        k = self.first_strategy_bar_close(rig, "SBIN", after=2, tf_min=10)
+        gain = max(math.ceil(manage["trail_activate_r"] * (entry - stop)) + 40, 1300)
+        up = (o, rupees(entry + gain) + 0.05, o - 0.05, rupees(entry + gain))
+        dip = (rupees(entry + gain), rupees(entry + gain) + 0.05, o - 0.05, o)
+        frame = rig.script("SBIN", {k: up, k + 1: dip})
         rig.poll()
         row = rig.row(alert)
         bars = frame.iloc[-40:]
@@ -261,7 +326,7 @@ class TestStockThroughTheDeskPoll:
             target_r=manage["target_r"],
             trail_atr_mult=manage["trail_atr_mult"],
             trail_activate_r=manage["trail_activate_r"],
-            atr=manage["atr"],
+            atr=manage.get("atr_trail", manage["atr"]),
             max_bars=manage["max_bars"],
             tf_min=manage["tf_min"],
             exit_time=dt.time(15, 15),
@@ -277,8 +342,8 @@ class TestStockThroughTheDeskPoll:
         end = (bars.index[-1] + pd.Timedelta(minutes=2)).to_pydatetime()
         _, events = U.manage().manage_step(state, bars, rules, end)
         close = U.close_of(events)
-        assert close.reason == "TRAIL_STOP", "the scenario must really trail"
-        assert row["close_reason"] == close.reason and H.same_instant(row["exit_ts"], close.at)
+        assert close is not None and row["close_reason"] == close.reason
+        assert H.same_instant(row["exit_ts"], close.at)
         assert row["exit_paise"] == U.expected_stock_exit(
             close.price, "long", close.reason, rig.slippage()
         )

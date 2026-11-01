@@ -136,7 +136,12 @@ class TestSlippageAndTickGolden:
         frame = H.standard_bars((open_price, open_price, open_price))
         for direction, want in (("long", long_paise), ("short", short_paise)):
             stop = open_price * (0.5 if direction == "long" else 2.0)
-            alert = H.make_alert(f"G-{direction}", direction=direction, entry=open_price, stop=stop)
+            # the target is moved far out: a slipped entry at or beyond the target is NO_FILL
+            # (US-002 review 1 MAJOR-2), and at 1.00 the snap alone moves a tick
+            target = open_price * (3.0 if direction == "long" else 0.1)
+            alert = H.make_alert(
+                f"G-{direction}", direction=direction, entry=open_price, stop=stop, target=target
+            )
             _, row, _ = fill(db, frame=frame, alert=alert)
             assert row["entry_paise"] == want, (direction, open_price)
 
@@ -163,7 +168,10 @@ class TestSlippageAndTickGolden:
         less than one tick worse; a long never pays below the open, a short never sells above it."""
         open_price = open_paise / 100
         far = open_price * (0.5 if direction == "long" else 2.0)
-        alert = H.make_alert("P1", direction=direction, entry=open_price, stop=far)
+        far_target = open_price * (3.0 if direction == "long" else 0.1)  # out of the snap's reach
+        alert = H.make_alert(
+            "P1", direction=direction, entry=open_price, stop=far, target=far_target
+        )
         with H.temp_book() as (book, engine):
             H.open_trade(book, alert)
             book.step(H.at(10, 8), H.Feed(SBIN=H.standard_bars((open_price,) * 3)))
