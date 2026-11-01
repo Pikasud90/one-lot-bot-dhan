@@ -264,14 +264,24 @@ class TestFieldRules:
         [
             ("yahoo", False, "Data live"),
             ("dhan-ws", True, "Data <b>delayed ~15m</b>"),
-            ("yahoo", None, "Data live"),
-            ("yahoo", "true", "Data live"),
+            ("dhan-ws", None, "Data n/a"),
+            ("dhan-ws", "false", "Data n/a"),
+            ("dhan-ws", 0, "Data n/a"),
+            ("yahoo", "true", "Data n/a"),
+            ("yahoo", 1, "Data n/a"),
         ],
     )
     def test_delayed_tag_comes_from_data_delayed_only(self, source, delayed, line):
-        """US-028 single rule: data.delayed (exactly True) decides; data.source is never read."""
+        """US-028 single rule: data.delayed decides and data.source is never read. Fail-safe:
+        'live' only for exactly False, so an alert of unknown freshness never reads live."""
         alert = stock_alert(data={"source": source, "delayed": delayed})
         assert format_alert(alert, NOW).split("\n")[7] == line
+
+    @pytest.mark.parametrize("data", [{"source": "dhan-ws"}, None, "live", []], ids=repr)
+    def test_a_missing_delayed_flag_or_data_block_reads_n_a(self, data):
+        alert = stock_alert()
+        alert["data"] = data
+        assert format_alert(alert, NOW).split("\n")[7] == "Data n/a"
 
     def test_the_unit_comes_from_the_kind_and_lot_size_not_the_unit_label(self):
         stock, index = stock_alert(), index_alert("CE")

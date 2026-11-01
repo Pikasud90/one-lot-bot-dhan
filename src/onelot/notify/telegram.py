@@ -14,7 +14,7 @@ bold. The rest follows the AC1 order:
     {strategy label} {timeframe}
     Conf {NN} {label}
     Valid till {HH:MM} IST ({M}m left | expired)
-    Data {live | <b>delayed ~15m</b>}       data.delayed only (US-028 single rule)
+    Data {live | <b>delayed ~15m</b> | n/a} data.delayed only (US-028); n/a unless a bool
     Alert {HH:MM:SS} IST · id <code>{first six}</code>
 
 Rules every formatter keeps:
@@ -303,8 +303,12 @@ def _ttl_line(deadline: dt.datetime | None, now: dt.datetime) -> str:
 
 
 def _data_line(data: Mapping[str, Any]) -> str:
-    # US-028: data.delayed is the single rule; data.source is never re-derived here.
-    return f"Data <b>{DELAYED_TAG}</b>" if data.get("delayed") is True else "Data live"
+    """US-028: data.delayed is the single rule; data.source is never re-derived here.
+    Fail-safe: 'live' only for exactly False, so unknown freshness reads n/a, never live."""
+    delayed = data.get("delayed")
+    if delayed is True:
+        return f"Data <b>{DELAYED_TAG}</b>"
+    return "Data live" if delayed is False else f"Data {NA}"
 
 
 def _insert_label(lines: list[str], alert: Mapping[str, Any]) -> None:
