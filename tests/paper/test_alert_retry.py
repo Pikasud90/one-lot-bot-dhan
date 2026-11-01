@@ -138,8 +138,10 @@ def insert_attempts(engine: Engine) -> dict[str, int]:
 def test_a_persistent_database_failure_is_retried_quietly(make_book, engine, caplog):
     """The Reviewer's probe: 3 failed alerts, the failure persists for 4 steps. Before: every
     alert every step, 12 tracebacks, hook_errors 12. Now: the retry phase stops at the first
-    database failure (it is not alert-specific), one traceback per alert then one-line
-    warnings, and hook_errors at most once per step."""
+    database failure (it is not alert-specific) and hook_errors counts at most once per step;
+    the failed alert goes to the BACK of the queue (review round 3: one bad alert never
+    blocks the rest), so each alert logs one traceback the first time, then one-line
+    warnings."""
     book = make_book()
     with broken_inserts(engine) as hits:
         for i in range(3):
@@ -150,15 +152,17 @@ def test_a_persistent_database_failure_is_retried_quietly(make_book, engine, cap
             for minute in range(6, 10):
                 book.step(ist(THU, 10, minute), bars())
 
-    assert hits["n"] == 4  # one per step: the oldest alert, then the phase stops
+    assert hits["n"] == 4  # one per step: the head of the queue, then the phase stops
     assert book.status()["hook_errors"] == 4
     tracebacks = [r for r in caplog.records if r.exc_info is not None]
-    assert len(tracebacks) == 1 and "p0" in tracebacks[0].getMessage()
+    assert [r.args[0] for r in tracebacks] == ["p0", "p1", "p2"]  # rotated: once each
     later = [r for r in caplog.records if r.levelno == logging.WARNING and r.exc_info is None]
-    assert len(later) == 3 and all("p0" in r.getMessage() for r in later)
+    assert len(later) == 1 and "p0" in later[0].getMessage()  # p0's second turn
 
-    book.step(ist(THU, 10, 10), bars())  # the database recovered: all three, oldest first
-    assert [r["alert_id"] for r in table_rows(engine, paper_trades)] == ["p0", "p1", "p2"]
+    book.step(ist(THU, 10, 10), bars())  # the database recovered: all three, once each
+    rows = table_rows(engine, paper_trades)
+    assert sorted(r["alert_id"] for r in rows) == ["p0", "p1", "p2"]
+    assert {r["created_at"] for r in rows} == {ist(THU, 10, 5, 3)}  # each at its own time
 
 
 def test_a_non_database_bug_is_raised_once_and_never_kept(make_book, engine, monkeypatch):

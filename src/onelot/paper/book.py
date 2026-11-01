@@ -30,7 +30,7 @@ from typing import Any, Literal, NamedTuple, cast
 # error, so a NEW module stays at zero only by naming it here (the flags are untouched).
 import pandas as pd  # type: ignore[import-untyped]
 from sqlalchemy import Engine, Text, inspect, select, type_coerce
-from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
+from sqlalchemy.exc import DataError, DBAPIError, IntegrityError, OperationalError
 
 from ..clock import IST, now_ist
 from ..config import BacktestCfg, PaperCfg
@@ -416,7 +416,12 @@ class PaperBook:
                         )
                     else:
                         self._log_retry_failure(alert_id, exc)
-                        return not database_locked(exc)
+                        locked = database_locked(exc)
+                        if not locked:  # to the back: one bad alert never blocks the rest
+                            with self._lock:
+                                if alert_id in self._retry:
+                                    self._retry.move_to_end(alert_id)
+                        return not locked
                 self._forget_retry(alert_id)
             return True
         finally:
@@ -475,8 +480,10 @@ class PaperBook:
         return self._commit(trade, values, [("NO_FILL", now, detail)], "no_fill")
 
     def _guarded(self, trade: PaperTrade, work: Callable[[], list[PaperEvent]]) -> list[PaperEvent]:
-        """One trade's work. A failure is logged, counted and skipped; a LOCKED database
-        stops the whole step (BUG-1): logged once without a traceback, then _StepStopped.
+        """One trade's work. A failure is logged, counted and skipped. A database that
+        fails as a whole stops the step: locked (BUG-1), read-only, a disk error (review
+        round 3), i.e. any DBAPIError but the row-level IntegrityError and DataError. That
+        is logged once without a traceback, counted once, then _StepStopped.
 
         Each write commits on its own, so a unit that commits one write and then fails (a
         REGRADED event, then a locked fill) leaves that committed event in the database
@@ -484,13 +491,14 @@ class PaperBook:
         """
         try:
             return work()
-        except OperationalError as exc:
-            if not database_locked(exc):
-                self._step_failed(trade)
-                return []
+        except (IntegrityError, DataError):  # one row's data: only this trade is skipped
+            self._step_failed(trade)
+            return []
+        except DBAPIError as exc:  # the database as a whole: every other trade would fail too
             log.error(
-                "paper: database is locked at trade %s (alert %s); step stopped, the rest "
-                "are retried on the next poll: %s",
+                "paper: database %s at trade %s (alert %s); step stopped, the rest are "
+                "retried on the next poll: %s",
+                "is locked" if database_locked(exc) else "failed",
                 trade.id,
                 trade.alert_id,
                 exc.orig,
