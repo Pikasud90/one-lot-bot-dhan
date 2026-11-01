@@ -69,7 +69,6 @@ _MONTHS = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT",
 # characters, so the label keeps at least 88 and MAX_CHARS always holds
 # (test_the_fixed_part_leaves_the_label_room pins it).
 _CAP_SYMBOL = 32
-_CAP_ACTION = 12  # an unknown side shown as the action word
 _CAP_STRATEGY = 48
 _CAP_TIMEFRAME = 24
 _CAP_CONF_LABEL = 24
@@ -223,7 +222,7 @@ def _instrument(payload: Mapping[str, Any], option: Mapping[str, Any]) -> tuple[
         return "BUY", " ".join([symbol, *(part for part in contract if part)])
     if side in ("BUY", "SELL"):
         return side, symbol
-    return (_fit(side.replace("_", " "), _CAP_ACTION) or "?"), symbol
+    return "?", symbol  # an unknown side is never echoed as a verb (like EXIT)
 
 
 def _unit(kind: str, economics: Mapping[str, Any]) -> str:

@@ -237,7 +237,6 @@ class TestHeader:
             ("SELL", "swing", " · intraday short"),  # stock shorts are intraday only
             ("BUY", None, ""),  # unknown: the product is left out, never guessed
             ("BUY", "weekly", ""),
-            ("HOLD", "intraday", ""),  # an unknown side gets no product either
         ],
     )
     def test_a_stock_header_carries_the_product(self, side, horizon, product):
@@ -251,6 +250,13 @@ class TestHeader:
     def test_an_option_header_never_carries_a_product(self, horizon):
         header = format_alert(index_alert("CE", horizon=horizon), NOW).split("\n")[0]
         assert header.endswith(" CE · 1 lot (30)</b>")
+
+    @pytest.mark.parametrize("side", ["HOLD", "BUY_FUT", "", None, True, 7], ids=repr)
+    def test_an_unknown_side_shows_a_question_mark_as_the_action_and_no_product(self, side):
+        """Manager decision: like EXIT, an alert never echoes an unknown side as a verb."""
+        alert = stock_alert(side=side)
+        assert format_alert(alert, NOW).split("\n")[0] == "<b>? RELIANCE · 1 share</b>"
+        assert " · ? RELIANCE · 1 share · " in format_missed(alert, NOW)
 
     def test_the_trading_symbol_is_preferred_over_the_series_key(self):
         """US-004 adds trading_symbol (the NSE symbol, e.g. M&M) to the Desk payload; the
