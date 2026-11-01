@@ -103,6 +103,26 @@ Command line equivalents:
 
 ---
 
+## Telegram: alerts on your phone
+
+SIGNAL, EXIT and CRITICAL alerts also go to a private Telegram chat (INFO, WARNING and the
+startup self-test stay in the app). Messages are queued in the database first (`telegram_outbox`),
+sent at most one per second and retried after outages; an alert that expired while Telegram was
+unreachable arrives as a short "Missed" note instead. Outside market hours they arrive silently.
+
+1. In Telegram, open **@BotFather**, send `/newbot` and follow the prompts. BotFather replies with
+   the bot token: put it in `.env` as `TELEGRAM_BOT_TOKEN`.
+2. Open a chat with your new bot and send it any message (a bot cannot write to you first).
+3. Find your chat id: open `https://api.telegram.org/bot<your token>/getUpdates` in a browser
+   and copy `result[0].message.chat.id` (a group id starts with `-`). Put it in `.env` as
+   `TELEGRAM_CHAT_ID`. Treat that URL like a password: it contains the token.
+4. Restart the app. The log says `Telegram not configured` when either value is missing or
+   malformed. `notify.telegram: false` in `config/config.yaml` turns phone alerts off.
+
+The token is never logged, shown in the UI or stored in the outbox.
+
+---
+
 ## The Backtest Lab, honestly
 
 * **One unit, no sizing.** Rupee P&L per trade is `(exit − entry) × unit − charges`. Metrics are
