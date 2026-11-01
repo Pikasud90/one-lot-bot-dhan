@@ -8,7 +8,7 @@ import threading
 from dataclasses import dataclass, field
 
 from ..clock import now_ist
-from .base import Notification, NotificationLevel
+from .base import NOTHING_DUE, Notification, NotificationLevel
 from .dashboard import DashboardChannel
 from .os_toast import build_os_channel
 
@@ -21,6 +21,24 @@ class ChannelStats:
     failed: int = 0
     last_error: str | None = None
     last_sent_at: dt.datetime | None = None
+    enqueued: int = 0  # accepted by a deferred channel; "sent" only once it is confirmed
+
+
+def dedup_key_for(n: Notification) -> str:
+    """The key that names what `n` is about (US-004 AC4): the signal for a SIGNAL, the position
+    for an EXIT, the notification itself for a CRITICAL (every CRITICAL is its own row; a
+    repeated title is held back by the Telegram worker, decision F); the level is always part
+    of it."""
+    level = n.level.value.lower()
+    if n.level is NotificationLevel.SIGNAL:
+        subject = n.signal_id or n.notification_id
+    elif n.level is NotificationLevel.EXIT:
+        subject = n.position_id or n.notification_id
+    elif n.level is NotificationLevel.CRITICAL:
+        subject = n.notification_id
+    else:
+        subject = n.signal_id or n.position_id or n.notification_id
+    return f"{level}:{subject}"
 
 
 @dataclass
@@ -69,43 +87,86 @@ class Notifier:
                     why,
                 )
 
-        if cfg.notify.telegram:
-            log.warning(
-                "notify.telegram is enabled in config but is not implemented "
-                "in this build; ignoring."
-            )
+        # notify.telegram is wired by the Engine (US-004): it needs the database and the
+        # session clock, which the Notifier does not own.
         if cfg.notify.webhook:
             log.warning(
                 "notify.webhook is enabled in config but is not implemented "
                 "in this build; ignoring."
             )
 
+    # ── channels ──────────────────────────────────────────────────────────
+    def add_channel(self, ch) -> None:
+        """Register `ch` (its stats entry with it). A channel with the same name is replaced,
+        so a name never appears twice in a result."""
+        with self._lock:
+            self._put(ch, ch.name)
+
+    def replace_channel(self, name: str, ch) -> None:
+        """Swap the channel called `name` for `ch` in the same slot (added at the end when
+        there is none); the stats entry of `ch.name` is kept or created."""
+        with self._lock:
+            self._put(ch, name)
+
+    def _put(self, ch, name: str) -> None:
+        """Caller holds self._lock. A new list each time: send() iterates a snapshot."""
+        channels = list(self.channels)
+        slot = next((i for i, c in enumerate(channels) if c.name == name), None)
+        if slot is None:
+            channels.append(ch)
+        else:
+            channels[slot] = ch
+        self.channels = channels
+        self.stats.setdefault(ch.name, ChannelStats())
+
+    def _snapshot(self) -> list:
+        with self._lock:
+            return list(self.channels)
+
     # ── sending ───────────────────────────────────────────────────────────
     def send(self, n: Notification, dedup_key: str | None = None) -> dict[str, bool]:
-        """Deliver to every channel. One failure never blocks the others."""
+        """Deliver to every channel that accepts `n`. One failure never blocks the others.
+
+        `dedup_key` here is the Notifier's own short repeat window; `n.dedup_key` (set below
+        when the caller left it empty) names the alert for durable channels."""
         now = now_ist()
         n.created_at = n.created_at or now
+        if n.kind == "generic":
+            n.kind = n.level.value.lower()
+        if n.dedup_key is None:
+            n.dedup_key = dedup_key_for(n)
 
         if dedup_key and not self._dedup.should_send(dedup_key, now):
             log.debug("suppressed duplicate notification %s", dedup_key)
             return {}
 
         results: dict[str, bool] = {}
-        for ch in self.channels:
+        for ch in self._snapshot():
+            error: str | None = None
+            outcome: object = False
             try:
-                ok = bool(ch.send(n))
+                accepts = getattr(ch, "accepts", None)
+                if accepts is not None and not accepts(n):
+                    continue
+                outcome = ch.send(n)
             except Exception as exc:
-                ok = False
-                log.warning("notification channel %s raised: %s", ch.name, exc)
-                self.stats[ch.name].last_error = f"{type(exc).__name__}: {exc}"
+                # The class only: an exception's text can quote SQL, parameters or the payload.
+                error = type(exc).__name__
+                log.warning("notification channel %s raised %s", ch.name, error)
+            ok = bool(outcome)
             results[ch.name] = ok
-            st = self.stats[ch.name]
-            if ok:
-                st.sent += 1
-                st.last_sent_at = now
-            else:
-                st.failed += 1
-                st.last_error = st.last_error or getattr(ch, "last_error", None)
+            if outcome is NOTHING_DUE:
+                continue  # handled, nothing new queued or delivered: no counter moves
+            with self._lock:
+                st = self.stats.setdefault(ch.name, ChannelStats())
+                if ok and getattr(ch, "deferred", False):
+                    st.enqueued += 1  # queued only: the channel reports its own "sent"
+                elif ok:
+                    st.sent += 1
+                    st.last_sent_at = now
+                else:
+                    st.failed += 1
+                    st.last_error = error or getattr(ch, "last_error", None) or st.last_error
 
         if self.repo is not None:
             try:
@@ -175,24 +236,38 @@ class Notifier:
 
     # ── introspection ─────────────────────────────────────────────────────
     def status(self) -> dict:
+        """One entry per channel: the Notifier's counters, then the channel's own status()
+        merged over them (its keys win, its name stays). Channel status is read outside the
+        Notifier lock: it may query a database."""
+        channels = self._snapshot()
+        entries = [self._entry(ch) for ch in channels]
         return {
-            "channels": [
-                {
-                    "name": ch.name,
-                    "available": bool(getattr(ch, "available", True)),
-                    "sent": self.stats[ch.name].sent,
-                    "failed": self.stats[ch.name].failed,
-                    "last_error": self.stats[ch.name].last_error,
-                    "last_sent_at": (
-                        self.stats[ch.name].last_sent_at.isoformat()
-                        if self.stats[ch.name].last_sent_at
-                        else None
-                    ),
-                }
-                for ch in self.channels
-            ],
-            "os_toast_available": any(ch.name.endswith("toast") for ch in self.channels),
+            "channels": entries,
+            "os_toast_available": any(ch.name.endswith("toast") for ch in channels),
         }
+
+    def _entry(self, ch) -> dict:
+        with self._lock:
+            st = self.stats.setdefault(ch.name, ChannelStats())
+            entry = {
+                "name": ch.name,
+                "available": bool(getattr(ch, "available", True)),
+                "sent": st.sent,
+                "failed": st.failed,
+                "enqueued": st.enqueued,
+                "last_error": st.last_error,
+                "last_sent_at": st.last_sent_at.isoformat() if st.last_sent_at else None,
+            }
+        own_status = getattr(ch, "status", None)
+        if callable(own_status):
+            try:
+                entry.update(own_status())
+            except Exception as exc:
+                log.warning(
+                    "notification channel %s status failed (%s)", ch.name, type(exc).__name__
+                )
+            entry["name"] = ch.name
+        return entry
 
     def self_test(self) -> dict:
         """Fire a test alert through every channel. Run this at startup so a

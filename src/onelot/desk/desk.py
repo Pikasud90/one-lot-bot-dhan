@@ -24,10 +24,10 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 from sqlalchemy import Engine, select, update
 
-from ..clock import IST, now_ist
+from ..clock import IST, now_ist, to_ist
 from ..data.schema import desk_positions, desk_signals
 from ..data.universe import load_specs
-from ..notify.base import Notification, NotificationLevel
+from ..notify.base import Notification, NotificationLevel, shown_confidence
 from .audit import audit_signal, confidence, strategy_scoreboard
 from .config import DeskConfig, load_desk_config
 from .data import CompositeBars, build_source, is_delayed_source
@@ -48,10 +48,18 @@ log = logging.getLogger(__name__)
 # Leads the title of a SIGNAL notification built on delayed (Yahoo) bars, so a truncated
 # OS toast still shows it. The alert payload keeps the flag in data.delayed / delay_note.
 DELAYED_TITLE_MARKER = "(delayed ~15m)"
+# The card of an intraday position left open from an earlier session (US-004 decision E).
+SESSION_OVER_NOTE = "session over: record the broker square-off"
 
 
 def _iso(v: dt.datetime | None) -> str | None:
     return v.isoformat() if v else None
+
+
+def _conf_number(conf: dict) -> str:
+    """The title's confidence number: the same floored rule as the phone (US-003 BUG-4)."""
+    shown = shown_confidence(conf.get("score"))
+    return "n/a" if shown is None else str(shown)
 
 
 def _aware(v: dt.datetime | None) -> dt.datetime | None:
@@ -374,7 +382,10 @@ class Desk:
             t.last_error = f"economics: {type(exc).__name__}: {exc}"
             return
         exit_time = str(getattr(slot.strategy.p, "exit_time", "15:15"))
-        horizon = "intraday" if t.cfg.kind == "INDEX" else self.cfg.stock_horizon
+        # A stock short is intraday only (ADR-001 am. 8): the broker squares it off at the
+        # close, so it is never carried overnight whatever stock_horizon says.
+        intraday = t.cfg.kind == "INDEX" or (t.cfg.kind == "STOCK" and eco.side == "SELL")
+        horizon = "intraday" if intraday else self.cfg.stock_horizon
         sid = uuid.uuid4().hex[:12]
         expires = now + dt.timedelta(minutes=self.cfg.signal_valid_minutes)
         text = alert_text(
@@ -403,6 +414,9 @@ class Desk:
             "expires_at": _iso(expires),
             "instrument_key": t.instrument.key,
             "series_key": t.series.key,
+            # What to type into Dhan (US-004): universe.yaml's trading_symbol (MM -> M&M),
+            # else the key itself.
+            "trading_symbol": str(t.series.extra.get("trading_symbol") or t.series.key),
             "label": t.series.label,
             "kind": t.cfg.kind,
             "side": eco.side,
@@ -479,7 +493,7 @@ class Desk:
                 if eco.kind == "STOCK"
                 else f" · ~₹{eco.outlay:,.0f} outlay"
             )
-            + f" · {slot.cfg.name} {slot.cfg.timeframe} · conf {conf['score']:.0f}"
+            + f" · {slot.cfg.name} {slot.cfg.timeframe} · conf {_conf_number(conf)}"
         )
         if delayed:
             title = f"{DELAYED_TITLE_MARKER} {title}"
@@ -599,6 +613,7 @@ class Desk:
                 "signal_id": sid,
                 "instrument_key": s["instrument_key"],
                 "series_key": s["series_key"],
+                "trading_symbol": s.get("trading_symbol") or s["series_key"],  # older alerts
                 "label": s["label"],
                 "kind": s["kind"],
                 "side": s["side"],
@@ -735,12 +750,15 @@ class Desk:
                 and p["sessions_held"] > int(self.cfg.swing_max_sessions)
             ):
                 advice = "TIME_STOP"
-            p["exit_advice"] = advice
             p["hold_check"] = f"strategy {p['strategy']} {p['timeframe']}: " + (
                 "still " + ("long" if sign > 0 else "short") + " — HOLD"
                 if not strat_exit
                 else strat_exit.replace("_", " ").lower()
             )
+            if horizon == "intraday" and to_ist(opened).date() < to_ist(now).date():
+                advice = None  # the broker squared it off at the close: no trading advice
+                self._note_session_over(pid, p)
+            p["exit_advice"] = advice
             if advice:
                 self.notifier.send(
                     Notification(
@@ -759,6 +777,26 @@ class Desk:
                 conn.execute(
                     update(desk_positions).where(desk_positions.c.id == pid).values(payload=p)
                 )
+
+    def _note_session_over(self, pid: str, p: dict) -> None:
+        """An intraday position from an earlier session (US-004 decision E): it raises no EXIT
+        (no trading advice, no phone reminders) and the desk stops watching it. The broker
+        squares off an intraday (MIS) position at the close, but not one bought NRML (an option
+        held past the close), so the note covers both. The card says so, and the owner is told
+        once, as an INFO (INFO never reaches Telegram); the flag is in the stored payload, so a
+        restart does not say it again."""
+        p["hold_check"] = SESSION_OVER_NOTE
+        if p.get("session_over"):
+            return
+        p["session_over"] = True
+        self.notifier.info(
+            f"Session over: {p['label']} {p['side'].replace('_', ' ')}",
+            "This intraday position is from an earlier session. If the broker squared it off "
+            "at the close, record the square-off price with Closed. If you still hold it, the "
+            "desk no longer watches it: close it on your terminal, then record the exit with "
+            "Closed.",
+            dedup_key=f"desk:session_over:{pid}",
+        )
 
     def _unrealized(self, p: dict, last: float, now: dt.datetime) -> float:
         sign = 1 if p["direction"] == "long" else -1

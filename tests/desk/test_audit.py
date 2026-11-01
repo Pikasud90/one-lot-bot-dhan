@@ -129,6 +129,14 @@ class TestAudit:
         assert (
             hi["score"] > 70 and hi["label"] == "high" and lo["score"] < 35 and lo["label"] == "low"
         )
+        # The label follows the stored (1-decimal) score, so a raw 64.97 stored as 65.0 is
+        # 'high' and a raw 44.96 stored as 45.0 is 'medium': the floored number shown on the
+        # desk title and the phone then always agrees with the label (US-003 BUG-4).
+        neutral = 0.30 * 50 + 0.20 * 50 + 0.15 * 50  # the three parts without evidence
+        edge_hi = confidence((64.97 - neutral) / 0.35, None, None, None)
+        edge_lo = confidence((44.96 - neutral) / 0.35, None, None, None)
+        assert (edge_hi["score"], edge_hi["label"]) == (65.0, "high")
+        assert (edge_lo["score"], edge_lo["label"]) == (45.0, "medium")
         few = confidence(50, {"trades": 3, "expectancy_r": 0.9, "profit_factor": 9}, None, None)
         assert 50 <= few["parts"]["backtest_evidence"] < 60  # 3 trades barely move it
 

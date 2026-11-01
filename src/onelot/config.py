@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import os
+import re
 import secrets
 from pathlib import Path
 from typing import Literal
@@ -501,11 +502,22 @@ class DashboardCfg(Strict):
     theme: Literal["shonen", "plain"] = "shonen"
 
 
+TelegramLevel = Literal["SIGNAL", "EXIT", "CRITICAL"]
+
+
 class NotifyCfg(Strict):
     os_toast: bool = True
     dashboard: bool = True
-    telegram: bool = False
+    # The master switch for phone alerts (US-004): false never builds the channel; true
+    # builds it when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are usable.
+    telegram: bool = True
     webhook: bool = False
+    # What reaches the phone: a subset of the three urgent levels (INFO and WARNING stay in
+    # the app). A misspelled level is a startup error, never a silently missing alert.
+    telegram_levels: tuple[TelegramLevel, ...] = ("SIGNAL", "EXIT", "CRITICAL")
+    # Outside market hours (holidays included) SIGNAL and EXIT arrive without a sound;
+    # nothing is dropped, and CRITICAL always sounds.
+    telegram_quiet_outside_session: bool = True
 
 
 class LoggingCfg(Strict):
@@ -579,6 +591,52 @@ class AppConfig(Strict):
 
 # ─────────────────────────── secrets ──────────────────────────────────────
 
+# A secret part shorter than this is not registered on its own: a short literal would
+# scrub ordinary words from every log line. Real Telegram secrets have 35 characters.
+_MIN_TELEGRAM_SECRET_PART = 16
+
+
+def telegram_token_forms(token: str) -> list[str]:
+    """The spellings of a Telegram bot token the log redactor must know (ADR-002 #8):
+    the token, its `%3A` (percent-encoded colon) form and the secret part after the
+    colon, which also covers `bot<token>` and a lower-case `%3a`. Empty for no token and
+    for a value without a colon, which is not a token (a chat id in the wrong field)."""
+    bot_id, colon, secret = token.partition(":")
+    if not colon:
+        return []
+    if len(secret) < _MIN_TELEGRAM_SECRET_PART:
+        return [token]
+    return [token, f"{bot_id}%3A{secret}", secret]
+
+
+_CHAT_ID_LIKE = re.compile(r"-?[0-9]+")
+# The Bot API token shape (ADR-002 #7), shared with onelot.notify.telegram. ASCII only:
+# [0-9], never \d (which also matches other Unicode digits); always use fullmatch, never $
+# (which also matches before a trailing newline).
+TELEGRAM_TOKEN_SHAPE = re.compile(r"[0-9]{6,12}:[A-Za-z0-9_-]{30,}")
+
+
+def _token_status(token: str) -> str | None:
+    """What Settings may say about the Telegram token: None (not set), 'set' (a valid
+    shape) or 'invalid'; never any part of it, not even the last four characters."""
+    if not token:
+        return None
+    return "set" if TELEGRAM_TOKEN_SHAPE.fullmatch(token) else "invalid"
+
+
+def telegram_redaction_literals(token: str) -> list[str]:
+    """What the redactor registers for a configured TELEGRAM_BOT_TOKEN, valid or not (a
+    typo in .env is still mostly the secret). The one rule for Secrets and the client:
+    the token forms when the stripped value has a colon; a colon-less value only when it
+    can be the secret part pasted alone (16+ characters and not a number); never a chat
+    id pasted into the wrong field, which would scrub that number from every log line."""
+    value = token.strip()
+    if ":" in value:
+        return telegram_token_forms(value)
+    if len(value) >= _MIN_TELEGRAM_SECRET_PART and not _CHAT_ID_LIKE.fullmatch(value):
+        return [value]
+    return []
+
 
 class Secrets:
     """Credentials, loaded from the environment (`.env`) only. Never logged.
@@ -599,6 +657,8 @@ class Secrets:
         data_access_token: str = "",
         pin: str = "",
         totp_secret: str = "",
+        telegram_bot_token: str = "",
+        telegram_chat_id: str = "",
     ):
         self.client_id = client_id
         self.access_token = access_token
@@ -607,6 +667,9 @@ class Secrets:
         # Optional: lets the engine mint its own 24-hour tokens (TOTP enabled on Dhan).
         self.pin = pin
         self.totp_secret = totp_secret
+        # Optional: phone alerts (ADR-002). The chat id is configuration, not a secret.
+        self.telegram_bot_token = telegram_bot_token
+        self.telegram_chat_id = telegram_chat_id
 
     @property
     def can_self_renew(self) -> bool:
@@ -642,6 +705,8 @@ class Secrets:
             data_access_token=os.environ.get("DHAN_DATA_ACCESS_TOKEN", "").strip(),
             pin=os.environ.get("DHAN_PIN", "").strip(),
             totp_secret=os.environ.get("DHAN_TOTP_SECRET", "").strip(),
+            telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
+            telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", "").strip(),
         )
 
     ENV_KEYS = (
@@ -650,6 +715,8 @@ class Secrets:
         "DHAN_DATA_ACCESS_TOKEN",
         "DHAN_PIN",
         "DHAN_TOTP_SECRET",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_CHAT_ID",
     )
 
     @classmethod
@@ -687,7 +754,9 @@ class Secrets:
         return path
 
     def masked(self) -> dict:
-        """What the Settings tab may show: presence and the last 4 characters only."""
+        """What the Settings tab may show: presence and the last 4 characters only.
+        The Telegram token is reported only as None, 'set' (a valid shape) or 'invalid';
+        the chat id as 'set' or None. Never any part of either (ADR-002 #7)."""
 
         def m(v: str) -> str | None:
             return (f"…{v[-4:]}" if len(v) >= 8 else "set") if v else None
@@ -700,6 +769,8 @@ class Secrets:
             "pin_set": bool(self.pin),
             "totp_set": bool(self.totp_secret),
             "can_self_renew": self.can_self_renew,
+            "telegram_bot_token": _token_status(self.telegram_bot_token),
+            "telegram_chat_id": "set" if self.telegram_chat_id else None,
         }
 
     @staticmethod
@@ -727,8 +798,11 @@ class Secrets:
         return bool(self.client_id and self.access_token)
 
     def secret_values(self) -> list[str]:
-        """Everything the log redactor must scrub. See logging_setup.py."""
-        return [
+        """Everything the log redactor must scrub. See logging_setup.py.
+
+        The Telegram chat id is deliberately absent: it is not a secret, and as a
+        redaction literal it would corrupt ordinary numbers in logs (ADR-002 #8)."""
+        values = [
             v
             for v in (
                 self.client_id,
@@ -740,6 +814,7 @@ class Secrets:
             )
             if v and len(v) >= 4
         ]
+        return values + telegram_redaction_literals(self.telegram_bot_token)
 
     def __repr__(self) -> str:  # never leak via repr in a traceback
         return f"<Secrets client_id={'set' if self.client_id else 'unset'} token=***>"

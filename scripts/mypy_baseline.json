@@ -49,7 +49,6 @@
     "src/onelot/market/chain.py": 1,
     "src/onelot/market/fallback.py": 1,
     "src/onelot/market/feed.py": 1,
-    "src/onelot/notify/manager.py": 1,
     "src/onelot/notify/os_toast.py": 2,
     "src/onelot/replay/replay.py": 4,
     "src/onelot/settings.py": 1,
