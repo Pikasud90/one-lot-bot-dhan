@@ -40,7 +40,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from sqlalchemy import Connection, Engine, func, select, update
+from sqlalchemy import ColumnElement, Connection, Engine, and_, func, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from ..clock import now_ist, to_ist
@@ -293,6 +293,7 @@ class TelegramOutbox:
         # the helper of a request that outlived its deadline (at most one is ever alive).
         self._last_send_at: dt.datetime | None = None
         self._inflight: threading.Thread | None = None
+        self._orphan: int | None = None  # claimed by this outbox, outcome not recorded yet
         # Written by the worker, read by status() on the dashboard's thread: both under
         # _state_lock, never under _drain_lock (status() must not wait for an HTTP call).
         self._state_lock = threading.Lock()
@@ -385,11 +386,17 @@ class TelegramOutbox:
                 self._wake.clear()  # cleared BEFORE the next drain: no wake-up is lost
 
     def _recover(self) -> None:
-        """sending -> queued, at once due; the resend flag on rows that are the message
-        itself (never on a note about other rows)."""
-        now = self._clock()
-        requeue = {"status": "queued", "claimed_at": None, "next_attempt_at": now}
-        stale = OUTBOX.c.status == "sending"
+        """Every row left in `sending` by a previous run is queued again (at start-up)."""
+        requeued = self._requeue_sending()
+        if requeued:
+            log.info("telegram outbox: re-queued %d row(s) left mid-send", requeued)
+
+    def _requeue_sending(self, *only: ColumnElement[bool]) -> int:
+        """sending -> queued, at once due, for the rows matching `only` (all when empty); the
+        resend flag on rows that are the message itself (never on a note about other rows).
+        Returns the rows re-queued."""
+        requeue = {"status": "queued", "claimed_at": None, "next_attempt_at": self._clock()}
+        stale = and_(OUTBOX.c.status == "sending", *only)
         with self._engine.begin() as conn:
             marked = conn.execute(
                 update(OUTBOX)
@@ -399,8 +406,18 @@ class TelegramOutbox:
             plain = conn.execute(
                 update(OUTBOX).where(stale, OUTBOX.c.kind.in_(_NO_MARKER)).values(**requeue)
             ).rowcount
-        if marked or plain:
-            log.info("telegram outbox: re-queued %d row(s) left mid-send", marked + plain)
+        return int(marked) + int(plain)
+
+    def _requeue_orphan(self) -> None:
+        """The row this outbox claimed last whose outcome was never recorded (the update after
+        the HTTP call raised): with no request in flight it is lost in `sending`, so it is
+        queued again once, as at start-up (at-least-once: it may already be on the phone)."""
+        if self._orphan is None or self._busy_with_a_hung_request():
+            return
+        row_id = self._orphan
+        self._requeue_sending(OUTBOX.c.id == row_id)
+        self._orphan = None
+        log.warning("telegram outbox: row %d re-queued, its result was never recorded", row_id)
 
     # ── one step ───────────────────────────────────────────────────────────
     def drain_once(self) -> int:
@@ -409,6 +426,7 @@ class TelegramOutbox:
         if not self._client.available:
             return 0
         with self._drain_lock:
+            self._requeue_orphan()
             now = self._clock()
             queued = self._queued()
             if self._settle_expired(queued, now):
@@ -422,7 +440,9 @@ class TelegramOutbox:
             for row in sorted((r for r in queued if r.due(now)), key=_Row.priority):
                 claimed = self._claim(row.id, now)
                 if claimed is not None:
+                    self._orphan = claimed.id  # until its outcome is recorded
                     self._deliver(claimed)
+                    self._orphan = None
                     return 1
             return 0
 
@@ -549,9 +569,8 @@ class TelegramOutbox:
             due = now + dt.timedelta(seconds=_backoff_s(row.attempts))
             values = {"status": "queued", "next_attempt_at": due, "last_error": result.detail}
             log.info("telegram outbox: %s row %d will retry: %s", row.kind, row.id, result.detail)
-        if not result.ok:
-            with self._state_lock:
-                self._last_error = result.detail
+        with self._state_lock:  # the current error: a confirmed send clears it
+            self._last_error = None if result.ok else result.detail
         with self._engine.begin() as conn:
             conn.execute(
                 update(OUTBOX)

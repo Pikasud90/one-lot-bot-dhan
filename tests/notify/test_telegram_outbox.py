@@ -638,3 +638,80 @@ def test_enqueue_failures_are_reported_even_when_the_outbox_status_fails(make_ri
     entry = _telegram_entry(notifier)
     assert entry["enqueue_failed"] == 1 and entry["enqueue_last_error"] == "OperationalError"
     assert entry["status_error"] == "OperationalError"
+
+
+def test_a_successful_send_clears_the_last_error(make_rig):
+    replies = iter([error(500, "boom"), ok(1)])
+    rig = make_rig(lambda r: next(replies))
+    rig.enqueue(rig.alert(minutes=30))
+
+    rig.drain()
+    assert "HTTP 500" in rig.outbox.status()["last_error"]
+    rig.clock.advance(1)
+    rig.drain()
+
+    status = rig.outbox.status()
+    assert status["sent"] == 1 and status["last_error"] is None
+
+
+def _fail_next_update_to(rig: Rig, status: str) -> list[str]:
+    """Make the NEXT UPDATE that writes `status` raise, as a locked or vanished database
+    would after the HTTP call already succeeded. Returns the list of statements it hit."""
+    from sqlalchemy import event
+
+    hit: list[str] = []
+
+    def before(conn: Any, cursor: Any, statement: str, params: Any, *rest: Any) -> None:
+        if not hit and statement.lstrip().startswith("UPDATE") and status in tuple(params):
+            hit.append(statement)
+            raise RuntimeError("database is locked")
+
+    event.listen(rig.db.engine, "before_cursor_execute", before)
+    return hit
+
+
+@pytest.mark.parametrize("kind, marked", [("alert", True), ("missed", False)])
+def test_a_row_whose_result_was_not_recorded_is_requeued_once_on_the_next_drain(
+    make_rig, kind, marked
+):
+    """The HTTP call succeeded but recording it failed: the row is still 'sending' and no
+    request is in flight. The next drain re-queues it (at-least-once) with the resend marker,
+    as a restart would (never on a note about other rows)."""
+    rig = make_rig()
+    alert = rig.alert(minutes=30)
+    rig.outbox.enqueue(
+        dedup_key=f"{kind}:1",
+        kind=kind,
+        alert_id=alert["id"],
+        payload=alert,
+        alert_created_at=T0,
+        expires_at=None,
+    )
+    hit = _fail_next_update_to(rig, "sent")
+
+    with pytest.raises(RuntimeError):
+        rig.outbox.drain_once()
+    assert hit and [r["status"] for r in rig.rows()] == ["sending"]
+
+    rig.drain()
+
+    (row,) = rig.rows()
+    assert row["status"] == "sent" and len(rig.requests) == 2
+    second = rig.requests[1].read().decode("utf-8")
+    assert (RESEND_MARKER in second) is marked
+    rig.clock.advance(3600)
+    assert rig.drain() == 0 and len(rig.requests) == 2, "re-queued once, not forever"
+
+
+def test_another_outbox_never_requeues_a_row_it_did_not_claim(make_rig):
+    rig = make_rig()
+    rig.enqueue(rig.alert(minutes=30))
+    hit = _fail_next_update_to(rig, "sent")
+    with pytest.raises(RuntimeError):
+        rig.outbox.drain_once()
+    assert hit
+    other = TelegramOutbox(rig.db.engine, rig.client, clock=rig.clock, sleep=rig.clock.sleep)
+
+    assert other.drain_once() == 0
+
+    assert [r["status"] for r in rig.rows()] == ["sending"], "only its claimer knows it is lost"
