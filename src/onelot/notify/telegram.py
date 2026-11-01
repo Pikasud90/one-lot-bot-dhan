@@ -198,12 +198,18 @@ def _short_id(value: Any) -> str:
 
 
 # ── shared pieces ────────────────────────────────────────────────────────────
+def _symbol(payload: Mapping[str, Any]) -> str:
+    """The tradable symbol (plain text): trading_symbol when it is usable text (the NSE
+    symbol, e.g. 'M&M', added to the Desk payload in US-004), else series_key."""
+    return _plain(payload.get("trading_symbol")) or _plain(payload.get("series_key"))
+
+
 def _instrument(payload: Mapping[str, Any], option: Mapping[str, Any]) -> tuple[str, str]:
     """(action word, instrument) for an alert or a position, both escaped: the tradable
     symbol, plus expiry, strike and CE/PE for an option. The CE/PE comes from the Desk
     side ("BUY_CE"), never from free text."""
     side = _plain(payload.get("side")).upper()
-    symbol = _fit(payload.get("series_key"), _CAP_SYMBOL) or "?"
+    symbol = _fit(_symbol(payload), _CAP_SYMBOL) or "?"
     if side in _OPTION_SIDES:
         contract = (_expiry(option.get("expiry")), _strike(option.get("strike")), side[-2:])
         return "BUY", " ".join([symbol, *(part for part in contract if part)])
@@ -243,8 +249,9 @@ def _levels(head: str, stop: Any, target: Any) -> str:
 def format_alert(alert: Mapping[str, Any], now: dt.datetime) -> str:
     """The phone message for a Desk SIGNAL dict (see `Desk._raise_signal`).
 
-    Reads only: id, created_at, expires_at, series_key, label, kind, side, risk_allowed,
-    strategy_label (else strategy), timeframe, confidence.{score,label}, data.delayed and
+    Reads only: id, created_at, expires_at, trading_symbol (else series_key), label, kind,
+    side, risk_allowed, strategy_label (else strategy), timeframe, confidence.{score,label},
+    data.delayed and
     economics.{qty, entry_price, stop_price, target_price, underlying_stop,
     underlying_target, synthetic, option.{strike, expiry, lot}}. `now` drives the minutes
     left, so format at send time. Only risk_allowed exactly False marks it blocked.
@@ -317,7 +324,7 @@ def _data_line(data: Mapping[str, Any]) -> str:
 def _insert_label(lines: list[str], alert: Mapping[str, Any]) -> None:
     """Put the instrument label under the header, in the room the budget leaves."""
     label = _plain(alert.get("label"))
-    if not label or label == _plain(alert.get("series_key")):
+    if not label or label == _symbol(alert):
         return
     room = MAX_CHARS - len("\n".join(lines)) - len("\n<i></i>")
     fitted = _fit(label, room)
@@ -331,7 +338,7 @@ def format_exit(event: Mapping[str, Any], now: dt.datetime) -> str:
     EXIT and the instrument, the reason, the estimated P&L (whole rupees, as the Desk
     rounds it) and the time of this message.
 
-    Reads only advice and position.{series_key, kind, side, qty,
+    Reads only advice and position.{trading_symbol (else series_key), kind, side, qty,
     option.{strike, expiry, lot}, unrealized}.
     """
     position = _fields(event.get("position"))

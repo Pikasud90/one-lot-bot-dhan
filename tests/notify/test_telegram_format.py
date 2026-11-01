@@ -228,6 +228,26 @@ class TestHeader:
         alert["economics"]["option"]["strike"] = "52000.0"
         assert " 52000 CE" in format_alert(alert, NOW).split("\n")[0]
 
+    def test_the_trading_symbol_is_preferred_over_the_series_key(self):
+        """US-004 adds trading_symbol (the NSE symbol, e.g. M&M) to the Desk payload; the
+        series key ('MM') is only the fallback."""
+        with_symbol = stock_alert(series_key="MM", trading_symbol="M&M", label="Mahindra")
+        without = stock_alert(series_key="MM", label="Mahindra")
+        assert format_alert(with_symbol, NOW).startswith("<b>BUY M&amp;M · ")
+        assert format_alert(without, NOW).startswith("<b>BUY MM · ")
+        assert " M&amp;M · " in format_missed(with_symbol, NOW)
+        event = exit_event("STOP", series_key="MM", trading_symbol="M&M", kind="STOCK")
+        assert format_exit(event, NOW).split("\n")[0].startswith("<b>EXIT M&amp;M")
+
+    @pytest.mark.parametrize("unusable", [None, "", "   ", ["M&M"], {"s": 1}], ids=repr)
+    def test_an_unusable_trading_symbol_falls_back_to_the_series_key(self, unusable):
+        alert = stock_alert(series_key="RELIANCE", trading_symbol=unusable)
+        assert format_alert(alert, NOW).startswith("<b>BUY RELIANCE · ")
+
+    def test_the_label_line_is_omitted_when_it_repeats_the_trading_symbol(self):
+        alert = stock_alert(series_key="MM", trading_symbol="M&M", label="M&M")
+        assert "<i>" not in format_alert(alert, NOW)
+
     def test_missed_and_exit_name_the_contract_like_the_header(self):
         later = dt.datetime(2026, 11, 2, 10, 45, 0, tzinfo=IST)
         missed = format_missed(index_alert("PE", risk_allowed=False), later)
