@@ -593,3 +593,36 @@ paper_events = Table(
     Column("detail", JSON),  # why, plus the bar prices used
     Index("ix_paper_events_trade", "trade_id"),
 )
+
+
+# ── Telegram outbox (US-004, ADR-002 amendments 1 and 6) ─────────────────
+# Every phone message is a row before it is a request: queued -> sending (claimed and
+# committed BEFORE the HTTP call) -> sent | failed | skipped. Delivery is at-least-once: a
+# row found in `sending` at start-up was cut off mid-call and is queued again, flagged
+# `resend`. At most one row per dedup_key and per (alert_id, kind).
+telegram_outbox = Table(
+    "telegram_outbox",
+    METADATA,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("dedup_key", String(160), nullable=False),
+    Column("kind", String(16), nullable=False),  # alert|exit|critical|missed|digest|...
+    Column("alert_id", String(64)),
+    Column("payload", JSON, nullable=False),  # what the formatter reads at send time
+    Column("status", String(8), nullable=False),  # queued|sending|sent|failed|skipped
+    Column("attempts", Integer, nullable=False, default=0),
+    Column("created_at", TZDateTime, nullable=False),
+    Column("alert_created_at", TZDateTime, nullable=False),
+    Column("expires_at", TZDateTime),  # None: never expires (EXIT, CRITICAL, notes)
+    Column("next_attempt_at", TZDateTime),
+    Column("claimed_at", TZDateTime),
+    Column("silent", Boolean, nullable=False, default=False),
+    Column("sent_at", TZDateTime),
+    Column("message_id", Integer),
+    Column("latency_ms", Integer),  # sent_at - alert_created_at, ms, never negative
+    Column("last_error", Text),  # SendResult.detail: status + description, token masked
+    Column("confidence", Float),  # a SIGNAL's score: the order inside a burst
+    Column("resend", Boolean, nullable=False, default=False),
+    UniqueConstraint("dedup_key", name="uq_telegram_outbox_dedup_key"),
+    UniqueConstraint("alert_id", "kind", name="uq_telegram_outbox_alert_kind"),
+    Index("ix_telegram_outbox_status_sent", "status", "sent_at"),
+)

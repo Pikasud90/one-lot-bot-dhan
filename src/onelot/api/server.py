@@ -19,6 +19,7 @@ import datetime as dt
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
@@ -140,6 +141,34 @@ def _iso(v):
     if isinstance(v, dt.datetime):
         return v.isoformat()
     return v
+
+
+def _paper_payload(desk: object, now: dt.datetime) -> dict[str, Any]:
+    """GET /api/paper (US-030): {enabled, status, trades, totals_today} for `desk`'s book.
+
+    `status` is the book's counters plus the desk's own `desk_hook_errors` (as in the desk
+    snapshot's paper block), every key present. Without a desk or a book, or with
+    paper.enabled false, it is `enabled: false` with no trades and null totals.
+    """
+    from ..paper.book import RECENT_LIMIT, STATUS_KEYS
+    from ..paper.view import totals_view
+
+    book = getattr(desk, "paper", None) if desk is not None else None
+    hook_errors = getattr(desk, "hook_errors", 0)
+    status: dict[str, int] = dict.fromkeys(STATUS_KEYS, 0)
+    if book is not None:
+        status.update(book.status())
+    # the desk's count, never the book's: a bool or a mock is not a count
+    valid = isinstance(hook_errors, int) and not isinstance(hook_errors, bool)
+    status["desk_hook_errors"] = hook_errors if valid else 0
+    if book is None or not book.enabled:
+        return {"enabled": False, "status": status, "trades": [], "totals_today": None}
+    return {
+        "enabled": True,
+        "status": status,
+        "trades": book.recent(RECENT_LIMIT),
+        "totals_today": totals_view(book.today_totals(now)),
+    }
 
 
 def create_app(engine, api_token: str) -> FastAPI:
@@ -307,6 +336,24 @@ def create_app(engine, api_token: str) -> FastAPI:
         key: str, timeframe: str | None = None, n: int = Query(300, ge=20, le=3000)
     ) -> dict:
         return _desk().bars_view(key, timeframe, n)
+
+    @app.get("/api/paper")
+    def paper_view() -> dict:
+        """The paper book for the desk's Paper panel (US-030). Read-only.
+
+        Reads the database through the book; never the Desk lock. No desk, no book, or
+        paper.enabled false: enabled false, no trades, no totals (the counts still shown).
+        """
+        from sqlalchemy.exc import SQLAlchemyError
+
+        try:
+            return _paper_payload(engine.desk, dt.datetime.now(IST))
+        except (SQLAlchemyError, OSError) as exc:
+            log.warning("GET /api/paper: the paper book could not be read: %s", exc)
+            # One line for the panel: the driver's message, never the SQL or its parameters.
+            text = str(getattr(exc, "orig", None) or exc).strip() or type(exc).__name__
+            brief = text.splitlines()[0]
+            raise HTTPException(503, f"paper book unreadable: {brief}") from exc
 
     # ── account (free Trading API; cached, never polled) ──────────────────
     @app.get("/api/account")

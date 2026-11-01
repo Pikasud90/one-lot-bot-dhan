@@ -29,7 +29,7 @@ from .analytics.regime import RegimeModel, compute_for_date
 from .broker.base import Contract, TokenExpiredError, nearest_monthly_expiry
 from .broker.dhan import DhanAdapter
 from .broker.mock import MockBroker
-from .clock import IST, SessionClock, TradingCalendar, assert_clock_sane, now_ist
+from .clock import IST, SessionClock, TradingCalendar, assert_clock_sane, now_ist, to_ist
 from .config import AppConfig, CostConfig, Secrets
 from .costs import CostModel, Quote
 from .lock import SingleInstanceLock
@@ -38,6 +38,9 @@ from .market.fallback import build_fallback
 from .market.feed import INDEX_KEY, FeedContracts, MarketFeed
 from .market.health import HealthMonitor
 from .notify.manager import Notifier
+from .notify.telegram import TelegramClient
+from .notify.telegram_channel import TelegramChannel
+from .notify.telegram_outbox import TelegramOutbox
 from .ratelimit import RateLimiter
 from .risk.governor import RiskGovernor
 from .store import init_database
@@ -146,6 +149,9 @@ class Engine:
         self.account = AccountService(self.db.engine, adapter=None)
         self.lab_jobs = JobRunner(self.db.engine)
         self.desk = None  # built in start(): the multi-instrument Live Desk
+        # Phone alerts (US-004): built in start() when notify.telegram is on and configured.
+        self.telegram_client: TelegramClient | None = None
+        self.telegram_outbox: TelegramOutbox | None = None
         self._last_renew_at: dt.datetime | None = None
         self._last_renew_error: str | None = None
 
@@ -170,6 +176,12 @@ class Engine:
         self.status.running = True
         self.status.started_at = now_ist()
         self.status.trade_date = self.trade_date
+        # First, so even the start-up CRITICALs below reach the phone.
+        try:
+            self._start_telegram()
+        except Exception:
+            log.exception("Telegram alerts failed to start (dashboard and OS toast continue)")
+            self.status.warnings.append("Telegram alerts failed to start — see the log")
 
         ok, msg = assert_clock_sane(self.cfg.session.clock_drift_tolerance_sec)
         if not ok:
@@ -257,6 +269,43 @@ class Engine:
             self.lot_size,
         )
 
+    def _start_telegram(self) -> None:
+        """notify.telegram is the master switch (US-004): off, nothing is built; on, the
+        channel and its outbox worker are added when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID
+        are usable, otherwise one INFO line says why (never the values)."""
+        if not self.cfg.notify.telegram:
+            return
+        client = TelegramClient.from_env()
+        if not client.available:
+            log.info(
+                "Telegram not configured (%s); alerts stay on the dashboard and the OS toast",
+                client.unavailable_reason,
+            )
+            client.close()
+            return
+        outbox = TelegramOutbox(self.db.engine, client)
+        self.notifier.add_channel(
+            TelegramChannel(client, outbox, self.cfg.notify, self._in_session)
+        )
+        self.telegram_client, self.telegram_outbox = client, outbox
+        outbox.start()
+        log.info("Telegram alerts on for %s", ", ".join(self.cfg.notify.telegram_levels))
+
+    def _stop_telegram(self) -> None:
+        """Stop and join the outbox worker (before the database goes), then close the client."""
+        outbox, self.telegram_outbox = self.telegram_outbox, None
+        if outbox is not None:
+            outbox.stop()
+        client, self.telegram_client = self.telegram_client, None
+        if client is not None:
+            client.close()
+
+    def _in_session(self, moment: dt.datetime) -> bool:
+        """Market hours on a trading day (a holiday is quiet): Telegram's quiet-hours rule."""
+        moment = to_ist(moment)  # the trade date is the IST date, whatever zone came in
+        window = self.session_clock.current_window(moment)
+        return window is not None and window.is_open(moment)
+
     def _data_api_active(self) -> bool:
         """Cheap: reads the cached profile, never the network."""
         try:
@@ -279,6 +328,7 @@ class Engine:
             self.chain.stop()
         for t in self._threads:
             t.join(timeout=5.0)
+        self._stop_telegram()  # joins the outbox worker: it must not outlive the database
         self.db.dispose()
         self.lock.release()
         self.status.running = False

@@ -31,8 +31,9 @@ import numpy as np
 # No pandas-stubs are pinned; every pandas module in the mypy baseline carries this one
 # error, so a NEW module stays at zero only by naming it here (the flags are untouched).
 import pandas as pd  # type: ignore[import-untyped]
-from sqlalchemy import Engine, Text, inspect, select, type_coerce
+from sqlalchemy import Engine, Text, and_, case, inspect, or_, select, type_coerce
 from sqlalchemy.exc import DataError, DBAPIError, IntegrityError, OperationalError
+from sqlalchemy.types import NullType
 
 from ..clock import IST, now_ist
 from ..config import BacktestCfg, PaperCfg
@@ -85,6 +86,7 @@ from .position import (
     strategy_exit_of,
 )
 from .pricing import frozen_iv, implied_iv
+from .view import DayTotals, trade_view
 
 # The public contract of this module (PaperAlertError and grade_for live in .alert).
 __all__ = ["PaperAlertError", "PaperBook", "PaperEvent", "PaperTrade", "grade_for"]
@@ -102,6 +104,9 @@ GAP_CLOSE_REASONS = {
     "gap_through_stop": "GAP_THROUGH_STOP",
     "gap_through_target": "GAP_THROUGH_TARGET",
 }
+RECENT_LIMIT = 200  # recent()'s default: the trades the desk's Paper panel is sent
+READ_WARN_CAP = 1000  # corrupt-row reasons a book remembers having warned about (LRU)
+REASON_KEY_CHARS = 200  # a reason is remembered by its first characters only
 
 PremiumAt = Callable[[Mapping[str, Any], float, dt.datetime], float | None]
 CostFor = Callable[[str], CostModel]
@@ -252,6 +257,10 @@ class PaperBook:
         self._retry_logged: set[str] = set()  # retries whose traceback was already logged
         self._tracked: frozenset[str] | None = None  # the desk's series (retire_untracked)
         self._callback_failed: set[int] = set()  # trades whose strategy_exit traceback is logged
+        # (trade id, reason) a read already warned about: the panel polls every few seconds,
+        # so a repeat is DEBUG (US-030 review MINOR). Its own lock: reads never take _lock.
+        self._read_warned: OrderedDict[tuple[object, str], None] = OrderedDict()
+        self._read_warn_lock = threading.Lock()
         METADATA.create_all(engine, tables=[paper_trades, paper_events])  # no-op if present
         self._load_active()
         if cfg.enabled:  # a disabled book opens nothing, not even at startup
@@ -532,6 +541,111 @@ class PaperBook:
         """Counters since this book was built: opened, filled, no_fill, closed, hook_errors."""
         with self._lock:
             return dict(self._counts)
+
+    @property
+    def enabled(self) -> bool:
+        """paper.enabled. False stops NEW paper trades only; open ones are still managed."""
+        return bool(self.cfg.enabled)
+
+    # ── read side (US-030): the desk's Paper panel ────────────────────────
+    # Both read the database only. They never take `self._lock` (an API read must not
+    # queue behind a step, BUG-2) and never touch the Desk.
+    def recent(self, limit: int = RECENT_LIMIT) -> list[dict[str, Any]]:
+        """Up to `limit` trades, newest first (created_at, then id), as display dicts.
+
+        The trades still managed (PENDING_FILL, OPEN) are picked first, whatever their age,
+        then the newest final ones fill the rest: an old open trade never drops off the
+        panel behind newer closed ones (Manager decision, 2026-11-01).
+
+        Each is `onelot.paper.view.trade_view`: money as rupee strings from paise, times
+        ISO-8601 IST, None for what is not known yet. A row that cannot be read (an unknown
+        status, a corrupt plan or time, money that is not integer paise) is logged and left
+        out, never fatal to the listing: the cells are fetched raw and decoded per row.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError(f"limit={limit!r} must be a positive int")
+        t = paper_trades.c
+        newest_first = (t.created_at.desc(), t.id.desc())
+        managed_first = case((t.status.in_(ACTIVE_STATUSES), 0), else_=1)
+        shown = select(t.id).order_by(managed_first, *newest_first).limit(limit)
+        raw = [type_coerce(c, NullType()).label(c.name) for c in paper_trades.c]
+        stmt = select(*raw).where(t.id.in_(shown)).order_by(*newest_first)
+        with self.engine.connect() as conn:
+            decoders = {
+                c.name: c.type.dialect_impl(conn.dialect).result_processor(conn.dialect, None)
+                for c in paper_trades.c
+            }
+            rows = conn.execute(stmt).mappings().all()
+        views: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                stored = {k: _decoded(k, v, decoders[k]) for k, v in row.items()}
+                views.append(trade_view(PaperTrade.from_row(stored)))
+            except Exception as exc:  # noqa: BLE001 - one bad row never hides the others
+                why = f"{type(exc).__name__}: {exc}"
+                self._warn_once(
+                    row["id"],
+                    f"not shown: {why}",
+                    "paper: trade %s (alert %s) not shown: %s",
+                    row["id"],
+                    row["alert_id"],
+                    why,
+                )
+        return views
+
+    def today_totals(self, now: dt.datetime) -> DayTotals:
+        """The CLOSED trades closed on `now`'s IST calendar date (`closed_totals`).
+
+        A trade is closed at its exit_ts, or at updated_at when it has none. NO_FILL trades
+        never filled, so they are not counted. An amount that is not integer paise (a
+        corrupt cell) is logged and read as unknown, so that sum is None, as for a missing
+        one. A naive `now` is rejected (ValueError).
+        """
+        _require_aware(now, "now")
+        start = dt.datetime.combine(now.astimezone(IST).date(), dt.time(0), tzinfo=IST)
+        end = start + dt.timedelta(days=1)
+        t = paper_trades.c
+        closed_today = or_(
+            and_(t.exit_ts >= start, t.exit_ts < end),
+            and_(t.exit_ts.is_(None), t.updated_at >= start, t.updated_at < end),
+        )
+        stmt = select(t.id, t.gross_paise, t.net_paise).where(t.status == "CLOSED", closed_today)
+        with self.engine.connect() as conn:
+            rows = conn.execute(stmt).all()
+        return closed_totals(
+            (
+                self._paise_or_unknown(i, "gross_paise", gross),
+                self._paise_or_unknown(i, "net_paise", net),
+            )
+            for i, gross, net in rows
+        )
+
+    def _paise_or_unknown(self, trade_id: object, name: str, value: object) -> int | None:
+        """today_totals(): a corrupt amount is reported (once) and read as unknown (None)."""
+        if _is_paise(value):
+            return cast(int | None, value)
+        self._warn_once(
+            trade_id,
+            f"{name}={value!r} read as unknown",
+            "paper: trade %s %s=%r is not integer paise; read as unknown",
+            trade_id,
+            name,
+            value,
+        )
+        return None
+
+    def _warn_once(self, trade_id: object, reason: str, msg: str, *args: object) -> None:
+        """Log `msg` as a WARNING the first time this book reads `reason` on `trade_id`, and at
+        DEBUG after that. The set is an LRU of READ_WARN_CAP entries: a reason it forgot is
+        warned again, so memory stays bounded and nothing is ever silently dropped."""
+        key = (trade_id, reason[:REASON_KEY_CHARS])
+        with self._read_warn_lock:
+            first = key not in self._read_warned
+            self._read_warned[key] = None
+            self._read_warned.move_to_end(key)
+            while len(self._read_warned) > READ_WARN_CAP:
+                self._read_warned.popitem(last=False)
+        log.log(logging.WARNING if first else logging.DEBUG, msg, *args)
 
     # ── opening ───────────────────────────────────────────────────────────
     def _open(
@@ -1376,6 +1490,38 @@ def _gross(trade: PaperTrade, exit_paise: int | None) -> int | None:
     return sign * (exit_paise - trade.entry_paise) * trade.qty
 
 
+def closed_totals(trades: Iterable[tuple[object, object]]) -> DayTotals:
+    """Count and sum closed trades given as (gross_paise, net_paise) pairs.
+
+    A trade is a win or a loss on its net when it has one, else on its gross (before
+    US-023 there are no costs, so no net); zero is neither, and a trade with neither has
+    no outcome. A sum is None as soon as one trade lacks that amount: a partial sum would
+    look like a real total. With no trades the gross is 0 but the net stays None: no net
+    has been computed, and a "0.00" net would read as costs already applied (US-030
+    contract: net null until US-023).
+    """
+    closed = wins = losses = 0
+    gross: int | None = 0
+    net: int | None = 0
+    for raw_gross, raw_net in trades:
+        trade_gross, trade_net = _int_or_none(raw_gross), _int_or_none(raw_net)
+        closed += 1
+        gross = None if gross is None or trade_gross is None else gross + trade_gross
+        net = None if net is None or trade_net is None else net + trade_net
+        outcome = trade_net if trade_net is not None else trade_gross
+        if outcome is not None and outcome > 0:
+            wins += 1
+        elif outcome is not None and outcome < 0:
+            losses += 1
+    return {
+        "closed": closed,
+        "wins": wins,
+        "losses": losses,
+        "gross_paise": gross,
+        "net_paise": net if closed else None,
+    }
+
+
 def reconcile_since(now: dt.datetime, days: int) -> dt.datetime:
     """Midnight IST `days` calendar days before `now`'s IST date: the reconciliation horizon."""
     day = now.astimezone(IST).date() - dt.timedelta(days=max(int(days), 0))
@@ -1493,3 +1639,16 @@ def _paise_or_none(row: Mapping[Any, Any], column: str) -> int | None:
             value,
         )
     return None
+
+
+def _is_paise(value: object) -> bool:
+    """A stored amount: None or a plain int. A float or a string is corrupt, never truncated."""
+    return value is None or (isinstance(value, int) and not isinstance(value, bool))
+
+
+def _decoded(name: str, value: object, decode: Callable[[Any], Any] | None) -> Any:
+    """One raw cell of a `recent()` row, decoded as its column type would (ValueError if bad)."""
+    value = decode(value) if decode is not None else value
+    if name.endswith("_paise") and not _is_paise(value):
+        raise ValueError(f"{name}={value!r} is not integer paise")
+    return value

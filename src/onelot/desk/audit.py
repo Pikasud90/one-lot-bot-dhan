@@ -214,5 +214,8 @@ def confidence(
         + 0.20 * parts["live_record"]
         + 0.15 * parts["regime_fit"]
     )
+    # The label follows the STORED score, so the floored number every surface shows
+    # (notify.base.shown_confidence) always agrees with it: 64.97 is stored and labelled 65.0.
+    score = round(score, 1)
     label = "high" if score >= 65 else ("low" if score < 45 else "medium")
-    return {"score": round(score, 1), "label": label, "parts": parts}
+    return {"score": score, "label": label, "parts": parts}

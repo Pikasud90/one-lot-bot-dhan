@@ -18,6 +18,10 @@ const spct = (v, d = 2) => (v === null || v === undefined || Number.isNaN(Number
 const tsf = (s) => s ? String(s).replace("T", " ").slice(0, 16) : "–";
 const hhmm = (s) => s ? String(s).slice(11, 16) : "–";
 const tile = (l, v, i = "", c = "") => `<div class="tile"><small>${l}</small><b class="${c}">${v}</b><i>${i}</i></div>`;
+// A rupee STRING from the API ("-12.05", exact from integer paise) for display: "−₹12.05", Indian digit grouping, never through a float. Plain text: esc() it in HTML.
+const inr = (s) => (s === null || s === undefined || s === "") ? "–" : (String(s).startsWith("-") ? "−₹" : "₹") + String(s).replace(/^-/, "").replace(/^\d+/, (w) => w.replace(/(\d)(?=(\d\d)*\d{3}$)/g, "$1,"));
+// The alert confidence as every surface shows it (notify.base.shown_confidence, US-003): floored and clamped to 0..100, so 64.9 shows 64; null when not a finite number.
+const confShown = (v) => (typeof v !== "number" || !Number.isFinite(v)) ? null : Math.min(100, Math.max(0, Math.floor(v)));
 const store = { get(k, d) { try { return JSON.parse(localStorage.getItem("onelot." + k)) ?? d; } catch (e) { return d; } },
                 set(k, v) { try { localStorage.setItem("onelot." + k, JSON.stringify(v)); } catch (e) {} } };
 const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -255,7 +259,7 @@ async function renderHomeJournal() {
 /* ── Home: alerts (pending cards, monitoring, archive with audited outcomes) ── */
 const alerts = { open: store.get("alerts.open", {}), rows: [], scoreboard: {}, loadedAt: 0 };
 const srcTag = (d) => d ? `${esc(d.source)} ${esc(d.resolution)}${d.delayed ? " · <span class='warn'>~15 min delayed</span>" : " · live"}` : "–";
-function confBadge(c) { return c ? `<div class="conf ${c.label}" title="${esc(JSON.stringify(c.parts))}">${fmt(c.score, 0)} ${esc(c.label)}</div>` : `<div class="conf medium">–</div>`; }
+function confBadge(c) { return c ? `<div class="conf ${c.label}" title="${esc(JSON.stringify(c.parts))}">${fmt(confShown(c.score), 0)} ${esc(c.label)}</div>` : `<div class="conf medium">–</div>`; }
 function outcomeCell(s) {
   const o = s.outcome;
   if (s.status === "PENDING") return `<span class="countdown" data-exp="${esc(s.expires_at)}">…</span>`;
@@ -275,7 +279,7 @@ function alertRow(s) {
       <div><h4>One-unit economics</h4>${kv("Unit", esc(e.unit_label || ""))}${kv(s.kind === "INDEX" ? "Est. premium" : "Entry", rup2(e.entry_price))}${kv(s.kind === "INDEX" ? "Premium at stop" : "Stop", rup2(e.stop_price), "neg")}
         ${kv(s.kind === "INDEX" ? "Premium at target" : "Target", e.target_price != null ? rup2(e.target_price) : "trail", "pos")}${kv("Risk ₹ (incl. charges)", rup(e.risk_inr), "neg")}${kv("Net reward ₹", e.reward_inr != null ? rup(e.reward_inr) : "–", "pos")}${kv("Net R/R", fmt(e.rr_net))}
         ${s.kind === "INDEX" ? kv("Underlying entry / stop / target", `${fmt(e.underlying_entry, 0)} / ${fmt(e.underlying_stop, 0)} / ${e.underlying_target != null ? fmt(e.underlying_target, 0) : "–"}`) : ""}${e.synthetic ? `<div class="hint warn">premium synthetic (Black-76) — no live chain at alert time</div>` : (o.spread_pct != null ? kv("Chain spread", pct(o.spread_pct)) : "")}</div>
-      <div><h4>Confidence ${fmt(c.score, 0)} <span class="dim">${esc(c.label || "")}</span></h4>
+      <div><h4>Confidence ${fmt(confShown(c.score), 0)} <span class="dim">${esc(c.label || "")}</span></h4>
         ${["signal_strength", "backtest_evidence", "live_record", "regime_fit"].map(k => `<div class="kv"><span>${k.replace("_", " ")}</span><span>${fmt(parts[k], 0)}</span></div><div class="conf-bar"><i style="width:${Math.max(0, Math.min(100, parts[k] || 0))}%"></i></div>`).join("")}
         <div class="hint">${esc(parts.backtest_note || "")}<br>${esc(parts.live_note || "")}</div>
         <h4>Outcome at the alerted levels</h4>${out.outcome ? kv("Result", outcomeCell(s)) + kv("Best / worst excursion", `${fmt(out.mfe_r, 2)}R / −${fmt(out.mae_r, 2)}R`) + kv("Est. P&L (1 unit)", rup(out.pnl_est), cls(out.pnl_est)) + kv("Resolved", out.exit_ts ? tsf(out.exit_ts) : "–") : `<div class="muted">audited once the next bars arrive</div>`}</div>
@@ -499,9 +503,52 @@ function positionsTable(ps) {
       <td>${esc(p.side.replace("_", " "))}</td><td class="n">${fmt(p.entry_price)}</td><td class="n">${fmt(p.last_underlying)}</td>
       <td class="n">${fmt(p.stop_underlying)}${p.trail_active ? " <span class='dim'>trail</span>" : ""}</td><td class="n">${p.target_underlying != null ? fmt(p.target_underlying) : "–"}</td>
       <td class="n ${cls(p.r_now)}">${fmt(p.r_now, 2)}R</td><td class="n ${cls(p.unrealized)}">${rup(p.unrealized)}</td>
-      <td class="${p.exit_advice ? "neg pos-advice" : "muted"}">${p.exit_advice ? "EXIT · " + esc(p.exit_advice.replace("_", " ")) : "hold"}</td><td class="n">${p.bars_held} bars</td>
+      <td class="${p.exit_advice || p.session_over ? "neg pos-advice" : "muted"}">${p.session_over ? esc(p.hold_check || "session over") : p.exit_advice ? "EXIT · " + esc(p.exit_advice.replace("_", " ")) : "hold"}</td><td class="n">${p.bars_held} bars</td>
       <td><input type="number" step="0.05" id="dx_${p.id}" placeholder="exit price" style="width:110px;display:inline-block;margin:0">
         <button class="btn small danger" data-dclose="${p.id}">Closed</button></td></tr>`).join("") + `</tbody></table>`;
+}
+/* ── paper trades (US-030): every alert's paper trade · one unit · never an order ──
+   Pure one-line helpers (node-tested) render GET /api/paper; money arrives as rupee strings. */
+const todayIST = () => { const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date()).map((x) => [x.type, x.value])); return `${p.year}-${p.month}-${p.day}`; };
+const paperChip = (st) => { const c = st === "PENDING_FILL" ? ["pending", "pending"] : st === "OPEN" ? ["open", "open"] : st === "NO_FILL" ? ["nofill", "no fill"] : st === "CLOSED" ? ["closed", "closed"] : ["", String(st ?? "?").toLowerCase()]; return `<span class="pchip ${c[0]}">${esc(c[1])}</span>`; };
+const paperWhen = (s, today) => !s ? "–" : (String(s).slice(0, 10) === today ? hhmm(s) : tsf(s));
+const paperRow = (t, today = todayIST()) => `<tr><td>${paperChip(t.status)}</td> <td><b>${esc(t.instrument)}</b> <span class="dim">${esc(t.strategy)} · ${esc(t.timeframe)}${t.qty > 1 ? ` · qty ${esc(t.qty)}` : ""}</span></td> <td>${esc(String(t.side ?? "").replace(/_/g, " "))}</td> <td class="${t.grade === "live" ? "pos" : "warn"}">${esc(t.grade)}</td> <td class="n">${esc(inr(t.entry))}</td> <td class="n">${esc(inr(t.exit))}</td> <td class="n ${t.gross == null ? "" : cls(Number(t.gross))}">${esc(inr(t.gross))}</td> <td class="n ${t.net == null ? "" : cls(Number(t.net))}">${esc(inr(t.net))}</td> <td>${esc(t.close_reason ? String(t.close_reason).replace(/_/g, " ") : "–")}</td> <td class="n">${esc(paperWhen(t.created_at, today))}${t.closed_at ? ` → ${esc(paperWhen(t.closed_at, today))}` : ""}</td></tr>`;
+const paperShown = (trades, today) => { const all = Array.isArray(trades) ? trades.filter((t) => t && typeof t === "object") : []; return [...all.filter((t) => t.status === "PENDING_FILL" || t.status === "OPEN"), ...all.filter((t) => (t.status === "CLOSED" || t.status === "NO_FILL") && String(t.closed_at ?? "").slice(0, 10) === today)]; };
+const paperPanel = (p) => { if (!p || !p.enabled) return `<div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sleep"/></svg> Paper trading is off: no new paper trades are opened.</div>`; const today = todayIST(), rows = paperShown(p.trades, today); if (!rows.length) return `<div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sleep"/></svg> ${Array.isArray(p.trades) && p.trades.length ? "Nothing open, and none closed today." : "No paper trades yet."}</div>`; return `<table class="paper"><thead><tr><th>Status</th> <th>Instrument</th> <th>Side</th> <th>Grade</th> <th class="n" title="price per share, or per option unit of the lot">Entry / unit</th> <th class="n" title="price per share, or per option unit of the lot">Exit / unit</th> <th class="n" title="the whole trade before costs: (exit - entry) x qty for a buy or an option, (entry - exit) x qty for a sell">Gross (trade)</th> <th class="n" title="the whole trade after costs; empty until costs are applied">Net (trade)</th> <th>Close reason</th> <th class="n">Time</th></tr></thead><tbody>${rows.map((t) => paperRow(t, today)).join("")}</tbody></table>`; };
+const paperMeta = (p) => { if (!p || !p.enabled) return ""; const s = p.status || {}, d = p.totals_today || {}, errors = (Number(s.hook_errors) || 0) + (Number(s.desk_hook_errors) || 0); return `today: ${d.closed ?? 0} closed · ${d.wins ?? 0} won · ${d.losses ?? 0} lost · gross ${inr(d.gross_rupees)} · net ${inr(d.net_rupees)}${d.net_rupees == null ? " (no costs yet)" : ""} · since restart: ${s.opened ?? 0} opened · ${s.filled ?? 0} filled · ${s.no_fill ?? 0} no fill${errors ? ` · ${errors} errors (see the log)` : ""}`; };
+// Fetched when the desk snapshot's version moves (and on opening the tab), at most every 5 s.
+const paperFeed = { at: 0, timer: null, version: null, shown: false };
+const liveTabActive = () => { const s = document.querySelector('section[data-tab="live"]'); return !!s && s.classList.contains("active"); };
+function wantPaper(force) {
+  if (paperFeed.timer || (!force && paperFeed.version === lastDeskVersion)) return;
+  paperFeed.timer = setTimeout(loadPaper, Math.max(0, 5000 - (Date.now() - paperFeed.at)));
+}
+async function loadPaper() {
+  const version = lastDeskVersion;
+  paperFeed.at = Date.now();
+  try {
+    const r = await fetch("/api/paper");  // a read: no token, and no toast every 5 s on failure
+    const p = await r.json().catch(() => null);
+    if (!r.ok) throw new Error((p && p.detail) || `HTTP ${r.status}`);
+    // Only a reply that says enabled true or false is an answer: a proxy page, a non-JSON body
+    // or a half-written object must never read as "Paper trading is off".
+    if (!p || typeof p.enabled !== "boolean") throw new Error("unexpected reply from /api/paper");
+    paperFeed.version = version;
+    paperFeed.shown = true;
+    $("desk-paper").innerHTML = paperPanel(p);
+    $("desk-paper-meta").className = "muted";
+    $("desk-paper-meta").textContent = paperMeta(p);
+  } catch (e) {
+    // The last table stays (still worth reading); the day line turns into a warning, and a
+    // panel that never loaded says why instead of "Loading" for ever.
+    const why = `paper trades unavailable: ${e.message}`;
+    $("desk-paper-meta").className = "warn";
+    $("desk-paper-meta").textContent = why;
+    if (!paperFeed.shown) $("desk-paper").innerHTML = `<div class="empty-inline"><span class="warn">${esc(why)}</span></div>`;
+  } finally {
+    paperFeed.timer = null;
+    if (paperFeed.version !== lastDeskVersion && liveTabActive()) wantPaper(false);
+  }
 }
 function accRow(r, isOpen) {
   const L = r.last || {}, R = r.regime || {}, H = r.health || {}, K = r.risk || {};
@@ -548,7 +595,7 @@ function renderDesk(d) {
   const risk = d.risk || {};
   $("desk-risk-line").textContent = `risk ${risk.state || "–"} · realised ${rup(risk.realized_pnl)} · ${risk.trades_taken || 0} trade(s) today`;
   // positions (re-render only when something changed)
-  const psig = JSON.stringify((d.positions || []).map(p => [p.id, p.exit_advice, p.stop_underlying, p.last_underlying, p.unrealized]));
+  const psig = JSON.stringify((d.positions || []).map(p => [p.id, p.exit_advice, p.session_over, p.stop_underlying, p.last_underlying, p.unrealized]));
   if (desk.sig.pos !== psig) {
     desk.sig.pos = psig;
     $("desk-positions").innerHTML = positionsTable(d.positions || []);
@@ -616,7 +663,7 @@ function applyStream(payload) {
   renderPanels(latest); renderJournal(latest); renderFeed(payload.notifications);
   const changed = latest.desk && latest.desk.version !== lastDeskVersion;
   if (changed) lastDeskVersion = latest.desk.version;
-  if (document.querySelector('[data-tab="live"]').classList.contains("active")) { renderDesk(latest.desk); if (changed) renderFocus(latest.desk); }
+  if (document.querySelector('[data-tab="live"]').classList.contains("active")) { renderDesk(latest.desk); if (changed) { renderFocus(latest.desk); wantPaper(false); } }
   if (changed && document.querySelector('[data-tab="home"]').classList.contains("active")) { renderHomePositions(latest.desk); if (Date.now() - alerts.loadedAt > 15000) { alerts.loadedAt = Date.now(); loadAlerts(true).catch(() => {}); } }
 }
 function connect() {
@@ -648,7 +695,7 @@ function renderFocus(d) {
     </div>
     <h4>Strategies</h4><div class="tbl">${table([{ l: "Strategy", f: s => `<b>${esc(s.label)}</b>` }, { l: "TF", k: "timeframe" }, { l: "Bar", f: s => hhmm(s.last_bar_ts) },
       { l: "Verdict", f: s => `<span class="schip ${s.verdict !== "none" ? s.verdict : ""}">${esc(s.verdict)}</span>` }, { l: "Why", f: s => esc(s.error || s.reason || "") }], r.strategies || [])}</div>
-    ${r.signal ? `<div class="notice mt"><b>Pending alert:</b> ${esc(r.signal.side.replace("_", " "))} · ${esc(r.signal.strategy)} ${esc(r.signal.timeframe)} · conf ${fmt((r.signal.confidence || {}).score, 0)} — act on it from <a href="#home">Home</a>.</div>` : ""}
+    ${r.signal ? `<div class="notice mt"><b>Pending alert:</b> ${esc(r.signal.side.replace("_", " "))} · ${esc(r.signal.strategy)} ${esc(r.signal.timeframe)} · conf ${fmt(confShown((r.signal.confidence || {}).score), 0)} — act on it from <a href="#home">Home</a>.</div>` : ""}
     ${r.position ? `<div class="notice mt"><b>Monitoring:</b> ${esc(r.position.side.replace("_", " "))} from ${fmt(r.position.entry_price)} · ${fmt(r.position.r_now, 2)}R · ${esc(r.position.hold_check || "")}${r.position.exit_advice ? ` · <b class="neg">EXIT: ${esc(r.position.exit_advice)}</b>` : ""}</div>` : ""}`;
   const tf = $("focus-tf").value;
   if (focus.lastKey !== r.key || focus.lastTf !== tf || Date.now() - focus.lastAt > 55000) {
@@ -663,7 +710,7 @@ function renderFocus(d) {
 }
 $("focus-key").onchange = () => { focus.key = $("focus-key").value; store.set("focus.key", focus.key); if (latest) renderFocus(latest.desk); };
 $("focus-tf").onchange = () => { if (latest) renderFocus(latest.desk); };
-tabLoaders.live = () => { renderGates(); desk.force = true; if (latest) { renderDesk(latest.desk); focus.lastAt = 0; renderFocus(latest.desk); } };
+tabLoaders.live = () => { renderGates(); desk.force = true; wantPaper(true); if (latest) { renderDesk(latest.desk); focus.lastAt = 0; renderFocus(latest.desk); } };
 
 /* ═══════════════════════════════ LAB ════════════════════════════════ */
 const lab = { strategies: [], instruments: [], focus: [], focusTfs: [], cat: store.get("lab.cat", "DESK"), runs: [], waiting: null, poll: null, shown: null };

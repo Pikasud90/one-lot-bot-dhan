@@ -1,0 +1,256 @@
+"""The Notifier's Telegram channel (US-004; ADR-002 amendments 2, 3, 6 and 9).
+
+What reaches the phone and when: the levels `notify.telegram_levels` allows, silent or not,
+and the EXIT reminder budget. Delivery itself is the outbox's job (.telegram_outbox); the
+channel only ever does one INSERT through `TelegramOutbox.enqueue`.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import logging
+import threading
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from typing import Any
+
+from ..clock import now_ist
+from ..config import NotifyCfg
+from .base import NOTHING_DUE, Notification, NotificationLevel, SendOutcome
+from .telegram import TelegramClient, _plain
+from .telegram_outbox import TelegramOutbox, _time_of
+
+log = logging.getLogger(__name__)
+
+EXIT_REMINDER_EVERY = dt.timedelta(minutes=5)
+EXIT_MAX_REMINDERS = 3  # after the first EXIT message
+# The same advice raised again after this long without it is a new episode (Manager decision
+# (1) after T1): a first message at once and a fresh reminder budget.
+EXIT_EPISODE_GAP = dt.timedelta(minutes=60)
+_PHONE_LEVELS = frozenset(
+    (NotificationLevel.SIGNAL, NotificationLevel.EXIT, NotificationLevel.CRITICAL)
+)
+
+
+@dataclass
+class _ExitEpisode:
+    """One EXIT advice for one position: the messages sent for it and when."""
+
+    advice: str
+    messages: int  # the first EXIT plus reminders so far
+    last_message_at: dt.datetime
+    last_raised_at: dt.datetime  # the last poll that raised it, a message or not
+
+
+def _is_desk_alert(payload: Mapping[str, Any]) -> bool:
+    """True for a Desk alert or position: it names a symbol or a side. The legacy Bank Nifty
+    engine's payloads name neither, and the Desk formatter would print '? ?' for them."""
+    return any(_plain(payload.get(key)) for key in ("trading_symbol", "series_key", "side"))
+
+
+def _note(n: Notification, **extra: Any) -> dict[str, Any]:
+    """What is stored for a SIGNAL or EXIT that is not a Desk alert: its title and body (the
+    text the dashboard and the toast show), sent by the outbox as a plain message."""
+    return {"plain": {"title": n.title, "body": n.body}, **extra}
+
+
+class TelegramChannel:
+    """The Notifier's Telegram channel: decides what goes to the phone and queues it.
+
+    `send` is ONE short INSERT into the outbox (the Desk holds its lock while it runs):
+    no HTTP, no Notifier call. SIGNAL, EXIT and CRITICAL only, as `notify.telegram_levels`
+    allows. Silent (no sound, never dropped): a risk-blocked SIGNAL always; SIGNAL and EXIT
+    outside the session when `notify.telegram_quiet_outside_session`; CRITICAL never.
+
+    EXIT advice is raised on every Desk poll. The phone gets the first message at once,
+    then at most EXIT_MAX_REMINDERS reminders, each EXIT_REMINDER_EVERY after the previous
+    message. A different advice for the position starts a fresh budget, and so does the same
+    advice raised again after EXIT_EPISODE_GAP without it; a restart starts one too (the
+    budget is in memory, accepted). Each message is its own row with alert_id
+    '{position_id}#n'; n continues across restarts, so a new message never collides with an
+    old row.
+    """
+
+    name = "telegram"
+    deferred = True  # True from send() means "queued": the outbox reports what was sent
+
+    def __init__(
+        self,
+        client: TelegramClient,
+        outbox: TelegramOutbox,
+        cfg: NotifyCfg,
+        in_session: Callable[[dt.datetime], bool],
+        clock: Callable[[], dt.datetime] = now_ist,
+    ) -> None:
+        self._client = client
+        self._outbox = outbox
+        self._cfg = cfg
+        self._levels = frozenset(cfg.telegram_levels)
+        self._in_session = in_session
+        self._clock = clock
+        self._lock = threading.Lock()  # EXIT episodes; never held by the worker
+        self._episodes: dict[str, _ExitEpisode] = {}
+        self._exit_numbers = self._load_exit_numbers()
+        self._stats_lock = threading.Lock()  # the enqueue failure counters below
+        self._enqueue_failed = 0
+        self._enqueue_last_error: str | None = None
+
+    def _load_exit_numbers(self) -> dict[str, int]:
+        try:
+            return self._outbox.exit_sequences()
+        except Exception as exc:  # an unreadable table: numbering restarts, logged
+            log.warning("telegram channel: EXIT numbering not restored (%s)", type(exc).__name__)
+            return {}
+
+    @property
+    def available(self) -> bool:
+        return self._client.available
+
+    def accepts(self, n: Notification) -> bool:
+        return n.level in _PHONE_LEVELS and n.level.value in self._levels
+
+    def status(self) -> dict[str, Any]:
+        """The outbox's status (delivery: sent, failed, last_error ...) plus this channel's
+        enqueue failures under their own keys, so a database error while queueing is never
+        hidden behind the outbox's 'failed 0'. The enqueue keys survive a failing outbox."""
+        with self._stats_lock:
+            own: dict[str, Any] = {
+                "enqueue_failed": self._enqueue_failed,
+                "enqueue_last_error": self._enqueue_last_error,
+            }
+        try:
+            return {**self._outbox.status(), **own}
+        except Exception as exc:
+            log.warning("telegram channel: outbox status failed (%s)", type(exc).__name__)
+            return {**own, "status_error": type(exc).__name__}
+
+    def send(self, n: Notification) -> bool | SendOutcome:
+        """True when a row was queued (or already existed), NOTHING_DUE for an EXIT reminder
+        that is not due, False when it is not for the phone or was not queued. A database
+        error raises (the Notifier counts it); either failure is also counted here."""
+        if not self.accepts(n):
+            return False
+        outcome: bool | SendOutcome
+        try:
+            if n.level is NotificationLevel.SIGNAL:
+                outcome = self._send_signal(n)
+            elif n.level is NotificationLevel.EXIT:
+                outcome = self._send_exit(n)
+            else:
+                outcome = self._send_critical(n)
+        except Exception as exc:
+            self._note_enqueue(type(exc).__name__)  # the class only: the text quotes SQL
+            raise
+        if outcome is True:
+            self._note_enqueue(None)
+        elif not outcome:
+            self._note_enqueue("not queued")
+        return outcome
+
+    def _note_enqueue(self, error: str | None) -> None:
+        """error None: a row was queued, the current error clears; else count the failure."""
+        with self._stats_lock:
+            if error is not None:
+                self._enqueue_failed += 1
+            self._enqueue_last_error = error
+
+    # ── per level ──────────────────────────────────────────────────────────
+    def _silent(self, n: Notification, now: dt.datetime, blocked: bool = False) -> bool:
+        if n.level is NotificationLevel.CRITICAL:
+            return False
+        if blocked:
+            return True
+        if not self._cfg.telegram_quiet_outside_session:
+            return False
+        try:
+            open_now = bool(self._in_session(now))
+        except Exception as exc:  # an unknown session never mutes an alert
+            log.warning("telegram channel: session check failed (%s)", type(exc).__name__)
+            open_now = True
+        return not open_now
+
+    def _send_signal(self, n: Notification) -> bool:
+        now = self._clock()
+        alert = n.payload if isinstance(n.payload, Mapping) else {}
+        alert_id = n.signal_id or _plain(alert.get("id")) or n.notification_id
+        created = _time_of(alert.get("created_at")) or n.created_at or now
+        expires = _time_of(alert.get("expires_at"))
+        if expires is None and n.ttl_seconds:
+            expires = created + dt.timedelta(seconds=n.ttl_seconds)
+        payload: Mapping[str, Any] = alert
+        if not _is_desk_alert(alert):  # BUG-1: the legacy engine's Signal.as_dict()
+            payload = _note(n, id=alert_id, expires_at=expires.isoformat() if expires else None)
+        return self._outbox.enqueue(
+            dedup_key=n.dedup_key or f"signal:{alert_id}",
+            kind="alert",
+            alert_id=alert_id,
+            payload=payload,
+            alert_created_at=created,
+            expires_at=expires,
+            silent=self._silent(n, now, blocked=alert.get("risk_allowed") is False),
+        )
+
+    def _send_exit(self, n: Notification) -> bool | SendOutcome:
+        now = self._clock()
+        event = n.payload if isinstance(n.payload, Mapping) else {}
+        position = event.get("position")
+        pid = (
+            n.position_id
+            or (_plain(position.get("id")) if isinstance(position, Mapping) else "")
+            or n.notification_id
+        )
+        advice = _plain(event.get("advice"))
+        if not (isinstance(position, Mapping) and _is_desk_alert(position)):
+            # BUG-1: the legacy engine's ExitDecision.as_dict() has a reason and no position
+            advice = advice or _plain(event.get("reason"))
+            event = _note(n)
+        with self._lock:
+            self._forget_stale_episodes(now)  # back after an hour: a fresh budget
+            episode = self._episodes.get(pid)
+            if episode is not None and episode.advice != advice:
+                episode = None  # a different advice: a fresh budget
+            if episode is not None:
+                episode.last_raised_at = now
+                if episode.messages > EXIT_MAX_REMINDERS:
+                    return NOTHING_DUE  # first + every reminder already queued
+                if now - episode.last_message_at < EXIT_REMINDER_EVERY:
+                    return NOTHING_DUE  # not yet: the previous message is recent
+            number = self._exit_numbers.get(pid, 0) + 1
+            queued = self._outbox.enqueue(
+                dedup_key=f"{n.dedup_key or 'exit:' + pid}#{number}",
+                kind="exit",
+                alert_id=f"{pid}#{number}",
+                payload=event,
+                alert_created_at=n.created_at or now,
+                expires_at=None,
+                silent=self._silent(n, now),
+            )
+            if queued:
+                self._exit_numbers[pid] = number
+                sent_before = 0 if episode is None else episode.messages
+                self._episodes[pid] = _ExitEpisode(advice, sent_before + 1, now, now)
+            return queued
+
+    def _forget_stale_episodes(self, now: dt.datetime) -> None:
+        """Caller holds self._lock. Drop every episode not raised for EXIT_EPISODE_GAP: its
+        position was closed (the Desk no longer raises it) or the advice went away, and the
+        same advice raised again would start a fresh budget anyway."""
+        stale = [
+            pid
+            for pid, episode in self._episodes.items()
+            if now - episode.last_raised_at >= EXIT_EPISODE_GAP
+        ]
+        for pid in stale:
+            del self._episodes[pid]
+
+    def _send_critical(self, n: Notification) -> bool:
+        now = self._clock()
+        return self._outbox.enqueue(
+            dedup_key=n.dedup_key or f"critical:{n.notification_id}",
+            kind="critical",
+            alert_id=n.notification_id,
+            payload={"title": n.title, "body": n.body},
+            alert_created_at=n.created_at or now,
+            expires_at=None,
+            silent=False,
+        )
