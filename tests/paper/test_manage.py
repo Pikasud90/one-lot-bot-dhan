@@ -20,7 +20,9 @@ Test list (ping-pong; Dev Beta T1 writes AC1/AC2 green and AC3/AC4 red):
       at-open precedence STOP/TARGET > SIGNAL_EXIT > OPPOSITE_SIGNAL; an exit due at a
       bar's open closes before anything inside that bar.
   Contract: naive now / naive index / missing columns / wrong-side stop / bad tick raise;
-      an unusable bar is skipped; a UTC-indexed frame behaves like an IST one.
+      an unusable bar (NaN, high below low) is skipped; an open outside high/low is judged
+      at the open, a close outside it is not a touch; a UTC-indexed frame behaves like an
+      IST one; the latest revision of a duplicated bar wins.
 """
 
 from __future__ import annotations
@@ -480,11 +482,28 @@ class TestContract:
         state, events = step(position(), rows)
         assert (state.closed, events, state.last_bar_ts) == (None, [], at(7))
 
-    def test_an_inconsistent_bar_is_skipped(self) -> None:
-        # low above the open: a corrupt print, not a stop touch at 990
-        rows = [(998.00, 999.00, 999.50, 990.00), QUIET]
+    def test_an_open_below_the_low_still_gaps_the_stop(self) -> None:
+        # Some feeds print the auction open apart from the continuous range: the bar is kept
+        # and its open is judged on its own, then the event stores the feed's own prints.
+        rows = [QUIET, (994.00, 997.00, 996.00, 996.50)]
+        state, (event,) = step(position(), rows)
+        assert state.closed == PaperClose("STOP", 99_400, at(7), gap=True)
+        assert event.detail["bar"]["low_paise"] == 99_600
+
+    def test_a_close_outside_the_high_low_is_not_a_touch(self) -> None:
+        # Touches come from high/low (and the open); the close only feeds the trail.
+        state, events = step(position(), [(998.00, 999.00, 997.00, 990.00)])
+        assert (state.closed, events) == (None, [])
+
+    def test_an_open_above_the_high_can_trade_a_long_through_its_target(self) -> None:
+        rows = [QUIET, (1010.05, 1009.00, 1005.00, 1006.00)]
         state, _ = step(position(), rows)
-        assert state.closed is None
+        assert state.closed == PaperClose("TARGET", 101_000, at(7), gap=True)
+
+    def test_a_bar_with_its_high_below_its_low_is_skipped(self) -> None:
+        rows = [(998.00, 990.00, 999.00, 997.00), QUIET]
+        state, events = step(position(), rows)
+        assert (state.closed, events, state.last_bar_ts) == (None, [], at(7))
 
     def test_a_utc_indexed_frame_gives_the_same_answer(self) -> None:
         rows = [QUIET, (998.00, 999.00, 995.00, 997.00)]

@@ -147,8 +147,9 @@ class ManageRules:
 
 @dataclass(frozen=True)
 class OhlcBars:
-    """One series' bars normalised once: int64 ns open times (strictly increasing) and
-    float64 rupee prices; `usable[i]` is False for a row that cannot be judged."""
+    """One series' bars normalised once: int64 ns open times (strictly increasing) and the
+    feed's float64 rupee prices, unchanged; `usable[i]` is False for a row that cannot be
+    judged at all."""
 
     ns: np.ndarray
     open: np.ndarray
@@ -184,8 +185,11 @@ def normalise_ohlc(frame: object) -> OhlcBars:
     Raises ValueError for anything but a DataFrame with a tz-aware DatetimeIndex (bar OPEN
     times) and open/high/low/close columns: a naive time is rejected, never guessed. Rows
     are sorted by time; for a duplicated time the LAST row wins (the feed's latest
-    revision). A row with a non-finite or non-positive price, or a low above the open or
-    close, or a high below them, is marked unusable.
+    revision). A row with a non-finite or non-positive price, or a high below its low, is
+    marked unusable (skipped and logged, never guessed). An open outside high/low (some
+    feeds print the auction open apart from the continuous range) is kept: the rules judge
+    the open on its own, before the bar's range, so it can still gap a stop or a target.
+    Touches inside the bar come from high/low only; the close is used for the trail alone.
     """
     if not isinstance(frame, pd.DataFrame):
         raise ValueError(f"bars must be a pandas DataFrame, not {type(frame).__name__}")
@@ -212,9 +216,10 @@ def normalise_ohlc(frame: object) -> OhlcBars:
             & np.isfinite(h)
             & np.isfinite(l)
             & np.isfinite(c)
+            & (o > 0.0)
             & (l > 0.0)
-            & (l <= np.minimum(o, c))
-            & (h >= np.maximum(o, c))
+            & (c > 0.0)
+            & (h >= l)
         )
     return OhlcBars(ns=ns, open=o, high=h, low=l, close=c, usable=usable)
 
