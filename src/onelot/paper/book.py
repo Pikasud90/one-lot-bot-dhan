@@ -46,7 +46,7 @@ Grade = Literal["live", "delayed"]
 TRADE_STATUSES: frozenset[str] = frozenset(("PENDING_FILL", "OPEN", "NO_FILL", "CLOSED"))
 ACTIVE_STATUSES: tuple[TradeStatus, ...] = ("PENDING_FILL", "OPEN")
 STATUS_KEYS = ("opened", "filled", "no_fill", "closed", "hook_errors")
-# Cost table per alert kind, named as the Backtest Lab names them (lab.execution).
+# Fallback cost table per alert kind when the instrument spec is unknown (Lab naming).
 PRODUCT_FOR_KIND = {
     "STOCK": PRODUCT_FOR_CATEGORY["STOCK"],
     "INDEX": PRODUCT_FOR_CATEGORY["OPTIONS"],
@@ -332,6 +332,9 @@ class PaperBook:
             raise PaperAlertError(f"alert {alert_id}: economics missing")
         data = snapshot.get("data") if isinstance(snapshot.get("data"), dict) else {}
         source = str(data.get("source") or "")
+        spec = self.specs.get(instrument_key)
+        # The cost table cost_for(instrument_key) charges from; by kind if the spec is unknown.
+        product = spec.product if spec is not None and spec.product else PRODUCT_FOR_KIND[kind]
         return {
             "alert_id": alert_id,
             "status": "PENDING_FILL",
@@ -346,8 +349,8 @@ class PaperBook:
             "strategy": _req_str(snapshot, "strategy", alert_id),
             "timeframe": _req_str(snapshot, "timeframe", alert_id),
             "confidence": _confidence_score(snapshot.get("confidence")),
-            "product": PRODUCT_FOR_KIND[kind],
-            "qty": _unit_qty(kind, eco, self.specs.get(instrument_key), alert_id),
+            "product": product,
+            "qty": _unit_qty(kind, eco, spec, alert_id),
             "resolution_min": _resolution_min(data.get("resolution")),
             "created_at": created_at,
             "expires_at": expires_at,

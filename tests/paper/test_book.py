@@ -137,6 +137,19 @@ class TestOnAlertOpens:
         assert make_book().on_alert(alert, ist(THU, 10, 5, 4)) is not None
         assert [r["status"] for r in table_rows(engine, paper_trades)] == ["PENDING_FILL"]
 
+    @pytest.mark.parametrize(
+        ("kind", "key", "product", "qty"),
+        [("STOCK", "TCS", "equity_intraday", 1), ("INDEX", "NIFTY_OPT", "index_options", 30)],
+    )
+    def test_an_instrument_without_a_spec_falls_back_by_kind(
+        self, make_book, kind, key, product, qty
+    ):
+        alert = make_alert(kind, "long")
+        alert["instrument_key"] = key  # not in SPECS: product by kind, lot from the alert
+        trade = make_book().on_alert(alert, ist(THU, 10, 5, 4))
+        assert trade is not None
+        assert (trade.product, trade.qty) == (product, qty)
+
     def test_levels_are_stored_once_as_integer_paise(self, make_book):
         trade = make_book().on_alert(make_alert("INDEX", "long"), ist(THU, 10, 5, 4))
         assert trade is not None
@@ -276,6 +289,30 @@ class TestOnAlertRejectsBadInput:
         with pytest.raises(PaperAlertError, match="id"):
             make_book().on_alert(alert, ist(THU, 10, 5, 4))
         assert table_rows(engine, paper_trades) == []
+
+    @pytest.mark.parametrize(
+        ("mutate", "match"),
+        [
+            (lambda a: a.update(kind="FUTURES"), "kind"),
+            (lambda a: a.update(direction="sideways"), "direction"),
+            (lambda a: a.update(strategy=""), "strategy"),
+            (lambda a: a.update(expires_at="2026-10-29T10:00:00+05:30"), "before created_at"),
+            (lambda a: a.update(created_at="yesterday"), "ISO-8601"),
+            (lambda a: a.update(economics=None), "economics"),
+            (lambda a: a["economics"].update(underlying_stop=float("nan")), "underlying_stop"),
+            (lambda a: a["economics"]["option"].update(lot=0), "lot"),
+            (lambda a: a["economics"]["option"].update(lot=12.5), "lot"),
+        ],
+    )
+    def test_an_unrecordable_alert_raises_with_context_and_writes_nothing(
+        self, make_book, engine, mutate, match
+    ):
+        alert = make_alert("INDEX", "long")
+        mutate(alert)
+        with pytest.raises(PaperAlertError, match=match):
+            make_book().on_alert(alert, ist(THU, 10, 5, 4))
+        assert table_rows(engine, paper_trades) == []
+        assert table_rows(engine, paper_events) == []
 
 
 # ── AC7: paper.enabled false stops NEW trades only ────────────────────────────
