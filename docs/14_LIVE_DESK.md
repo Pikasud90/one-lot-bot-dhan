@@ -114,6 +114,26 @@ is running). When `/api/paper` cannot be read, or answers without saying whether
 the line above the table turns into a warning (*paper trades unavailable: …*), the last table
 stays, and the panel tries again at most every 5 seconds.
 
+**Views (US-032):** three buttons above the table, **Today | Last session | All**, choose what
+the panel lists (arrow keys move between them; the choice is remembered in this browser, and a
+browser that keeps nothing simply starts on *Today*).
+
+* **Today** is the list above. When nothing has *closed* today (a weekend, or the morning before
+  the first stop or target), it falls back to the **last session**: the open trades and any of
+  today's no-fills come first, then the closed and no-fill trades of the most recent earlier day
+  that has any, under a heading such as *Last session · Fri 30 Oct*, and the line above the table
+  gives that session's closed count, wins, losses, gross and net (*today: nothing closed yet*).
+* **Last session** always shows that earlier day's closed and no-fill trades with its totals,
+  even when today has closes of its own.
+* **All** lists every trade the endpoint returned (at most 200, newest first); its line counts
+  them and adds no money up.
+
+A trade belongs to the day of its close time: its exit time, or for a no-fill (which has none)
+the time the book wrote it. So alerts booked late, for example Friday's alerts reconciled at
+Sunday's start, close on their own bar times and show as Friday's session, while their
+no-fills are stamped Sunday and show under today. The session totals, like today's, are
+added up on the server from integer paise.
+
 ## Data
 
 * Without the Data API the desk polls **Yahoo 2-minute bars** (one batched request per minute,
@@ -141,7 +161,7 @@ equality test (which the 1-minute Bank Nifty engine uses) would never fire.
 | `POST /api/desk/context` | `{"key":"GIFTNIFTY","last":25410,"change_pct":0.3}` — manual slot |
 | `POST /api/desk/reload` · `POST /api/desk/poll` | reload `desk.yaml` · poll now |
 | `GET /api/desk/journal` | closed desk trades |
-| `GET /api/paper` | the paper book, read-only: `{enabled, status, trades, totals_today}`; at most 200 trades, newest first; the selection keeps the open trades (however old) before the newest closed ones; money as rupee strings (`"1000.30"`) from integer paise, `null` where not known yet; `enabled: false` with no trades when paper is off |
+| `GET /api/paper` | the paper book, read-only: `{enabled, status, trades, totals_today, last_session}`; at most 200 trades, newest first; the selection keeps the open trades (however old) before the newest closed ones; money as rupee strings (`"1000.30"`) from integer paise, `null` where not known yet; `last_session` is `{"date": "2026-10-30", "totals": {…same shape as totals_today…}}` for the most recent day before today with a closed or no-fill trade, or `null`; `enabled: false` with no trades, totals or last session when paper is off |
 
 GIFT NIFTY has no free feed (it trades on NSE IX); the slot exists so your own scraper or a paid
 feed can post it.
