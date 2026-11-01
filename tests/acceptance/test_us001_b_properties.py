@@ -79,7 +79,12 @@ def oracle(rows, *, created, expires, source, feed_delay, res, now, direction, s
     session_end = close_at if created < close_at else midnight
     grade = "delayed" if delayed else "live"
     for ts, price in closed:
-        if created < ts <= deadline and ts.astimezone(IST).date() == day and usable(price):
+        if (
+            created < ts <= deadline
+            and ts < session_end  # a bar opening AT the close never fills (before-close alerts)
+            and ts.astimezone(IST).date() == day
+            and usable(price)
+        ):
             paise = H.to_paise(price)
             gapped = paise < stop if direction == "long" else paise > stop
             return ("gap" if gapped else "fill", ts, price), grade
@@ -93,7 +98,8 @@ def oracle(rows, *, created, expires, source, feed_delay, res, now, direction, s
 @st.composite
 def scenarios(draw):
     res = draw(st.sampled_from([1, 2]))
-    grid = [H.at(9, 15) + dt.timedelta(minutes=res * i) for i in range(375 // res)]
+    # the grid runs to 15:39: bars opening at or after the 15:30 close are part of the picture
+    grid = [H.at(9, 15) + dt.timedelta(minutes=res * i) for i in range((375 + 10) // res)]
     n = len(grid)
     lo = draw(st.integers(0, n - 1))
     hi = draw(st.integers(lo, min(n - 1, lo + 40)))
