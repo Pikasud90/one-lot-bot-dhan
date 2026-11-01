@@ -15,8 +15,9 @@ from onelot.clock import IST, now_ist
 from onelot.config import AppConfig
 from onelot.desk import Desk, load_desk_config
 from onelot.desk.config import DeskConfig, DeskInstrumentCfg, StrategySlotCfg
+from onelot.desk.data import COLUMNS, CompositeBars, is_delayed_source
 from onelot.desk.economics import alert_text, index_option_economics, stock_economics
-from onelot.desk.tracker import InstrumentTracker
+from onelot.desk.tracker import InstrumentTracker, Verdict
 from onelot.notify.base import Notification
 from onelot.risk.governor import RiskGovernor
 from onelot.store import init_database
@@ -63,6 +64,13 @@ def synthetic(
     )
 
 
+def _yesterday_close() -> pd.Timestamp:
+    """Deterministic feed end: yesterday 15:30 IST, whatever the wall clock says."""
+    return (pd.Timestamp.now(tz=IST).normalize() - pd.Timedelta(days=1)) + pd.Timedelta(
+        hours=15, minutes=30
+    )
+
+
 class FakeSource:
     name, delayed, resolution = "fake", False, "2m"
     primary = None
@@ -73,11 +81,38 @@ class FakeSource:
         self.frames = {}
 
     def fetch(self, specs, days, since=None):
-        # deterministic: full sessions ending yesterday 15:30, whatever the wall clock says
-        end = (pd.Timestamp.now(tz=IST).normalize() - pd.Timedelta(days=1)) + pd.Timedelta(
-            hours=15, minutes=30
-        )
+        end = _yesterday_close()
         return {k: self.frames.get(k, synthetic(seed=hash(k) % 1000, end=end)) for k in specs}
+
+
+class FakeDhanBars:
+    """A Dhan-like primary that returns an empty frame (no bars) for the keys in `empty_for`."""
+
+    name, delayed, resolution = "dhan", False, "2m"
+    last_error = None
+
+    def __init__(self, empty_for=()):
+        self.empty_for = set(empty_for)
+
+    def fetch(self, specs, days, since=None):
+        end = _yesterday_close()
+        return {
+            k: pd.DataFrame(columns=COLUMNS)
+            if k in self.empty_for
+            else synthetic(seed=hash(k) % 1000, end=end)
+            for k in specs
+        }
+
+
+class FakeYahooBars:
+    """A Yahoo-like fallback (the real one is delayed ~15 minutes)."""
+
+    name, delayed, resolution = "yahoo", True, "2m"
+    last_error = None
+
+    def fetch(self, specs, days, since=None):
+        end = _yesterday_close()
+        return {k: synthetic(seed=hash(k) % 1000 + 1, end=end) for k in specs}
 
 
 class FakeNotifier:
@@ -370,3 +405,86 @@ class TestDeskFlow:
         sig = next(iter(d.signals.values()))
         assert sig["risk_allowed"] is False and "HALT" in sig["risk_reason"].upper()
         assert notifier.sent[-1].title.startswith("[BLOCKED by risk]")
+
+
+class TestIsDelayedSource:
+    """US-028: one rule decides "delayed" for alerts, tracker health and the header badge."""
+
+    @pytest.mark.parametrize("name", ["yahoo", "YAHOO", "Yahoo", "yahoo-2m"])
+    def test_yahoo_served_bars_are_delayed(self, name):
+        assert is_delayed_source(name) is True
+
+    @pytest.mark.parametrize(
+        "name",
+        # "dhan+yahoo" is the composite's own name: the fallback when served_by has no entry
+        ["dhan", "dhan-ws", "mock", "fake", "manual", "dhan+yahoo", "", None],
+    )
+    def test_everything_else_is_not_delayed(self, name):
+        assert is_delayed_source(name) is False
+
+
+class TestFeedDelayLabel:
+    """US-028 AC1 through the desk harness: a Dhan primary that returns no bars for one series
+    makes CompositeBars fall back to Yahoo for that series only."""
+
+    def _composite_desk(self, cfg, db, monkeypatch, dhan_empty_for):
+        repo = Repo(db)
+        gov = RiskGovernor(
+            cfg.risk, cfg.account.capital_inr, cfg.mode, now_ist().date().isoformat(), repo
+        )
+        notifier = FakeNotifier()
+        d = Desk(db.engine, cfg, notifier, gov, OpenClock(), repo=repo, desk_cfg=small_cfg())
+        primary = None if dhan_empty_for is None else FakeDhanBars(dhan_empty_for)
+        d.source = CompositeBars(primary, FakeYahooBars())
+        d.fine_minutes = 2
+        # small_cfg asks for "yahoo" and there is no adapter: keep the composite we installed
+        monkeypatch.setattr(d, "_maybe_switch_source", lambda: None)
+        d.poll()
+        return d, notifier
+
+    @staticmethod
+    def _verdict(t) -> Verdict:
+        close = float(t.bars["close"].iloc[-1])
+        return Verdict(
+            "long", "test", t.bars.index[-1].to_pydatetime(), close * 0.99, close, 60.0, [], True
+        )
+
+    @pytest.mark.parametrize(
+        "dhan_empty_for, served, delayed",
+        [
+            ({"SBIN"}, "yahoo", True),  # Dhan primary, but Yahoo served SBIN -> delayed
+            (set(), "dhan", False),  # Dhan served SBIN -> live
+            (None, "yahoo", True),  # Yahoo-only desk (no Dhan plan) -> delayed
+        ],
+        ids=["dhan-primary-yahoo-served", "dhan-served", "yahoo-only"],
+    )
+    def test_alert_delay_flag_follows_the_source_that_served_the_series(
+        self, cfg, db, monkeypatch, dhan_empty_for, served, delayed
+    ):
+        d, notifier = self._composite_desk(cfg, db, monkeypatch, dhan_empty_for)
+        assert d.source.served_by["SBIN"] == served
+        t = d.trackers["SBIN"]
+        d._raise_signal(t, t.slots[0], self._verdict(t), now_ist())
+        data = next(iter(d.signals.values()))["data"]
+        assert data["source"] == served and data["delayed"] is delayed
+        if delayed:
+            assert "Yahoo" in data["delay_note"] and "15 minutes" in data["delay_note"]
+        else:
+            assert data["delay_note"] == "live exchange feed"
+        # the notification (Telegram) carries the very same flag: one rule, one place
+        assert notifier.sent[-1].payload["data"]["delayed"] is delayed
+
+    def test_snapshot_marks_only_the_yahoo_served_tracker_delayed(self, cfg, db, monkeypatch):
+        d, _ = self._composite_desk(cfg, db, monkeypatch, {"SBIN"})
+        snap = d.snapshot()
+        health = {r["key"]: r["health"] for r in snap["stocks"] + snap["indices"]}
+        assert health["SBIN"]["source"] == "yahoo" and health["SBIN"]["delayed"] is True
+        assert health["BANKNIFTY"]["source"] == "dhan" and health["BANKNIFTY"]["delayed"] is False
+        assert snap["source"]["delayed"] is True  # header badge: any tracker delayed
+        assert snap["source"]["delayed_keys"] == ["SBIN"]
+
+    def test_snapshot_is_live_when_dhan_served_everything(self, cfg, db, monkeypatch):
+        d, _ = self._composite_desk(cfg, db, monkeypatch, set())
+        snap = d.snapshot()
+        assert not any(r["health"]["delayed"] for r in snap["stocks"] + snap["indices"])
+        assert snap["source"]["delayed"] is False and snap["source"]["delayed_keys"] == []

@@ -26,6 +26,18 @@ log = logging.getLogger(__name__)
 COLUMNS = ["open", "high", "low", "close", "volume"]
 
 
+def is_delayed_source(name: str | None) -> bool:
+    """True when bars from the source called `name` run behind the exchange.
+
+    The single rule behind every "delayed" label (alert data, tracker health, the Desk
+    header badge, Telegram): Yahoo bars run ~15 minutes behind; Dhan REST/WebSocket,
+    mock and manual sources are live. `name` is the source that actually served a series
+    (`CompositeBars.served_by`), not the composite's own name such as "dhan+yahoo".
+    None or "" (nothing served yet) is not delayed.
+    """
+    return name is not None and name.lower().startswith("yahoo")
+
+
 class BarSource(Protocol):
     name: str
     delayed: bool

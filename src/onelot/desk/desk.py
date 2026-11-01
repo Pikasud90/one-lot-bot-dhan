@@ -29,7 +29,7 @@ from ..data.universe import load_specs
 from ..notify.base import Notification, NotificationLevel
 from .audit import audit_signal, confidence, strategy_scoreboard
 from .config import DeskConfig, load_desk_config
-from .data import CompositeBars, build_source
+from .data import CompositeBars, build_source, is_delayed_source
 from .economics import (
     Economics,
     alert_text,
@@ -297,6 +297,11 @@ class Desk:
                 s.last_bar_ts = None
         self.context_bars = {}
 
+    def _served_by(self, key: str) -> str:
+        """The source that served `key` on the last poll (e.g. "yahoo" when Dhan had no bars),
+        else the composite's own name."""
+        return self.source.served_by.get(key, self.source.name)
+
     def _reset_daily_counters(self, now: dt.datetime) -> None:
         day = now.date().isoformat()
         if getattr(self, "_counter_day", None) != day:
@@ -370,8 +375,8 @@ class Desk:
             self.scoreboard.get(slot.cfg.name),
             regime_ok,
         )
-        src = self.source.served_by.get(t.cfg.key, self.source.name)
-        delayed = bool(self.source.delayed) and src == "yahoo"
+        src = self._served_by(t.cfg.key)
+        delayed = is_delayed_source(src)
         sig = {
             "id": sid,
             "created_at": _iso(now),
@@ -958,7 +963,7 @@ class Desk:
             "timeframe": tf,
             "bars": bars,
             "markers": markers,
-            "source": self.source.served_by.get(t.cfg.key, self.source.name),
+            "source": self._served_by(t.cfg.key),
             "live": t.live_quote,
         }
 
@@ -1011,7 +1016,7 @@ class Desk:
                 if len(closes) >= 2:
                     row["prev_close"] = float(closes.iloc[-2])
                 row["as_of"] = _iso(df.index[-1].to_pydatetime())
-                row["source"] = self.source.served_by.get(c.key, self.source.name)
+                row["source"] = self._served_by(c.key)
             q = quotes.get(c.key)
             if q and q.get("ltp"):
                 row["last"], row["as_of"], row["source"] = float(q["ltp"]), q.get("ts"), "dhan-ws"
@@ -1033,13 +1038,12 @@ class Desk:
 
     # ── snapshot ──────────────────────────────────────────────────────────
     def _rebuild_snapshot(self, now: dt.datetime, window) -> None:
-        delayed = bool(self.source.delayed)
         market_open = bool(window and window.is_open(now))
+        served = {k: self._served_by(k) for k in self.trackers}
+        delayed_keys = sorted(k for k, src in served.items() if is_delayed_source(src))
         trackers = [
-            t.as_dict(
-                now, self.source.served_by.get(t.cfg.key, self.source.name), delayed, market_open
-            )
-            for t in self.trackers.values()
+            t.as_dict(now, served[k], k in delayed_keys, market_open)
+            for k, t in self.trackers.items()
         ]
         pending = {s["instrument_key"]: s for s in self.signals.values()}
         open_by = {p["instrument_key"]: p for p in self.positions.values()}
@@ -1092,7 +1096,8 @@ class Desk:
             "version": self.version,
             "source": {
                 "name": self.source.name,
-                "delayed": delayed,
+                "delayed": bool(delayed_keys),  # header badge: any tracker on delayed bars
+                "delayed_keys": delayed_keys,
                 "resolution": self.source.resolution,
                 "last_fetch_at": _iso(self.last_fetch_at),
                 "last_error": self.last_error,
