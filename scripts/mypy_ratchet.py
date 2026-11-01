@@ -192,21 +192,24 @@ def compare(baseline: Mapping[str, int], observed: Mapping[str, int], root: Path
 
 
 def run_mypy(args: Sequence[str], root: Path) -> subprocess.CompletedProcess[str]:
-    """Run ``python -m mypy *args`` with this interpreter, in ``root``."""
+    """Run ``python -m mypy *args`` with this interpreter, in ``root``.
+
+    mypy is told to write UTF-8 (a Windows console would otherwise give cp1252), and
+    any byte that still is not UTF-8 is replaced rather than crashing the ratchet: the
+    counts come from whole lines and the summary checksum, not from those bytes.
+    """
     env = {k: v for k, v in os.environ.items() if k not in SCRUBBED_ENV}
+    env["PYTHONIOENCODING"] = "utf-8"
     cmd = [sys.executable, "-m", "mypy", *args]
     try:
-        return subprocess.run(
-            cmd,
-            cwd=root,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=MYPY_TIMEOUT_S,
-            check=False,
+        proc = subprocess.run(
+            cmd, cwd=root, env=env, capture_output=True, timeout=MYPY_TIMEOUT_S, check=False
         )
     except (OSError, subprocess.TimeoutExpired) as err:
         raise RatchetError(f"could not run {' '.join(cmd)}: {err}") from err
+    return subprocess.CompletedProcess(
+        cmd, proc.returncode, _decode(proc.stdout), _decode(proc.stderr)
+    )
 
 
 def installed_mypy_version(root: Path) -> str:
@@ -243,14 +246,19 @@ def write_baseline(path: Path, version: str, counts: Mapping[str, int]) -> None:
         "files": {p: counts[p] for p in sorted(counts) if counts[p] > 0},
     }
     text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=path.name, suffix=".tmp", dir=path.parent)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=path.name, suffix=".tmp", dir=path.parent)
+    except OSError as err:
+        raise RatchetError(f"cannot write baseline {path}: {err}") from err
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(text)
         os.replace(tmp, path)
-    except BaseException:
+    except BaseException as err:
         Path(tmp).unlink(missing_ok=True)
+        if isinstance(err, OSError):
+            raise RatchetError(f"cannot write baseline {path}: {err}") from err
         raise
 
 
@@ -330,6 +338,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except RatchetError as err:
         _err(f"mypy ratchet: tool error: {err}")
         return EXIT_TOOL_ERROR
+    except Exception as err:  # noqa: BLE001 - an uncaught exception would exit 1 = "regression"
+        _err(f"mypy ratchet: internal error (a bug in the ratchet): {type(err).__name__}: {err}")
+        return EXIT_TOOL_ERROR
 
 
 def _print_changes(changes: Mapping[str, tuple[int, int]]) -> None:
@@ -339,6 +350,16 @@ def _print_changes(changes: Mapping[str, tuple[int, int]]) -> None:
 
 def _err(message: str) -> None:
     print(message, file=sys.stderr)
+
+
+def _decode(raw: bytes) -> str:
+    """UTF-8 with universal newlines; undecodable bytes become U+FFFD, with a note."""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("utf-8", errors="replace")
+        _err("note: mypy output was not valid UTF-8; undecodable bytes were replaced")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _tail(text: str, lines: int = 20) -> str:

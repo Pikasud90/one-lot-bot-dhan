@@ -36,11 +36,15 @@ from mypy import _BEHAVIOUR
 with open(os.environ["FAKE_MYPY_LOG"], "a", encoding="utf-8") as fh:
     fh.write(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd(),
                          "python": sys.executable,
-                         "mypypath": os.environ.get("MYPYPATH")}) + "\\n")
+                         "mypypath": os.environ.get("MYPYPATH"),
+                         "ioencoding": os.environ.get("PYTHONIOENCODING")}) + "\\n")
 if "--version" in sys.argv[1:]:
     print("mypy " + _BEHAVIOUR["version"])
     sys.exit(0)
-sys.stdout.write(_BEHAVIOUR["stdout"])
+if _BEHAVIOUR["stdout_hex"]:
+    sys.stdout.buffer.write(bytes.fromhex(_BEHAVIOUR["stdout_hex"]))
+else:
+    sys.stdout.write(_BEHAVIOUR["stdout"])
 sys.stderr.write(_BEHAVIOUR["stderr"])
 sys.exit(_BEHAVIOUR["rc"])
 """
@@ -98,11 +102,14 @@ class Rig:
         stderr: str = "",
         version: str = VERSION,
         missing: bool = False,
+        raw_stdout: bytes | None = None,
     ) -> None:
+        """Script the fake; ``raw_stdout`` writes bytes as-is (e.g. invalid UTF-8)."""
         if rc is None:
             rc = 1 if ": error: " in stdout else 0
         payload = {
             "stdout": stdout,
+            "stdout_hex": raw_stdout.hex() if raw_stdout is not None else "",
             "stderr": stderr,
             "rc": rc,
             "version": version,
@@ -492,6 +499,50 @@ class TestUpdate:
         code, _, _ = run(ratchet, rig, capsys, "--update", "--allow-regression")
         assert code == 2
         assert rig.baseline.read_bytes() == before
+
+    def test_a_baseline_that_cannot_be_written_is_a_tool_error(
+        self, ratchet, rig: Rig, capsys, tmp_path: Path
+    ):
+        blocker = tmp_path / "a file, not a directory"
+        blocker.write_text("x", encoding="utf-8")
+        rig.mypy(mypy_output({"src/pkg/a.py": 1}))
+        code, _, err = run(ratchet, rig, capsys, "--update", "--baseline", str(blocker / "b.json"))
+        assert code == 2
+        assert "cannot write" in err
+
+
+# --------------------------------------------------------------------------- exit 1 is reserved
+class TestExitOneMeansRegressionOnly:
+    """Python exits 1 on an uncaught exception, which would pose as a regression."""
+
+    def test_undecodable_mypy_output_is_read_leniently_and_said_so(self, ratchet, rig: Rig, capsys):
+        rig.write_baseline({"src/pkg/a.py": 1})
+        raw = b"src/pkg/a.py:3: error: bad \xff\xfe  [misc]\n"
+        raw += b"Found 1 error in 1 file (checked 3 source files)\n"
+        rig.mypy(raw_stdout=raw, rc=1)
+        code, _, err = run(ratchet, rig, capsys)
+        assert code == 0
+        assert "not valid UTF-8" in err
+
+    def test_mypy_is_told_to_write_utf8_whatever_the_console_encoding(
+        self, ratchet, rig: Rig, capsys
+    ):
+        rig.write_baseline({})
+        run(ratchet, rig, capsys)
+        assert {call["ioencoding"] for call in rig.calls()} == {"utf-8"}
+
+    def test_an_unexpected_exception_is_a_tool_error(
+        self, ratchet, rig: Rig, capsys, monkeypatch: pytest.MonkeyPatch
+    ):
+        def boom(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("simulated bug")
+
+        monkeypatch.setattr(ratchet, "compare", boom)
+        rig.write_baseline({"src/pkg/a.py": 1})
+        rig.mypy(mypy_output({"src/pkg/a.py": 1}))
+        code, _, err = run(ratchet, rig, capsys)
+        assert code == 2
+        assert "internal error" in err and "simulated bug" in err
 
 
 # --------------------------------------------------------------------------- the real CLI
