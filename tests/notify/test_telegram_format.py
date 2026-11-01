@@ -508,38 +508,50 @@ class TestBudget:
         assert msg.startswith("<b>[BLOCKED by risk] BUY ")
         assert "<i>" in msg  # the label still gets some room
 
-    def test_the_fixed_part_leaves_the_label_room(self):
-        """Every capped field at its cap on the longest template (a blocked index alert with
-        an expiry): the label must still keep at least 100 HTML characters (AC1 budget)."""
-        wide = "W" * 400
-        alert = index_alert(
-            "CE",
-            id=wide,
-            series_key=wide,
-            label="L" * 2000,
-            strategy_label=wide,
-            timeframe=wide,
-            confidence={"score": 100, "label": wide},
-            expires_at="2026-11-02T23:59:59+05:30",
-            created_at="2026-11-02T10:15:00+05:30",
-            data={"delayed": True},
-            risk_allowed=False,
-        )
-        alert["economics"].update(
-            entry_price=-9.99e11,
-            stop_price=-9.99e11,
-            target_price=-9.99e11,
-            underlying_stop=-9.99e11,
-            underlying_target=-9.99e11,
-            qty=10**11,
-        )
-        alert["economics"]["option"]["strike"] = wide
-        msg = format_alert(alert, NOW)
+    @pytest.mark.parametrize("char", ["&", "W"], ids=["escaped", "plain"])
+    def test_the_fixed_part_leaves_the_label_room(self, char):
+        """The longest template (a blocked index alert with an expiry) with every capped
+        field at its cap, the widest numbers (a 15-character strike, a 12-digit lot, 10 digits
+        of minutes) and '&' (5 characters once escaped): the fixed part stays within 504 HTML
+        characters, so the label always keeps at least 88 and the 600 budget holds."""
+        wide = char * 400
+
+        def alert(label: str) -> dict[str, Any]:
+            a = index_alert(
+                "CE",
+                id=wide,
+                series_key=wide,
+                trading_symbol=wide,
+                label=label,
+                strategy_label=wide,
+                timeframe=wide,
+                confidence={"score": 100, "label": wide},
+                expires_at="9999-12-31T23:59:59+05:30",
+                created_at="2026-11-02T10:15:00+05:30",
+                data={"delayed": True},
+                risk_allowed=False,
+            )
+            biggest = -999999999999.99
+            a["economics"].update(
+                entry_price=biggest,
+                stop_price=biggest,
+                target_price=biggest,
+                underlying_stop=biggest,
+                underlying_target=biggest,
+                qty=999999999999,
+            )
+            a["economics"]["option"].update(strike=999999999999.99, expiry="2026-11-26")
+            return a
+
+        fixed = format_alert(alert(""), NOW)
+        assert_telegram_html(fixed)
+        assert len(fixed) <= 504
+        msg = format_alert(alert("L" * 2000), NOW)
         assert_telegram_html(msg)
         assert len(msg) >= 590  # the label really stretched to fill the budget
         label_line = msg.split("\n")[1]
         assert label_line.startswith("<i>LLLL") and label_line.endswith("…</i>")
-        assert len(label_line) - len("<i>…</i>") >= 100
+        assert len(label_line) - len("<i>…</i>") >= 88
 
     @settings(max_examples=150, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     @given(

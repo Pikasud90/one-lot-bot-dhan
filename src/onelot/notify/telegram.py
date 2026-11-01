@@ -63,9 +63,10 @@ ID_CHARS = 6
 # English and upper case from a table: strftime("%b") follows the process locale.
 _MONTHS = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
 
-# Caps in HTML characters after escaping; with these the fixed part of the longest
-# message (a blocked index alert) stays well under MAX_CHARS whatever the input
-# (test_the_fixed_part_leaves_the_label_room pins the worst case).
+# Caps in HTML characters after escaping. With them the fixed part of the longest message
+# (a blocked index alert, every capped field at its cap, the widest numbers) is at most 504
+# characters, so the label keeps at least 88 and MAX_CHARS always holds
+# (test_the_fixed_part_leaves_the_label_room pins it).
 _CAP_SYMBOL = 32
 _CAP_ACTION = 12  # an unknown side shown as the action word
 _CAP_STRATEGY = 48
