@@ -41,9 +41,18 @@ non-zero exit at the first one that fails. CI will run the same script (US-008).
 ```
 
 Tests marked `live` need real broker credentials and never run in the gate; a bare `pytest`
-skips them too (`addopts` in `pyproject.toml`). The mypy ratchet
-lets type errors fall but never rise per file; after removing some, run the ratchet with
-`--update` and commit `scripts/mypy_baseline.json`.
+skips them too (`addopts` in `pyproject.toml`).
+
+The mypy ratchet lets type errors fall but never rise, file by file, against the counts in
+`scripts/mypy_baseline.json`. Keep that file in step with the code:
+
+- When the ratchet prints `run --update`, run `.venv/bin/python scripts/mypy_ratchet.py --update`
+  and commit the baseline in the same PR, so the improvement is locked in.
+- Deleting a file that has a baseline entry: run the ratchet with `--update` and commit the
+  baseline in the same commit (until then it warns about the stale entry).
+- Renaming one: run it with `--update --allow-regression` and commit the baseline in the same
+  commit, because the new path counts up from 0; check that the baseline diff shows only the move.
+- Any other use of `--allow-regression` accepts new type errors and needs the owner's agreement.
 
 **Ruff format policy:** all Python is formatted by `ruff format` with ruff==0.17.3, pinned in
 `requirements-dev.txt`. Format before committing, keep formatting-only changes in their own

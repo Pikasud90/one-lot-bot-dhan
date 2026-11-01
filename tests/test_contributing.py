@@ -114,6 +114,24 @@ def test_contributing_lists_exactly_the_gate_commands_in_one_bash_block() -> Non
     assert listed == gate_commands()
 
 
+RATCHET_RULES = {
+    "a decrease is locked in by the same PR": r"prints `run --update`.*same PR",
+    "a deleted file's entry goes in the same commit": r"[Dd]elet.*`--update`.*same commit",
+    "a renamed file needs --allow-regression": (
+        r"[Rr]enam.*`--update --allow-regression`.*same commit"
+    ),
+}
+
+
+@pytest.mark.parametrize("rule", RATCHET_RULES)
+def test_contributing_spells_out_the_mypy_ratchet_workflow(rule: str) -> None:
+    items = re.findall(r"^- (.*?)(?=^- |^\s*$|\Z)", running_everything_section(), re.M | re.S)
+    flat = [" ".join(item.split()) for item in items]
+    assert any(re.search(RATCHET_RULES[rule], item) for item in flat), (
+        f"CONTRIBUTING.md has no bullet saying: {rule}"
+    )
+
+
 def test_the_docs_do_not_claim_a_ci_that_does_not_exist_yet() -> None:
     """CI arrives with US-008; until then the docs say it will, not that it does."""
     for path in (CONTRIBUTING, GATE):
