@@ -20,7 +20,7 @@ from sqlalchemy import select
 from onelot.clock import IST
 from onelot.config import NotifyCfg
 from onelot.notify.base import Notification, NotificationLevel
-from onelot.notify.telegram import TelegramClient
+from onelot.notify.telegram import SEP, TelegramClient
 from onelot.notify.telegram_channel import TelegramChannel
 from onelot.notify.telegram_outbox import (
     RESEND_MARKER,
@@ -170,6 +170,19 @@ def test_a_digest_lists_at_most_ten_alerts_and_says_how_many_it_covers():
     assert len(text) <= 4096
 
 
+@pytest.mark.parametrize(
+    ("score", "shown"),
+    [(64.6, "Conf 64"), (99.99, "Conf 99"), (10**400, "Conf 100"), ("high", "Conf n/a")],
+    ids=["64.6", "99.99", "10**400", "text"],
+)
+def test_a_digest_shows_the_same_floored_confidence_as_the_alert(score, shown):
+    """US-003 BUG-4: one number everywhere (notify.base.shown_confidence), never rounded up
+    across a label threshold, and a score beyond float range never raises."""
+    alert = {"id": "000001zz", "series_key": "SBIN", "side": "BUY", "confidence": {"score": score}}
+    text = format_digest({"reason": "burst", "alerts": [alert]}, T0)
+    assert f"{SEP}{shown}{SEP}" in text
+
+
 # ========================= enqueue: input checks =========================================
 def test_an_unknown_kind_is_refused_before_any_sql(make_rig):
     rig = make_rig()
@@ -197,7 +210,22 @@ def test_non_json_values_are_stored_as_text_and_booleans_stay_booleans(make_rig)
     assert stored["risk_allowed"] is True
 
 
-@pytest.mark.parametrize("score", [float("nan"), float("inf"), True, "high", None])
+def test_a_score_beyond_float_range_is_still_queued(make_rig):
+    """US-003 BUG-5 class: an absurd int score must not make the INSERT raise (the phone
+    would lose the alert); it is stored as is and ranked like an unreadable one."""
+    rig = make_rig()
+
+    assert rig.enqueue(rig.alert(score=10**400)) is True
+
+    (row,) = rig.rows()
+    assert row["confidence"] is None and row["payload"]["confidence"]["score"] == 10**400
+
+
+@pytest.mark.parametrize(
+    "score",
+    [float("nan"), float("inf"), True, "high", None, 10**400],
+    ids=["nan", "inf", "bool", "text", "none", "10**400"],
+)
 def test_a_burst_ranks_an_unreadable_confidence_last(make_rig, score):
     rig = make_rig()
     rig.enqueue(rig.alert(1, score=score))
@@ -254,6 +282,69 @@ def test_a_call_that_outlives_the_deadline_is_a_transient_failure(make_rig, tmp_
     assert row["status"] == "queued" and row["attempts"] == 1
     assert "no response within" in row["last_error"]
     assert row["next_attempt_at"] == T0 + dt.timedelta(seconds=1)
+
+
+def _join_send_helpers() -> None:
+    for thread in threading.enumerate():
+        if thread.name == "telegram-send":
+            thread.join(10)
+
+
+def test_a_hung_request_is_the_only_one_in_flight(make_rig):
+    """A request that outlived its deadline keeps its helper thread until httpx gives up.
+    No second request (and no second thread) starts while it lives, and no row is claimed
+    in the meantime, so a hung network never piles up threads or burns attempts."""
+    release = threading.Event()
+
+    def hang(request: httpx.Request) -> httpx.Response:
+        release.wait(30)
+        return ok()
+
+    rig = make_rig(hang)
+    quick = TelegramOutbox(
+        rig.db.engine, rig.client, clock=rig.clock, sleep=rig.clock.sleep, send_deadline_s=0.05
+    )
+    rig.enqueue(rig.alert(1, minutes=30, score=90))
+    rig.enqueue(rig.alert(2, minutes=30, score=10))
+    try:
+        assert quick.drain_once() == 1
+        rig.clock.advance(5)
+        assert quick.drain_once() == 0, "nothing is claimed while the hung request lives"
+        assert len(rig.requests) == 1
+        assert [r["attempts"] for r in rig.rows()] == [1, 0]
+        alive = [t for t in threading.enumerate() if t.name == "telegram-send"]
+        assert len(alive) == 1
+    finally:
+        release.set()
+    _join_send_helpers()
+
+    assert quick.drain_once() == 1 and quick.drain_once() == 1
+    assert [r["status"] for r in rig.rows()] == ["sent", "sent"]
+
+
+def test_status_never_waits_for_a_request_in_flight(make_rig):
+    """status() is read by the dashboard thread: it must not queue behind the drain lock
+    while the worker waits on HTTP."""
+    started, release = threading.Event(), threading.Event()
+
+    def slow(request: httpx.Request) -> httpx.Response:
+        started.set()
+        release.wait(30)
+        return ok()
+
+    rig = make_rig(slow)
+    rig.enqueue(rig.alert(minutes=30))
+    drainer = threading.Thread(target=rig.outbox.drain_once)
+    drainer.start()
+    try:
+        assert started.wait(10)
+        status = rig.outbox.status()
+        assert drainer.is_alive(), "status() returned while the request was in flight"
+        assert status["queue_depth"] == 1 and status["last_error"] is None
+    finally:
+        release.set()
+        drainer.join(10)
+    _join_send_helpers()
 
 
 def test_an_unavailable_client_claims_nothing(make_rig):

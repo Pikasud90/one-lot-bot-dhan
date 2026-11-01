@@ -45,6 +45,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from ..clock import now_ist, to_ist
 from ..store.schema import telegram_outbox as OUTBOX
+from .base import shown_confidence
 from .telegram import (
     ELLIPSIS,
     NA,
@@ -112,13 +113,21 @@ def _retry_after_s(seconds: float | None) -> float:
     return min(max(seconds if seconds is not None else 0.0, MIN_RETRY_AFTER_S), MAX_RETRY_AFTER_S)
 
 
-def _score(payload: Mapping[str, Any]) -> float | None:
-    """A SIGNAL's confidence.score as a finite float, else None (ranked last)."""
+def _raw_score(payload: Mapping[str, Any]) -> Any:
     confidence = payload.get("confidence")
-    raw = confidence.get("score") if isinstance(confidence, Mapping) else None
+    return confidence.get("score") if isinstance(confidence, Mapping) else None
+
+
+def _score(payload: Mapping[str, Any]) -> float | None:
+    """A SIGNAL's confidence.score as a finite float for ranking, else None (ranked last):
+    missing, a bool, text, NaN, inf, or an int beyond float range (never an OverflowError)."""
+    raw = _raw_score(payload)
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         return None
-    value = float(raw)
+    try:
+        value = float(raw)
+    except OverflowError:
+        return None
     return value if math.isfinite(value) else None
 
 
@@ -169,8 +178,8 @@ def format_note(event: Mapping[str, Any], now: dt.datetime) -> str:
 
 
 def _digest_line(alert: Mapping[str, Any], now: dt.datetime, expired: bool) -> str:
-    score = _score(alert)
-    conf = f"Conf {score:.0f}" if score is not None else f"Conf {NA}"
+    shown = shown_confidence(_raw_score(alert))  # floored, as on the alert and the desk
+    conf = f"Conf {NA if shown is None else shown}"
     deadline = _time_of(alert.get("expires_at"))
     if deadline is None:
         window = f"till {NA}"
@@ -280,8 +289,13 @@ class TelegramOutbox:
         self._thread: threading.Thread | None = None
         self._stopping = threading.Event()
         self._wake = threading.Event()
-        # Written only under _drain_lock; status() reads them as plain references.
+        # The worker's own state (under _drain_lock): when the last request started, and
+        # the helper of a request that outlived its deadline (at most one is ever alive).
         self._last_send_at: dt.datetime | None = None
+        self._inflight: threading.Thread | None = None
+        # Written by the worker, read by status() on the dashboard's thread: both under
+        # _state_lock, never under _drain_lock (status() must not wait for an HTTP call).
+        self._state_lock = threading.Lock()
         self._paused_until: dt.datetime | None = None
         self._last_error: str | None = None
 
@@ -401,14 +415,27 @@ class TelegramOutbox:
                 queued = self._queued()
             if self._fold_burst(queued, now):
                 queued = self._queued()
-            if self._paused_until is not None and now < self._paused_until:
+            if self._paused(now):
                 return 0  # flood control applies to the whole chat
+            if self._busy_with_a_hung_request():
+                return 0  # a row claimed now would only wait behind it
             for row in sorted((r for r in queued if r.due(now)), key=_Row.priority):
                 claimed = self._claim(row.id, now)
                 if claimed is not None:
                     self._deliver(claimed)
                     return 1
             return 0
+
+    def _paused(self, now: dt.datetime) -> bool:
+        with self._state_lock:
+            return self._paused_until is not None and now < self._paused_until
+
+    def _busy_with_a_hung_request(self) -> bool:
+        """True while the helper of a timed-out request is still alive. Nothing new starts
+        until it ends, so one hung network holds one thread, not one per retry."""
+        if self._inflight is not None and not self._inflight.is_alive():
+            self._inflight = None
+        return self._inflight is not None
 
     def _queued(self) -> list[_Row]:
         with self._engine.connect() as conn:
@@ -479,7 +506,8 @@ class TelegramOutbox:
     def _call(self, text: str, silent: bool) -> SendResult:
         """client.send_message with a total deadline: the request runs on a helper thread and
         a request that outlives the deadline is a transient failure (it may still arrive:
-        at-least-once). The helper only talks HTTP; it never touches the database."""
+        at-least-once). The helper only talks HTTP; it never touches the database. It is the
+        only one: drain_once starts no request while a timed-out helper is still alive."""
         box: list[SendResult] = []
 
         def work() -> None:
@@ -493,6 +521,7 @@ class TelegramOutbox:
         helper.join(self._deadline_s)
         if box:
             return box[0]
+        self._inflight = helper  # drain_once claims nothing until it ends
         detail = f"no response within {self._deadline_s:g} s"
         return SendResult(False, "transient", None, None, detail)
 
@@ -512,7 +541,8 @@ class TelegramOutbox:
             log.warning("telegram outbox: %s row %d failed: %s", row.kind, row.id, result.detail)
         elif result.kind == "rate_limited":
             due = now + dt.timedelta(seconds=_retry_after_s(result.retry_after))
-            self._paused_until = due
+            with self._state_lock:
+                self._paused_until = due
             values = {"status": "queued", "next_attempt_at": due, "last_error": result.detail}
             log.info("telegram outbox: rate limited until %s", due.isoformat())
         else:  # transient (and "unavailable", which drain_once never gets to)
@@ -520,7 +550,8 @@ class TelegramOutbox:
             values = {"status": "queued", "next_attempt_at": due, "last_error": result.detail}
             log.info("telegram outbox: %s row %d will retry: %s", row.kind, row.id, result.detail)
         if not result.ok:
-            self._last_error = result.detail
+            with self._state_lock:
+                self._last_error = result.detail
         with self._engine.begin() as conn:
             conn.execute(
                 update(OUTBOX)
@@ -669,12 +700,13 @@ class TelegramOutbox:
                 .limit(P95_WINDOW)
             ).all()
         last_ok = recent[0].sent_at if recent else None
-        paused = self._paused_until
+        with self._state_lock:
+            paused, last_error = self._paused_until, self._last_error
         return {
             "configured": self._client.available,
             "last_ok_at": to_ist(last_ok).isoformat() if last_ok is not None else None,
             "queue_depth": counts.get("queued", 0) + counts.get("sending", 0),
-            "last_error": self._last_error,
+            "last_error": last_error,
             "p95_latency_ms": p95_nearest_rank(
                 int(r.latency_ms) for r in recent if r.latency_ms is not None
             ),
