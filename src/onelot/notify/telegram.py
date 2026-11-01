@@ -48,6 +48,7 @@ import httpx
 from ..clock import to_ist
 from ..config import telegram_token_forms
 from ..logging_setup import get_redactor, register_secrets
+from .base import shown_confidence
 
 MAX_LINES = 12
 MAX_CHARS = 600
@@ -285,8 +286,9 @@ def _strategy_line(alert: Mapping[str, Any]) -> str:
 
 
 def _confidence_line(confidence: Mapping[str, Any]) -> str:
-    score = _rounded(confidence.get("score"), _UNIT)
-    shown = NA if score is None else f"{score:f}"
+    """'Conf 72 high': the same floored number as the desk title (shown_confidence)."""
+    score = shown_confidence(confidence.get("score"))
+    shown = NA if score is None else str(score)
     label = _fit(confidence.get("label"), _CAP_CONF_LABEL)
     return f"Conf {shown} {label}" if label else f"Conf {shown}"
 

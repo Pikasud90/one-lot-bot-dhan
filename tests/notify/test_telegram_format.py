@@ -340,8 +340,12 @@ class TestFieldRules:
         assert lines[2] == "Entry n/a mkt"
         assert lines[3] == "Stop n/a · Target n/a"
 
-    @pytest.mark.parametrize(("score", "shown"), [(64.5, "65"), (0.0, "0"), (100, "100")])
-    def test_confidence_is_a_whole_number_rounded_half_up(self, score, shown):
+    @pytest.mark.parametrize(
+        ("score", "shown"),
+        [(64.5, "64"), (64.99, "64"), (44.9, "44"), (0.0, "0"), (100, "100"), (None, "n/a")],
+    )
+    def test_confidence_is_the_floored_score_like_the_desk_title(self, score, shown):
+        """BUG-4: one rule on every surface, floor, so 64.9 never shows as a 'medium' 65."""
         msg = format_alert(stock_alert(confidence={"score": score, "label": "medium"}), NOW)
         assert msg.split("\n")[5] == f"Conf {shown} medium"
 
