@@ -176,6 +176,31 @@ def test_the_resend_marker_is_added_once_not_stacked(make_rig):
     assert rec2.texts()[0].count(RESEND) == 1
 
 
+def test_a_second_crash_requeues_the_row_again_with_the_marker_still_once(make_rig):
+    """Decided: no limit of one re-queue. A crash in the middle of the RESEND leaves the row
+    claimed again; the next start re-queues it and the text still carries ONE marker."""
+    rig = make_rig()
+    _enqueue(rig)
+    _crash_after_claim(rig)
+    first, _ = rig.another_outbox()
+    first.start()
+    assert wait_until(lambda: "sending" not in rig.statuses())
+    first.stop()
+    _crash_after_claim(rig)  # whatever the first restart managed, the resend died mid-flight
+    assert rig.statuses() == ["sending"]
+
+    second, rec2 = rig.another_outbox()
+    second.start()
+    assert wait_until(lambda: "sending" not in rig.statuses()), "the row was not re-queued again"
+    second.stop()
+    rig.drain(second)
+
+    assert rec2.calls == 1
+    text = rec2.texts()[0]
+    assert visible(text).lstrip().startswith(RESEND) and text.count(RESEND) == 1
+    assert rig.statuses() == ["sent"]
+
+
 def test_a_row_left_in_sending_whose_alert_has_since_expired_gets_a_missed_note(make_rig):
     tg = telegram()
     rig = make_rig()

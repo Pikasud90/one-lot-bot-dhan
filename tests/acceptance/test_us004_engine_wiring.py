@@ -1,6 +1,12 @@
 """US-004 Engine wiring (Manager clarifications) and AC3 "Engine.stop stops and joins the worker
 before db.dispose".
 
+notify.telegram is the MASTER SWITCH (Manager decision on note 10):
+  * false: the channel is never built, even with valid credentials;
+  * true with a usable client (TelegramClient.from_env() available): channel + worker;
+  * true without a usable client: nothing is added and ONE INFO "Telegram not configured";
+  * the shipped config.yaml says true.
+
 The REAL Engine runs on a throw-away project root (see us004_helpers.make_engine): the broker,
 feed, regime load, Desk and its loops are replaced by no-ops, `TelegramClient.from_env()` still
 reads the (monkeypatched) environment but hands back a client on a MockTransport. What is left
@@ -67,7 +73,7 @@ def channel_named(engine: Any, name: str) -> Any:
 
 
 # ========================= configured ===================================================
-@pytest.mark.parametrize("flag", [True, None], ids=["notify.telegram: true", "shipped default"])
+@pytest.mark.parametrize("flag", [True, None], ids=["notify.telegram: true", "shipped config"])
 def test_the_engine_adds_the_telegram_channel_and_starts_its_worker_when_the_client_is_available(
     engine_factory, flag
 ):
@@ -84,6 +90,29 @@ def test_the_engine_adds_the_telegram_channel_and_starts_its_worker_when_the_cli
     assert rig.rec.calls == 0, "the startup self-test must not reach the phone"
     assert probe(rig.db_path) == [], "and must not leave a row behind"
     assert [c.name for c in rig.engine.notifier.channels][0] == "dashboard"
+
+
+@pytest.mark.parametrize(
+    "token, chat",
+    [(TOKEN, CHAT), (None, None)],
+    ids=["valid credentials", "no credentials"],
+)
+def test_notify_telegram_false_never_builds_the_channel_even_with_credentials(
+    engine_factory, token, chat
+):
+    rig = engine_factory(telegram_flag=False, token=token, chat=chat)
+    before = set(threading.enumerate())
+
+    rig.engine.start()
+
+    assert channel_named(rig.engine, "telegram") is None, "the master switch is off"
+    assert rig.worker_threads(before) == [], "no outbox worker when the switch is off"
+    now = now_ist()
+    result = rig.engine.notifier.send(signal_notification(alert_at(now, id=alert_id(1)), now))
+    assert result == {"dashboard": True}
+    assert rig.rec.calls == 0, "nothing may reach Telegram"
+    assert probe(rig.db_path) == [], "and nothing is queued"
+    rig.engine.stop()
 
 
 def test_an_alert_raised_through_the_engines_notifier_reaches_the_phone(engine_factory):
@@ -110,10 +139,10 @@ def test_an_alert_raised_through_the_engines_notifier_reaches_the_phone(engine_f
     [(None, None), ("not-a-bot-token", CHAT), (TOKEN, None), (None, CHAT)],
     ids=["nothing set", "malformed token", "token only", "chat id only"],
 )
-def test_without_a_usable_client_the_engine_adds_nothing_and_logs_one_info_line(
+def test_with_the_switch_on_but_no_usable_client_the_engine_adds_nothing_and_logs_one_info_line(
     engine_factory, caplog, token, chat
 ):
-    rig = engine_factory(token=token, chat=chat)
+    rig = engine_factory(telegram_flag=True, token=token, chat=chat)
     before = set(threading.enumerate())
 
     with caplog.at_level(logging.INFO):

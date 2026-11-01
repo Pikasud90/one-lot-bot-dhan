@@ -131,25 +131,33 @@ def test_a_new_burst_after_the_first_is_ordered_again(make_rig):
     assert [code_ids(t) for t in tail] == [[a["id"][:6]] for a in by_confidence(later)]
 
 
-def test_exit_and_critical_messages_are_never_folded_into_a_digest(make_rig):
-    """PROPOSED RULE (see the report): the digest and the top-8 cap are for SIGNAL alerts. An
-    EXIT or a CRITICAL has no confidence and must never wait behind, or vanish into, a digest."""
+def test_exit_and_critical_go_first_and_only_signal_alerts_are_capped_and_digested(make_rig):
+    """Decided: EXIT and CRITICAL are never folded into a digest and go first; the top-8 cap and
+    the digest count SIGNAL alerts only. 10 alerts + EXIT + CRITICAL = EXIT, CRITICAL, the 8
+    best alerts, then one digest for the other 2 (11 messages)."""
     rig = make_rig()
     notifier, _ = build_notifier(rig)
     now = rig.clock()
+    alerts = []
     for i in range(10):
         alert = alert_at(now, id=alert_id(i), score=SCORES[i])
+        alerts.append(alert)
         notifier.send(signal_notification(alert, now))
     notifier.send(exit_notification("pos000000001", -740.0, now))
     notifier.send(critical_notification("Dhan token expired", "renew it", now))
+    ranked = by_confidence(alerts)
 
     rig.drain()
 
     texts = rig.rec.texts()
     plain = [visible(t) for t in texts]
-    exit_at = next(i for i, p in enumerate(plain) if p.startswith("EXIT "))
-    critical_at = next(i for i, p in enumerate(plain) if "Dhan token expired" in p)
-    assert exit_at < 8 and critical_at < 8, "EXIT and CRITICAL go out among the first eight"
+    assert len(texts) == 11, f"expected 2 + 8 + 1 messages, got {len(texts)}"
+    first_two = plain[:2]
+    assert any(p.startswith("EXIT ") for p in first_two), "EXIT goes first"
+    assert any("Dhan token expired" in p for p in first_two), "CRITICAL goes first"
+    assert [code_ids(t) for t in texts[2:10]] == [[a["id"][:6]] for a in ranked[:8]]
+    assert mentions_count(texts[10], 2), f"the digest covers the 2 other alerts: {texts[10]!r}"
+    assert all(g >= 1.0 - 1e-9 for g in gaps(rig.rec.times))
 
 
 # ========================= formatted at send time =======================================

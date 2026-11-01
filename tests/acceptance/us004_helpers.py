@@ -587,11 +587,14 @@ def make_engine(
     *,
     token: str | None = TOKEN,
     chat: str | None = CHAT,
-    telegram_flag: bool | None = None,
+    telegram_flag: bool | None = True,
 ) -> EngineRig:
     """The REAL Engine on a throw-away project root (copy of config/), with everything that
     would touch a broker, a feed or Yahoo replaced by a no-op. What is left is exactly what
-    this story changes: the Notifier, the database and the start / stop sequence."""
+    this story changes: the Notifier, the database and the start / stop sequence.
+
+    `telegram_flag` is notify.telegram: True (the default here) or False are set explicitly,
+    None keeps whatever config/config.yaml ships (decided: true)."""
     import onelot.data.db as data_db
     import onelot.desk as desk_package
     from onelot.config import AppConfig, Secrets

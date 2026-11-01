@@ -171,6 +171,27 @@ def test_a_different_position_is_not_silenced_by_the_first_ones_reminder_budget(
     assert len(rig.rec.texts()) == 5, "B's first EXIT must go out at once"
 
 
+def test_a_change_of_advice_for_the_same_position_starts_a_fresh_reminder_budget(make_rig):
+    """Decided: STOP at 0 and 60 s, then the advice becomes TARGET. The new advice is a first
+    message at once (120 s) and has its own 3 reminders (420, 720, 1020 s)."""
+    rig = make_rig()
+    notifier, _ = build_notifier(rig)
+    t0 = rig.clock()
+    pid = "pos000000001"
+    for k in range(0, 61):  # one poll a minute for an hour
+        advice = "STOP" if k < 2 else "TARGET"
+        rig.clock.set(t0 + dt.timedelta(minutes=k))
+        notifier.send(
+            exit_notification(pid, pnl(k), rig.clock(), advice),
+            dedup_key=f"desk:exit:{pid}:{advice}",
+        )
+        rig.drain()
+
+    assert rig.rec.offsets(t0) == [0.0, 120.0, 420.0, 720.0, 1020.0]
+    plain = [visible(t) for t in rig.rec.texts()]
+    assert "STOP" in plain[0] and all("TARGET" in p for p in plain[1:])
+
+
 def test_exit_rows_are_durable_and_each_message_is_its_own_row(make_rig):
     rig = make_rig()
     notifier, _ = build_notifier(rig)

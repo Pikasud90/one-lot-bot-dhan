@@ -308,6 +308,39 @@ def test_after_a_long_outage_one_digest_is_sent_instead_of_n_missed_notes(make_r
     assert rig.outbox.status()["queue_depth"] == 0
 
 
+def test_eight_expired_alerts_get_eight_missed_notes_and_no_digest(make_rig):
+    tg = telegram()
+    rig = make_rig()
+    t0 = rig.clock()
+    alerts = [alert_at(t0, id=alert_id(i), score=50 + i) for i in range(8)]
+    for alert in alerts:
+        rig.enqueue_alert(alert)
+    rig.clock.advance(2 * 3600)
+    now = rig.clock()
+
+    rig.drain()
+
+    texts = rig.rec.texts()
+    assert len(texts) == 8
+    assert sorted(texts) == sorted(tg.format_missed(a, now) for a in alerts)
+    kinds = [r["kind"] for r in rig.rows()]
+    assert kinds.count("digest") == 0 and kinds.count("missed") == 8
+
+
+def test_nine_expired_alerts_get_one_digest_and_no_missed_notes(make_rig):
+    rig = make_rig()
+    t0 = rig.clock()
+    for i in range(9):
+        rig.enqueue_alert(alert_at(t0, id=alert_id(i), score=50 + i))
+    rig.clock.advance(2 * 3600)
+
+    rig.drain()
+
+    texts = rig.rec.texts()
+    assert len(texts) == 1 and mentions_count(texts[0], 9), texts
+    assert [r["kind"] for r in rig.rows() if r["status"] == "sent"] == ["digest"]
+
+
 def test_a_single_expired_alert_still_gets_its_own_missed_note_not_a_digest(make_rig):
     tg = telegram()
     rig = make_rig()

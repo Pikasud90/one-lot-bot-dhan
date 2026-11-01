@@ -180,7 +180,7 @@ def test_only_signal_exit_and_critical_reach_the_outbox(make_rig):
 
     assert [r.get("telegram") is True for r in results] == [False, False, True, True, True]
     kinds = [r["kind"] for r in rig.rows()]
-    assert len(kinds) == 3 and kinds[:2] == ["alert", "exit"], kinds
+    assert kinds == ["alert", "exit", "critical"], kinds  # outbox kinds (decided: 'critical')
     assert rig.rec.calls == 0
 
 

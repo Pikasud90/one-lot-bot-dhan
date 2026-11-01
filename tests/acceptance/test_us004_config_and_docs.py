@@ -32,7 +32,7 @@ def test_notify_cfg_defaults_are_signal_exit_critical_and_quiet_outside_session(
 
 def test_notify_cfg_keeps_its_existing_fields_and_defaults():
     cfg = NotifyCfg()
-    assert (cfg.os_toast, cfg.dashboard, cfg.telegram, cfg.webhook) == (True, True, False, False)
+    assert (cfg.os_toast, cfg.dashboard, cfg.webhook) == (True, True, False)
 
 
 @pytest.mark.parametrize(
@@ -58,8 +58,18 @@ def test_notify_cfg_is_still_strict_about_unknown_keys():
 
 def test_the_shipped_config_yaml_loads_and_exposes_the_new_fields():
     cfg = AppConfig.load(REPO / "config" / "config.yaml", project_root=REPO)
+    assert cfg.notify.telegram is True, "notify.telegram is the master switch and ships on"
     assert level_names(cfg.notify.telegram_levels) == ["SIGNAL", "EXIT", "CRITICAL"]
     assert cfg.notify.telegram_quiet_outside_session is True
+
+
+def test_the_shipped_yaml_no_longer_calls_telegram_unimplemented():
+    line = next(
+        ln
+        for ln in (REPO / "config" / "config.yaml").read_text().splitlines()
+        if ln.strip().startswith("telegram:")
+    )
+    assert "not implemented" not in line.lower(), line
 
 
 def test_the_yaml_can_set_the_new_keys(tmp_path: Path):
