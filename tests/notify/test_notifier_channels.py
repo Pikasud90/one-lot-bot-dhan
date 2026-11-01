@@ -144,3 +144,42 @@ def test_add_channel_with_a_taken_name_replaces_rather_than_duplicates():
     nf.add_channel(second)
 
     assert [c for c in nf.channels if c.name == "toast"] == [second]
+
+
+SECRET_SQL = 'INSERT INTO telegram_outbox (payload) VALUES (\'{"risk_reason": "halt"}\')'
+
+
+class Raising(Spy):
+    def send(self, n: Notification) -> bool:
+        raise RuntimeError(SECRET_SQL)
+
+
+def test_a_channel_failure_keeps_and_logs_only_the_exception_class(caplog):
+    """An exception's text can quote SQL, parameters or the payload: never store or log it."""
+    nf = notifier()
+    nf.add_channel(Raising("db"))
+
+    with caplog.at_level("DEBUG"):
+        result = nf.send(note(L.SIGNAL, signal_id="s1"))
+
+    assert result == {"dashboard": True, "db": False}
+    assert nf.stats["db"].last_error == "RuntimeError"
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert "RuntimeError" in logged and "INSERT" not in logged and "risk_reason" not in logged
+
+
+def test_a_status_failure_logs_only_the_exception_class(caplog):
+    spy = Spy()
+
+    def broken() -> dict[str, Any]:
+        raise RuntimeError(SECRET_SQL)
+
+    spy.status = broken  # type: ignore[attr-defined]
+    nf = notifier()
+    nf.add_channel(spy)
+
+    with caplog.at_level("DEBUG"):
+        nf.status()
+
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert "RuntimeError" in logged and "INSERT" not in logged

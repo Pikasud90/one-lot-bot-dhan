@@ -149,8 +149,9 @@ class Notifier:
                 ok = bool(ch.send(n))
             except Exception as exc:
                 ok = False
-                error = f"{type(exc).__name__}: {exc}"
-                log.warning("notification channel %s raised: %s", ch.name, exc)
+                # The class only: an exception's text can quote SQL, parameters or the payload.
+                error = type(exc).__name__
+                log.warning("notification channel %s raised %s", ch.name, error)
             results[ch.name] = ok
             with self._lock:
                 st = self.stats.setdefault(ch.name, ChannelStats())
@@ -258,7 +259,9 @@ class Notifier:
             try:
                 entry.update(own_status())
             except Exception as exc:
-                log.warning("notification channel %s status failed: %s", ch.name, exc)
+                log.warning(
+                    "notification channel %s status failed (%s)", ch.name, type(exc).__name__
+                )
             entry["name"] = ch.name
         return entry
 
