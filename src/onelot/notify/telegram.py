@@ -50,6 +50,8 @@ from ..config import telegram_token_forms
 from ..logging_setup import get_redactor, register_secrets
 from .base import shown_confidence
 
+log = logging.getLogger(__name__)
+
 MAX_LINES = 12
 MAX_CHARS = 600
 ELLIPSIS = "…"
@@ -565,8 +567,8 @@ class TelegramClient:
 
     def send_message(self, text: str, *, silent: bool = False) -> SendResult:
         """POST sendMessage with HTML parse mode; `silent` sends it without a sound.
-        Exactly one HTTP request (none when unavailable), with a 10 s timeout on every
-        phase whatever the injected client's own default is."""
+        Exactly one HTTP request (none when unavailable or closed), with a 10 s timeout on
+        every phase whatever the injected client's own default is. Never raises."""
         if not self._available or self._http is None:
             return _failed("unavailable", self._unavailable_reason or "not configured")
         payload: dict[str, Any] = {"chat_id": self._chat_id, "text": text, "parse_mode": "HTML"}
@@ -576,13 +578,17 @@ class TelegramClient:
             response = self._http.post(
                 f"{API_BASE}/bot{self._token}/sendMessage", json=payload, timeout=TIMEOUT
             )
+            return _classify(response, self._forms)
         except httpx.HTTPStatusError as exc:  # an http client that raises for status
             return _classify(exc.response, self._forms)
         except httpx.HTTPError as exc:  # network, timeout, protocol: the class name only
             return _failed("transient", f"network error: {type(exc).__name__}")
         except UnicodeEncodeError:  # a lone surrogate: this text can never be sent
             return _failed("permanent", "the text is not valid UTF-8")
-        return _classify(response, self._forms)
+        except Exception as exc:  # noqa: BLE001 - the contract: a SendResult, never a raise
+            # The class name only: an exception's text can quote the URL, and so the token.
+            log.warning("telegram send failed unexpectedly: %s", type(exc).__name__)
+            return _failed("transient", f"unexpected error: {type(exc).__name__}")
 
     def __repr__(self) -> str:
         return f"TelegramClient(available={self._available}, token={_MASK})"
@@ -590,6 +596,11 @@ class TelegramClient:
     __str__ = __repr__
 
     def close(self) -> None:
-        """Close the http client this object built itself; an injected one is the caller's."""
+        """Stop sending: from now on the client is unavailable and send_message returns
+        'unavailable' without a request. The http client this object built is closed; an
+        injected one is the caller's to close."""
+        if self._available:
+            self._available = False
+            self._unavailable_reason = "the Telegram client is closed"
         if self._owns_http and self._http is not None:
             self._http.close()
