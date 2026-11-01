@@ -82,6 +82,10 @@ SLO_KINDS = ("alert", "exit", "critical")
 # EXIT and CRITICAL texts carry the time of the event (decision A): one delivered more than
 # this after it also says when it was sent, so a late EXIT is never read as a fresh one.
 SENT_LATE_AFTER = dt.timedelta(seconds=60)
+# A CRITICAL whose title was SENT less than this ago is not sent again (decision F, refined:
+# a sliding window from the last sent one); a legacy alarm raised every minute is one message
+# per window.
+CRITICAL_REPEAT_WINDOW = dt.timedelta(minutes=30)
 SEND_DEADLINE_S = 15.0  # total time one request may hold the worker
 IDLE_WAIT_S = 1.0  # the worker's nap when nothing is due (a new row wakes it at once)
 RESEND_MARKER = chr(0x21BB) + " resend"  # "↻ resend"
@@ -440,6 +444,8 @@ class TelegramOutbox:
                 queued = self._queued()
             if self._supersede_exits(queued):
                 queued = self._queued()
+            if self._skip_repeated_criticals(queued, now):
+                queued = self._queued()
             if self._fold_burst(queued, now):
                 queued = self._queued()
             if self._fold_missed(queued, now):
@@ -654,6 +660,32 @@ class TelegramOutbox:
         log.info("telegram outbox: %d older EXIT row(s) superseded", len(older))
         return True
 
+    def _skip_repeated_criticals(self, queued: list[_Row], now: dt.datetime) -> bool:
+        """A queued CRITICAL whose title matches one SENT within CRITICAL_REPEAT_WINDOW ends
+        skipped (decision F). Decided here, not in send(): the window runs from the last
+        message the phone actually got, and send() stays one INSERT. After an outage the
+        oldest of a run of repeats goes and the rest are skipped once it is sent."""
+        criticals = [r for r in queued if r.kind == "critical"]
+        if not criticals:
+            return False
+        with self._engine.connect() as conn:
+            recent = conn.execute(
+                select(OUTBOX.c.payload).where(
+                    OUTBOX.c.kind == "critical",
+                    OUTBOX.c.status == "sent",
+                    OUTBOX.c.sent_at > now - CRITICAL_REPEAT_WINDOW,
+                )
+            ).scalars()
+            sent_titles = {_title_key(p) for p in recent}
+        repeats = [r for r in criticals if _title_key(r.payload) in sent_titles]
+        if not repeats:
+            return False
+        with self._engine.begin() as conn:
+            for r in repeats:
+                self._mark(conn, r.id, "queued", "skipped", "repeat within 30 minutes")
+        log.info("telegram outbox: %d repeated CRITICAL(s) held back", len(repeats))
+        return True
+
     def _fold_burst(self, queued: list[_Row], now: dt.datetime) -> bool:
         """More than BURST_CAP queued SIGNAL alerts: keep the best BURST_CAP, fold the rest
         into one digest (they end skipped). EXIT and CRITICAL are never folded."""
@@ -817,6 +849,14 @@ def _missed_alerts(row: _Row) -> list[Mapping[str, Any]] | None:
         raw = row.payload.get("alerts")
         return [a for a in raw if isinstance(a, Mapping)] if isinstance(raw, list) else []
     return None
+
+
+def _title_key(payload: Any) -> str:
+    """A CRITICAL's title with its spacing normalised (case kept), for the repeat window."""
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    title = payload.get("title") if isinstance(payload, Mapping) else None
+    return " ".join(str(title).split()) if isinstance(title, str) else ""
 
 
 def _position_of(row: _Row) -> str:

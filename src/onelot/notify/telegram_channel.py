@@ -17,7 +17,6 @@ from typing import Any
 from ..clock import now_ist
 from ..config import NotifyCfg
 from .base import NOTHING_DUE, Notification, NotificationLevel, SendOutcome
-from .manager import dedup_key_for
 from .telegram import TelegramClient, _plain
 from .telegram_outbox import TelegramOutbox, _time_of
 
@@ -228,7 +227,7 @@ class TelegramChannel:
     def _send_critical(self, n: Notification) -> bool:
         now = self._clock()
         return self._outbox.enqueue(
-            dedup_key=n.dedup_key or dedup_key_for(n),  # title + 30-minute bucket
+            dedup_key=n.dedup_key or f"critical:{n.notification_id}",
             kind="critical",
             alert_id=n.notification_id,
             payload={"title": n.title, "body": n.body},

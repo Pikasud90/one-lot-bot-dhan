@@ -1,14 +1,17 @@
 """US-004 review round 1, the channel side: CRITICAL repeats (decision F) and the EXIT episode
 memory (decision G).
 
-(F) the same CRITICAL title within one 30-minute bucket reaches the phone once: its dedup key
-is the title plus the bucket, not the notification id (this replaces decision 3's "two
-same-title CRITICALs both arrive"; a repeat in a later bucket still arrives).
+(F, refined) a CRITICAL whose title matches one SENT to the phone less than 30 minutes ago is
+not sent again: a sliding window from the last sent one, decided by the worker when the row
+comes up (send() stays one INSERT, the dashboard still shows every one). This replaces decision
+3's "two same-title CRITICALs both arrive"; a repeat 30 minutes or more after the last sent
+one arrives.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import json
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,13 +19,12 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from onelot.clock import IST
 from onelot.config import NotifyCfg
 from onelot.notify.base import Notification, NotificationLevel
-from onelot.notify.manager import Notifier, dedup_key_for
+from onelot.notify.manager import Notifier
 from onelot.notify.telegram_channel import TelegramChannel
 
-from .test_telegram_outbox import T0, Rig, ok
+from .test_telegram_outbox import T0, Rig, error, ok
 
 L = NotificationLevel
 
@@ -46,72 +48,120 @@ def critical(title: str, at: dt.datetime, body: str = "") -> Notification:
     return Notification(title=title, body=body, level=L.CRITICAL, created_at=at)
 
 
-# ========================= (F) the CRITICAL key: title + 30-minute bucket ================
-def at(hh: int, mm: int, ss: int = 0) -> dt.datetime:
-    return dt.datetime(2026, 11, 2, hh, mm, ss, tzinfo=IST)
+def channel_of(rig: Rig) -> TelegramChannel:
+    return TelegramChannel(rig.client, rig.outbox, NotifyCfg(), lambda m: True, clock=rig.clock)
 
 
-@pytest.mark.parametrize(
-    ("first", "second", "same"),
-    [
-        (at(10, 0), at(10, 29, 59), True),
-        (at(10, 30), at(10, 59, 59), True),
-        (at(10, 29, 59), at(10, 30), False),  # a bucket edge: a new bucket, sent again
-        (at(10, 0), at(11, 0), False),
-    ],
-)
-def test_a_critical_key_is_its_title_and_a_thirty_minute_bucket(first, second, same):
-    a, b = critical("Feed down", first), critical("Feed down", second)
-
-    assert (dedup_key_for(a) == dedup_key_for(b)) is same
-    assert dedup_key_for(a).startswith("critical:")
-
-
-def test_the_bucket_is_the_same_instant_in_any_zone():
-    utc = at(10, 5).astimezone(dt.timezone.utc)
-    assert dedup_key_for(critical("Feed down", utc)) == dedup_key_for(
-        critical("Feed down", at(10, 5))
-    )
-
-
-def test_different_titles_never_share_a_key_and_spacing_is_not_a_difference():
-    base = dedup_key_for(critical("Feed down", at(10, 0)))
-
-    assert dedup_key_for(critical("Feed  down ", at(10, 1))) == base
-    assert dedup_key_for(critical("Feed up", at(10, 1))) != base
-    assert dedup_key_for(critical("feed down", at(10, 1))) != base, "case is kept"
-
-
-def test_a_long_title_still_gives_a_short_key():
-    key = dedup_key_for(critical("x" * 5000, at(10, 0)))
-    assert len(key) <= 64
-
-
-def test_a_same_title_critical_within_the_bucket_reaches_the_phone_once(make_rig):
-    rig = make_rig()
-    notifier = Notifier(SimpleNamespace(notify=NotifyCfg(os_toast=False)), dedup_seconds=0.0)
-    notifier.add_channel(
-        TelegramChannel(rig.client, rig.outbox, NotifyCfg(), lambda m: True, clock=rig.clock)
-    )
-
-    first = notifier.send(critical("UNMANAGED position", T0 + dt.timedelta(minutes=1)))
-    repeat = notifier.send(critical("UNMANAGED position", T0 + dt.timedelta(minutes=9)))
-    later = notifier.send(critical("UNMANAGED position", T0 + dt.timedelta(minutes=31)))
+def raise_at(rig: Rig, channel: TelegramChannel, minute: float, title: str = "Feed down") -> None:
+    """Raise the CRITICAL at T0 + `minute` and let the worker drain."""
+    rig.clock.now = T0 + dt.timedelta(minutes=minute)
+    channel.send(critical(title, rig.clock()))
     rig.drain()
 
-    assert first["telegram"] is repeat["telegram"] is later["telegram"] is True
-    assert len(rig.requests) == 2, "the 10:09 repeat is the same alarm; 10:31 is a new bucket"
-    assert len(notifier.dashboard.recent()) == 3, "the dashboard still shows every one"
+
+def sent_minutes(rig: Rig) -> list[float]:
+    return [
+        (r["sent_at"] - T0).total_seconds() / 60
+        for r in rig.rows()
+        if r["kind"] == "critical" and r["status"] == "sent"
+    ]
 
 
-def test_the_channel_uses_the_same_key_without_the_notifier(make_rig):
+# ========================= (F) a sliding 30 minutes from the last SENT one ===============
+@pytest.mark.parametrize(("again", "sent"), [(29.99, [0.0]), (30, [0.0, 30.0])])
+def test_a_same_title_critical_within_30_minutes_of_the_last_sent_one_is_skipped(
+    make_rig, again, sent
+):
     rig = make_rig()
-    channel = TelegramChannel(rig.client, rig.outbox, NotifyCfg(), lambda m: True, clock=rig.clock)
+    channel = channel_of(rig)
 
-    channel.send(critical("Feed down", T0))
-    channel.send(critical("Feed down", T0 + dt.timedelta(minutes=5)))
+    raise_at(rig, channel, 0)
+    raise_at(rig, channel, again)
 
-    assert len(rig.rows()) == 1
+    assert sent_minutes(rig) == sent
+    if len(sent) == 1:
+        assert rig.rows()[-1]["status"] == "skipped"
+        assert rig.rows()[-1]["last_error"] == "repeat within 30 minutes"
+
+
+def test_the_window_slides_from_the_last_sent_one_not_from_the_last_raised(make_rig):
+    """A legacy alarm raised every minute for two hours reaches the phone every 30 minutes:
+    each repeat is measured from the last one that was SENT."""
+    rig = make_rig()
+    channel = channel_of(rig)
+
+    for minute in range(121):
+        raise_at(rig, channel, minute, "UNMANAGED position")
+
+    assert sent_minutes(rig) == [0.0, 30.0, 60.0, 90.0, 120.0]
+
+
+def test_another_title_is_another_alarm_and_spacing_is_not_a_difference(make_rig):
+    rig = make_rig()
+    channel = channel_of(rig)
+
+    raise_at(rig, channel, 0, "Feed down")
+    raise_at(rig, channel, 1, "Feed  down ")  # the same title
+    raise_at(rig, channel, 2, "feed down")  # case is kept: another title
+    raise_at(rig, channel, 3, "Clock problem")
+
+    assert sent_minutes(rig) == [0.0, 2.0, 3.0]
+
+
+def test_a_critical_that_failed_does_not_silence_the_next_one(make_rig):
+    replies = iter([error(400, "Bad Request: chat not found"), ok()])
+    rig = make_rig(lambda r: next(replies))
+    channel = channel_of(rig)
+
+    raise_at(rig, channel, 0)
+    raise_at(rig, channel, 5)
+
+    assert [r["status"] for r in rig.rows()] == ["failed", "sent"]
+
+
+def test_an_outage_delivers_the_repeated_alarm_once(make_rig):
+    down = [True]
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(502) if down[0] else ok()
+
+    rig = make_rig(respond)
+    channel = channel_of(rig)
+    for minute in range(60):  # raised every minute while Telegram is unreachable
+        rig.clock.now = T0 + dt.timedelta(minutes=minute)
+        channel.send(critical("UNMANAGED position", rig.clock()))
+        rig.outbox.drain_once()  # one pass a minute: every attempt fails
+    down[0] = False
+    rig.clock.now = T0 + dt.timedelta(minutes=61)
+
+    rig.drain()
+
+    statuses = [r["status"] for r in rig.rows()]
+    assert statuses.count("sent") == 1 and statuses.count("skipped") == 59
+    text = json.loads(rig.requests[-1].read())["text"]
+    assert "Time 10:00:00 IST" in text and text.endswith(" · sent late 11:01"), text
+
+
+def test_the_dashboard_still_shows_every_critical(make_rig):
+    rig = make_rig()
+    notifier = Notifier(SimpleNamespace(notify=NotifyCfg(os_toast=False)), dedup_seconds=0.0)
+    notifier.add_channel(channel_of(rig))
+
+    for minute in (1, 9, 31):
+        rig.clock.now = T0 + dt.timedelta(minutes=minute)
+        assert notifier.send(critical("UNMANAGED position", rig.clock()))["telegram"] is True
+        rig.drain()
+
+    assert len(rig.requests) == 2, "10:09 repeats the 10:01 alarm; 10:31 is 30 min after it"
+    assert len(notifier.dashboard.recent()) == 3
+
+
+def test_each_critical_is_its_own_row_with_the_notification_id_in_its_key():
+    from onelot.notify.manager import dedup_key_for
+
+    a = critical("Feed down", T0)
+    b = critical("Feed down", T0)
+    assert dedup_key_for(a) == f"critical:{a.notification_id}" != dedup_key_for(b)
 
 
 # ========================= (G) the EXIT episode memory is pruned =========================
