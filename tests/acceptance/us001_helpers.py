@@ -599,6 +599,14 @@ def lab_fair_premium(
     )
 
 
+def real_pricing_book(engine: Engine, clock: Callable[[], dt.datetime] | None = None):
+    """The book the Engine builds (`build_paper_book`): real specs, costs and Black-76 pricer."""
+    from onelot.config import AppConfig
+    from onelot.paper.factory import build_paper_book
+
+    return build_paper_book(AppConfig.load(), engine, clock=clock or (lambda: at(10, 30)))
+
+
 # ── a real Engine over a throw-away project root (never started) ──────────────────────
 @contextlib.contextmanager
 def real_engine(tmp_path: Path, **paper_overrides: Any) -> Iterator[Any]:
