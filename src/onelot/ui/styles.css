@@ -9,6 +9,7 @@
   --accent:#e0173f; --accent-deep:#a60f2f; --accent2:#c4740a; --cyan:#0a8aa3; --violet:#6c5ce7;
   --ok:#128347; --bad:#d41f3e; --warn:#b16900;
   --ok-bg:rgba(18,131,71,.12); --bad-bg:rgba(212,31,62,.10); --warn-bg:rgba(196,116,10,.13); --cyan-bg:rgba(10,138,163,.10);
+  --warn-ink:#8a5200; --cyan-ink:#066a7e; /* chip text on --warn-bg / --cyan-bg at AA (5.5:1) */
   --head:#0c1328; --head2:#17213f; --head-text:#f4f7ff; --head-muted:#a7b3cf;
   --shadow:0 1px 2px rgba(15,23,42,.06),0 10px 26px -14px rgba(15,23,42,.22);
   --grid:#dfe4ee; --plot-font:#4a5974;
@@ -25,6 +26,7 @@
   --accent:#ff4463; --accent-deep:#b8123a; --accent2:#ffb52e; --cyan:#2dd4ee; --violet:#9089ff;
   --ok:#3ddc8a; --bad:#ff5a79; --warn:#ffb52e;
   --ok-bg:rgba(61,220,138,.16); --bad-bg:rgba(255,90,121,.16); --warn-bg:rgba(255,181,46,.14); --cyan-bg:rgba(45,212,238,.12);
+  --warn-ink:#ffb52e; --cyan-ink:#2dd4ee; /* already 6.6:1 and 6.7:1 on the night chips */
   --head:#090e1c; --head2:#131c33;
   --shadow:0 10px 30px -16px rgba(0,0,0,.7);
   --grid:#2a3650; --plot-font:#a9b6d0;
@@ -280,8 +282,8 @@ table.paper{font-size:15.5px}
 table.paper td b{font:20px/1 var(--display);letter-spacing:.05em}
 .pchip{position:relative;isolation:isolate;display:inline-block;padding:5px 12px;font:800 12.5px/1 var(--ui);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
 .pchip::before{content:"";position:absolute;inset:0;z-index:-1;transform:skew(-12deg);background:var(--panel3)}
-.pchip.pending{color:var(--warn)} .pchip.pending::before{background:var(--warn-bg)}
-.pchip.open{color:var(--cyan)} .pchip.open::before{background:var(--cyan-bg)}
+.pchip.pending{color:var(--warn-ink)} .pchip.pending::before{background:var(--warn-bg)}
+.pchip.open{color:var(--cyan-ink)} .pchip.open::before{background:var(--cyan-bg)}
 .pchip.nofill{color:var(--muted)} .pchip.nofill::before{background:transparent;border:1px dashed var(--line2)}
 .pchip.closed{color:var(--text)} .pchip.closed::before{background:var(--line2)}
 .legacy>summary{cursor:pointer;list-style:none}
