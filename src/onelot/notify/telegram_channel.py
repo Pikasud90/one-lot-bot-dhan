@@ -16,7 +16,7 @@ from typing import Any
 
 from ..clock import now_ist
 from ..config import NotifyCfg
-from .base import Notification, NotificationLevel
+from .base import NOTHING_DUE, Notification, NotificationLevel, SendOutcome
 from .telegram import TelegramClient, _plain
 from .telegram_outbox import TelegramOutbox, _time_of
 
@@ -97,7 +97,9 @@ class TelegramChannel:
     def status(self) -> dict[str, Any]:
         return self._outbox.status()
 
-    def send(self, n: Notification) -> bool:
+    def send(self, n: Notification) -> bool | SendOutcome:
+        """True when a row was queued (or already existed), NOTHING_DUE for an EXIT reminder
+        that is not due, False when it is not for the phone. A database error raises."""
         if not self.accepts(n):
             return False
         if n.level is NotificationLevel.SIGNAL:
@@ -139,7 +141,7 @@ class TelegramChannel:
             silent=self._silent(n, now, blocked=alert.get("risk_allowed") is False),
         )
 
-    def _send_exit(self, n: Notification) -> bool:
+    def _send_exit(self, n: Notification) -> bool | SendOutcome:
         now = self._clock()
         event = n.payload if isinstance(n.payload, Mapping) else {}
         position = event.get("position")
@@ -158,9 +160,9 @@ class TelegramChannel:
             if episode is not None:
                 episode.last_raised_at = now
                 if episode.messages > EXIT_MAX_REMINDERS:
-                    return True  # first + every reminder already queued: nothing to do
+                    return NOTHING_DUE  # first + every reminder already queued
                 if now - episode.last_message_at < EXIT_REMINDER_EVERY:
-                    return True  # not yet: the previous message is recent
+                    return NOTHING_DUE  # not yet: the previous message is recent
             number = self._exit_numbers.get(pid, 0) + 1
             queued = self._outbox.enqueue(
                 dedup_key=f"{n.dedup_key or 'exit:' + pid}#{number}",

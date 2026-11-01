@@ -8,7 +8,7 @@ import threading
 from dataclasses import dataclass, field
 
 from ..clock import now_ist
-from .base import Notification, NotificationLevel
+from .base import NOTHING_DUE, Notification, NotificationLevel
 from .dashboard import DashboardChannel
 from .os_toast import build_os_channel
 
@@ -142,17 +142,20 @@ class Notifier:
         results: dict[str, bool] = {}
         for ch in self._snapshot():
             error: str | None = None
+            outcome: object = False
             try:
                 accepts = getattr(ch, "accepts", None)
                 if accepts is not None and not accepts(n):
                     continue
-                ok = bool(ch.send(n))
+                outcome = ch.send(n)
             except Exception as exc:
-                ok = False
                 # The class only: an exception's text can quote SQL, parameters or the payload.
                 error = type(exc).__name__
                 log.warning("notification channel %s raised %s", ch.name, error)
+            ok = bool(outcome)
             results[ch.name] = ok
+            if outcome is NOTHING_DUE:
+                continue  # handled, nothing new queued or delivered: no counter moves
             with self._lock:
                 st = self.stats.setdefault(ch.name, ChannelStats())
                 if ok and getattr(ch, "deferred", False):

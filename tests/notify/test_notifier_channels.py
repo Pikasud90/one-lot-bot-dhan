@@ -183,3 +183,20 @@ def test_a_status_failure_logs_only_the_exception_class(caplog):
 
     logged = " ".join(r.getMessage() for r in caplog.records)
     assert "RuntimeError" in logged and "INSERT" not in logged
+
+
+def test_nothing_due_is_a_success_that_no_counter_sees():
+    from onelot.notify.base import NOTHING_DUE
+
+    spy = Spy("queue")
+    spy.deferred = True  # type: ignore[attr-defined]
+    spy.send = lambda n: NOTHING_DUE  # type: ignore[method-assign]
+    nf = notifier()
+    nf.add_channel(spy)
+
+    result = nf.send(note(L.EXIT, position_id="p1"))
+
+    assert result == {"dashboard": True, "queue": True}
+    assert type(result["queue"]) is bool
+    st = nf.stats["queue"]
+    assert (st.sent, st.enqueued, st.failed) == (0, 0, 0)

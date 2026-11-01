@@ -83,8 +83,25 @@ class Notification:
         }
 
 
+class SendOutcome(Enum):
+    """A `Channel.send` result that is a success with nothing new delivered or queued (an EXIT
+    reminder that is not due yet). It is truthy, so the caller sees success; the Notifier
+    counts it nowhere (not sent, not enqueued, not failed)."""
+
+    NOTHING_DUE = "nothing_due"
+
+    def __bool__(self) -> bool:
+        return True
+
+
+NOTHING_DUE = SendOutcome.NOTHING_DUE
+
+
 class Channel(Protocol):
     """What the Notifier needs from a channel.
+
+    ``send`` returns True (delivered, or queued for a deferred channel), False (failed) or
+    ``NOTHING_DUE`` (handled, nothing new to deliver: success, counted nowhere).
 
     Optional members, looked up with getattr so the simple channels stay simple:
 
@@ -99,4 +116,4 @@ class Channel(Protocol):
     name: str
     available: bool
 
-    def send(self, n: Notification) -> bool: ...
+    def send(self, n: Notification) -> bool | SendOutcome: ...

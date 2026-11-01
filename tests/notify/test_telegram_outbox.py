@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 from onelot.clock import IST
 from onelot.config import NotifyCfg
-from onelot.notify.base import Notification, NotificationLevel
+from onelot.notify.base import NOTHING_DUE, Notification, NotificationLevel
 from onelot.notify.telegram import SEP, TelegramClient
 from onelot.notify.telegram_channel import TelegramChannel
 from onelot.notify.telegram_outbox import (
@@ -442,7 +442,8 @@ def raise_every_minute(channel: TelegramChannel, rig: Rig, minutes: int, **kw: A
     for k in range(minutes + 1):
         if k:
             rig.clock.advance(60)
-        assert channel.send(exit_note(**kw)) is True, "a suppressed reminder is not a failure"
+        outcome = channel.send(exit_note(**kw))
+        assert outcome is True or outcome is NOTHING_DUE, "a suppressed reminder is not a failure"
 
 
 def test_an_exhausted_budget_stays_quiet_while_the_advice_persists(make_rig):
@@ -550,3 +551,22 @@ def test_a_worker_whose_drain_keeps_failing_logs_the_streak_once(make_rig, monke
     assert len(calls) >= 5
     failures = [r for r in caplog.records if "drain failed" in r.getMessage()]
     assert len(failures) == 1, "one line per streak, not one per second"
+
+
+def test_a_suppressed_exit_reminder_is_not_counted_as_enqueued(make_rig):
+    from types import SimpleNamespace
+
+    from onelot.notify.manager import Notifier
+
+    rig = make_rig()
+    notifier = Notifier(SimpleNamespace(notify=NotifyCfg(os_toast=False)), dedup_seconds=0.0)
+    notifier.add_channel(channel_for(rig))
+
+    for k in range(31):  # the Desk's poll, once a minute for half an hour
+        if k:
+            rig.clock.advance(60)
+        assert notifier.send(exit_note()) == {"dashboard": True, "telegram": True}
+
+    assert len(rig.rows()) == 4
+    assert notifier.stats["telegram"].enqueued == 4, "27 polls queued nothing"
+    assert notifier.stats["telegram"].failed == 0
