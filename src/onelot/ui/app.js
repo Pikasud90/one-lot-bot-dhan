@@ -528,8 +528,11 @@ async function loadPaper() {
   paperFeed.at = Date.now();
   try {
     const r = await fetch("/api/paper");  // a read: no token, and no toast every 5 s on failure
-    const p = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(p.detail || `HTTP ${r.status}`);
+    const p = await r.json().catch(() => null);
+    if (!r.ok) throw new Error((p && p.detail) || `HTTP ${r.status}`);
+    // Only a reply that says enabled true or false is an answer: a proxy page, a non-JSON body
+    // or a half-written object must never read as "Paper trading is off".
+    if (!p || typeof p.enabled !== "boolean") throw new Error("unexpected reply from /api/paper");
     paperFeed.version = version;
     paperFeed.shown = true;
     $("desk-paper").innerHTML = paperPanel(p);

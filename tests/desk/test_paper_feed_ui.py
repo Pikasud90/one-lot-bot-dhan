@@ -42,6 +42,7 @@ const $ = (id) => els[id];
 globalThis.document = { querySelector: () => ({ classList: { contains: () => active } }) };
 const paperPanel = (p) => `PANEL ${JSON.stringify(p)}`;
 const paperMeta = () => "META";
+const OK = { enabled: true };  // the smallest reply the panel accepts
 const flush = () => new Promise((r) => setImmediate(r));
 async function advance(ms) {
   const end = clock + ms;
@@ -107,9 +108,9 @@ class TestWhenItFetches:
 
     def test_a_burst_of_snapshots_is_one_fetch_5_s_after_the_last(self):
         got = run(
-            "wantPaper(true); await advance(0); await reply(200, {});"
+            "wantPaper(true); await advance(0); await reply(200, OK);"
             "for (let i = 0; i < 4; i++) { await advance(500); bump(); }"  # 0.5 .. 2 s
-            "await advance(10000); await reply(200, {});"
+            "await advance(10000); await reply(200, OK);"
         )
         assert starts(got) == [0, 5000]
         assert got["fetches"][1]["version"] == 3  # it saw the latest snapshot
@@ -117,14 +118,14 @@ class TestWhenItFetches:
     def test_a_snapshot_during_a_fetch_is_picked_up_by_a_trailing_fetch(self):
         got = run(
             "wantPaper(true); await advance(0); await advance(100); bump();"
-            "await advance(100); await reply(200, {}); await advance(10000);"
-            "if (pending.length) await reply(200, {});"
+            "await advance(100); await reply(200, OK); await advance(10000);"
+            "if (pending.length) await reply(200, OK);"
         )
         assert starts(got) == [0, 5000]
         assert got["fetches"][1]["version"] == 0
 
     def test_no_new_snapshot_no_new_fetch(self):
-        got = run("wantPaper(true); await advance(0); await reply(200, {}); await advance(60000);")
+        got = run("wantPaper(true); await advance(0); await reply(200, OK); await advance(60000);")
         assert starts(got) == [0] and got["timers"] == 0
 
 
@@ -141,7 +142,7 @@ class TestOnFailure:
 
     def test_a_later_failure_keeps_the_table_and_warns_on_the_day_line(self):
         got = run(
-            "wantPaper(true); await advance(0); await reply(200, {}); bump();"
+            "wantPaper(true); await advance(0); await reply(200, OK); bump();"
             'await advance(5000); await reply(503, {detail: "locked"});'
         )
         assert got["panel"].startswith("PANEL") and got["metaClass"] == "warn"
@@ -149,7 +150,7 @@ class TestOnFailure:
     def test_success_after_a_failure_clears_the_warning(self):
         got = run(
             'wantPaper(true); await advance(0); await reply(503, {detail: "locked"});'
-            "await advance(5000); await reply(200, {});"
+            "await advance(5000); await reply(200, OK);"
         )
         assert starts(got) == [0, 5000]  # retried at the 5 s floor while the tab is open
         assert got["panel"].startswith("PANEL") and (got["meta"], got["metaClass"]) == (
@@ -163,6 +164,31 @@ class TestOnFailure:
             "await advance(60000);"
         )
         assert starts(got) == [0] and got["timers"] == 0
+
+    @pytest.mark.parametrize(
+        "body",
+        ["{}", "[]", '"ok"', "null", "{enabled: 1}", '{detail: "x"}'],
+        ids=["empty", "array", "string", "null", "enabled-not-bool", "no-enabled"],
+    )
+    def test_a_200_without_an_enabled_flag_is_a_failure_not_paper_off(self, body):
+        # A proxy page or a half-written reply must never read as "Paper trading is off".
+        got = run(f"wantPaper(true); await advance(0); await reply(200, {body});")
+        assert "PANEL" not in got["panel"] and "Loading" not in got["panel"]
+        assert got["meta"] == "paper trades unavailable: unexpected reply from /api/paper"
+        assert got["metaClass"] == "warn"
+
+    def test_a_200_that_is_not_json_is_a_failure(self):
+        got = run(
+            "wantPaper(true); await advance(0);"
+            "const r = pending.shift(); inFlight--;"
+            "r({ ok: true, status: 200, json: async () => { throw new SyntaxError('bad'); } });"
+            "await flush(); await flush();"
+        )
+        assert got["meta"] == "paper trades unavailable: unexpected reply from /api/paper"
+
+    def test_paper_off_is_a_real_answer(self):
+        got = run("wantPaper(true); await advance(0); await reply(200, {enabled: false});")
+        assert got["panel"].startswith("PANEL") and got["metaClass"] == "muted"
 
     def test_a_network_error_is_a_failure_too(self):
         got = run(
@@ -185,9 +211,9 @@ class TestInvariants:
             "for (let step = 0; step < 600; step++) {"
             "  await advance(500);"
             "  if (rnd() < 0.3) bump();"
-            "  if (pending.length && rnd() < 0.4) await reply(rnd() < 0.2 ? 503 : 200, {});"
+            "  if (pending.length && rnd() < 0.4) await reply(rnd() < 0.2 ? 503 : 200, OK);"
             "}"
-            "for (let i = 0; i < 20; i++) { await advance(6000); while (pending.length) await reply(200, {}); }"
+            "for (let i = 0; i < 20; i++) { await advance(6000); while (pending.length) await reply(200, OK); }"
         )
         at = starts(got)
         assert got["maxInFlight"] == 1
