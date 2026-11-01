@@ -334,6 +334,13 @@ def _offline(monkeypatch):
     base.block_network(monkeypatch)
 
 
+@pytest.fixture(autouse=True)
+def _frozen_clock(monkeypatch):
+    """One fixed 'now' (a Monday, 11:00 IST) for the tests AND for GET /api/paper's own clock,
+    so "today" rows can never straddle IST midnight mid-test."""
+    H.freeze_clock(monkeypatch)
+
+
 @pytest.fixture
 def app_cfg():
     return AppConfig.load()

@@ -88,8 +88,12 @@ BASE_HELPERS = ("esc", "cls", "fmt", "rup", "rup2", "pct", "tsf", "hhmm", "bd", 
 
 
 # ══ time ═════════════════════════════════════════════════════════════════════════════
+FROZEN_AT: dt.datetime | None = None  # set by freeze_clock(): "now" for the whole harness
+DEFAULT_FROZEN = dt.datetime(2026, 11, 2, 11, 0, 0, tzinfo=IST)  # a Monday, mid-session
+
+
 def now() -> dt.datetime:
-    return dt.datetime.now(tz=IST)
+    return FROZEN_AT or dt.datetime.now(tz=IST)
 
 
 def midnight(days_ago: int = 0) -> dt.datetime:
@@ -99,6 +103,38 @@ def midnight(days_ago: int = 0) -> dt.datetime:
 
 
 ORDER_BASE = dt.datetime(2026, 10, 20, 10, 0, 0, tzinfo=IST)  # a fixed day for ordering tests
+
+
+def freeze_clock(monkeypatch, at: dt.datetime = DEFAULT_FROZEN) -> dt.datetime:
+    """Make "now" `at` for the harness (`now()`, `midnight()`, the node Date) AND for the
+    code under test: GET /api/paper's clock, wherever it reads it (the server's `dt`, a
+    `now_ist` imported by the server or the book, or the book's own `clock`). A test that
+    builds "today" rows then cannot be flaky around IST midnight."""
+    import sys
+    import types
+
+    import onelot.api.server as server
+    import onelot.clock as clock_module
+
+    monkeypatch.setattr(sys.modules[__name__], "FROZEN_AT", at)
+
+    class Frozen(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            return at.astimezone(tz) if tz is not None else at.replace(tzinfo=None)
+
+    shim = types.SimpleNamespace(**{k: getattr(dt, k) for k in dir(dt) if not k.startswith("_")})
+    shim.datetime = Frozen
+    monkeypatch.setattr(server, "dt", shim)
+    for module in (server, clock_module):
+        monkeypatch.setattr(module, "now_ist", lambda: at, raising=False)
+    try:
+        import onelot.paper.book as book_module
+
+        monkeypatch.setattr(book_module, "now_ist", lambda: at, raising=False)
+    except ImportError:  # pragma: no cover
+        pass
+    return at
 
 
 def parse_ts(value: str) -> dt.datetime:
@@ -249,6 +285,37 @@ def one_row_of_every_status(day: dt.datetime) -> list[dict[str, Any]]:
 
 
 # ══ the API ══════════════════════════════════════════════════════════════════════════
+def realistic_rows() -> list[dict[str, Any]]:
+    """A believable book on the frozen day: a trade still open from two days ago, one waiting
+    since last evening, one closed today, one closed yesterday and one NO_FILL today (the book
+    leaves a NO_FILL's exit time empty, as here)."""
+    m = midnight()
+    hour, sec = dt.timedelta(hours=1), dt.timedelta(seconds=1)
+    return [
+        trade_values(
+            "R-OPEN",
+            status="OPEN",
+            instrument="M&M",
+            created=m - 48 * hour,
+            entry=100030,
+            entry_ts=m - 48 * hour + 60 * sec,
+        ),
+        trade_values("R-WAIT", status="PENDING_FILL", created=m - 5 * hour),
+        closed_row("R-TODAY", m + sec, -1205, instrument="RELIANCE"),
+        closed_row("R-YESTERDAY", m - sec, 500, instrument="INFY"),
+        trade_values(
+            "R-NOFILL",
+            status="NO_FILL",
+            close_reason="NO_FILL",
+            instrument="HDFCBANK",
+            gross=0,
+            costs=0,
+            net=0,
+            created=m + 2 * sec,
+        ),
+    ]
+
+
 def make_app(app_cfg, db, *, enabled: bool = True, book: bool = True, desk: bool = True):
     """The real app factory over a stub engine that carries a real Desk and PaperBook.
 
@@ -504,14 +571,18 @@ def _scan(src: str, i: int, nested: bool, out: list[tuple[int, str]] | None) -> 
     return n
 
 
-def top_level_definitions(src: str) -> dict[str, str]:
-    """name -> source of every top-level `const|let|var NAME = ...;` and `function NAME(){}`
-    of a script (inside its outer IIFE, if it has one), in file order."""
+_BLOCK_KINDS = {"function", "async", "class", "if", "else", "for", "while", "try", "catch"}
+_BLOCK_KINDS |= {"finally", "switch", "do"}
+
+
+def top_level_statements(src: str) -> list[str]:
+    """The source of every top-level statement of a script (inside its outer IIFE, if it has
+    one), in file order. Declarations, functions and expression statements alike."""
     code: list[tuple[int, str]] = []
     _scan(src, 0, False, code)
     head = "".join(ch for _, ch in code[:24])  # the first code characters, comments dropped
     base_depth = 2 if re.match(r"\((async)?(\(\)=>\{|function\(\)\{)", head) else 0
-    defs: dict[str, str] = {}
+    out: list[str] = []
     depth, start, kind = 0, None, ""
     for idx, ch in code:
         if depth == base_depth and start is None and ch not in ";}":
@@ -522,29 +593,45 @@ def top_level_definitions(src: str) -> dict[str, str]:
             depth += 1
         elif ch in ")}]":
             depth -= 1
-        ended = (ch == ";" and depth == base_depth) or (
-            ch == "}" and depth == base_depth and kind in ("function", "async", "class")
-        )
-        if ended and start is not None:
-            text = src[start : idx + 1]
-            m = re.match(
-                r"(?:async\s+)?(?:function\s*\*?\s*|(?:const|let|var)\s+)([A-Za-z_$][\w$]*)", text
-            )
-            if m:
-                defs[m.group(1)] = text
+        if start is None or depth != base_depth:
+            continue
+        if ch == ";" or (ch == "}" and kind in _BLOCK_KINDS):
+            out.append(src[start : idx + 1])
             start = None
-        elif (
-            ch == "}"
-            and depth == base_depth
-            and start is not None
-            and kind
-            not in (
-                "const",
-                "let",
-                "var",
-            )
-        ):
-            start = None  # an `if` / `try` / block statement: not a definition
+    return out
+
+
+def declared_names(statement: str) -> list[str]:
+    """Names a top-level statement defines: `function f`, `const a = 1, b = 2` -> a, b."""
+    m = re.match(
+        r"(?:async\s+)?(?:function\s*\*?\s*|(?:const|let|var)\s+)([A-Za-z_$][\w$]*)", statement
+    )
+    if not m:
+        return []
+    names = [m.group(1)]
+    if re.match(r"(?:const|let|var)\b", statement):
+        code: list[tuple[int, str]] = []
+        _scan(statement, 0, False, code)
+        depth = 0
+        for idx, ch in code:
+            if ch in "({[":
+                depth += 1
+            elif ch in ")}]":
+                depth -= 1
+            elif ch == "," and depth == 0:
+                more = re.match(r"\s*([A-Za-z_$][\w$]*)\s*[=,;]", statement[idx + 1 :])
+                if more:
+                    names.append(more.group(1))
+    return names
+
+
+def top_level_definitions(src: str) -> dict[str, str]:
+    """name -> source of every top-level `const|let|var NAME = ...;` and `function NAME(){}`
+    of a script, in file order. A multi-declarator `let a = 1, b = 2;` is under both names."""
+    defs: dict[str, str] = {}
+    for statement in top_level_statements(src):
+        for name in declared_names(statement):
+            defs[name] = statement
     return defs
 
 
@@ -571,16 +658,41 @@ def resolve_helper(kind: str) -> str:
     )
 
 
-def _closure(defs: dict[str, str], roots: list[str]) -> list[str]:
-    """`roots` plus every top-level definition they (transitively) mention, in file order."""
+def _closure(defs: dict[str, str], roots: list[str], skip=lambda name: False) -> list[str]:
+    """`roots` plus every top-level definition they (transitively) mention, in file order.
+    Names for which `skip(name)` is true are neither followed nor included."""
     wanted, todo = set(), list(roots)
     while todo:
         name = todo.pop()
-        if name in wanted or name not in defs:
+        if name in wanted or name not in defs or (skip(name) and name not in roots):
             continue
         wanted.add(name)
         todo.extend(w for w in re.findall(r"[A-Za-z_$][\w$]*", defs[name]) if w in defs)
     return [n for n in defs if n in wanted]
+
+
+def lifted_source(roots: list[str], *, skip=lambda name: False, extra: tuple[str, ...] = ()) -> str:
+    """The roots, what they call, and then the `extra` top-level statements, as one script.
+    A statement shared by several names (`let a = 1, b = 2;`) is emitted once."""
+    defs = js_definitions()
+    seen: set[str] = set()
+    parts: list[str] = []
+    for name in _closure(defs, roots, skip):
+        if defs[name] not in seen:
+            seen.add(defs[name])
+            parts.append(defs[name])
+    return "\n".join([*parts, *extra])
+
+
+def statement_starting(prefix: str) -> str:
+    """The one top-level statement of app.js that starts with `prefix` (e.g. 'tabLoaders.live =')."""
+    found = [
+        t for t in top_level_statements(APP_JS.read_text(encoding="utf-8")) if t.startswith(prefix)
+    ]
+    assert len(found) == 1, (
+        f"expected one top-level statement starting {prefix!r}, found {len(found)}"
+    )
+    return found[0]
 
 
 PRELUDE = r"""
@@ -604,8 +716,7 @@ def run_js(
     assert NODE, "node is not installed"
     entry = resolve_helper(kind)
     defs = js_definitions()
-    roots = [entry, *[h for h in BASE_HELPERS if h in defs]]
-    body = "\n".join(defs[n] for n in _closure(defs, roots))
+    body = lifted_source([entry, *[h for h in BASE_HELPERS if h in defs]])
     script = "\n".join(
         [
             PRELUDE,
@@ -627,12 +738,148 @@ def run_js(
     return json.loads(done.stdout)
 
 
+# ══ the stream: applyStream() over a fake browser (clock, timers, fetch, DOM) ═════════
+STREAM_STUB = re.compile(r"^(render|load)[A-Z]")  # screens other than the Paper panel
+STREAM_ROOTS = ("applyStream", "esc", "hhmm", "tsf", "cls", "$")
+STREAM_HARNESS = r"""
+const __T0 = new Date(JSON.parse(process.argv[2]).now).getTime();
+let __clock = __T0, __id = 1;
+const __RealDate = Date;
+globalThis.Date = class extends __RealDate {
+  constructor(...a) { if (a.length === 0) super(__clock); else super(...a); }
+  static now() { return __clock; }
+};
+const __timers = [], __fetches = [], __els = {}, __tab = { live: true, home: false };
+globalThis.setTimeout = (fn, ms) => { const id = __id++; __timers.push({ at: __clock + Math.max(0, Number(ms) || 0), fn, id }); return id; };
+globalThis.clearTimeout = (id) => { const i = __timers.findIndex((t) => t.id === id); if (i >= 0) __timers.splice(i, 1); };
+globalThis.setInterval = () => 0;
+let __fail = false, __version = 0, __delay = 0, __inflight = 0, __maxInflight = 0;
+let __answer = async () => {
+  if (__delay) await new Promise((r) => setTimeout(r, __delay));  // a slow server, on the fake clock
+  return __fail ? { throw: "network down" }
+    : { status: 200, body: { enabled: true, status: {}, trades: [], totals_today: {} } };
+};
+globalThis.fetch = async (url, opts) => {
+  __fetches.push({ url: String(url), opts: opts || null, at: __clock - __T0, version: __version });
+  __inflight++; __maxInflight = Math.max(__maxInflight, __inflight);
+  let a;
+  try { a = await __answer(String(url)); } finally { __inflight--; }
+  if (a.throw) throw new Error(a.throw);
+  return { ok: a.status < 400, status: a.status, json: async () => a.body };
+};
+const __el = (id) => (__els[id] = __els[id] || { id, innerHTML: "", textContent: "", className: "",
+  dataset: {}, style: {}, classList: { toggle() {}, add() {}, remove() {}, contains: () => false },
+  querySelectorAll: () => [], addEventListener() {}, appendChild() {}, remove() {}, set onclick(v) {} });
+const window = { ONELOT_TOKEN: "t" }, navigator = {}, location = { hash: "#live" };
+const localStorage = { getItem: () => null, setItem: () => {} };
+const document = {
+  getElementById: __el,
+  querySelector: (sel) => ({ classList: { contains: (c) => /data-tab="live"/.test(sel) ? __tab.live : /data-tab="home"/.test(sel) ? __tab.home : false } }),
+  querySelectorAll: () => [], documentElement: { dataset: {} },
+};
+const __flush = () => new Promise((r) => setImmediate(r));
+async function settle() { for (let i = 0; i < 6; i++) await __flush(); }
+async function advance(ms) {
+  const end = __clock + ms;
+  for (;;) {
+    __timers.sort((a, b) => a.at - b.at || a.id - b.id);
+    if (!__timers.length || __timers[0].at > end) break;
+    const t = __timers.shift(); __clock = t.at; t.fn(); await settle();
+  }
+  __clock = end; await settle();
+}
+// one SSE message carrying a desk snapshot of `version` (default: the next version)
+function snapshot(version) {
+  __version = version === undefined ? __version + 1 : version;
+  applyStream({ state: { desk: { version: __version, booting: false } }, notifications: [] });
+}
+function state() {
+  const els = {};
+  for (const [id, e] of Object.entries(__els)) els[id] = { innerHTML: e.innerHTML, textContent: e.textContent, className: e.className };
+  return { fetches: __fetches, els, clock: __clock - __T0, version: __version, maxInflight: __maxInflight };
+}
+"""
+
+
+def run_stream(
+    scenario: str,
+    *,
+    answer: str | None = None,
+    at: dt.datetime | None = None,
+    extra: tuple[str, ...] = (),
+    tz: str = "Asia/Kolkata",
+) -> dict[str, Any]:
+    """Run `scenario` (async JS, see STREAM_HARNESS) against the REAL `applyStream` and Paper
+    code of app.js: every other screen is a no-op, the browser is a fake. `answer` is a JS
+    expression for the fake server `__answer = (url) => ...` returning {status, body} or
+    {throw}. Returns the harness `state()`: fetches [{url, opts, at(ms)}], els {id: ...}."""
+    assert NODE, "node is not installed"
+    defs = js_definitions()
+    stubs = [n for n in defs if STREAM_STUB.match(n) and "paper" not in n.lower()]
+    mentioned = [w for text in extra for w in re.findall(r"[A-Za-z_$][\w$]*", text) if w in defs]
+    body = lifted_source(
+        [r for r in (*STREAM_ROOTS, "tabLoaders", *mentioned) if r in defs and r not in stubs],
+        skip=lambda name: name in stubs,
+        extra=extra,
+    )
+    stub_src = "\n".join(f"function {n}() {{ return Promise.resolve(); }}" for n in stubs)
+    script = "\n".join(
+        [
+            STREAM_HARNESS,
+            stub_src,
+            body,
+            f"__answer = {answer};" if answer else "",
+            f"(async () => {{ {scenario}\nawait settle(); console.log(JSON.stringify(state())); }})();",
+        ]
+    )
+    done = subprocess.run(
+        [NODE, "-e", script, "null", json.dumps({"now": (at or now()).isoformat()})],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        env={"PATH": "/usr/bin:/bin:/usr/local/bin", "TZ": tz},
+    )
+    assert done.returncode == 0, f"stream scenario failed in node:\n{done.stderr[-2000:]}"
+    return json.loads(done.stdout.strip().splitlines()[-1])
+
+
 def html_of(
     kind: str, payload: Any, *, at: dt.datetime | None = None, tz: str = "Asia/Kolkata"
 ) -> str:
     out = run_js(kind, payload, at=at, tz=tz)
     assert isinstance(out, str), f"{resolve_helper(kind)}() must return an HTML string, got {out!r}"
     return out
+
+
+def paper_text(state: dict[str, Any]) -> str:
+    """Everything the reader sees in the Paper card after a stream scenario, lower case."""
+    chunks = []
+    for el_id, el in state["els"].items():
+        if "paper" in el_id.lower():
+            chunks += [visible_text(el["innerHTML"]), " ".join(str(el["textContent"]).split())]
+    return " ".join(chunks).lower()
+
+
+def paper_element(state: dict[str, Any], part: str) -> dict[str, str]:
+    """The fake DOM element whose id contains both 'paper' and `part` (e.g. 'meta')."""
+    hits = [e for i, e in state["els"].items() if "paper" in i.lower() and part in i.lower()]
+    assert len(hits) == 1, (
+        f"expected one element with 'paper' and {part!r} in its id: {list(state['els'])}"
+    )
+    return hits[0]
+
+
+def paper_container(state: dict[str, Any]) -> dict[str, str]:
+    """The element the table is written into: the paper element with HTML in it, not the card
+    or the day line."""
+    hits = [
+        e
+        for i, e in state["els"].items()
+        if "paper" in i.lower() and "meta" not in i.lower() and e["innerHTML"]
+    ]
+    assert len(hits) == 1, f"expected the table in one paper element: {list(state['els'])}"
+    return hits[0]
 
 
 # ══ static UI facts ══════════════════════════════════════════════════════════════════
