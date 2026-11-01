@@ -122,6 +122,7 @@ class Book:
         self.fail_alert, self.fail_step, self.fail_status = fail_alert, fail_step, fail_status
         self.alerts: list[dict[str, Any]] = []
         self.steps: list[tuple[dt.datetime, Any]] = []
+        self.strategy_exits: list[Any] = []
 
     def on_alert(self, alert, now):
         row = None
@@ -138,6 +139,7 @@ class Book:
     def step(self, now, bars, strategy_exit=None):
         self.log.append("step")
         self.steps.append((now, bars))
+        self.strategy_exits.append(strategy_exit)
         if self.fail_step:
             self.fail_step -= 1
             raise RuntimeError("paper step exploded")
@@ -286,6 +288,55 @@ def test_step_runs_after_manage_positions_with_the_trackers_bars_by_series_key(
     assert bars("SBIN") is d.trackers["SBIN"].bars
     assert bars("BANKNIFTY") is d.trackers["BANKNIFTY"].bars
     assert bars("NO_SUCH_SERIES") is None
+
+
+class PaperTrade:
+    """The fields of onelot.paper.book.PaperTrade the desk's callback reads."""
+
+    def __init__(self, direction: str = "long", series_key: str = "SBIN") -> None:
+        self.series_key, self.direction = series_key, direction
+        self.strategy, self.timeframe = "ema_cross", "10m"
+
+
+@pytest.mark.parametrize(
+    ("flags", "direction", "reason"),
+    [
+        ({"long_exit": True}, "long", "SIGNAL_EXIT"),
+        ({"short_entry": True}, "long", "OPPOSITE_SIGNAL"),
+        ({"short_exit": True}, "short", "SIGNAL_EXIT"),
+        ({"long_entry": True}, "short", "OPPOSITE_SIGNAL"),
+        ({"long_entry": True}, "long", None),  # the strategy still says long: HOLD
+        ({}, "long", None),
+    ],
+)
+def test_the_book_is_told_the_strategys_exit_on_its_last_closed_bar(
+    cfg, db, flags, direction, reason
+):
+    """US-002: the paper book hears the same exit_advice the desk shows for a manual position,
+    as a plain (reason, close time of that strategy bar) tuple: the desk never imports the
+    paper package. Read-only: the slot is not touched."""
+    book = Book()
+    d, _ = make_desk(cfg, db, paper=book)
+    slot = d.trackers["SBIN"].slots[0]
+    slot.last_flags = dict(flags)
+    ask = book.strategy_exits[-1]
+    answer = ask(PaperTrade(direction), now_ist())
+    if reason is None:
+        assert answer is None
+    else:
+        assert answer == (reason, slot.last_bar_ts + dt.timedelta(minutes=10))
+    assert slot.last_flags == flags
+
+
+def test_the_strategy_exit_is_none_for_an_unknown_series_or_strategy(cfg, db):
+    book = Book()
+    d, _ = make_desk(cfg, db, paper=book)
+    d.trackers["SBIN"].slots[0].last_flags = {"long_exit": True}
+    ask = book.strategy_exits[-1]
+    assert ask(PaperTrade(series_key="NOPE"), now_ist()) is None
+    other = PaperTrade()
+    other.strategy = "orb"
+    assert ask(other, now_ist()) is None
 
 
 def test_step_runs_when_the_market_is_shut_and_nothing_is_held(cfg, db):

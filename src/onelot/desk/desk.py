@@ -1085,11 +1085,35 @@ class Desk:
             self.hook_errors += 1
             log.exception("paper: retire_untracked failed")
 
+    def _paper_strategy_exit(self, trade: Any, now: dt.datetime) -> tuple[str, dt.datetime] | None:
+        """For the paper book (US-002): what the trade's own strategy says on its last
+        CLOSED bar, the same `exit_advice` the desk shows for a manual position, as
+        (SIGNAL_EXIT | OPPOSITE_SIGNAL, that strategy bar's close time), or None.
+
+        Read-only, and a plain tuple: the desk never imports the paper package."""
+        tracker = self.trackers.get(trade.series_key)
+        if tracker is None:
+            return None
+        slot = next(
+            (
+                s
+                for s in tracker.slots
+                if s.cfg.name == trade.strategy and s.cfg.timeframe == trade.timeframe
+            ),
+            None,
+        )
+        if slot is None or slot.last_bar_ts is None:
+            return None
+        reason = slot.exit_advice(trade.direction)
+        if reason is None:
+            return None
+        return reason, slot.last_bar_ts + dt.timedelta(minutes=slot.tf_min)
+
     def _step_paper(self, now: dt.datetime) -> None:
         if self.paper is None:
             return
         try:
-            self.paper.step(now, self._paper_bars)
+            self.paper.step(now, self._paper_bars, self._paper_strategy_exit)
         except Exception:  # noqa: BLE001 - the poll carries on whatever the book does
             self.hook_errors += 1
             log.exception("paper: step failed (poll %d)", self.polls)
