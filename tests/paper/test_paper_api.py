@@ -154,6 +154,27 @@ class TestEnabled:
         assert resp.status_code == 503
         assert "paper" in resp.json()["detail"]
 
+    def test_the_503_detail_is_one_short_line_without_the_sql(self, make_book):
+        # The panel shows it beside its title: the driver's message, not a statement dump.
+        book = make_book()
+
+        def locked(*_a: Any, **_k: Any) -> Any:
+            raise OperationalError("SELECT secret FROM paper_trades", {"p": 1}, Exception("locked"))
+
+        book.recent = locked  # type: ignore[method-assign]
+        detail = client_for(stub_desk(book)).get("/api/paper").json()["detail"]
+        assert detail == "paper book unreadable: locked"
+
+    def test_an_error_without_a_message_is_still_a_503(self, make_book):
+        book = make_book()
+
+        def disk(*_a: Any, **_k: Any) -> Any:
+            raise OSError()
+
+        book.recent = disk  # type: ignore[method-assign]
+        resp = client_for(stub_desk(book)).get("/api/paper")
+        assert (resp.status_code, resp.json()["detail"]) == (503, "paper book unreadable: OSError")
+
     @pytest.mark.parametrize(
         "corrupt",
         [

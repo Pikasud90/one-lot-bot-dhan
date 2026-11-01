@@ -350,7 +350,10 @@ def create_app(engine, api_token: str) -> FastAPI:
             return _paper_payload(engine.desk, dt.datetime.now(IST))
         except (SQLAlchemyError, OSError) as exc:
             log.warning("GET /api/paper: the paper book could not be read: %s", exc)
-            raise HTTPException(503, f"paper book unreadable: {exc}") from exc
+            # One line for the panel: the driver's message, never the SQL or its parameters.
+            text = str(getattr(exc, "orig", None) or exc).strip() or type(exc).__name__
+            brief = text.splitlines()[0]
+            raise HTTPException(503, f"paper book unreadable: {brief}") from exc
 
     # ── account (free Trading API; cached, never polled) ──────────────────
     @app.get("/api/account")
