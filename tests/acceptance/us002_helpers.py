@@ -208,6 +208,10 @@ def mk_rules(**kw: Any) -> Any:
 
 
 def trail_rules(mult: float = 1.5, activate: float = 1.0, atr: float | None = 4.0, **kw: Any):
+    """Trail rules on 1-MINUTE strategy bars (tf_min 1) unless a test says otherwise: the trail
+    arms and ratchets at strategy-bar closes only (Manager decision, cycle 2), and with tf_min 1
+    every fine bar close is one. Tests of tf_min > 1 boundaries pass tf_min explicitly."""
+    kw.setdefault("tf_min", 1)
     return mk_rules(trail_atr_mult=mult, trail_activate_r=activate, atr=atr, **kw)
 
 
@@ -289,7 +293,10 @@ def make_alert(alert_id: str = "A1", manage: dict | None = None, **kw: Any) -> d
     horizon = kw.pop("horizon", "intraday")
     alert = H.make_alert(alert_id, **kw)
     alert["horizon"] = horizon
-    alert["manage"] = {**BASE_MANAGE, "horizon": horizon, **(manage or {})}
+    merged = {**BASE_MANAGE, "horizon": horizon, **(manage or {})}
+    if merged.get("trail_atr_mult") and "tf_min" not in (manage or {}):
+        merged["tf_min"] = 1  # a trail test runs on 1-minute strategy bars (see trail_rules)
+    alert["manage"] = merged
     return alert
 
 
