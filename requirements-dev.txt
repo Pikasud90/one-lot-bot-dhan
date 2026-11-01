@@ -5,4 +5,7 @@ pytest-cov>=5.0
 pytest-asyncio>=0.23
 hypothesis>=6.100
 freezegun>=1.5
-ruff>=0.4
+# Gate tools are pinned EXACTLY: a formatter or type-checker upgrade changes the gate's
+# verdict, so it must be its own reviewed commit (and, for mypy, a new ratchet baseline).
+ruff==0.17.3
+mypy==2.4.1
