@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import os
+import re
 import secrets
 from pathlib import Path
 from typing import Literal
@@ -569,13 +570,31 @@ _MIN_TELEGRAM_SECRET_PART = 16
 def telegram_token_forms(token: str) -> list[str]:
     """The spellings of a Telegram bot token the log redactor must know (ADR-002 #8):
     the token, its `%3A` (percent-encoded colon) form and the secret part after the
-    colon, which also covers `bot<token>` and a lower-case `%3a`. Empty for no token."""
-    if not token:
-        return []
+    colon, which also covers `bot<token>` and a lower-case `%3a`. Empty for no token and
+    for a value without a colon, which is not a token (a chat id in the wrong field)."""
     bot_id, colon, secret = token.partition(":")
-    if not colon or len(secret) < _MIN_TELEGRAM_SECRET_PART:
+    if not colon:
+        return []
+    if len(secret) < _MIN_TELEGRAM_SECRET_PART:
         return [token]
     return [token, f"{bot_id}%3A{secret}", secret]
+
+
+_CHAT_ID_LIKE = re.compile(r"-?[0-9]+")
+
+
+def telegram_redaction_literals(token: str) -> list[str]:
+    """What the redactor registers for a configured TELEGRAM_BOT_TOKEN, valid or not (a
+    typo in .env is still mostly the secret). The one rule for Secrets and the client:
+    the token forms when the stripped value has a colon; a colon-less value only when it
+    can be the secret part pasted alone (16+ characters and not a number); never a chat
+    id pasted into the wrong field, which would scrub that number from every log line."""
+    value = token.strip()
+    if ":" in value:
+        return telegram_token_forms(value)
+    if len(value) >= _MIN_TELEGRAM_SECRET_PART and not _CHAT_ID_LIKE.fullmatch(value):
+        return [value]
+    return []
 
 
 class Secrets:
@@ -753,7 +772,7 @@ class Secrets:
             )
             if v and len(v) >= 4
         ]
-        return values + telegram_token_forms(self.telegram_bot_token)
+        return values + telegram_redaction_literals(self.telegram_bot_token)
 
     def __repr__(self) -> str:  # never leak via repr in a traceback
         return f"<Secrets client_id={'set' if self.client_id else 'unset'} token=***>"

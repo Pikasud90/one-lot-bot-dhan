@@ -46,7 +46,7 @@ from typing import Any, Literal
 import httpx
 
 from ..clock import to_ist
-from ..config import telegram_token_forms
+from ..config import telegram_redaction_literals
 from ..logging_setup import get_redactor, register_secrets
 from .base import shown_confidence
 
@@ -422,14 +422,13 @@ def _harden_logging(token: str) -> tuple[str, ...]:
     mostly the secret), and return its spellings, longest first.
 
     * every spelling (the token, its %3A form, the part after the colon) is registered with
-      the process-wide redactor; a value without a colon is not token-like and is skipped,
-      so a chat id pasted into the wrong field never scrubs numbers from every log line;
+      the process-wide redactor by the same rule Secrets uses (telegram_redaction_literals):
+      a chat id pasted into the wrong field is never registered, so numbers in logs survive;
     * that redactor is attached to the httpx logger itself, once: a filter on the logger
       scrubs each record before ANY handler sees it, even one added without setup_logging;
     * httpcore (and any child set lower) is raised to WARNING; a stricter level is kept.
     """
-    value = token.strip()
-    forms = telegram_token_forms(value) if ":" in value else []
+    forms = telegram_redaction_literals(token)
     register_secrets(forms)
     redactor = get_redactor()
     with _logging_lock:
