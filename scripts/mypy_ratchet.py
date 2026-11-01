@@ -9,9 +9,9 @@ Instead every file's error count is held at or below the tracked baseline
      "files": {"src/onelot/x.py": 3, ...}}
 
 Paths are POSIX and relative to the repo root; a file absent from ``files`` has a
-baseline of 0. Counts are only comparable for the same mypy and the same flags: a
-check re-runs mypy with the flags recorded in ``_meta.flags``, and a different mypy
-version is a tool error, not a pass. ``--update`` records this script's MYPY_FLAGS.
+baseline of 0. Counts are only comparable for the same mypy and the same flags, so a
+check runs MYPY_FLAGS and treats a different mypy version, or ``_meta.flags`` that
+differ from MYPY_FLAGS, as a tool error, not a pass. ``--update`` records MYPY_FLAGS.
 
 Usage::
 
@@ -20,9 +20,9 @@ Usage::
     .venv/bin/python scripts/mypy_ratchet.py --update --allow-regression
 
 Exit codes: 0 ok (a decrease asks you to run --update) · 1 regression (or --update
-refused to raise a count) · 2 tool error: mypy missing or crashed, its version differs
-from the baseline's, unparsable output, errors prevented further checking, or a
-missing or invalid baseline. Exit 2 never means "probably fine".
+refused to raise a count) · 2 tool error: mypy missing or crashed, its version or the
+flags differ from the baseline's, unparsable output, errors prevented further checking,
+or a missing or invalid baseline. Exit 2 never means "probably fine".
 
 Deliberately NOT a mypy config file: a [tool.mypy] section, mypy.ini or setup.cfg
 would make the team's gate treat mypy as a hard requirement on the legacy code.
@@ -48,8 +48,8 @@ EXIT_OK = 0
 EXIT_REGRESSION = 1
 EXIT_TOOL_ERROR = 2
 
-# What --update runs and records in _meta.flags; a check re-runs the RECORDED flags, so
-# editing this tuple takes effect at the next --update (commit both together).
+# What mypy always runs with; --update records it in _meta.flags and a check refuses a
+# baseline whose flags differ, so editing this tuple needs an --update (commit both together).
 #   --config-file=      ignore any user-level or repo mypy config: same flags, same counts
 #   --python-version    pin the typeshed view, so the interpreter running mypy cannot move it
 MYPY_FLAGS: tuple[str, ...] = (
@@ -265,18 +265,21 @@ def write_baseline(path: Path, version: str, counts: Mapping[str, int]) -> None:
 def check(root: Path, baseline_path: Path) -> int:
     """Compare a fresh mypy run with the baseline; never writes."""
     baseline = load_baseline(baseline_path, root)
+    if baseline.flags != MYPY_FLAGS:
+        # Running the recorded flags would let an edit to the JSON narrow the target or
+        # add a suppressing flag, and every count would then "fall" to a green check.
+        raise RatchetError(
+            f"{baseline_path} _meta.flags {list(baseline.flags)} differ from this script's "
+            f"MYPY_FLAGS {list(MYPY_FLAGS)}: counts are only comparable under the same flags. "
+            "If MYPY_FLAGS changed on purpose, run --update and commit both files together."
+        )
     version = installed_mypy_version(root)
     if version != baseline.mypy_version:
         raise RatchetError(
             f"baseline was captured with mypy {baseline.mypy_version} but {version} is "
             "installed: install the pinned mypy, or re-baseline with --update"
         )
-    if baseline.flags != MYPY_FLAGS:
-        _err(
-            f"note: checking with the baseline's recorded flags {list(baseline.flags)}; "
-            f"this script's MYPY_FLAGS {list(MYPY_FLAGS)} take effect at the next --update"
-        )
-    observed = observe(root, baseline.flags)
+    observed = observe(root, MYPY_FLAGS)
     result = compare(baseline.files, observed, root)
     for path in result.deleted:
         _err(f"warning: baseline entry for deleted file {path}; run --update to drop it")

@@ -336,7 +336,7 @@ class TestCheck:
         code, _, _ = run(ratchet, rig, capsys)
         assert code == 0
 
-    def test_mypy_runs_as_a_module_of_this_interpreter_in_root_with_the_recorded_flags(
+    def test_mypy_runs_as_a_module_of_this_interpreter_in_root_with_the_scripts_flags(
         self, ratchet, rig: Rig, capsys, monkeypatch: pytest.MonkeyPatch
     ):
         monkeypatch.setenv("MYPYPATH", "/somewhere/else")
@@ -407,16 +407,31 @@ class TestCheck:
         assert code == 2
         assert err.strip(), "a tool error must say what went wrong"
 
-    def test_a_check_reruns_the_flags_recorded_in_the_baseline_and_says_so(
-        self, ratchet, rig: Rig, capsys
+    @pytest.mark.parametrize(
+        "edit",
+        [
+            pytest.param(lambda f: [x for x in f if x != "src"] + ["src/pkg/a.py"], id="narrowed"),
+            pytest.param(lambda f: [*f, "--follow-imports=skip"], id="suppressing-flag-added"),
+            pytest.param(lambda f: ["--strict", "src"], id="replaced"),
+        ],
+    )
+    def test_a_baseline_whose_flags_differ_from_the_scripts_is_a_tool_error(
+        self, ratchet, rig: Rig, capsys, edit
     ):
-        """Counts are only comparable under the flags they were captured with."""
-        rig.write_baseline({"src/pkg/a.py": 1}, flags=["--strict", "src"])
-        rig.mypy(mypy_output({"src/pkg/a.py": 1}))
-        code, _, err = run(ratchet, rig, capsys)
-        assert code == 0
-        assert rig.calls()[-1]["argv"] == ["--strict", "src"]
-        assert "recorded flags" in err and "--update" in err
+        """Editing _meta.flags in a PR must not widen the gate: counts are only comparable
+        under MYPY_FLAGS, so a check refuses other flags instead of running them."""
+        foreign = edit(list(rig.flags))
+        rig.write_baseline({"src/pkg/a.py": 3}, flags=foreign)
+        rig.mypy(mypy_output({}))  # what a narrowed run would report: every count "fell"
+        code, out, err = run(ratchet, rig, capsys)
+        assert code == 2, out + err
+        assert "flags" in err and "--update" in err
+        assert all(call["argv"] != foreign for call in rig.calls()), "ran the foreign flags"
+
+    def test_the_tracked_baseline_records_the_scripts_flags(self, ratchet):
+        """The committed pair must agree, or the gate's ratchet step exits 2."""
+        tracked = ratchet.load_baseline(ROOT / "scripts" / "mypy_baseline.json", ROOT)
+        assert tracked.flags == ratchet.MYPY_FLAGS
 
     def test_update_runs_and_records_the_scripts_flags(self, ratchet, rig: Rig, capsys):
         rig.write_baseline({"src/pkg/a.py": 1}, flags=["--strict", "src"])
