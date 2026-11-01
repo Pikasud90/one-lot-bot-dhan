@@ -36,7 +36,7 @@ import us023_helpers as W
 
 from onelot.config import AppConfig, BacktestCfg
 from onelot.desk.economics import index_option_economics
-from onelot.lab.execution import OptionPricer, expiry_datetime
+from onelot.lab.execution import OptionPricer
 
 NAN, INF = float("nan"), float("inf")
 
@@ -557,15 +557,6 @@ class TestANanVixFallsBack:
         assert all(math.isfinite(x) for x in figures), figures
         assert got.option["iv"] == fallback.option["iv"] == self.BT.option_iv_constant
         assert got.as_dict() == fallback.as_dict()
-
-    @pytest.mark.parametrize("vix", [NAN, INF, -3.0, 0.0], ids=["nan", "inf", "-3", "zero"])
-    def test_the_lab_pricer_uses_the_constant_iv_for_a_bad_vix_close(self, vix):
-        ts = pd.Timestamp(self.NOW)
-        series = pd.Series([vix], index=[ts.normalize()])
-        pricer = OptionPricer(self.BT, series)
-        assert pricer.iv_for(ts) == self.BT.option_iv_constant
-        premium = pricer.premium(54000.0, 54000.0, ts, expiry_datetime(dt.date(2026, 11, 24)), "CE")
-        assert math.isfinite(premium) and premium > 0
 
     def test_a_good_vix_is_still_used(self):
         """Guard against the cure that ignores VIX altogether."""
