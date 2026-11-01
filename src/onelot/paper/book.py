@@ -27,7 +27,7 @@ from typing import Any, Literal, NamedTuple, cast
 # error, so a NEW module stays at zero only by naming it here (the flags are untouched).
 import pandas as pd  # type: ignore[import-untyped]
 from sqlalchemy import Engine, Text, inspect, select, type_coerce
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from ..clock import IST, now_ist
 from ..config import BacktestCfg, PaperCfg
@@ -250,7 +250,10 @@ class PaperBook:
         `bars(series_key)` is called once per series that has a waiting trade. Each status
         change commits with its paper_events rows in one transaction. A failure on one
         trade is logged and counted in `hook_errors`; it never stops the other trades and
-        never escapes. A naive `now` is rejected (ValueError), never guessed.
+        never escapes. The exception is a locked database: every further write would wait
+        a whole busy timeout (30 s) while the Desk lock is held, so the step stops at the
+        first one, counts and logs it once, and the next poll retries (BUG-1, review 1).
+        A naive `now` is rejected (ValueError), never guessed.
         """
         _require_aware(now, "now")
         now = now.astimezone(IST)
@@ -270,13 +273,29 @@ class PaperBook:
             for trade in trades:
                 try:
                     events.extend(self._step_waiting(trade, view, now))
-                except Exception:
-                    log.exception(
-                        "paper: step failed for trade %s (alert %s)", trade.id, trade.alert_id
+                except OperationalError as exc:
+                    if not database_locked(exc):
+                        self._step_failed(trade)
+                        continue
+                    log.error(
+                        "paper: database is locked at trade %s (alert %s); step stopped, "
+                        "%d waiting trade(s) retried on the next poll: %s",
+                        trade.id,
+                        trade.alert_id,
+                        len(waiting),
+                        exc.orig,
                     )
                     with self._lock:
                         self._counts["hook_errors"] += 1
+                    return events
+                except Exception:
+                    self._step_failed(trade)
         return events
+
+    def _step_failed(self, trade: PaperTrade) -> None:
+        log.exception("paper: step failed for trade %s (alert %s)", trade.id, trade.alert_id)
+        with self._lock:
+            self._counts["hook_errors"] += 1
 
     def open_trades(self) -> list[PaperTrade]:
         """A copy of the trades still managed (PENDING_FILL or OPEN), oldest first."""
@@ -745,6 +764,11 @@ def reconcile_since(now: dt.datetime, days: int) -> dt.datetime:
     """Midnight IST `days` calendar days before `now`'s IST date: the reconciliation horizon."""
     day = now.astimezone(IST).date() - dt.timedelta(days=max(int(days), 0))
     return dt.datetime.combine(day, dt.time(0), tzinfo=IST)
+
+
+def database_locked(exc: BaseException) -> bool:
+    """SQLite's "database is locked" / "database table is locked": another writer holds it."""
+    return isinstance(exc, OperationalError) and "is locked" in str(exc.orig).lower()
 
 
 def _event_row(event: PaperEvent) -> dict[str, Any]:
