@@ -11,16 +11,22 @@ are integer paise on the tick grid; bar prices become paise once, here, with `to
 slippage or option repricing: the book turns it into the trade's exit_paise.
 
 Rules for one bar, in time order (ported from `lab.simulator.simulate`, never called):
-  at the open  the stop is due when the open is at or through it (closes at the open;
-               `gap` when strictly through, like the fill rule's GAP_THROUGH_STOP); the
-               target is due when the open is through it by at least one tick (closes at
-               exactly the target, gap=True). Precedence (`desk.rules.exit_priority`)
-               picks among the reasons due at the same open.
+  at the open  an exit that fell due before the bar opened closes at the open: a strategy
+               exit whose signal bar closed at or before this open (AC4; Manager decision 1,
+               chronological: nothing inside the bar can pre-empt it). So does the stop when
+               the open is at or through it (`gap` when strictly through, like the fill
+               rule's GAP_THROUGH_STOP), and the target when the open is through it by at
+               least one tick (at exactly the target, gap=True). Precedence
+               (`desk.rules.exit_priority`) picks among the reasons due at the same open.
   inside       the stop on a touch (a long's low at or below it), at the stop; the target
                only when traded THROUGH by one tick, at exactly the target. STOP beats
                TARGET: which came first inside the bar is unknown, so the adverse one wins.
-  at the close (AC3-AC5, next slices) the trail ratchets; strategy, session and time exits
-               become due at the next bar's open.
+  at the close the trail ratchets from the close once the close is `trail_activate_r` in
+               profit (AC3); the moved stop acts from the NEXT bar and is booked as a
+               STOP_MOVED event stamped with this bar's close.
+A strategy exit reported before its exit bar has closed waits in `PositionState.pending_exit`
+(the earliest one wins; on a tie, the higher precedence), so a caller that reports it once
+still gets it. Session and time exits (AC5) are due at an open in the same way.
 Deliberate differences from the Lab: a target needs a trade-through and fills at exactly T
 (the Lab fills on a touch, at the open on a gap); no partial exits; the trail activates on
 the close, not on the bar's best price; no forced end-of-day close in swing (US-027).
@@ -30,8 +36,10 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import math
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
-from numbers import Integral
+from numbers import Integral, Real
 from typing import Any, Literal, NamedTuple, cast, get_args
 
 import numpy as np
@@ -40,10 +48,17 @@ import numpy as np
 import pandas as pd  # type: ignore[import-untyped]
 
 from ..clock import IST
-from ..desk.rules import bars_held, exit_priority, sessions_held
+from ..desk.rules import (
+    EXIT_PRECEDENCE,
+    bars_held,
+    exit_priority,
+    r_multiple,
+    ratchet_stop,
+    sessions_held,
+)
 from .events import PaperEvent
 from .fill import NS_PER_MINUTE, Bars, from_ns, infer_resolution_min, to_ns
-from .money import to_paise
+from .money import PAISE_PER_RUPEE, to_decimal, to_paise
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +80,7 @@ Kind = Literal["STOCK", "INDEX"]
 CLOSE_REASONS: frozenset[str] = frozenset(get_args(CloseReason))
 STRATEGY_EXIT_REASONS: frozenset[str] = frozenset(get_args(StrategyExitReason))
 CLOSED = "CLOSED"  # the event kind of a close
+STOP_MOVED = "STOP_MOVED"  # the event kind of a trail that tightened the stop
 PRICE_COLUMNS = ("open", "high", "low", "close")
 
 
@@ -104,7 +120,9 @@ class PositionState:
 
     `last_bar_ts` is the open time of the last bar managed (None until the first);
     `closed` is set once, by the bar that closed the position. `trade_id` is the
-    paper_trades id the events are booked under (0 in pure unit tests).
+    paper_trades id the events are booked under (0 in pure unit tests). `trail_active` is
+    True once the trail has moved the stop beyond the initial one. `pending_exit` is a
+    strategy exit reported before its exit bar closed (the book persists it with the state).
     """
 
     direction: Direction
@@ -122,6 +140,7 @@ class PositionState:
     option: dict[str, Any] | None
     trade_id: int = 0
     closed: PaperClose | None = None
+    pending_exit: StrategyExit | None = None
 
 
 @dataclass(frozen=True)
@@ -171,11 +190,12 @@ class BarPaise(NamedTuple):
     close: int
 
     def as_detail(self) -> dict[str, int]:
+        """The flat event-detail keys of the bar (Manager decision A1, 2026-11-01)."""
         return {
-            "open_paise": self.open,
-            "high_paise": self.high,
-            "low_paise": self.low,
-            "close_paise": self.close,
+            "bar_open_paise": self.open,
+            "bar_high_paise": self.high,
+            "bar_low_paise": self.low,
+            "bar_close_paise": self.close,
         }
 
 
@@ -235,13 +255,17 @@ def manage_step(
 
     A bar is eligible iff it opens at or after the fill bar (or after `last_bar_ts`) and
     its open plus the resolution is not later than `now`. Stepping again with the same
-    (now, bars) books nothing. Raises ValueError for a naive `now`, a malformed frame or
-    an inconsistent state (float paise, a stop on the wrong side of the entry, a stop
-    looser than the initial one).
+    (now, bars) books nothing. `strategy_exit` reports the strategy's exit seen on a bar
+    that closed by `now`; one whose bar closed at or before `opened_at` is stale and
+    ignored. Raises ValueError for a naive `now`, a malformed frame, a strategy exit from
+    after `now` (look-ahead) or an inconsistent state (float paise, a stop on the wrong
+    side of the entry, a stop looser than the initial one).
     """
     _require_aware(now, "now")
     _check_rules(rules)
     _check_state(state)
+    if strategy_exit is not None:
+        _check_strategy_exit(strategy_exit, now)
     if state.closed is not None:
         return state, []
     return _manage(state, normalise_ohlc(bars), rules, now.astimezone(IST), strategy_exit)
@@ -254,7 +278,7 @@ def _manage(
     now: dt.datetime,
     strategy_exit: StrategyExit | None,
 ) -> tuple[PositionState, list[PaperEvent]]:
-    sign = 1 if state.direction == "long" else -1
+    pending = _earliest_exit(state, strategy_exit)
     res_min = rules.resolution_min or infer_resolution_min(Bars(ns=view.ns, opens=view.open))
     res = dt.timedelta(minutes=res_min)
     if state.last_bar_ts is None:
@@ -262,10 +286,12 @@ def _manage(
     else:
         lo = int(np.searchsorted(view.ns, to_ns(state.last_bar_ts), side="right"))
     hi = int(np.searchsorted(view.ns, to_ns(now) - res_min * NS_PER_MINUTE, side="right"))
-    if hi <= lo:
-        return state, []
+    if hi <= lo:  # no new closed bar: only a newly reported exit is remembered
+        return replace(state, pending_exit=pending), []
 
-    stop, target = state.stop_paise, state.target_paise
+    sign = 1 if state.direction == "long" else -1
+    trail_atr = _trail_atr_paise(rules)
+    stop, trail_active = state.stop_paise, state.trail_active
     last_ts = state.last_bar_ts
     seen_date = None if last_ts is None else last_ts.astimezone(IST).date()
     new_dates: list[dt.date] = []
@@ -283,23 +309,45 @@ def _manage(
         bar = BarPaise(
             *(to_paise(float(col[i])) for col in (view.open, view.high, view.low, view.close))
         )
-        closed = _close_on_bar(sign, bar, bar_ts, stop, state.initial_stop_paise, target, rules)
+        due_at_open = _exits_due_at_open(bar_ts, pending)
+        closed = _close_on_bar(sign, bar, bar_ts, stop, state, rules.tick_paise, due_at_open)
         if closed is not None:
             events.append(_closed_event(state, closed, bar, stop, res_min))
             break
-        # AC3-AC5 (next slices): ratchet the trail at this close; strategy, session and
-        # time exits become due at the next bar's open.
+        trailed = _trailed_stop(state, stop, bar.close, trail_atr, rules)
+        if trailed != stop:  # the bar's close moved it: it acts from the next bar on
+            events.append(_stop_moved_event(state, stop, trailed, bar, bar_ts, bar_ts + res))
+            stop, trail_active = trailed, True
 
     assert last_ts is not None  # hi > lo: at least one bar was walked
     new_state = replace(
         state,
         stop_paise=stop,
+        trail_active=trail_active,
         last_bar_ts=last_ts,
         bars_held=bars_held(state.opened_at, last_ts + res, rules.tf_min),
         sessions_held=state.sessions_held + sessions_held(new_dates),
         closed=closed,
+        pending_exit=None if closed is not None else pending,
     )
     return new_state, events
+
+
+def _earliest_exit(state: PositionState, reported: StrategyExit | None) -> StrategyExit | None:
+    """The strategy exit the position now waits for: the pending one or the newly reported
+    one, whichever bar closed first (on a tie, the higher precedence). A report whose bar
+    closed at or before the fill is stale: the position did not exist when it was seen."""
+    if reported is not None and reported.bar_close_ts <= state.opened_at:
+        reported = None
+    known = [e for e in (state.pending_exit, reported) if e is not None]
+    return min(known, key=lambda e: (e.bar_close_ts, EXIT_PRECEDENCE.index(e.reason)), default=None)
+
+
+def _exits_due_at_open(bar_ts: dt.datetime, pending: StrategyExit | None) -> tuple[str, ...]:
+    """The reasons that fell due before this bar opened (AC5 adds SESSION_END, TIME_STOP)."""
+    if pending is not None and bar_ts >= pending.bar_close_ts:
+        return (pending.reason,)
+    return ()
 
 
 def _close_on_bar(
@@ -307,15 +355,20 @@ def _close_on_bar(
     bar: BarPaise,
     bar_ts: dt.datetime,
     stop: int,
-    initial_stop: int,
-    target: int | None,
-    rules: ManageRules,
+    state: PositionState,
+    tick: int,
+    due_at_open: Iterable[str] = (),
 ) -> PaperClose | None:
-    """The close this bar makes, if any: what is due at its open first, then inside it."""
-    stop_reason: CloseReason = "TRAIL_STOP" if (stop - initial_stop) * sign > 0 else "STOP"
-    tick = rules.tick_paise
+    """The close this bar makes, if any: what is due at its open first, then inside it.
 
-    at_open: dict[str, tuple[int, bool]] = {}
+    `due_at_open` are the exits that fell due before the bar opened: they close at the
+    open (chronological, Manager decision 1), unless a gap through the stop or the target
+    is due at the same open and outranks them.
+    """
+    initial_stop, target = state.initial_stop_paise, state.target_paise
+    stop_reason: CloseReason = "TRAIL_STOP" if (stop - initial_stop) * sign > 0 else "STOP"
+
+    at_open: dict[str, tuple[int, bool]] = dict.fromkeys(due_at_open, (bar.open, False))
     through_stop = (bar.open - stop) * sign  # <= 0: the open is at or beyond the stop
     if through_stop <= 0:
         at_open[stop_reason] = (bar.open, through_stop < 0)
@@ -339,22 +392,71 @@ def _pick(due: dict[str, tuple[int, bool]], bar_ts: dt.datetime) -> PaperClose:
     return PaperClose(cast(CloseReason, reason), price, bar_ts, gap)
 
 
+def _trail_atr_paise(rules: ManageRules) -> float | None:
+    """The frozen ATR in paise (exact: Decimal x 100), or None when the trail is off: a
+    multiple or an ATR that is None, zero, negative or not finite (no live-ATR fallback),
+    or an activation level that is not a finite number (a NaN would arm on every bar)."""
+    usable = _positive_finite(rules.atr) and _positive_finite(rules.trail_atr_mult)
+    if not usable or not _finite(rules.trail_activate_r):
+        return None
+    return float(to_decimal(rules.atr) * PAISE_PER_RUPEE)
+
+
+def _trailed_stop(
+    state: PositionState, stop: int, close: int, atr_paise: float | None, rules: ManageRules
+) -> int:
+    """The stop after a bar that closed at `close`: ratcheted from that close once the close
+    is at least `trail_activate_r` in profit, snapped to the tick against the trader, never
+    loosened. R is measured from the INITIAL stop; a zero-risk position has no R to arm on."""
+    entry, initial = state.entry_paise, state.initial_stop_paise
+    if atr_paise is None or entry == initial:
+        return stop
+    if r_multiple(state.direction, entry, initial, close) < rules.trail_activate_r:
+        return stop
+    mult, tick = rules.trail_atr_mult, rules.tick_paise
+    # on the tick grid, or `stop` itself: an exact integer either way
+    return int(ratchet_stop(state.direction, stop, close, atr_paise, mult, tick=tick))
+
+
 def _closed_event(
     state: PositionState, close: PaperClose, bar: BarPaise, stop: int, res_min: int
 ) -> PaperEvent:
-    """The CLOSED event: final, with the bar prices it used (the feed may revise bars)."""
+    """The CLOSED event: final, with the bar prices it used (the feed may revise bars).
+
+    `price_paise` is the rule level on the managed series; the book adds the slipped
+    `exit_paise` (Manager decisions A1, A13)."""
     detail: dict[str, Any] = {
         "reason": close.reason,
         "price_paise": close.price_paise,
         "gap": close.gap,
         "bar_ts": close.at.isoformat(),
-        "bar": bar.as_detail(),
+        **bar.as_detail(),
         "stop_paise": stop,
         "initial_stop_paise": state.initial_stop_paise,
         "target_paise": state.target_paise,
         "resolution_min": res_min,
     }
     return PaperEvent(state.trade_id, close.at, CLOSED, detail)
+
+
+def _stop_moved_event(
+    state: PositionState,
+    old: int,
+    new: int,
+    bar: BarPaise,
+    bar_ts: dt.datetime,
+    effective_at: dt.datetime,
+) -> PaperEvent:
+    """The STOP_MOVED event, stamped with the bar CLOSE: the moment the new stop takes
+    effect (Manager decision 4). It stores the bar whose close moved it."""
+    detail: dict[str, Any] = {
+        "from_paise": old,
+        "to_paise": new,
+        "initial_stop_paise": state.initial_stop_paise,
+        "bar_ts": bar_ts.isoformat(),
+        **bar.as_detail(),
+    }
+    return PaperEvent(state.trade_id, effective_at, STOP_MOVED, detail)
 
 
 # ── validation ────────────────────────────────────────────────────────────────
@@ -403,10 +505,30 @@ def _check_state(state: PositionState) -> None:
             f"PositionState: stop_paise={state.stop_paise} is looser than "
             f"initial_stop_paise={state.initial_stop_paise}"
         )
+    if state.pending_exit is not None and not isinstance(state.pending_exit, StrategyExit):
+        raise ValueError(f"PositionState.pending_exit={state.pending_exit!r} is no StrategyExit")
+
+
+def _check_strategy_exit(strategy_exit: StrategyExit, now: dt.datetime) -> None:
+    if not isinstance(strategy_exit, StrategyExit):
+        raise ValueError(f"strategy_exit={strategy_exit!r} must be a StrategyExit or None")
+    if strategy_exit.bar_close_ts > now:
+        raise ValueError(
+            f"StrategyExit.bar_close_ts={strategy_exit.bar_close_ts.isoformat()} is after "
+            f"now={now.isoformat()}: a signal bar that has not closed is look-ahead"
+        )
 
 
 def _is_int(value: object) -> bool:
     return isinstance(value, Integral) and not isinstance(value, bool)
+
+
+def _finite(value: object) -> bool:
+    return isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _positive_finite(value: object) -> bool:
+    return _finite(value) and float(cast(Real, value)) > 0.0
 
 
 def _require_aware(ts: object, name: str) -> None:

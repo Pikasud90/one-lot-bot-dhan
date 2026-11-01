@@ -61,6 +61,7 @@ RULES = ManageRules(
 )
 TRAIL = replace(RULES, trail_atr_mult=1.0, trail_activate_r=1.0, atr=2.0)  # ATR in RUPEES
 QUIET = (1000.00, 1001.00, 999.00, 1000.50)  # a bar that touches nothing
+BAR_KEYS = ("bar_open_paise", "bar_high_paise", "bar_low_paise", "bar_close_paise")  # A1
 
 Row = tuple[float, float, float, float]
 
@@ -80,8 +81,10 @@ def position(
     stop: int | None = None,
     target: int | None = -1,
     option: dict | None = None,
+    opened: dt.datetime = OPENED,
 ) -> PositionState:
-    """A freshly filled position (nothing managed yet); levels in paise."""
+    """A freshly filled position (nothing managed yet); levels in paise; `opened` is the
+    fill bar's open."""
     sign = 1 if direction == "long" else -1
     stop = entry - sign * 500 if stop is None else stop
     target = entry + sign * 1000 if target == -1 else target
@@ -94,7 +97,7 @@ def position(
         stop_paise=stop,
         target_paise=target,
         trail_active=False,
-        opened_at=OPENED,
+        opened_at=opened,
         last_bar_ts=None,
         bars_held=0,
         sessions_held=0,
@@ -229,12 +232,7 @@ class TestAC1Stop:
         assert event.detail["price_paise"] == 99_500
         assert event.detail["gap"] is False
         assert event.detail["bar_ts"] == at(6).isoformat()
-        assert event.detail["bar"] == {
-            "open_paise": 99_800,
-            "high_paise": 99_900,
-            "low_paise": 99_500,
-            "close_paise": 99_700,
-        }
+        assert [event.detail[k] for k in BAR_KEYS] == [99_800, 99_900, 99_500, 99_700]
         assert event.detail["stop_paise"] == 99_500
 
 
@@ -279,7 +277,7 @@ class TestAC2Target:
         assert state.closed is None
 
 
-# ── AC3: the trailing stop (written red for Dev Alpha) ─────────────────────────
+# ── AC3: the trailing stop ─────────────────────────────────────────────────────
 
 
 class TestAC3Trail:
@@ -352,8 +350,27 @@ class TestAC3Trail:
         state, _ = step(position(target=None), rows, rules=TRAIL)
         assert state.closed == PaperClose("TRAIL_STOP", 100_200, at(7), gap=True)
 
+    def test_the_stop_moved_event_stores_the_bar_whose_close_moved_it(self) -> None:
+        bar1 = (1000.00, 1005.50, 999.50, 1005.00)
+        _, (moved,) = step(position(target=None), [bar1], rules=TRAIL)
+        assert (moved.trade_id, moved.detail["bar_ts"]) == (7, at(6).isoformat())
+        assert [moved.detail[k] for k in BAR_KEYS] == [100_000, 100_550, 99_950, 100_500]
 
-# ── AC4: strategy exits (written red for Dev Alpha) ────────────────────────────
+    def test_a_nan_activation_level_disables_the_trail(self) -> None:
+        # `r < nan` is False: without the guard a NaN would arm the trail on every bar
+        rules = replace(TRAIL, trail_activate_r=math.nan)
+        state, events = step(
+            position(target=None), [(1000.00, 1001.00, 999.50, 1000.00)], rules=rules
+        )
+        assert (state.stop_paise, state.trail_active, events) == (99_500, False, [])
+
+    def test_a_zero_risk_position_never_arms_the_trail(self) -> None:
+        flat_risk = position(stop=100_000, target=None)  # entry == stop: there is no R
+        state, events = step(flat_risk, [(1001.00, 1005.50, 1000.50, 1005.00)], rules=TRAIL)
+        assert (state.stop_paise, state.trail_active, events) == (100_000, False, [])
+
+
+# ── AC4: strategy exits ────────────────────────────────────────────────────────
 
 
 def exit_at(minute: int, reason: str = "SIGNAL_EXIT") -> StrategyExit:
@@ -429,6 +446,24 @@ class TestAC4StrategyExit:
         state, _ = step(state, rows, strategy_exit=exit_at(10))
         assert state.closed == PaperClose("OPPOSITE_SIGNAL", 100_000, at(8), gap=False)
 
+    def test_an_exit_reported_when_no_new_bar_has_closed_is_remembered(self) -> None:
+        rows = [*FOUR_QUIET, (1002.00, 1003.00, 1001.00, 1002.50)]
+        state, _ = step(position(), rows, now=at(10))  # 10:06 .. 10:09 managed
+        half = at(10) + dt.timedelta(seconds=30)
+        state, events = step(state, rows, now=half, strategy_exit=exit_at(10))
+        assert (events, state.pending_exit, state.last_bar_ts) == ([], exit_at(10), at(9))
+        state, _ = step(state, rows, now=at(11))
+        assert state.closed == PaperClose("SIGNAL_EXIT", 100_200, at(10), gap=False)
+        assert state.pending_exit is None
+
+    def test_an_exit_reported_after_its_bar_was_managed_closes_at_the_next_open(self) -> None:
+        # Booked events are final: the open at B's close is past, so the first bar not yet
+        # managed is the first open the paper trade can still act on.
+        rows = [*FOUR_QUIET, QUIET, QUIET, (1001.00, 1002.00, 1000.00, 1001.50)]  # .. 10:12
+        state, _ = step(position(), rows, now=at(12))  # 10:06 .. 10:11 managed
+        state, _ = step(state, rows, now=at(13), strategy_exit=exit_at(10))
+        assert state.closed == PaperClose("SIGNAL_EXIT", 100_100, at(12), gap=False)
+
 
 # ── the contract ───────────────────────────────────────────────────────────────
 
@@ -488,7 +523,7 @@ class TestContract:
         rows = [QUIET, (994.00, 997.00, 996.00, 996.50)]
         state, (event,) = step(position(), rows)
         assert state.closed == PaperClose("STOP", 99_400, at(7), gap=True)
-        assert event.detail["bar"]["low_paise"] == 99_600
+        assert event.detail["bar_low_paise"] == 99_600
 
     def test_a_close_outside_the_high_low_is_not_a_touch(self) -> None:
         # Touches come from high/low (and the open); the close only feeds the trail.
