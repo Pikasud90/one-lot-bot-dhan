@@ -43,14 +43,26 @@ exit 0
 """
 
 
+STEPS_MARKER = "# --- steps: CONTRIBUTING.md lists exactly these ---"
+GATE_EPILOGUE = 'echo "gate: PASS"'
+
+
+def gate_sections() -> tuple[list[str], list[str]]:
+    """gate.sh's executable lines before and after the steps marker: (prelude, steps)."""
+    lines = [line.strip() for line in GATE.read_text(encoding="utf-8").splitlines()]
+    assert lines.count(STEPS_MARKER) == 1, f"gate.sh needs exactly one {STEPS_MARKER!r} line"
+    cut = lines.index(STEPS_MARKER)
+
+    def executable(chunk: list[str]) -> list[str]:
+        return [line for line in chunk if line and not line.startswith("#")]
+
+    return executable(lines[:cut]), executable(lines[cut + 1 :])
+
+
 def gate_commands() -> list[str]:
-    """Commands gate.sh runs, with the interpreter variable spelled as the venv path."""
-    commands = []
-    for line in GATE.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if stripped.startswith('"$PY" '):
-            commands.append(VENV_PYTHON + stripped.removeprefix('"$PY"'))
-    return commands
+    """The gate's steps, with the interpreter variable spelled as the venv path."""
+    _, steps = gate_sections()
+    return [VENV_PYTHON + line.removeprefix('"$PY"') for line in steps if line.startswith('"$PY" ')]
 
 
 def running_everything_section() -> str:
@@ -70,6 +82,22 @@ def ruff_pin() -> str:
 # --------------------------------------------------------------------------- AC5 doc test
 def test_gate_runs_the_four_contract_steps_in_order() -> None:
     assert gate_commands() == [f"{VENV_PYTHON} {step}" for step in GATE_STEPS]
+
+
+def test_every_executable_line_after_the_prelude_is_a_documented_step() -> None:
+    """A future non-"$PY" step would escape the doc test, so none may exist."""
+    _, steps = gate_sections()
+    assert steps[-1] == GATE_EPILOGUE, f"gate.sh must end with {GATE_EPILOGUE!r}"
+    offenders = [line for line in steps[:-1] if not line.startswith('"$PY" ')]
+    assert not offenders, f"gate.sh steps that CONTRIBUTING.md cannot list: {offenders}"
+
+
+def test_the_prelude_runs_no_gate_step() -> None:
+    prelude, _ = gate_sections()
+    leaked = [
+        line for line in prelude if re.search(r"ruff (format|check)|mypy_ratchet|pytest", line)
+    ]
+    assert not leaked, f"gate steps above the steps marker escape the doc test: {leaked}"
 
 
 def test_contributing_lists_exactly_the_gate_commands_in_one_bash_block() -> None:

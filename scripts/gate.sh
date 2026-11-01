@@ -17,6 +17,7 @@ fi
 trap 'echo "gate: FAIL (exit $?) at: $BASH_COMMAND" >&2' ERR
 echo "gate: $PY in $ROOT"
 
+# --- steps: CONTRIBUTING.md lists exactly these ---
 "$PY" -m ruff format --check .
 "$PY" -m ruff check .
 "$PY" scripts/mypy_ratchet.py
