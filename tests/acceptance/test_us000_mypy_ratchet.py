@@ -23,6 +23,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -241,6 +242,7 @@ class Sandbox:
         hide_mypy: bool = False,
         script: Path | None = None,
         with_paths: bool = True,
+        umask: int | None = None,
     ) -> Run:
         assert RATCHET.is_file(), "scripts/mypy_ratchet.py does not exist yet (US-000 AC3)"
         calls_log = self.fake_site / "calls.jsonl"
@@ -256,6 +258,15 @@ class Sandbox:
         if with_paths:
             command += ["--root", str(self.root), "--baseline", str(self.baseline)]
         command += list(args)
+        if umask is not None:  # POSIX only: run the ratchet under a chosen umask
+            command = [
+                "/bin/sh",
+                "-c",
+                'umask "$1"; shift; exec "$@"',
+                "sh",
+                f"{umask:04o}",
+                *command,
+            ]
         try:
             done = subprocess.run(
                 command,
@@ -847,6 +858,147 @@ def test_update_never_writes_a_baseline_from_a_failed_mypy_run(sb, scenario):
     run = sb.run("--update", "--allow-regression", hide_mypy=hide)
     assert_tool_error(run)
     assert sb.baseline_bytes() == before, "a failed mypy run must never rewrite the baseline"
+
+
+# --------------------------------------------------------------------------------------------
+# mode B: bootstrap, flags, file mode, quoting (regression tests for the review fixes)
+# --------------------------------------------------------------------------------------------
+def test_update_with_no_baseline_refuses_any_error_without_allow_regression(sb):
+    # A missing baseline counts as an empty one: bootstrapping with errors is a deliberate act.
+    assert not sb.baseline.exists()
+    sb.mypy_counts({ALPHA: 1, BETA: 2})
+    run = sb.run("--update")
+    assert run.code == 1, run.text
+    assert ALPHA in run.text and BETA in run.text, run.text
+    assert "Traceback (most recent call last)" not in run.text, run.text
+    assert not sb.baseline.exists(), "a refused bootstrap must not create the baseline"
+
+
+def test_deleting_the_baseline_cannot_launder_existing_errors_through_update(sb):
+    sb.set_baseline({ALPHA: 1, BETA: 1})
+    sb.mypy_counts({ALPHA: 1, BETA: 1})
+    sb.baseline.unlink()
+    run = sb.run("--update")
+    assert run.code == 1, run.text
+    assert not sb.baseline.exists()
+
+
+def test_update_with_no_baseline_and_a_clean_mypy_creates_an_empty_baseline(sb):
+    sb.mypy_counts({})
+    run = sb.run("--update")
+    assert run.code == 0, run.text
+    data = sb.baseline_json()
+    assert data["files"] == {}
+    assert data["_meta"]["mypy_version"] == FAKE_VERSION
+    assert data["_meta"]["flags"] == ratchet_flags()
+    assert sb.run().code == 0
+
+
+@pytest.mark.parametrize("clean", [True, False])
+def test_a_check_with_no_baseline_is_a_tool_error_even_when_mypy_is_clean(sb, clean):
+    sb.mypy_counts({} if clean else {ALPHA: 1})
+    run = sb.run()
+    assert run.code == 2, run.text
+    assert "--update" in run.text, "the error should say how to create the baseline"
+    assert not sb.baseline.exists(), "a check must never create the baseline"
+
+
+def _flag_variant(kind: str, flags: list[str]) -> list[str]:
+    if kind == "suppressing flag added":
+        return [*flags, "--ignore-errors"]
+    if kind == "exclude added":
+        return [*flags, "--exclude", "src"]
+    if kind == "first flag dropped":
+        return flags[1:]
+    if kind == "reordered":
+        return [*reversed(flags)] if len(set(flags)) > 1 else [*flags, "--x"]
+    return []
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["suppressing flag added", "exclude added", "first flag dropped", "reordered", "empty"],
+)
+def test_a_baseline_recorded_with_other_flags_is_a_tool_error_and_those_flags_never_run(sb, kind):
+    flags = ratchet_flags()
+    other = _flag_variant(kind, flags)
+    assert other != flags, "test precondition: the variant must differ"
+    sb.set_baseline({ALPHA: 5}, flags=other)
+    sb.mypy_counts({ALPHA: 1})  # would look like a green decrease if the recorded flags were run
+    before = sb.baseline_bytes()
+    run = sb.run()
+    assert_tool_error(run)
+    assert "flag" in run.text.lower(), run.text
+    assert all(call["argv"] == flags for call in run.check_calls), (
+        f"mypy ran with flags other than the script's: {run.check_calls}"
+    )
+    assert sb.baseline_bytes() == before
+
+
+def test_update_over_a_baseline_recorded_with_other_flags_adopts_the_script_flags(sb):
+    flags = ratchet_flags()
+    sb.set_baseline({ALPHA: 2}, flags=[*flags, "--ignore-errors"])
+    sb.mypy_counts({ALPHA: 2})
+    run = sb.run("--update")
+    assert run.code == 0, run.text
+    assert sb.baseline_json()["_meta"]["flags"] == flags
+    assert sb.run().code == 0
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+@pytest.mark.parametrize(
+    ("umask", "expected"),
+    [(0o022, 0o644), (0o002, 0o644), (0o000, 0o644), (0o077, 0o600)],
+)
+def test_update_writes_the_baseline_like_a_normal_checkout_file_respecting_the_umask(
+    sb, umask, expected
+):
+    sb.mypy_counts({ALPHA: 1})
+    run = sb.run("--update", "--allow-regression", umask=umask)
+    assert run.code == 0, run.text
+    mode = stat.S_IMODE(sb.baseline.stat().st_mode)
+    assert mode == expected, f"umask {umask:03o}: baseline mode {mode:03o}, expected {expected:03o}"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_update_replaces_a_private_baseline_with_a_normal_checkout_mode(sb):
+    sb.set_baseline({ALPHA: 2})
+    sb.baseline.chmod(0o600)
+    sb.mypy_counts({ALPHA: 1})
+    run = sb.run("--update", umask=0o022)
+    assert run.code == 0, run.text
+    assert stat.S_IMODE(sb.baseline.stat().st_mode) == 0o644
+
+
+@pytest.mark.parametrize("refused", [False, True])
+def test_update_leaves_no_temporary_files_next_to_the_baseline(sb, refused):
+    sb.set_baseline({ALPHA: 1})
+    sb.mypy_counts({ALPHA: 2} if refused else {ALPHA: 1})
+    run = sb.run("--update")
+    assert run.code == (1 if refused else 0), run.text
+    assert [p.name for p in sb.base.iterdir() if p.is_file()] == ["b.json"]
+
+
+def test_a_note_that_quotes_an_error_line_is_not_counted_as_a_second_error(sb):
+    stdout = "".join(
+        [
+            error_line(ALPHA, 3) + "\n",
+            f'{ALPHA}:3: note: Perhaps you meant "{BETA}:7: error: something else"\n',
+            summary_line(1, 1) + "\n",
+        ]
+    )
+    sb.set_baseline({ALPHA: 1})
+    sb.mypy(stdout=stdout, exit_code=1)
+    run = sb.run()
+    assert run.code == 0, run.text
+
+
+def test_an_error_message_that_quotes_another_error_line_counts_once_for_its_own_file(sb):
+    quoted = f"{ALPHA}:3: error: Cannot find implementation (see {BETA}:7: error: x)  [import]\n"
+    sb.set_baseline({ALPHA: 1})
+    sb.mypy(stdout=quoted + summary_line(1, 1) + "\n", exit_code=1)
+    run = sb.run()
+    assert run.code == 0, run.text
 
 
 # --------------------------------------------------------------------------------------------

@@ -29,9 +29,10 @@ instruments automatically; lot sizes there are fallbacks overridden by the Dhan 
 
 ## Running everything
 
-`scripts/gate.sh` is the quality gate. From the repo root it runs exactly these commands, in
-this order, with `.venv/bin/python` (else `python`, or `python3`, from `PATH`), and stops with a
-non-zero exit at the first one that fails. CI will run the same script (US-008).
+`scripts/gate.sh` is the quality gate. From the repo root it prints the ruff and mypy versions,
+then runs exactly these commands, in this order, with `.venv/bin/python` (else `python`, or
+`python3`, from `PATH`), and stops with a non-zero exit at the first one that fails.
+CI will run the same script (US-008).
 
 ```bash
 .venv/bin/python -m ruff format --check .
@@ -49,7 +50,7 @@ The mypy ratchet lets type errors fall but never rise, file by file, against the
 - When the ratchet prints `run --update`, run `.venv/bin/python scripts/mypy_ratchet.py --update`
   and commit the baseline in the same PR, so the improvement is locked in.
 - Deleting a file that has a baseline entry: run the ratchet with `--update` and commit the
-  baseline in the same commit (until then it warns about the stale entry).
+  baseline in the same commit (until then the ratchet warns and the gate fails).
 - Renaming one: run it with `--update --allow-regression` and commit the baseline in the same
   commit, because the new path counts up from 0; check that the baseline diff shows only the move.
 - Any other use of `--allow-regression` accepts new type errors and needs the owner's agreement.

@@ -12,7 +12,8 @@ Updated at each retrospective. The Manager copies the relevant lines into delega
 
 ## Conventions
 - Language and stack: Python 3.12 (src/onelot), FastAPI, SQLAlchemy/SQLite (WAL), vanilla JS UI with vendored Lightweight Charts (no build step). Venv: `.venv/bin/python`.
-- Run tests: `.venv/bin/python -m pytest -q -m "not slow and not live" -p no:warnings`; lint: `.venv/bin/python -m ruff check src tests`.
+- The gate (must exit 0 before PROPOSE_READY): `scripts/gate.sh` = `ruff format --check .` + `ruff check .` + `scripts/mypy_ratchet.py` (mypy 2.4.1, never raise a per-file count; never narrow what mypy checks: a change to MYPY_FLAGS needs the user's sign-off; a baseline change may only lower counts, and lower counts are committed in the same PR) + full pytest with `-m "not live"` (about 160 s). Fast inner loop while pairing: `.venv/bin/python -m pytest -q -m "not slow and not live" <paths>`. Tools pinned in requirements-dev.txt (ruff 0.17.3, mypy 2.4.1).
+- Formatting: run `.venv/bin/python -m ruff format <your files>` before committing; never reformat files you did not change.
 - HARD SAFETY INVARIANT (tests/test_invariants.py scans every identifier in src/): never use `place_order`, `modify_order`, `cancel_order`, `exit_position`, `square_off`, `convert_position`, `kill_switch_order` (or any alias in that file) as names, and never reference an `/orders` endpoint. Use `close_paper_trade`, `session_end_close`, etc.
 - Money: the paper ledger is integer paise (Decimal at boundaries); never float for ledger sums. Analytics may be float64.
 - Time: timezone-aware IST (`onelot.clock.IST`, `now_ist()`); never naive datetimes in new code.
