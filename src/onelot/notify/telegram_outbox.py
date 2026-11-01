@@ -180,6 +180,42 @@ def format_critical(event: Mapping[str, Any], now: dt.datetime) -> str:
     return "\n".join(lines)
 
 
+def format_plain(note: Mapping[str, Any], when: dt.datetime) -> str:
+    """A SIGNAL or EXIT that is not a Desk alert (the legacy Bank Nifty engine, BUG-1): its
+    Notification title in bold, the body on one line, the event time. Escaped and capped like
+    format_critical, so 'BUY BANKNIFTY 52000 CE x1 @ ~126.00' arrives as the toast shows it."""
+    title = _fit(note.get("title"), _CAP_TITLE) or "OneLot alert"
+    body = _fit(note.get("body"), _CAP_BODY)
+    lines = [f"<b>{title}</b>", *([body] if body else [])]
+    lines.append(f"Time {to_ist(when).strftime('%H:%M:%S')} IST")
+    return "\n".join(lines)
+
+
+def _plain_of(payload: Any) -> Mapping[str, Any] | None:
+    """The {title, body} note a channel stored instead of a Desk alert, else None."""
+    note = payload.get("plain") if isinstance(payload, Mapping) else None
+    return note if isinstance(note, Mapping) else None
+
+
+def _window(alert: Mapping[str, Any], now: dt.datetime, expired: bool) -> str:
+    deadline = _time_of(alert.get("expires_at"))
+    if deadline is None:
+        return f"till {NA}"
+    if expired or to_ist(now) >= deadline:
+        return f"expired {to_ist(deadline).strftime('%H:%M')}"
+    left = int((deadline - now).total_seconds() // 60)
+    return f"till {to_ist(deadline).strftime('%H:%M')} ({left}m left)"
+
+
+def format_missed_plain(alert: Mapping[str, Any], note: Mapping[str, Any], now: dt.datetime) -> str:
+    """format_missed for a stored note: 'Missed · {title} · expired 10:02 IST'."""
+    deadline = _time_of(alert.get("expires_at"))
+    passed = deadline is None or to_ist(now) >= deadline
+    shown = f"{to_ist(deadline).strftime('%H:%M')} IST" if deadline is not None else NA
+    title = _fit(note.get("title"), _CAP_TITLE) or "OneLot alert"
+    return SEP.join(["<b>Missed</b>", title, f"{'expired' if passed else 'valid till'} {shown}"])
+
+
 def format_note(event: Mapping[str, Any], now: dt.datetime) -> str:
     """A plain titled message (kinds without a formatter of their own, e.g. 'test')."""
     title = _fit(event.get("title"), _CAP_TITLE) or "OneLot"
@@ -188,16 +224,12 @@ def format_note(event: Mapping[str, Any], now: dt.datetime) -> str:
 
 
 def _digest_line(alert: Mapping[str, Any], now: dt.datetime, expired: bool) -> str:
+    window = _window(alert, now, expired)
+    note = _plain_of(alert)
+    if note is not None:  # a legacy alert: its title is all there is
+        return SEP.join([_fit(note.get("title"), _CAP_TITLE) or "OneLot alert", window])
     shown = shown_confidence(_raw_score(alert))  # floored, as on the alert and the desk
     conf = f"Conf {NA if shown is None else shown}"
-    deadline = _time_of(alert.get("expires_at"))
-    if deadline is None:
-        window = f"till {NA}"
-    elif expired or to_ist(now) >= deadline:
-        window = f"expired {to_ist(deadline).strftime('%H:%M')}"
-    else:
-        left = int((deadline - now).total_seconds() // 60)
-        window = f"till {to_ist(deadline).strftime('%H:%M')} ({left}m left)"
     return SEP.join([_header(alert), conf, window, _short_id(alert.get("id"))])
 
 
@@ -528,7 +560,12 @@ class TelegramOutbox:
 
     def _render(self, row: _Row, now: dt.datetime) -> str:
         payload = row.payload
-        if row.kind == "alert":
+        note = _plain_of(payload)
+        if note is not None and row.kind in ("alert", "exit"):
+            text = format_plain(note, row.alert_created_at) + _late(row, now)
+        elif note is not None and row.kind == "missed":
+            text = format_missed_plain(payload, note, now)
+        elif row.kind == "alert":
             text = format_alert(payload, now)
         elif row.kind == "exit":
             text = format_exit(payload, row.alert_created_at) + _late(row, now)

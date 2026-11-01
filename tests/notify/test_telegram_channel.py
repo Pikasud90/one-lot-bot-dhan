@@ -207,3 +207,153 @@ def test_a_pruned_position_raised_again_starts_a_fresh_budget(make_rig):
     channel.send(exit_for("p1", rig.clock()))
 
     assert [r["alert_id"] for r in rig.rows()][-1] == "p1#5"
+
+
+# ========================= BUG-1: the legacy engine's SIGNAL and EXIT ====================
+LEGACY_SIGNAL_TITLE = "BUY BANKNIFTY 52000 CE x1 @ ~126.00"
+LEGACY_SIGNAL_BODY = "BUY BANKNIFTY 11-26 52000 CE  x1 lot (30 qty)\nEntry ~126.00 (ask 125.50)"
+
+
+def legacy_signal(at: dt.datetime, title: str = LEGACY_SIGNAL_TITLE, **kw) -> Notification:
+    """Notifier.signal(sig) for the Bank Nifty engine: Signal.as_dict() has no trading_symbol,
+    series_key or side, so the Desk formatter would print '? ?'."""
+    payload = {
+        "signal_id": "5a1d0e2c9b47",
+        "created_at": at.isoformat(),
+        "expires_at": (at + dt.timedelta(minutes=2)).isoformat(),
+        "underlying": "BANKNIFTY",
+        "strike": 52000.0,
+        "opt_type": "CE",
+        "entry_eff": 126.0,
+    }
+    return Notification(
+        title=title,
+        body=kw.pop("body", LEGACY_SIGNAL_BODY),
+        level=L.SIGNAL,
+        signal_id="5a1d0e2c9b47",
+        ttl_seconds=120,
+        created_at=at,
+        payload=payload,
+        **kw,
+    )
+
+
+def legacy_exit(at: dt.datetime, reason: str = "STOP") -> Notification:
+    """Notifier.exit_alert(position, decision): ExitDecision.as_dict(), no position."""
+    return Notification(
+        title=f"EXIT 52000 CE {chr(0x2014)} {reason}",
+        body="Underlying through the stop: close the position at the market.",
+        level=L.EXIT,
+        position_id="9c3e5d7f1a20",
+        created_at=at,
+        payload={"action": "EXIT", "reason": reason, "message": "close it", "details": {}},
+    )
+
+
+def texts(rig: Rig) -> list[str]:
+    return [json.loads(r.read())["text"] for r in rig.requests]
+
+
+def test_a_legacy_signal_is_sent_as_its_title_and_body(make_rig):
+    rig = make_rig()
+    channel = channel_of(rig)
+
+    assert channel.send(legacy_signal(T0)) is True
+    rig.drain()
+
+    (row,) = rig.rows()
+    assert row["kind"] == "alert" and row["alert_id"] == "5a1d0e2c9b47"
+    assert texts(rig) == [
+        "<b>BUY BANKNIFTY 52000 CE x1 @ ~126.00</b>\n"
+        "BUY BANKNIFTY 11-26 52000 CE x1 lot (30 qty) Entry ~126.00 (ask 125.50)\n"
+        "Time 10:00:00 IST"
+    ]
+
+
+def test_a_legacy_note_is_escaped_and_capped(make_rig):
+    rig = make_rig()
+    channel = channel_of(rig)
+
+    channel.send(legacy_signal(T0, title="<b>BUY</b> & " + "x" * 500, body="y" * 20_000))
+    rig.drain()
+
+    (text,) = texts(rig)
+    assert text.startswith("<b>&lt;b&gt;BUY&lt;/b&gt; &amp; x") and len(text) <= 4096
+
+
+def test_a_legacy_exit_is_sent_as_its_title_and_keeps_the_reminder_budget(make_rig):
+    rig = make_rig()
+    channel = channel_of(rig)
+    for minute in range(31):
+        rig.clock.now = T0 + dt.timedelta(minutes=minute)
+        channel.send(legacy_exit(rig.clock()))
+        rig.drain()
+    rig.clock.now = T0 + dt.timedelta(minutes=31)
+    channel.send(legacy_exit(rig.clock(), reason="TARGET"))  # another reason: a fresh budget
+    rig.drain()
+
+    sent = texts(rig)
+    assert [r["kind"] for r in rig.rows()] == ["exit"] * 5
+    assert len(sent) == 5 and all(t.startswith("<b>EXIT 52000 CE") for t in sent)
+    assert "STOP" in sent[0] and "TARGET" in sent[-1]
+
+
+def test_a_legacy_signal_that_expires_unsent_gets_a_readable_missed_note(make_rig):
+    down = [True]
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(502) if down[0] else ok()
+
+    rig = make_rig(respond)
+    channel_of(rig).send(legacy_signal(T0))
+    rig.outbox.drain_once()
+    rig.clock.now = T0 + dt.timedelta(minutes=5)  # valid for 2 minutes
+    down[0] = False
+
+    rig.drain()
+
+    assert texts(rig)[-1] == (
+        "<b>Missed</b> · BUY BANKNIFTY 52000 CE x1 @ ~126.00 · expired 10:02 IST"
+    )
+
+
+def test_legacy_signals_in_a_missed_digest_are_listed_by_title(make_rig):
+    from onelot.notify.telegram_outbox import format_digest
+
+    alerts = [
+        {"plain": {"title": f"BUY BANKNIFTY {52000 + 100 * i} CE"}, "expires_at": T0.isoformat()}
+        for i in range(3)
+    ]
+
+    text = format_digest({"reason": "expired", "alerts": alerts}, T0)
+
+    assert text.split("\n")[1:] == [
+        f"BUY BANKNIFTY {52000 + 100 * i} CE · expired 10:00" for i in range(3)
+    ]
+
+
+def test_a_legacy_signal_follows_the_quiet_rule(make_rig):
+    rig = make_rig()
+    closed = TelegramChannel(rig.client, rig.outbox, NotifyCfg(), lambda m: False, clock=rig.clock)
+
+    closed.send(legacy_signal(T0))
+
+    assert rig.rows()[0]["silent"] is True
+
+
+@pytest.mark.parametrize("key", ["trading_symbol", "series_key", "side"])
+def test_a_desk_payload_with_any_desk_field_keeps_the_desk_formatter(make_rig, key):
+    from onelot.notify.telegram import format_alert
+
+    rig = make_rig()
+    alert = rig.alert()
+    for other in ("trading_symbol", "series_key", "side"):
+        if other != key:
+            alert.pop(other, None)
+    alert.setdefault(key, "BUY" if key == "side" else "SBIN")
+    n = Notification(title="ignored", body="", level=L.SIGNAL, signal_id=alert["id"], payload=alert)
+
+    channel_of(rig).send(n)
+    rig.drain()
+
+    assert texts(rig) == [format_alert(alert, T0)]

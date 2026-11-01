@@ -42,6 +42,18 @@ class _ExitEpisode:
     last_raised_at: dt.datetime  # the last poll that raised it, a message or not
 
 
+def _is_desk_alert(payload: Mapping[str, Any]) -> bool:
+    """True for a Desk alert or position: it names a symbol or a side. The legacy Bank Nifty
+    engine's payloads name neither, and the Desk formatter would print '? ?' for them."""
+    return any(_plain(payload.get(key)) for key in ("trading_symbol", "series_key", "side"))
+
+
+def _note(n: Notification, **extra: Any) -> dict[str, Any]:
+    """What is stored for a SIGNAL or EXIT that is not a Desk alert: its title and body (the
+    text the dashboard and the toast show), sent by the outbox as a plain message."""
+    return {"plain": {"title": n.title, "body": n.body}, **extra}
+
+
 class TelegramChannel:
     """The Notifier's Telegram channel: decides what goes to the phone and queues it.
 
@@ -165,11 +177,14 @@ class TelegramChannel:
         expires = _time_of(alert.get("expires_at"))
         if expires is None and n.ttl_seconds:
             expires = created + dt.timedelta(seconds=n.ttl_seconds)
+        payload: Mapping[str, Any] = alert
+        if not _is_desk_alert(alert):  # BUG-1: the legacy engine's Signal.as_dict()
+            payload = _note(n, id=alert_id, expires_at=expires.isoformat() if expires else None)
         return self._outbox.enqueue(
             dedup_key=n.dedup_key or f"signal:{alert_id}",
             kind="alert",
             alert_id=alert_id,
-            payload=alert,
+            payload=payload,
             alert_created_at=created,
             expires_at=expires,
             silent=self._silent(n, now, blocked=alert.get("risk_allowed") is False),
@@ -185,6 +200,10 @@ class TelegramChannel:
             or n.notification_id
         )
         advice = _plain(event.get("advice"))
+        if not (isinstance(position, Mapping) and _is_desk_alert(position)):
+            # BUG-1: the legacy engine's ExitDecision.as_dict() has a reason and no position
+            advice = advice or _plain(event.get("reason"))
+            event = _note(n)
         with self._lock:
             self._forget_stale_episodes(now)  # back after an hour: a fresh budget
             episode = self._episodes.get(pid)
