@@ -100,7 +100,10 @@ def _plain(value: Any) -> str:
     if isinstance(value, str):
         text = value
     elif isinstance(value, (int, float, Decimal)):
-        text = str(value)
+        try:
+            text = str(value)
+        except ValueError:  # an int beyond Python's 4300-digit str() limit is unreadable
+            return ""
     else:
         return ""
     return " ".join(_INVISIBLE.sub("", text).split())

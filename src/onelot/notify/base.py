@@ -16,14 +16,21 @@ def shown_confidence(score: object) -> int | None:
 
     The score floored to a whole number and clamped to 0..100, so the number shown never
     crosses the label thresholds (high >= 65, low < 45: 64.9 shows 64, never a 'medium'
-    65). None when the score is missing or not a finite number (bools included).
+    65). None when the score is missing or not a finite number (bools included). The
+    comparisons are exact, never through float, so an int or a Decimal beyond float range
+    (10**400) is clamped like any other, not an OverflowError.
     """
     if isinstance(score, bool) or not isinstance(score, (int, float, Decimal)):
         return None
-    value = float(score)
-    if not math.isfinite(value):
+    if isinstance(score, float) and not math.isfinite(score):
         return None
-    return math.floor(min(max(value, 0.0), 100.0))
+    if isinstance(score, Decimal) and not score.is_finite():
+        return None
+    if score >= 100:
+        return 100
+    if score <= 0:
+        return 0
+    return math.floor(score)
 
 
 class NotificationLevel(str, Enum):

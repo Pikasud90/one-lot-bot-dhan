@@ -489,6 +489,43 @@ class TestEscapingAndWhitelist:
         assert_telegram_html(msg)
 
 
+class TestJunkScalars:
+    """US-003 BUG-5: an astronomically large int where text or a number belongs."""
+
+    HUGE = 10**5000  # str() refuses ints beyond 4300 digits (ValueError)
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "label",
+            "series_key",
+            "trading_symbol",
+            "strategy_label",
+            "timeframe",
+            "id",
+            "side",
+            "kind",
+            "horizon",
+        ],
+    )
+    def test_a_huge_int_in_a_text_field_never_raises(self, path):
+        alert = stock_alert()
+        alert[path] = self.HUGE
+        msg = format_alert(alert, NOW)
+        assert_telegram_html(msg)
+        assert "\n" not in format_missed(alert, NOW)
+
+    def test_a_huge_int_in_exit_fields_never_raises(self):
+        event = exit_event("STOP", series_key=self.HUGE, unrealized=self.HUGE, kind=self.HUGE)
+        event["advice"] = self.HUGE
+        lines = format_exit(event, NOW).split("\n")
+        assert lines[1:3] == ["Reason: n/a", "Est. P&amp;L n/a"]
+
+    def test_a_huge_score_is_clamped(self):
+        alert = stock_alert(confidence={"score": self.HUGE, "label": "high"})
+        assert format_alert(alert, NOW).split("\n")[5] == "Conf 100 high"
+
+
 class TestBudget:
     def test_an_over_budget_label_is_cut_with_an_ellipsis(self):
         msg = format_alert(stock_alert(label="Reliance Industries " * 60), NOW)
