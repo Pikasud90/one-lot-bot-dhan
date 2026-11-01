@@ -584,6 +584,17 @@ class TestAC5SessionEndFallback:
         state, _ = manage_step(state, revised, RULES, when(15, 31))
         assert state.closed is not None and state.closed.price_paise == 100_035
 
+    def test_a_position_that_never_saw_a_usable_bar_is_left_open_not_priced(self) -> None:
+        nan = float("nan")
+        bars = self.bars([(nan, nan, nan, nan)] * 5)
+        state, events = manage_step(self.opened(), bars, RULES, when(15, 31))
+        assert (state.closed, events, state.last_close_paise) == (None, [], None)
+        assert state.last_bar_ts == when(15, 9)  # the cursor still moved past the garbage
+
+    def test_the_last_close_seen_is_remembered_with_its_close_time(self) -> None:
+        state, _ = manage_step(self.opened(), self.bars(), RULES, when(15, 10))
+        assert (state.last_close_paise, state.last_close_at) == (100_035, when(15, 10))
+
     def test_a_later_days_bar_ends_the_session_and_is_never_managed(self) -> None:
         stamps = [when(15, 5 + i) for i in range(5)] + [when(9, 15 + i, day=FRI) for i in range(3)]
         bars = frame_at(stamps, [*self.ROWS] + [NEXT_DAY] * 3)
@@ -624,6 +635,11 @@ class TestAC5TimeStop:
     def test_a_negative_max_bars_is_rejected(self) -> None:
         with pytest.raises(ValueError, match="max_bars"):
             manage_step(position(), frame([QUIET]), replace(RULES, max_bars=-1), at(7))
+
+    def test_an_exit_time_that_is_not_a_time_is_rejected(self) -> None:
+        rules = replace(RULES, exit_time="15:15")  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match="exit_time"):
+            manage_step(position(), frame([QUIET]), rules, at(7))
 
 
 # ── AC6: stepping is idempotent and catches up (written red for Dev Beta, T3) ──
