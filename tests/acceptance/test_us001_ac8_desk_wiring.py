@@ -310,7 +310,10 @@ class TestARaisingBookNeverBlocksTheDesk:
         alert = H.raise_alert(d, "SBIN", now=H.mid_session(d, "SBIN"))
         d.poll()  # step works again
         assert hook_errors(d) == 1
-        assert H.val(H.trade_row(desk_db.engine, alert["id"])["status"]) in ("OPEN", "NO_FILL")
+        row = H.trade_row(desk_db.engine, alert["id"])
+        assert H.val(row["status"]) in ("OPEN", "CLOSED", "NO_FILL")  # managed in the same step
+        kinds = H.kinds_of(desk_db.engine, alert["id"])
+        assert "FILLED" in kinds or "NO_FILL" in kinds, kinds
 
     def test_a_raising_spy_is_survived_too(self, app_cfg, desk_db):
         class Exploding(H.SpyPaper):
@@ -339,12 +342,12 @@ class TestEndToEndThroughTheDesk:
         bars = d.trackers["SBIN"].bars
         fill_ts = bars.index[bars.index > now][0]
         row = H.trade_row(desk_db.engine, alert["id"])
-        assert H.val(row["status"]) == "OPEN"
-        assert H.same_instant(row["fill_bar_ts"], fill_ts.to_pydatetime())
         want = H.expected_stock_entry(
             float(bars["open"].loc[fill_ts]), "long", app_cfg.backtest.slippage_pct
         )
-        assert row["entry_paise"] == want
+        # the poll's bars are all closed, so the fill may already be managed to a close in the
+        # same step (US-002): judge the fill on the entry columns, not on a status
+        H.assert_filled(row, at_ts=fill_ts.to_pydatetime(), entry=want)
         assert row["resolution_min"] == 2 and row["qty"] == 1
         assert book.status()["opened"] == 1 and book.status()["filled"] == 1
         assert hook_errors(d) in (0, None)

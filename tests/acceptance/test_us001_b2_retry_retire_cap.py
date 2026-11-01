@@ -74,9 +74,10 @@ def stamps(*hhmm, day=H.DAY):
 
 
 CAP_CASES = [
-    # (id, resolution, created, source, ttl, bar opens, now, status, fill bar)
+    # (id, resolution, created, source, ttl, bar opens, now, outcome, fill bar); outcome FILLED
+    # means the entry columns are set (the same step may already have managed it to a close)
     ("1m-fills-the-last-session-bar", 1, H.at(15, 28, 30), "dhan", 10,
-     stamps((15, 28), (15, 29), (15, 30), (15, 31)), H.at(15, 35), "OPEN", H.at(15, 29)),
+     stamps((15, 28), (15, 29), (15, 30), (15, 31)), H.at(15, 35), "FILLED", H.at(15, 29)),
     ("1m-hole-at-1529-never-fills-the-1530-print", 1, H.at(15, 28, 30), "dhan", 10,
      stamps((15, 28), (15, 30), (15, 31)), H.at(15, 35), "NO_FILL", None),
     ("1m-1529-alert-and-post-close-bars", 1, H.at(15, 29, 3), "dhan", 10,
@@ -84,7 +85,7 @@ CAP_CASES = [
     ("1m-alert-in-the-last-microsecond", 1, H.at(15, 29, 59, 999999), "dhan", 10,
      stamps((15, 29), (15, 30), (15, 31)), H.at(15, 40), "NO_FILL", None),
     ("2m-fills-the-last-session-bar", 2, H.at(15, 27, 3), "dhan", 10,
-     stamps((15, 26), (15, 28), (15, 30)), H.at(15, 40), "OPEN", H.at(15, 28)),
+     stamps((15, 26), (15, 28), (15, 30)), H.at(15, 40), "FILLED", H.at(15, 28)),
     ("2m-1528-alert-and-post-close-bars", 2, H.at(15, 28, 3), "dhan", 10,
      stamps((15, 28), (15, 30), (15, 32)), H.at(15, 40), "NO_FILL", None),
     ("delayed-window-cannot-reach-past-the-close", 2, H.at(15, 28, 3), "yahoo", 10,
@@ -110,13 +111,14 @@ class TestTheCloseCap:
         H.open_trade(book, alert)
         book.step(now, H.Feed(SBIN=H.bars_at(opens, [1000.0 + i for i in range(len(opens))])))
         row = H.trade_row(db.engine, "A1")
+        if status == "FILLED":  # the last session bar: filled, then SESSION_END closes it at once
+            H.assert_filled(row, at_ts=fill_at)
+            assert H.kinds_of(db.engine, "A1").count("FILLED") == 1
+            return
         assert H.val(row["status"]) == status, row
-        if fill_at is None:
-            assert row["entry_paise"] is None and row["fill_bar_ts"] is None
-            (event,) = [e for e in H.event_rows(db.engine, "A1") if H.val(e["kind"]) == "NO_FILL"]
-            assert "session_closed" in H.blob(event["detail"])
-        else:
-            assert H.same_instant(row["fill_bar_ts"], fill_at)
+        assert row["entry_paise"] is None and row["fill_bar_ts"] is None
+        (event,) = [e for e in H.event_rows(db.engine, "A1") if H.val(e["kind"]) == "NO_FILL"]
+        assert "session_closed" in H.blob(event["detail"])
 
     def test_an_alert_raised_after_the_close_is_bounded_by_its_date_not_by_1530(self, db):
         """A special session (evening Muhurat): the alert is not 'before the close', so the cap
@@ -128,15 +130,15 @@ class TestTheCloseCap:
         frame = H.minute_bars(H.at(18, 19), [1000.0, 1001.0, 1002.0])
         book.step(H.at(18, 30), H.Feed(SBIN=frame))
         row = H.trade_row(db.engine, "A1")
-        assert H.val(row["status"]) == "OPEN" and H.same_instant(row["fill_bar_ts"], H.at(18, 21))
+        H.assert_filled(row, at_ts=H.at(18, 21))  # (a bar after exit_time: closed on the spot)
 
     def test_the_last_session_bars_still_fill_when_the_frame_also_holds_post_close_bars(self, db):
         frame = H.minute_bars(H.at(15, 20), [1000.0] * 20)  # 15:20 .. 15:39
         book = H.make_book(db.engine)
         H.open_trade(book, H.make_alert("A1", created=H.at(15, 27, 3)))
         events = book.step(H.at(15, 45), H.Feed(SBIN=frame))
-        assert [H.val(e.kind) for e in events] == ["FILLED"]
-        assert H.same_instant(H.trade_row(db.engine, "A1")["fill_bar_ts"], H.at(15, 28))
+        assert len(H.fills(events)) == 1  # the step may also close it: session over (US-002)
+        H.assert_filled(H.trade_row(db.engine, "A1"), at_ts=H.at(15, 28))
 
 
 # ── opened_by and booked_at ───────────────────────────────────────────────────────────

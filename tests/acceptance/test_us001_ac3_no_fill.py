@@ -139,13 +139,99 @@ class TestGapThroughTheStop:
         later 10:07 bar gaps too, but the trade already filled at 10:06."""
         alert = H.make_alert("A1", stop=990.0)
         frame = H.minute_bars(H.at(10, 5), [980.0, 1000.0, 970.0])
-        _, row, _ = run(db, alert, frame, H.at(10, 8))
-        assert H.val(row["status"]) == "OPEN" and row["entry_paise"] == 100030
+        _, row, events = run(db, alert, frame, H.at(10, 8))
+        # filled at 10:06 on the FILLED event and the entry columns (the 10:07 gap below the stop
+        # then stops the open trade out in the same step: US-002), never a NO_FILL
+        assert len(H.fills(events)) == 1
+        H.assert_filled(row, at_ts=H.at(10, 6), entry=100030)
+        assert "NO_FILL" not in H.kinds_of(db.engine, "A1")
+        assert row["close_reason"] != "GAP_THROUGH_STOP"
 
     def test_the_reason_is_written_on_the_event(self, db):
         _, _, (event,) = run(db, *gap_case()[:3])
         assert H.val(event.kind) == "NO_FILL"
         assert "gap_through_stop" in H.blob(event.detail)
+
+
+class TestGapThroughTheTarget:
+    """US-002 decision 3: a fill bar that opens AT or BEYOND the alert's target is NO_FILL,
+    reason GAP_THROUGH_TARGET (its target would sit behind the entry). One tick inside fills."""
+
+    @pytest.mark.parametrize(
+        "direction, target, fill_open, gaps",
+        [
+            ("long", 1020.0, 1020.0, True),  # AT the target
+            ("long", 1020.0, 1020.05, True),
+            ("long", 1020.0, 1100.0, True),
+            ("long", 1020.0, 1019.95, False),  # one tick inside: fills
+            ("short", 980.0, 980.0, True),
+            ("short", 980.0, 979.95, True),
+            ("short", 980.0, 900.0, True),
+            ("short", 980.0, 980.05, False),
+        ],
+    )
+    def test_a_stock_whose_fill_bar_opens_at_or_beyond_its_target_never_fills(
+        self, db, direction, target, fill_open, gaps
+    ):
+        alert = H.make_alert("A1", direction=direction, target=target)
+        frame = H.minute_bars(H.at(10, 5), [1000.0, fill_open, fill_open])
+        book, row, events = run(db, alert, frame, H.at(10, 8))
+        if gaps:
+            assert (H.val(row["status"]), H.val(row["close_reason"])) == (
+                "NO_FILL",
+                "GAP_THROUGH_TARGET",
+            )
+            assert row["entry_paise"] is None and row["exit_paise"] is None
+            assert row["costs_paise"] == 0 and row["net_paise"] == 0
+            assert [H.val(e.kind) for e in events] == ["NO_FILL"]
+            assert "gap_through_target" in H.blob(events[0].detail)
+            assert book.open_trades() == [] and book.status()["no_fill"] == 1
+            assert book.status()["filled"] == 0
+        else:
+            assert len(H.fills(events)) == 1
+            H.assert_filled(row, at_ts=H.at(10, 6))
+
+    @pytest.mark.parametrize(
+        "direction, target, fill_open, gaps",
+        [
+            ("long", 54300.0, 54300.0, True),
+            ("long", 54300.0, 54299.95, False),
+            ("short", 53700.0, 53700.0, True),  # BUY_PE: the target is BELOW the underlying
+            ("short", 53700.0, 53700.05, False),
+        ],
+    )
+    def test_an_index_option_is_judged_on_the_underlying_open_against_the_underlying_target(
+        self, db, direction, target, fill_open, gaps
+    ):
+        alert = H.make_alert("O1", kind="INDEX", direction=direction, target=target)
+        frame = H.minute_bars(H.at(10, 5), [54000.0, fill_open, fill_open])
+        _, row, events = run(db, alert, frame, H.at(10, 8))
+        if gaps:
+            assert (H.val(row["status"]), H.val(row["close_reason"])) == (
+                "NO_FILL",
+                "GAP_THROUGH_TARGET",
+            )
+            assert row["entry_paise"] is None and "FILLED" not in H.kinds_of(db.engine, "O1")
+        else:
+            H.assert_filled(row, at_ts=H.at(10, 6))
+
+    def test_an_alert_without_a_target_has_nothing_to_gap_through(self, db):
+        alert = H.make_alert("A1")
+        alert["economics"]["underlying_target"] = alert["economics"]["target_price"] = None
+        frame = H.minute_bars(H.at(10, 5), [1000.0, 5000.0, 5000.0])  # a huge open: still a fill
+        _, row, events = run(db, alert, frame, H.at(10, 8))
+        assert len(H.fills(events)) == 1
+        H.assert_filled(row, at_ts=H.at(10, 6))
+
+    def test_the_stop_gap_wins_when_the_open_is_beyond_the_stop_and_the_target_is_inverted(
+        self, db
+    ):
+        """A long open below the stop is GAP_THROUGH_STOP even if it is also 'beyond' a target
+        that was (wrongly) placed below it: the stop is the first test."""
+        alert = H.make_alert("A1", stop=990.0, target=985.0)
+        frame = H.minute_bars(H.at(10, 5), [1000.0, 980.0, 980.0])
+        _, row, _ = run(db, alert, frame, H.at(10, 8))
+        assert H.val(row["close_reason"]) == "GAP_THROUGH_STOP"
 
 
 class TestDeadlineAndSession:
@@ -207,8 +293,9 @@ class TestDeadlineAndSession:
         caught_up = H.minute_bars(H.at(15, 0, day=H.FRIDAY), [1000.0] * 15, step=2)  # .. 15:28
         events = book.step(H.at(15, 45, day=H.FRIDAY), H.Feed(SBIN=caught_up))
         row = H.trade_row(db.engine, "N1")
-        assert [H.val(e.kind) for e in events] == ["FILLED"]
-        assert H.same_instant(row["fill_bar_ts"], H.at(15, 22, day=H.FRIDAY))
+        # filled on the first late bar; the same step may also close it (session over: US-002)
+        assert len(H.fills(events)) == 1
+        H.assert_filled(row, at_ts=H.at(15, 22, day=H.FRIDAY))
 
 
 class TestNoPriceIsInventedWhileWaiting:

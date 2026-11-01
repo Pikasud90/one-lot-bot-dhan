@@ -302,10 +302,22 @@ class TestPerformanceProxies:
         for i in range(45):
             H.open_trade(book, alert_id=f"P{i}", instrument_key=series[i % 3])
         feed = H.Feed(**dict.fromkeys(series, frame))
+        # 15:10: before exit_time (15:15), so the bars from the fill on touch no level: 45 fills
+        # and nothing else, every trade OPEN
         started = time.perf_counter()
-        events = book.step(H.at(15, 40), feed)
+        events = book.step(H.at(15, 10), feed)
         elapsed = time.perf_counter() - started
         assert sorted(feed.calls) == sorted(series)  # once per series
         assert len(events) == 45 and all(H.val(e.kind) == "FILLED" for e in events)
         assert {H.val(r["status"]) for r in H.trade_rows(db.engine)} == {"OPEN"}
         assert elapsed < 2.0, f"45 fills on 30,000-row frames took {elapsed:.2f}s (budget 0.2s)"
+        # 15:40: the session is over, so the same 45 trades are managed to their SESSION_END close
+        feed.calls.clear()
+        started = time.perf_counter()
+        events = book.step(H.at(15, 40), feed)
+        elapsed = time.perf_counter() - started
+        assert sorted(feed.calls) == sorted(series)  # still once per series
+        assert len(events) == 45 and all(H.val(e.kind) == "CLOSED" for e in events)
+        assert {H.val(r["status"]) for r in H.trade_rows(db.engine)} == {"CLOSED"}
+        assert {r["close_reason"] for r in H.trade_rows(db.engine)} == {"SESSION_END"}
+        assert elapsed < 2.0, f"45 closes on 30,000-row frames took {elapsed:.2f}s (budget 0.2s)"

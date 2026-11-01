@@ -58,10 +58,13 @@ def usable(open_price: float) -> bool:
     )
 
 
-def oracle(rows, *, created, expires, source, feed_delay, res, now, direction, stop):
+def oracle(rows, *, created, expires, source, feed_delay, res, now, direction, stop, target):
     """What the story says a waiting trade does at `now` over `rows` [(open ts, open price)].
 
-    ('fill', ts, open) | ('gap', ts, open) | ('no_fill',) | ('wait',), plus the grade."""
+    ('fill', ts, open) | ('gap', ts, open) | ('gap_target', ts, open) | ('no_fill',) |
+    ('wait',), plus the grade. The fill bar's open is judged against the stop (strictly beyond
+    it: GAP_THROUGH_STOP) and, since US-002, against the TARGET (at or beyond it:
+    GAP_THROUGH_TARGET). `stop` and `target` are paise."""
     last: dict[dt.datetime, float] = {}
     for ts, price in rows:  # a duplicated time: the LAST row wins
         last[ts] = price
@@ -86,8 +89,12 @@ def oracle(rows, *, created, expires, source, feed_delay, res, now, direction, s
             and usable(price)
         ):
             paise = H.to_paise(price)
-            gapped = paise < stop if direction == "long" else paise > stop
-            return ("gap" if gapped else "fill", ts, price), grade
+            sign = 1 if direction == "long" else -1
+            if (paise - stop) * sign < 0:
+                return ("gap", ts, price), grade
+            if (paise - target) * sign >= 0:
+                return ("gap_target", ts, price), grade
+            return ("fill", ts, price), grade
     if closed:
         last_ts = closed[-1][0]
         if last_ts >= min(deadline, midnight) or last_ts + step >= session_end:
@@ -104,8 +111,15 @@ def scenarios(draw):
     lo = draw(st.integers(0, n - 1))
     hi = draw(st.integers(lo, min(n - 1, lo + 40)))
     holes = draw(st.sets(st.integers(lo, hi), max_size=6))
+    # Hypothesis favours the ends of an integer range, so the levels that matter are listed:
+    # a tick either side of (and exactly on) the stops 995 / 1005 and the targets 1005 / 995 /
+    # 1020 / 980 the scenarios use, so every boundary rule is met, not just approached
+    boundary = [994.95, 995.0, 995.05, 1004.95, 1005.0, 1005.05, 1019.95, 1020.0, 1020.05]
+    boundary += [979.95, 980.0, 980.05, 1000.0]
     price = st.one_of(
-        *[st.integers(99_000, 101_000).map(lambda p: p / 100)] * 3,
+        st.sampled_from(boundary),
+        st.sampled_from(boundary),
+        st.integers(99_000, 101_000).map(lambda p: p / 100),
         st.sampled_from([NAN, INF, -INF, 0.0, -1.0, 0.004]),
     )
     kept = [i for i in range(lo, hi + 1) if i not in holes]
@@ -127,6 +141,7 @@ def scenarios(draw):
         "source": draw(st.sampled_from(["dhan", "yahoo"])),
         "feed_delay": draw(st.sampled_from([0, 15])),
         "direction": draw(st.sampled_from(["long", "short"])),
+        "near_target": draw(st.booleans()),  # inside the 990..1010 price range, or far away
         "now": now,
     }
 
@@ -137,6 +152,10 @@ class TestTheFillRuleAgainstAnIndependentOracle:
     def test_property_step_agrees_with_the_oracle_on_hostile_frames(self, sc):
         direction = sc["direction"]
         stop_price = 995.0 if direction == "long" else 1005.0
+        long_ = direction == "long"
+        target_price = (
+            (1005.0 if long_ else 995.0) if sc["near_target"] else (1020.0 if long_ else 980.0)
+        )
         alert = H.make_alert(
             "O1",
             direction=direction,
@@ -145,6 +164,7 @@ class TestTheFillRuleAgainstAnIndependentOracle:
             source=sc["source"],
             resolution=f"{sc['res']}m",
             stop=stop_price,
+            target=target_price,
         )
         rows = sc["rows"]
         frame = H.bars_at([ts for ts, _ in rows], [p for _, p in rows]) if rows else None
@@ -159,6 +179,7 @@ class TestTheFillRuleAgainstAnIndependentOracle:
             now=sc["now"],
             direction=direction,
             stop=H.to_paise(stop_price),
+            target=H.to_paise(target_price),
         )
         with H.temp_book(feed_delay=sc["feed_delay"]) as (book, engine):
             H.open_trade(book, alert)
@@ -175,13 +196,18 @@ class TestTheFillRuleAgainstAnIndependentOracle:
         kind = expected[0]
         if kind == "fill":
             _, ts, price = expected
-            assert status == "OPEN" and reason is None, (sc, expected, row)
-            assert H.same_instant(row["fill_bar_ts"], ts)
-            assert row["entry_paise"] == H.expected_stock_entry(price, direction)
+            # filled; the same step may already have managed it on to a close (US-002), so the
+            # fill is judged on the entry columns, and a close reason only if it closed
+            H.assert_filled(row, at_ts=ts, entry=H.expected_stock_entry(price, direction))
+            assert (status == "OPEN") is (reason is None), (sc, expected, row)
             assert kinds.count("FILLED") == 1 and "NO_FILL" not in kinds
         elif kind == "gap":
             assert (status, reason) == ("NO_FILL", "GAP_THROUGH_STOP"), (sc, expected, row)
             assert row["entry_paise"] is None and row["exit_paise"] is None
+        elif kind == "gap_target":
+            assert (status, reason) == ("NO_FILL", "GAP_THROUGH_TARGET"), (sc, expected, row)
+            assert row["entry_paise"] is None and row["exit_paise"] is None
+            assert row["costs_paise"] == 0 == row["net_paise"] and "FILLED" not in kinds
         elif kind == "no_fill":
             assert (status, reason) == ("NO_FILL", "NO_FILL"), (sc, expected, row)
             assert row["entry_paise"] is None and row["costs_paise"] == 0 == row["net_paise"]
@@ -198,12 +224,12 @@ class TestTheSessionEndBoundary:
         "res, created, now, status",
         [
             # 1-minute bars: the last session bar opens 15:29 and closes at 15:30
-            (1, H.at(15, 28, 30), H.at(15, 30), "OPEN"),  # the 15:29 bar fills it
+            (1, H.at(15, 28, 30), H.at(15, 30), "FILLED"),  # the 15:29 bar fills it
             (1, H.at(15, 28, 30), H.at(15, 29, 59), "PENDING_FILL"),  # 15:29 not closed yet
             (1, H.at(15, 29, 1), H.at(15, 30), "NO_FILL"),  # no bar can follow: session over
             (1, H.at(15, 29, 1), H.at(15, 29, 59), "PENDING_FILL"),
             # 2-minute bars: the last one opens 15:28 and closes at 15:30
-            (2, H.at(15, 27, 3), H.at(15, 30), "OPEN"),
+            (2, H.at(15, 27, 3), H.at(15, 30), "FILLED"),
             (2, H.at(15, 27, 3), H.at(15, 29, 59), "PENDING_FILL"),
             (2, H.at(15, 28, 3), H.at(15, 30), "NO_FILL"),
         ],
@@ -231,7 +257,11 @@ class TestTheSessionEndBoundary:
         book = H.make_book(db.engine)
         H.open_trade(book, H.make_alert("A1", created=created, resolution=f"{res}m"))
         book.step(now, H.Feed(SBIN=frame))
-        assert H.val(H.trade_row(db.engine, "A1")["status"]) == status
+        row = H.trade_row(db.engine, "A1")
+        if status == "FILLED":  # then SESSION_END closes it in the same step (US-002)
+            H.assert_filled(row)
+        else:
+            assert H.val(row["status"]) == status
 
 
 class TestHostileAlerts:

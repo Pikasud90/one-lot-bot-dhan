@@ -152,7 +152,8 @@ class TestTheGovernorIsNeverTouched:
         d.poll()
 
         (row,) = H.trade_rows(desk_db.engine)
-        assert H.val(row["status"]) in ("OPEN", "NO_FILL"), "the paper book did not act"
+        # the poll's bars may already have managed the fill to a close (US-002): it acted
+        assert H.val(row["status"]) in ("OPEN", "CLOSED", "NO_FILL"), "the paper book did not act"
         assert gov.snapshot().as_dict() == before
         assert d.snapshot()["risk"] == before
         assert d.positions == {} and H.count_rows(desk_db.engine, "desk_positions") == 0

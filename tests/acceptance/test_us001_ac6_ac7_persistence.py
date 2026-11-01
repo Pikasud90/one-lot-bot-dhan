@@ -302,7 +302,9 @@ class TestPaperDisabled:
         assert H.count_rows(db.engine, "paper_trades") == 2
         events = disabled.step(  # ... but the open ones are still managed
             H.at(10, 9),
-            H.Feed(SBIN=H.standard_bars(), RELIANCE=H.standard_bars((1998.0, 2000.0, 2001.0))),
+            # RELIANCE opens at 1000 (inside the alert's 1020 target): a fill bar at or beyond the
+            # target would be NO_FILL / GAP_THROUGH_TARGET now
+            H.Feed(SBIN=H.standard_bars(), RELIANCE=H.standard_bars()),
         )
         assert [H.val(e.kind) for e in events] == ["FILLED"]
         assert H.val(H.trade_row(db.engine, "B")["status"]) == "OPEN"

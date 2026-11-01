@@ -489,6 +489,32 @@ def val(x: Any) -> Any:
     return getattr(x, "value", x)
 
 
+# A trade that FILLED is OPEN, or already CLOSED when the same step's bars also hit a level, the
+# session end or the time stop (US-002: a trade is managed in the SAME step as its fill).
+FILLED_STATUSES = ("OPEN", "CLOSED")
+
+
+def fills(events: Sequence[Any]) -> list[Any]:
+    """The FILLED events among a step's events (management events ride along since US-002)."""
+    return [e for e in events if val(e.kind) == "FILLED"]
+
+
+def kinds_of(engine: Engine, alert_id: str) -> list[str]:
+    return [val(e["kind"]) for e in event_rows(engine, alert_id)]
+
+
+def assert_filled(row: dict, at_ts: dt.datetime | None = None, entry: int | None = None) -> None:
+    """The trade FILLED (judged on the entry columns and the FILLED event, not on a status that
+    management may already have moved on): entry priced, fill bar stamped, OPEN or CLOSED."""
+    assert val(row["status"]) in FILLED_STATUSES, row
+    assert row["entry_paise"] is not None and row["fill_bar_ts"] is not None, row
+    assert row["entry_ts"] == row["fill_bar_ts"]
+    if at_ts is not None:
+        assert same_instant(row["fill_bar_ts"], at_ts), row
+    if entry is not None:
+        assert row["entry_paise"] == entry, row
+
+
 def same_instant(a: dt.datetime | None, b: dt.datetime) -> bool:
     return a is not None and a.tzinfo is not None and a == b
 

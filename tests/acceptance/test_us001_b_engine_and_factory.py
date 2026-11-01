@@ -282,7 +282,9 @@ class TestTheEngineHandsTheBookToTheDesk:
             assert [t.alert_id for t in book.open_trades()] == [waiting["id"]]
             d1, notifier = H.new_desk(eng.cfg, eng.db, paper=book)
             d1.poll()  # the disabled book still fills what is waiting
-            assert H.val(H.trade_row(eng.db.engine, waiting["id"])["status"]) == "OPEN"
+            # (and the same poll may already manage the fill to a close: US-002)
+            H.assert_filled(H.trade_row(eng.db.engine, waiting["id"]))
+            assert "FILLED" in H.kinds_of(eng.db.engine, waiting["id"])
             new_alert = H.raise_alert(d1, "BANKNIFTY", now=H.mid_session(d1, "BANKNIFTY"))
             d1.poll()  # ... and opens nothing new, without a hook error
             assert [r["alert_id"] for r in H.trade_rows(eng.db.engine)] == [waiting["id"]]
@@ -301,11 +303,8 @@ class TestACrashBetweenTheInsertAndTheHookIsRepairedByTheEnginesOwnBook:
         d, _ = H.new_desk(eng.cfg, eng.db, paper=book)
         d.poll()  # and the restarted desk fills it from the bars it holds
         row = H.trade_row(eng.db.engine, alert["id"])
-        assert H.val(row["status"]) == "OPEN" and row["entry_paise"] is not None
-        assert [H.val(e["kind"]) for e in H.event_rows(eng.db.engine, alert["id"])] == [
-            "OPENED",
-            "FILLED",
-        ]
+        H.assert_filled(row)  # filled from the bars it holds (managed on, in the same poll)
+        assert H.kinds_of(eng.db.engine, alert["id"])[:2] == ["OPENED", "FILLED"]
 
 
 class TestEndToEndThroughTheEngineBuiltBook:
@@ -318,10 +317,13 @@ class TestEndToEndThroughTheEngineBuiltBook:
         bars = d.trackers["SBIN"].bars
         fill_ts = first_bar_after(bars, now)
         row = H.trade_row(eng.db.engine, alert["id"])
-        assert H.val(row["status"]) == "OPEN"
-        assert H.same_instant(row["fill_bar_ts"], fill_ts.to_pydatetime())
-        assert row["entry_paise"] == H.expected_stock_entry(
-            float(bars["open"].loc[fill_ts]), "long", eng.cfg.backtest.slippage_pct
+        # judged on the entry columns: the same poll may already have managed the fill to a close
+        H.assert_filled(
+            row,
+            at_ts=fill_ts.to_pydatetime(),
+            entry=H.expected_stock_entry(
+                float(bars["open"].loc[fill_ts]), "long", eng.cfg.backtest.slippage_pct
+            ),
         )
         assert row["qty"] == 1 and row["product"] == "equity_intraday"
         stop = H.to_paise(alert["economics"]["underlying_stop"])
@@ -369,7 +371,7 @@ class TestEndToEndThroughTheEngineBuiltBook:
         )
         risk = (entry - H.to_paise(max(sold, tick))) * lot
         row = H.trade_row(eng.db.engine, alert["id"])
-        assert H.val(row["status"]) == "OPEN", row
+        H.assert_filled(row, at_ts=fill_ts.to_pydatetime())  # managed on in the same poll
         assert row["entry_paise"] == entry
         assert row["risk_paise"] == risk
         assert row["qty"] == lot and row["product"] == "index_options"

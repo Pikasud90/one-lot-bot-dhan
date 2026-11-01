@@ -433,7 +433,10 @@ class TestIndexOptionFill:
             else underlying_open + stop_distance,
             2,
         )
-        alert = _option_alert(direction, stop=underlying_stop)
+        # the alert's target sits far beyond any open drawn here: a fill bar that opens at or
+        # beyond the target is NO_FILL / GAP_THROUGH_TARGET (US-002 decision 3), not a fill
+        far_target = underlying_open + 5_000 if direction == "long" else underlying_open - 5_000
+        alert = _option_alert(direction, stop=underlying_stop, target=far_target)
         with H.temp_book(premium_at=H.make_pricer()) as (book, engine):
             H.open_trade(book, alert)
             book.step(H.at(10, 8), H.Feed(BANKNIFTY=_option_frame(underlying_open)))
@@ -551,8 +554,12 @@ class TestRiskIsSetAtTheFill:
         bt = H.BT.model_copy(update={"slippage_pct": 0.0})
         for direction in ("long", "short"):
             alert = H.make_alert(f"Z-{direction}", direction=direction, stop=1000.0)
-            _, row, _ = fill(db, alert=alert, bt=bt)
-            assert H.val(row["status"]) == "OPEN" and row["entry_paise"] == 100000, direction
+            _, row, events = fill(db, alert=alert, bt=bt)
+            # the fill bar opens AT the stop, so US-002 may close the trade on that very bar:
+            # the fill is judged on the FILLED event and the entry columns, never on NO_FILL
+            assert len(H.fills(events)) == 1, direction
+            H.assert_filled(row, entry=100000)
+            assert "NO_FILL" not in H.kinds_of(db.engine, alert["id"]), direction
             assert row["risk_paise"] is None, direction
             assert H.typeof(db.engine, "risk_paise", alert["id"]) == "null"
 

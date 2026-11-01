@@ -224,9 +224,12 @@ class TestAMondayStartBooksFridaysAlerts:
         frame.loc[H.at(10, 6, day=H.FRIDAY), "open"] = 1003.35
         events = book.step(H.at(9, 20, day=H.MONDAY), H.Feed(SBIN=frame))
         row = H.trade_row(db.engine, alert["id"])
-        assert [H.val(e.kind) for e in events] == ["FILLED"]
-        assert H.same_instant(row["fill_bar_ts"], H.at(10, 6, day=H.FRIDAY))
-        assert row["entry_paise"] == H.expected_stock_entry(1003.35, "long")
+        assert len(H.fills(events)) == 1  # (the stored session is then managed to its close)
+        H.assert_filled(
+            row,
+            at_ts=H.at(10, 6, day=H.FRIDAY),
+            entry=H.expected_stock_entry(1003.35, "long"),
+        )
 
     def test_a_weekend_of_alerts_is_all_booked_in_creation_order(self, db):
         stamps = [
