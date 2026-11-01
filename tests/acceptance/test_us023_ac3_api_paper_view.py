@@ -61,7 +61,11 @@ class TestTheEndpointIsThere:
     def test_the_paper_endpoint_serves_the_book(self, db):
         book = W.make_book(db.engine)
         body = W.paper_api(book)
-        assert set(body) == {"enabled", "status", "trades", "totals_today"}
+        # the US-030 keys, all served; US-032 adds exactly one more (`last_session`, a block or
+        # null), and nothing else may appear
+        assert {"enabled", "status", "trades", "totals_today"} <= set(body)
+        assert set(body) <= {"enabled", "status", "trades", "totals_today", "last_session"}
+        assert "last_session" in body
 
 
 class TestAnOpenOptionShowsItsMarkAndUnrealised:
