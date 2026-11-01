@@ -76,6 +76,9 @@ BURST_CAP = 8  # SIGNAL alerts sent one by one before the rest are digested
 DIGEST_THRESHOLD = 8  # more expired alerts than this in one pass: one digest
 DIGEST_LINES = 10  # alerts listed by name in a digest
 P95_WINDOW = 100  # the last N sent rows
+# The SLO is alert to phone: notes the worker makes itself (missed, digest) are sent at ~0 ms
+# after they are made and would only pull the p95 down (review round 1, decision D).
+SLO_KINDS = ("alert", "exit", "critical")
 SEND_DEADLINE_S = 15.0  # total time one request may hold the worker
 IDLE_WAIT_S = 1.0  # the worker's nap when nothing is due (a new row wakes it at once)
 RESEND_MARKER = chr(0x21BB) + " resend"  # "↻ resend"
@@ -702,23 +705,26 @@ class TelegramOutbox:
         return highest
 
     def status(self) -> dict[str, Any]:
-        """configured, last_ok_at, queue_depth, last_error (scrubbed by the client),
-        p95_latency_ms (nearest rank, last P95_WINDOW sent), enqueued (rows ever queued),
-        sent, failed, skipped, rate_limited_until. Plain JSON."""
+        """configured, last_ok_at (the last confirmed send of any kind), queue_depth,
+        last_error (scrubbed by the client), p95_latency_ms (nearest rank over the last
+        P95_WINDOW sent rows of SLO_KINDS), enqueued (rows ever queued), sent, failed,
+        skipped, rate_limited_until. Plain JSON."""
         with self._engine.connect() as conn:
-            counts = {
-                str(status): int(n)
-                for status, n in conn.execute(
-                    select(OUTBOX.c.status, func.count()).group_by(OUTBOX.c.status)
-                ).all()
-            }
-            recent = conn.execute(
-                select(OUTBOX.c.latency_ms, OUTBOX.c.sent_at)
-                .where(OUTBOX.c.status == "sent")
+            by_status = conn.execute(
+                select(OUTBOX.c.status, func.count(), func.max(OUTBOX.c.sent_at)).group_by(
+                    OUTBOX.c.status
+                )
+            ).all()
+            latencies = conn.execute(
+                select(OUTBOX.c.latency_ms)
+                .where(OUTBOX.c.status == "sent", OUTBOX.c.kind.in_(SLO_KINDS))
                 .order_by(OUTBOX.c.sent_at.desc(), OUTBOX.c.id.desc())
                 .limit(P95_WINDOW)
-            ).all()
-        last_ok = recent[0].sent_at if recent else None
+            ).scalars()
+            p95 = p95_nearest_rank(int(ms) for ms in latencies if ms is not None)
+        counts = {str(status): int(n) for status, n, _ in by_status}
+        # max() keeps the column's TZDateTime type, so it comes back aware like the column.
+        last_ok = next((at for status, _, at in by_status if status == "sent"), None)
         with self._state_lock:
             paused, last_error = self._paused_until, self._last_error
         return {
@@ -726,9 +732,7 @@ class TelegramOutbox:
             "last_ok_at": to_ist(last_ok).isoformat() if last_ok is not None else None,
             "queue_depth": counts.get("queued", 0) + counts.get("sending", 0),
             "last_error": last_error,
-            "p95_latency_ms": p95_nearest_rank(
-                int(r.latency_ms) for r in recent if r.latency_ms is not None
-            ),
+            "p95_latency_ms": p95,
             "enqueued": sum(counts.values()),
             "sent": counts.get("sent", 0),
             "failed": counts.get("failed", 0),
