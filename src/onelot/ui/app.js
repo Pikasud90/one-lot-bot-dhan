@@ -1151,7 +1151,7 @@ async function loadSettings() {
     kv("Account reads", s.account_adapter ? "<span class='pos'>attached</span>" : "<span class='warn'>no adapter</span>") +
     kv("Data API plan", s.data_api_active ? "<span class='pos'>active</span>" : "<span class='warn'>not active / unknown</span>") +
     kv("Market feed", s.feed_live ? "<span class='pos'>Dhan (live)</span>" : "<span class='warn'>synthetic mock</span> <span class='dim'>— press Go live once the token is valid</span>") +
-    kv("Desk bars", s.desk_source ? `${esc(s.desk_source.name)} ${esc(s.desk_source.resolution)}${s.desk_source.delayed ? " (delayed)" : " (live)"}${s.desk_source.socket ? ` · socket ${s.desk_source.socket.alive ? "<span class='pos'>connected</span>" : "<span class='warn'>down</span>"} (${s.desk_source.socket.subscribed} instruments)` : ""}` : "–");
+    kv("Desk bars", s.desk_source ? `${esc(s.desk_source.name)} ${esc(s.desk_source.resolution)} · ${esc(delayNote(s.desk_source))}${s.desk_source.socket ? ` · socket ${s.desk_source.socket.alive ? "<span class='pos'>connected</span>" : "<span class='warn'>down</span>"} (${s.desk_source.socket.subscribed} instruments)` : ""}` : "–");
   const block = (t, o) => `<h3>${t}</h3><pre class="code">${esc(JSON.stringify(o, null, 2))}</pre>`;
   $("cfg-view").innerHTML = kv("Mode", esc(s.mode)) + kv("Bind", `${esc(s.api.host)}:${s.api.port}`) +
     block("Live direction source (Bank Nifty engine)", s.live) + block("Risk (absolute rupees, one unit)", s.risk) + block("Backtest defaults", s.backtest) + block("Data corpus", s.data);
