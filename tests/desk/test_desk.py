@@ -284,6 +284,20 @@ class TestTracker:
         again = t.evaluate(now_ist(), None, True)
         assert again == [] and t.slots[0].last_verdict.reason == "no new bar yet"
 
+    def test_the_strategys_trail_atr_is_kept_with_its_features(self):
+        """US-002 review 1 MAJOR-1: the paper trail uses the strategy's ATR(trail_atr_period),
+        the `atr_trail` column the Lab trails with, not the ATR(14) the stop is sized on."""
+        from onelot.data.universe import load_specs
+
+        series, inst = load_specs()
+        ic = DeskInstrumentCfg("SBIN", "SBIN", "STOCK", (StrategySlotCfg("ema_cross", "10m"),))
+        t = InstrumentTracker(ic, series["SBIN"], inst["SBIN"], 2)
+        t.update_bars(synthetic(days=12))
+        t.evaluate(now_ist(), None, True)
+        features = t.slots[0].last_features
+        assert features["atr_trail"] is not None and features["atr_trail"] > 0
+        assert features["atr_trail"] != features["atr"]  # ATR(5) vs ATR(14) on a random walk
+
 
 class TestDeskFlow:
     def _desk(self, cfg, db):
@@ -333,6 +347,10 @@ class TestDeskFlow:
             sig["side"] == "BUY" and sig["economics"]["qty"] == 1 and "BUY 1 share" in sig["text"]
         )
         assert any(n.level.value == "SIGNAL" for n in notifier.sent)
+
+        # the alert freezes the strategy's trail ATR for the paper book (US-002 MAJOR-1)
+        assert sig["manage"]["atr_trail"] == slot.last_features["atr_trail"] > 0
+        assert sig["manage"]["atr"] == slot.last_features["atr"]
 
         # second fire on the same instrument is suppressed while one is pending
         d._raise_signal(t, fired[0][0], fired[0][1], end)

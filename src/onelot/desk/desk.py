@@ -437,6 +437,8 @@ class Desk:
                 "max_bars": int(getattr(slot.strategy.p, "max_bars", 0) or 0),
                 "exit_time": exit_time,
                 "atr": (slot.last_features or {}).get("atr"),
+                # the trail's own ATR, frozen for the paper book (US-002 review 1 MAJOR-1)
+                "atr_trail": (slot.last_features or {}).get("atr_trail"),
                 "tf_min": slot.tf_min,
                 "horizon": horizon,
             },

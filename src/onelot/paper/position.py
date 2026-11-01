@@ -30,19 +30,22 @@ def rules_from_alert(
 ) -> ManageRules:
     """The exit rules frozen in the alert's `manage` block (Desk._raise_signal).
 
-    `atr` stays in rupees as the alert recorded it; a missing, zero or non-finite ATR or
-    multiple leaves the trail off (no live fallback). A missing or unreadable value takes
-    the desk's default and is logged, never guessed silently: exit_time 15:15, max_bars 0,
-    trail_activate_r 1.0, tf_min from the alert's timeframe.
+    `atr` stays in rupees as the alert recorded it. It is the strategy's TRAIL ATR,
+    `manage.atr_trail` (ATR(trail_atr_period), what the Lab trails with); only an alert that
+    predates that key falls back to `manage.atr` (review round 1, MAJOR-1). A missing, zero
+    or non-finite ATR or multiple leaves the trail off: never another ATR, never a live one.
+    A missing or unreadable value takes the desk's default and is logged, never guessed
+    silently: exit_time 15:15, max_bars 0, trail_activate_r 1.0, tf_min from the timeframe.
     """
     manage = alert.get("manage")
     manage = manage if isinstance(manage, Mapping) else {}
     tf_default = resolution_min(timeframe) or 1
+    trail_atr = manage["atr_trail"] if "atr_trail" in manage else manage.get("atr")
     return ManageRules(
         target_r=_number(manage.get("target_r"), 0.0),
         trail_atr_mult=_number(manage.get("trail_atr_mult"), 0.0),
         trail_activate_r=_number(manage.get("trail_activate_r"), 1.0),
-        atr=_atr(manage.get("atr")),
+        atr=_atr(trail_atr),
         max_bars=_whole(manage.get("max_bars"), 0, "max_bars"),
         tf_min=_whole(manage.get("tf_min"), tf_default, "tf_min") or tf_default,
         exit_time=_exit_time(manage.get("exit_time")),

@@ -234,6 +234,7 @@ class InstrumentTracker:
                 "adx",
                 "rsi",
                 "atr",
+                "atr_trail",  # ATR(trail_atr_period): what the strategy trails with
                 "atr_pct",
                 "vwap",
                 "ema20",
