@@ -38,7 +38,8 @@ from .market.feed import INDEX_KEY, FeedContracts, MarketFeed
 from .market.health import HealthMonitor
 from .notify.manager import Notifier
 from .notify.telegram import TelegramClient
-from .notify.telegram_outbox import TelegramChannel, TelegramOutbox
+from .notify.telegram_channel import TelegramChannel
+from .notify.telegram_outbox import TelegramOutbox
 from .ratelimit import RateLimiter
 from .risk.governor import RiskGovernor
 from .store import init_database

@@ -21,9 +21,9 @@ from onelot.clock import IST
 from onelot.config import NotifyCfg
 from onelot.notify.base import Notification, NotificationLevel
 from onelot.notify.telegram import TelegramClient
+from onelot.notify.telegram_channel import TelegramChannel
 from onelot.notify.telegram_outbox import (
     RESEND_MARKER,
-    TelegramChannel,
     TelegramOutbox,
     format_critical,
     format_digest,

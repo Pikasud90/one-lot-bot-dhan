@@ -655,11 +655,15 @@ class TelegramClient:
 
 
 def __getattr__(name: str) -> Any:
-    """TelegramOutbox and TelegramChannel (US-004) live in .telegram_outbox, which imports
-    this module; they are reachable from here as the story's contract names them, loaded on
-    first use so the import stays one-way."""
-    if name in ("TelegramOutbox", "TelegramChannel"):
+    """TelegramOutbox and TelegramChannel (US-004) live in .telegram_outbox and
+    .telegram_channel, which import this module; they are reachable from here as the story's
+    contract names them, loaded on first use so the import stays one-way."""
+    if name == "TelegramOutbox":
         from . import telegram_outbox
 
-        return getattr(telegram_outbox, name)
+        return telegram_outbox.TelegramOutbox
+    if name == "TelegramChannel":
+        from . import telegram_channel
+
+        return telegram_channel.TelegramChannel
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
