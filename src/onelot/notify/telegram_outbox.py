@@ -427,8 +427,8 @@ class TelegramOutbox:
 
     # ── one step ───────────────────────────────────────────────────────────
     def drain_once(self) -> int:
-        """Settle expired rows, drop superseded EXITs, fold an oversized burst, then claim the
-        best due row and send it. Returns the rows claimed (0 or 1). Never sleeps except to
+        """Settle expired rows, drop superseded EXITs, fold an oversized burst and a pile of
+        missed notes, then claim the best due row and send it. Returns the rows claimed (0 or 1). Never sleeps except to
         keep the spacing."""
         if not self._client.available:
             return 0
@@ -441,6 +441,8 @@ class TelegramOutbox:
             if self._supersede_exits(queued):
                 queued = self._queued()
             if self._fold_burst(queued, now):
+                queued = self._queued()
+            if self._fold_missed(queued, now):
                 queued = self._queued()
             if self._paused(now):
                 return 0  # flood control applies to the whole chat
@@ -663,6 +665,36 @@ class TelegramOutbox:
         log.info("telegram outbox: %d lower-confidence alert(s) folded into a digest", len(folded))
         return True
 
+    def _fold_missed(self, queued: list[_Row], now: dt.datetime) -> bool:
+        """Missed notes pile up while Telegram is down (one per expired alert, as alerts
+        expire one pass at a time). More than DIGEST_THRESHOLD alerts waiting in queued notes
+        and expired digests: all of them become ONE 'Missed N alerts' digest (decision C), the
+        folded rows end skipped. A lone digest is left as it is."""
+        backlog = [r for r in queued if _missed_alerts(r) is not None]
+        alerts = [a for r in backlog for a in _missed_alerts(r) or ()]
+        if len(backlog) < 2 or len(alerts) <= DIGEST_THRESHOLD:
+            return False
+        with self._engine.begin() as conn:
+            folded = [
+                r
+                for r in backlog
+                if self._mark(conn, r.id, "queued", "skipped", "folded into a digest")
+            ]
+            if folded:
+                missed = [a for r in folded for a in _missed_alerts(r) or ()]
+                missed.sort(key=_best_first)
+                self._insert_note(
+                    conn,
+                    dedup_key=f"digest:expired:{min(r.id for r in folded)}",  # folded once
+                    kind="digest",
+                    alert_id=None,
+                    payload={"reason": "expired", "alerts": missed},
+                    silent=all(r.silent for r in folded),
+                    now=now,
+                )
+        log.info("telegram outbox: %d missed note(s) folded into one digest", len(folded))
+        return True
+
     def _insert_digest(
         self, conn: Connection, reason: str, rows: list[_Row], now: dt.datetime
     ) -> None:
@@ -762,6 +794,23 @@ class TelegramOutbox:
             "skipped": counts.get("skipped", 0),
             "rate_limited_until": to_ist(paused).isoformat() if paused is not None else None,
         }
+
+
+def _best_first(alert: Mapping[str, Any]) -> tuple[bool, float]:
+    """Sort key: the higher confidence first, an unreadable one last (sorted() is stable)."""
+    score = _score(alert)
+    return (score is None, -(score or 0.0))
+
+
+def _missed_alerts(row: _Row) -> list[Mapping[str, Any]] | None:
+    """The alerts a queued note reports as missed: [its alert] for a missed note, the list of
+    an 'expired' digest; None for any other row."""
+    if row.kind == "missed":
+        return [row.payload]
+    if row.kind == "digest" and row.payload.get("reason") == "expired":
+        raw = row.payload.get("alerts")
+        return [a for a in raw if isinstance(a, Mapping)] if isinstance(raw, list) else []
+    return None
 
 
 def _position_of(row: _Row) -> str:

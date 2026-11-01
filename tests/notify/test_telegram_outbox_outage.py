@@ -228,3 +228,89 @@ def test_an_outage_gives_the_phone_one_exit_not_a_burst(make_rig):
     assert [s for _, s, _ in exit_rows(rig)] == ["skipped", "skipped", "skipped", "sent"]
     text = json.loads(rig.requests[-1].read())["text"]
     assert "Time 10:15:00 IST" in text and text.endswith(f"{SEP}sent late 10:40")
+
+
+# ========================= (C) missed notes that pile up become one digest ================
+def expire_one_by_one(rig: Rig, count: int) -> None:
+    """`count` alerts, the i-th valid for i minutes, the worker draining once a minute while
+    Telegram is down: each pass expires exactly one, as during a real outage."""
+    for i in range(1, count + 1):
+        rig.enqueue(rig.alert(i, minutes=i))
+    for minute in range(1, count + 1):
+        rig.clock.now = T0 + dt.timedelta(minutes=minute)
+        rig.outbox.drain_once()
+
+
+def queued_kinds(rig: Rig) -> list[str]:
+    return [r["kind"] for r in rig.rows() if r["status"] in ("queued", "sending")]
+
+
+def test_up_to_eight_missed_notes_stay_individual(make_rig):
+    rig = make_rig(Switch())
+
+    expire_one_by_one(rig, 8)
+
+    assert queued_kinds(rig) == ["missed"] * 8
+
+
+def test_a_ninth_missed_note_folds_them_all_into_one_digest(make_rig):
+    switch = Switch()
+    rig = make_rig(switch)
+    expire_one_by_one(rig, 9)
+
+    assert queued_kinds(rig) == ["digest"]
+    switch.down = False
+    rig.clock.advance(120)
+    rig.drain()
+    text = json.loads(rig.requests[-1].read())["text"]
+    assert text.startswith("<b>Missed 9 alerts</b>")
+    assert [r["last_error"] for r in rig.rows() if r["kind"] == "missed"] == [
+        "folded into a digest"
+    ] * 9
+
+
+def test_a_two_hour_outage_gives_one_digest_and_the_live_alerts_not_a_note_each(make_rig):
+    """The worker drains every second through a 2 h transport outage, one alert every 5
+    minutes (each valid 10 minutes). After recovery: the alert still live and ONE digest of
+    every alert that expired, never 23 separate notes (whichever is due first goes first:
+    the rows are in their retry back-off, at most 60 s)."""
+    switch = Switch()
+    rig = make_rig(switch)
+    outage = 2 * 3600
+    for second in range(outage):
+        rig.clock.now = max(rig.clock.now, T0 + dt.timedelta(seconds=second))
+        if second % 300 == 0:
+            rig.enqueue(rig.alert(second // 300 + 1, minutes=10))
+        rig.outbox.drain_once()
+    switch.down = False
+    rig.clock.now = max(rig.clock.now, T0 + dt.timedelta(seconds=outage))
+    tried_during_outage = len(rig.requests)
+
+    for _ in range(120):  # longer than the longest back-off
+        rig.clock.advance(1)
+        rig.outbox.drain_once()
+
+    after = [json.loads(r.read())["text"] for r in rig.requests[tried_during_outage:]]
+    live = [r for r in rig.rows() if r["kind"] == "alert" and r["status"] == "sent"]
+    expired = [r for r in rig.rows() if r["kind"] == "alert" and r["status"] == "skipped"]
+    assert len(live) == 1 and len(expired) == 23
+    assert len(after) == 2, after
+    assert sorted(t.split("</b>")[0] for t in after) == [
+        "<b>BUY SBIN · 1 share",
+        "<b>Missed 23 alerts",
+    ]
+    assert queued_kinds(rig) == []
+
+
+def test_the_missed_digest_lists_the_best_confidence_first_and_a_zero_is_a_score(make_rig):
+    rig = make_rig(Switch())
+    for i, score in enumerate([None, 0.0, 70.0, 10.0, 0.0, 90.0, 50.0, None, 30.0], start=1):
+        rig.enqueue(rig.alert(i, minutes=i, score=score))
+    for minute in range(1, 10):
+        rig.clock.now = T0 + dt.timedelta(minutes=minute)
+        rig.outbox.drain_once()
+
+    (digest,) = [r for r in rig.rows() if r["kind"] == "digest"]
+
+    scores = [a["confidence"]["score"] for a in digest["payload"]["alerts"]]
+    assert scores == [90.0, 70.0, 50.0, 30.0, 10.0, 0.0, 0.0, None, None]
