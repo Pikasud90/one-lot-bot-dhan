@@ -26,12 +26,15 @@ SENTINEL = "SENTINEL-7f3a9c"
 LINE_SEPARATOR = chr(0x2028)
 RTL_OVERRIDE = chr(0x202E)
 LTR_ISOLATE = chr(0x2066)
+LONE_SURROGATES = (chr(0xD800), chr(0xDBFF), chr(0xDC00), chr(0xDFFF))
+ARABIC_LETTER_MARK = chr(0x061C)
+BYTE_ORDER_MARK = chr(0xFEFF)
 
 
 class TestGoldenAlerts:
     def test_stock_buy(self):
         assert format_alert(stock_alert(), NOW) == (
-            "<b>BUY RELIANCE · 1 share</b>\n"
+            "<b>BUY RELIANCE · 1 share · intraday</b>\n"
             "<i>Reliance Industries</i>\n"
             "Entry 2,950.50 mkt\n"
             "Stop 2,921.00 · Target 3,009.50\n"
@@ -59,7 +62,7 @@ class TestGoldenAlerts:
             side="SELL", entry_price=4100.0, stop_price=4141.0, target_price=4018.0
         )
         assert format_alert(alert, NOW) == (
-            "<b>SELL TCS · 1 share</b>\n"
+            "<b>SELL TCS · 1 share · intraday short</b>\n"
             "<i>Tata Consultancy</i>\n"
             "Entry 4,100.00 mkt\n"
             "Stop 4,141.00 · Target 4,018.00\n"
@@ -194,7 +197,7 @@ class TestHeader:
     def test_a_risk_blocked_alert_is_prefixed_inside_the_bold_and_otherwise_unchanged(self):
         plain = format_alert(stock_alert(), NOW).split("\n")
         blocked = format_alert(stock_alert(risk_allowed=False), NOW).split("\n")
-        assert blocked[0] == "<b>[BLOCKED by risk] BUY RELIANCE · 1 share</b>"
+        assert blocked[0] == "<b>[BLOCKED by risk] BUY RELIANCE · 1 share · intraday</b>"
         assert blocked[1:] == plain[1:]
 
     @pytest.mark.parametrize("flag", [True, None, 0, "", "false", "no"])
@@ -206,6 +209,77 @@ class TestHeader:
         header = format_alert(index_alert("PE", risk_allowed=False), NOW).split("\n")[0]
         assert header == "<b>[BLOCKED by risk] BUY BANKNIFTY 25 NOV 45000 PE · 1 lot (30)</b>"
 
+    @pytest.mark.parametrize("strike", ["abc", "52k", None, [52000], float("nan"), True], ids=repr)
+    def test_an_unreadable_strike_shows_a_question_mark_never_a_word(self, strike):
+        """The strike is typed into Dhan: only a number is shown, anything else is '?'."""
+        alert = index_alert("CE")
+        alert["economics"]["option"]["strike"] = strike
+        event = exit_event("STOP")
+        event["position"]["option"]["strike"] = strike
+        for text in (
+            format_alert(alert, NOW).split("\n")[0],
+            format_missed(alert, NOW),
+            format_exit(event, NOW).split("\n")[0],
+        ):
+            assert " ? CE" in text, text
+
+    def test_a_numeric_string_strike_is_still_a_number(self):
+        alert = index_alert("CE")
+        alert["economics"]["option"]["strike"] = "52000.0"
+        assert " 52000 CE" in format_alert(alert, NOW).split("\n")[0]
+
+    @pytest.mark.parametrize(
+        ("side", "horizon", "product"),
+        [
+            ("BUY", "intraday", " · intraday"),
+            ("BUY", "swing", " · delivery"),
+            ("SELL", "intraday", " · intraday short"),
+            ("SELL", "swing", " · intraday short"),  # stock shorts are intraday only
+            ("BUY", None, ""),  # unknown: the product is left out, never guessed
+            ("BUY", "weekly", ""),
+        ],
+    )
+    def test_a_stock_header_carries_the_product(self, side, horizon, product):
+        """Decision 1: the product decides the order type in Dhan (intraday vs delivery)."""
+        alert = stock_alert(side=side, horizon=horizon)
+        expected = f"<b>{side} RELIANCE · 1 share{product}</b>"
+        assert format_alert(alert, NOW).split("\n")[0] == expected
+        assert f" · {side} RELIANCE · 1 share{product} · " in format_missed(alert, NOW)
+
+    @pytest.mark.parametrize("horizon", ["intraday", "swing", None])
+    def test_an_option_header_never_carries_a_product(self, horizon):
+        header = format_alert(index_alert("CE", horizon=horizon), NOW).split("\n")[0]
+        assert header.endswith(" CE · 1 lot (30)</b>")
+
+    @pytest.mark.parametrize("side", ["HOLD", "BUY_FUT", "", None, True, 7], ids=repr)
+    def test_an_unknown_side_shows_a_question_mark_as_the_action_and_no_product(self, side):
+        """Manager decision: like EXIT, an alert never echoes an unknown side as a verb."""
+        alert = stock_alert(side=side)
+        assert format_alert(alert, NOW).split("\n")[0] == "<b>? RELIANCE · 1 share</b>"
+        assert " · ? RELIANCE · 1 share · " in format_missed(alert, NOW)
+
+    def test_the_trading_symbol_is_preferred_over_the_series_key(self):
+        """US-004 adds trading_symbol (the NSE symbol, e.g. M&M) to the Desk payload; the
+        series key ('MM') is only the fallback."""
+        with_symbol = stock_alert(series_key="MM", trading_symbol="M&M", label="Mahindra")
+        without = stock_alert(series_key="MM", label="Mahindra")
+        assert format_alert(with_symbol, NOW).startswith("<b>BUY M&amp;M · ")
+        assert format_alert(without, NOW).startswith("<b>BUY MM · ")
+        assert " M&amp;M · " in format_missed(with_symbol, NOW)
+        event = exit_event(
+            "STOP", series_key="MM", trading_symbol="M&M", kind="STOCK", side="BUY", option={}
+        )
+        assert format_exit(event, NOW).split("\n")[0] == "<b>EXIT: SELL M&amp;M · 1 share</b>"
+
+    @pytest.mark.parametrize("unusable", [None, "", "   ", ["M&M"], {"s": 1}], ids=repr)
+    def test_an_unusable_trading_symbol_falls_back_to_the_series_key(self, unusable):
+        alert = stock_alert(series_key="RELIANCE", trading_symbol=unusable)
+        assert format_alert(alert, NOW).startswith("<b>BUY RELIANCE · ")
+
+    def test_the_label_line_is_omitted_when_it_repeats_the_trading_symbol(self):
+        alert = stock_alert(series_key="MM", trading_symbol="M&M", label="M&M")
+        assert "<i>" not in format_alert(alert, NOW)
+
     def test_missed_and_exit_name_the_contract_like_the_header(self):
         later = dt.datetime(2026, 11, 2, 10, 45, 0, tzinfo=IST)
         missed = format_missed(index_alert("PE", risk_allowed=False), later)
@@ -213,7 +287,7 @@ class TestHeader:
         event = exit_event("STOP")
         event["position"]["option"]["expiry"] = None
         header = format_exit(event, NOW).split("\n")[0]
-        assert header == "<b>EXIT BANKNIFTY 45000 CE · 1 lot (30)</b>"
+        assert header == "<b>EXIT: SELL BANKNIFTY 45000 CE · 1 lot (30)</b>"
 
 
 class TestFieldRules:
@@ -261,21 +335,31 @@ class TestFieldRules:
         [
             ("yahoo", False, "Data live"),
             ("dhan-ws", True, "Data <b>delayed ~15m</b>"),
-            ("yahoo", None, "Data live"),
-            ("yahoo", "true", "Data live"),
+            ("dhan-ws", None, "Data n/a"),
+            ("dhan-ws", "false", "Data n/a"),
+            ("dhan-ws", 0, "Data n/a"),
+            ("yahoo", "true", "Data n/a"),
+            ("yahoo", 1, "Data n/a"),
         ],
     )
     def test_delayed_tag_comes_from_data_delayed_only(self, source, delayed, line):
-        """US-028 single rule: data.delayed (exactly True) decides; data.source is never read."""
+        """US-028 single rule: data.delayed decides and data.source is never read. Fail-safe:
+        'live' only for exactly False, so an alert of unknown freshness never reads live."""
         alert = stock_alert(data={"source": source, "delayed": delayed})
         assert format_alert(alert, NOW).split("\n")[7] == line
+
+    @pytest.mark.parametrize("data", [{"source": "dhan-ws"}, None, "live", []], ids=repr)
+    def test_a_missing_delayed_flag_or_data_block_reads_n_a(self, data):
+        alert = stock_alert()
+        alert["data"] = data
+        assert format_alert(alert, NOW).split("\n")[7] == "Data n/a"
 
     def test_the_unit_comes_from_the_kind_and_lot_size_not_the_unit_label(self):
         stock, index = stock_alert(), index_alert("CE")
         stock["economics"]["unit_label"] = SENTINEL
         del index["economics"]["unit_label"]
         index["economics"]["qty"] = None  # falls back to option.lot
-        assert format_alert(stock, NOW).split("\n")[0] == "<b>BUY RELIANCE · 1 share</b>"
+        assert format_alert(stock, NOW).split("\n")[0] == "<b>BUY RELIANCE · 1 share · intraday</b>"
         header = format_alert(index, NOW).split("\n")[0]
         assert header == "<b>BUY BANKNIFTY 25 NOV 45000 CE · 1 lot (30)</b>"
 
@@ -286,7 +370,7 @@ class TestFieldRules:
 
     def test_numeric_text_fields_are_rendered_as_numbers(self):
         lines = format_alert(stock_alert(series_key=500325, timeframe=5), NOW).split("\n")
-        assert lines[0] == "<b>BUY 500325 · 1 share</b>"
+        assert lines[0] == "<b>BUY 500325 · 1 share · intraday</b>"
         assert lines[4] == "Opening Range Breakout 5"
 
     def test_label_line_is_omitted_when_it_repeats_the_symbol(self):
@@ -308,8 +392,12 @@ class TestFieldRules:
         assert lines[2] == "Entry n/a mkt"
         assert lines[3] == "Stop n/a · Target n/a"
 
-    @pytest.mark.parametrize(("score", "shown"), [(64.5, "65"), (0.0, "0"), (100, "100")])
-    def test_confidence_is_a_whole_number_rounded_half_up(self, score, shown):
+    @pytest.mark.parametrize(
+        ("score", "shown"),
+        [(64.5, "64"), (64.99, "64"), (44.9, "44"), (0.0, "0"), (100, "100"), (None, "n/a")],
+    )
+    def test_confidence_is_the_floored_score_like_the_desk_title(self, score, shown):
+        """BUG-4: one rule on every surface, floor, so 64.9 never shows as a 'medium' 65."""
         msg = format_alert(stock_alert(confidence={"score": score, "label": "medium"}), NOW)
         assert msg.split("\n")[5] == f"Conf {shown} medium"
 
@@ -325,7 +413,7 @@ class TestEscapingAndWhitelist:
         )
         msg = format_alert(alert, NOW)
         lines = msg.split("\n")
-        assert lines[0] == "<b>BUY M&amp;M · 1 share</b>"
+        assert lines[0] == "<b>BUY M&amp;M · 1 share · intraday</b>"
         assert lines[1] == "<i>&lt;b&gt;Mahindra&lt;/b&gt; &amp; Mahindra 🚜</i>"
         assert lines[4] == "a&lt;b&gt;c &lt;5m&gt;"
         assert lines[5] == "Conf 70 hi&lt;i&gt;gh"
@@ -340,7 +428,7 @@ class TestEscapingAndWhitelist:
         msg = format_alert(alert, NOW)
         lines = msg.split("\n")
         assert len(lines) == 9
-        assert lines[0] == "<b>BUY M&amp;M EVIL · 1 share</b>"
+        assert lines[0] == "<b>BUY M&amp;M EVIL · 1 share · intraday</b>"
         assert lines[1] == "<i>Mahindra and Mahindra Ltd</i>"
         assert lines[4] == "orb fast 5m"
         assert LINE_SEPARATOR not in msg and "\r" not in msg
@@ -351,8 +439,29 @@ class TestEscapingAndWhitelist:
             series_key=f"REL{RTL_OVERRIDE}ECNAI\x00", label=f"Reliance{LTR_ISOLATE} Ind\x07"
         )
         lines = format_alert(alert, NOW).split("\n")
-        assert lines[0] == "<b>BUY RELECNAI · 1 share</b>"
+        assert lines[0] == "<b>BUY RELECNAI · 1 share · intraday</b>"
         assert lines[1] == "<i>Reliance Ind</i>"
+
+    @pytest.mark.parametrize(
+        "junk",
+        [*LONE_SURROGATES, ARABIC_LETTER_MARK, BYTE_ORDER_MARK],
+        ids=["d800", "dbff", "dc00", "dfff", "061c", "feff"],
+    )
+    def test_lone_surrogates_and_invisible_marks_are_dropped_so_the_text_encodes(self, junk):
+        """A lone surrogate cannot be encoded as UTF-8, so one stray character in a label
+        would make the whole alert undeliverable; U+061C and U+FEFF are invisible."""
+        alert = index_alert("CE", series_key=f"BANK{junk}NIFTY", label=f"NIFTY{junk} BANK")
+        alert["strategy_label"] = f"Opening{junk} Range Breakout"
+        for text in (
+            format_alert(alert, NOW),
+            format_missed(alert, NOW),
+            format_exit(exit_event("STOP", series_key=f"BANK{junk}NIFTY"), NOW),
+        ):
+            assert junk not in text
+            text.encode("utf-8")  # raises UnicodeEncodeError on a lone surrogate
+            assert "BANKNIFTY" in text
+        lines = format_alert(alert, NOW).split("\n")
+        assert lines[1] == "<i>NIFTY BANK</i>"
 
     def test_account_fields_never_reach_the_message(self):
         alert = stock_alert(
@@ -386,6 +495,65 @@ class TestEscapingAndWhitelist:
         assert_telegram_html(msg)
 
 
+class TestJunkScalars:
+    """US-003 BUG-5/6: a bool or an astronomically large int where text belongs."""
+
+    HUGE = 10**5000  # str() refuses ints beyond 4300 digits (ValueError)
+
+    @pytest.mark.parametrize("flag", [True, False])
+    def test_a_bool_in_a_text_field_renders_empty_never_as_a_word(self, flag):
+        alert = index_alert(
+            "CE", label=flag, series_key=flag, id=flag, timeframe=flag, strategy_label=flag
+        )
+        alert["confidence"]["label"] = flag
+        msg = format_alert(alert, NOW)
+        assert not re.search(r"\b(True|False)\b", msg), msg
+        lines = msg.split("\n")
+        assert lines[0].startswith("<b>BUY ? 25 NOV 45000 CE · ")  # the symbol reads '?'
+        assert lines[4] == "orb"  # a bool strategy label falls back to the strategy name
+        assert lines[5] == "Conf 66"
+        assert lines[-1].endswith("id <code></code>")
+        assert_telegram_html(msg)
+
+    @pytest.mark.parametrize("flag", [True, False])
+    def test_a_bool_trading_symbol_falls_back_to_the_series_key(self, flag):
+        alert = stock_alert(trading_symbol=flag)
+        assert format_alert(alert, NOW).startswith("<b>BUY RELIANCE · 1 share")
+        event = exit_event("STOP", trading_symbol=flag, series_key=flag)
+        assert format_exit(event, NOW).split("\n")[0].startswith("<b>EXIT: SELL ? ")
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "label",
+            "series_key",
+            "trading_symbol",
+            "strategy_label",
+            "timeframe",
+            "id",
+            "side",
+            "kind",
+            "horizon",
+        ],
+    )
+    def test_a_huge_int_in_a_text_field_never_raises(self, path):
+        alert = stock_alert()
+        alert[path] = self.HUGE
+        msg = format_alert(alert, NOW)
+        assert_telegram_html(msg)
+        assert "\n" not in format_missed(alert, NOW)
+
+    def test_a_huge_int_in_exit_fields_never_raises(self):
+        event = exit_event("STOP", series_key=self.HUGE, unrealized=self.HUGE, kind=self.HUGE)
+        event["advice"] = self.HUGE
+        lines = format_exit(event, NOW).split("\n")
+        assert lines[1:3] == ["Reason: n/a", "Est. P&amp;L n/a"]
+
+    def test_a_huge_score_is_clamped(self):
+        alert = stock_alert(confidence={"score": self.HUGE, "label": "high"})
+        assert format_alert(alert, NOW).split("\n")[5] == "Conf 100 high"
+
+
 class TestBudget:
     def test_an_over_budget_label_is_cut_with_an_ellipsis(self):
         msg = format_alert(stock_alert(label="Reliance Industries " * 60), NOW)
@@ -393,7 +561,7 @@ class TestBudget:
         label_line = msg.split("\n")[1]
         assert label_line.startswith("<i>Reliance Industries Reliance")
         assert label_line.endswith("…</i>")
-        assert msg.split("\n")[0] == "<b>BUY RELIANCE · 1 share</b>"
+        assert msg.split("\n")[0] == "<b>BUY RELIANCE · 1 share · intraday</b>"
         assert msg.endswith("id <code>a1b2c3</code>")
         assert_telegram_html(msg)
 
@@ -431,38 +599,50 @@ class TestBudget:
         assert msg.startswith("<b>[BLOCKED by risk] BUY ")
         assert "<i>" in msg  # the label still gets some room
 
-    def test_the_fixed_part_leaves_the_label_room(self):
-        """Every capped field at its cap on the longest template (a blocked index alert with
-        an expiry): the label must still keep at least 100 HTML characters (AC1 budget)."""
-        wide = "W" * 400
-        alert = index_alert(
-            "CE",
-            id=wide,
-            series_key=wide,
-            label="L" * 2000,
-            strategy_label=wide,
-            timeframe=wide,
-            confidence={"score": 100, "label": wide},
-            expires_at="2026-11-02T23:59:59+05:30",
-            created_at="2026-11-02T10:15:00+05:30",
-            data={"delayed": True},
-            risk_allowed=False,
-        )
-        alert["economics"].update(
-            entry_price=-9.99e11,
-            stop_price=-9.99e11,
-            target_price=-9.99e11,
-            underlying_stop=-9.99e11,
-            underlying_target=-9.99e11,
-            qty=10**11,
-        )
-        alert["economics"]["option"]["strike"] = wide
-        msg = format_alert(alert, NOW)
+    @pytest.mark.parametrize("char", ["&", "W"], ids=["escaped", "plain"])
+    def test_the_fixed_part_leaves_the_label_room(self, char):
+        """The longest template (a blocked index alert with an expiry) with every capped
+        field at its cap, the widest numbers (a 15-character strike, a 12-digit lot, 10 digits
+        of minutes) and '&' (5 characters once escaped): the fixed part stays within 504 HTML
+        characters, so the label always keeps at least 88 and the 600 budget holds."""
+        wide = char * 400
+
+        def alert(label: str) -> dict[str, Any]:
+            a = index_alert(
+                "CE",
+                id=wide,
+                series_key=wide,
+                trading_symbol=wide,
+                label=label,
+                strategy_label=wide,
+                timeframe=wide,
+                confidence={"score": 100, "label": wide},
+                expires_at="9999-12-31T23:59:59+05:30",
+                created_at="2026-11-02T10:15:00+05:30",
+                data={"delayed": True},
+                risk_allowed=False,
+            )
+            biggest = -999999999999.99
+            a["economics"].update(
+                entry_price=biggest,
+                stop_price=biggest,
+                target_price=biggest,
+                underlying_stop=biggest,
+                underlying_target=biggest,
+                qty=999999999999,
+            )
+            a["economics"]["option"].update(strike=999999999999.99, expiry="2026-11-26")
+            return a
+
+        fixed = format_alert(alert(""), NOW)
+        assert_telegram_html(fixed)
+        assert len(fixed) <= 504
+        msg = format_alert(alert("L" * 2000), NOW)
         assert_telegram_html(msg)
         assert len(msg) >= 590  # the label really stretched to fill the budget
         label_line = msg.split("\n")[1]
         assert label_line.startswith("<i>LLLL") and label_line.endswith("…</i>")
-        assert len(label_line) - len("<i>…</i>") >= 100
+        assert len(label_line) - len("<i>…</i>") >= 88
 
     @settings(max_examples=150, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     @given(
@@ -497,11 +677,29 @@ class TestExitAndMissed:
     def test_exit_golden_index_stop(self):
         later = dt.datetime(2026, 11, 2, 11, 42, 10, tzinfo=IST)
         assert format_exit(exit_event("STOP"), later) == (
-            "<b>EXIT BANKNIFTY 25 NOV 45000 CE · 1 lot (30)</b>\n"
+            "<b>EXIT: SELL BANKNIFTY 25 NOV 45000 CE · 1 lot (30)</b>\n"
             "Reason: STOP\n"
             "Est. P&amp;L -1,235\n"  # -1234.5 rounds half-up, away from zero
             "Time 11:42:10 IST"
         )
+
+    @pytest.mark.parametrize(
+        ("kind", "side", "line_one"),
+        [
+            ("STOCK", "BUY", "<b>EXIT: SELL SBIN · 1 share</b>"),
+            ("STOCK", "SELL", "<b>EXIT: BUY SBIN · 1 share · cover short</b>"),
+            ("INDEX", "BUY_CE", "<b>EXIT: SELL SBIN 25 NOV 45000 CE · 1 lot (30)</b>"),
+            ("INDEX", "BUY_PE", "<b>EXIT: SELL SBIN 25 NOV 45000 PE · 1 lot (30)</b>"),
+            ("STOCK", "HOLD", "<b>EXIT SBIN · 1 share</b>"),  # unknown side: no action named
+            ("STOCK", None, "<b>EXIT SBIN · 1 share</b>"),
+        ],
+    )
+    def test_exit_line_one_names_the_closing_action(self, kind, side, line_one):
+        """Decision 7: SELL closes a long stock or any bought option; BUY covers a short."""
+        event = exit_event("STOP", series_key="SBIN", kind=kind, side=side)
+        if kind == "STOCK":
+            event["position"].update(qty=1, option={})
+        assert format_exit(event, NOW).split("\n")[0] == line_one
 
     def test_exit_golden_stock_short_at_target(self):
         event = exit_event(
@@ -519,7 +717,8 @@ class TestExitAndMissed:
         )
         later = dt.datetime(2026, 11, 2, 13, 5, 0, tzinfo=IST)
         assert format_exit(event, later) == (
-            "<b>EXIT TCS · 1 share</b>\nReason: TARGET\nEst. P&amp;L +82\nTime 13:05:00 IST"
+            "<b>EXIT: BUY TCS · 1 share · cover short</b>\n"
+            "Reason: TARGET\nEst. P&amp;L +82\nTime 13:05:00 IST"
         )
 
     @pytest.mark.parametrize(

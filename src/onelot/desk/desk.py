@@ -26,7 +26,7 @@ from sqlalchemy import Engine, select, update
 from ..clock import IST, now_ist
 from ..data.schema import desk_positions, desk_signals
 from ..data.universe import load_specs
-from ..notify.base import Notification, NotificationLevel
+from ..notify.base import Notification, NotificationLevel, shown_confidence
 from .audit import audit_signal, confidence, strategy_scoreboard
 from .config import DeskConfig, load_desk_config
 from .data import CompositeBars, build_source, is_delayed_source
@@ -48,6 +48,12 @@ DELAYED_TITLE_MARKER = "(delayed ~15m)"
 
 def _iso(v: dt.datetime | None) -> str | None:
     return v.isoformat() if v else None
+
+
+def _conf_number(conf: dict) -> str:
+    """The title's confidence number: the same floored rule as the phone (US-003 BUG-4)."""
+    shown = shown_confidence(conf.get("score"))
+    return "n/a" if shown is None else str(shown)
 
 
 def _aware(v: dt.datetime | None) -> dt.datetime | None:
@@ -456,7 +462,7 @@ class Desk:
                 if eco.kind == "STOCK"
                 else f" · ~₹{eco.outlay:,.0f} outlay"
             )
-            + f" · {slot.cfg.name} {slot.cfg.timeframe} · conf {conf['score']:.0f}"
+            + f" · {slot.cfg.name} {slot.cfg.timeframe} · conf {_conf_number(conf)}"
         )
         if delayed:
             title = f"{DELAYED_TITLE_MARKER} {title}"

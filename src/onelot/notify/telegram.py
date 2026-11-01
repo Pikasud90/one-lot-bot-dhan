@@ -2,11 +2,12 @@
 
 The formatters turn a Desk payload into Telegram HTML that the owner can act on from
 the lock screen. The first line names exactly what to type into Dhan: the tradable
-symbol (series_key), the contract and the unit ("BUY BANKNIFTY 25 NOV 52000 CE · 1 lot
-(30)"); a risk-blocked alert is still sent, with "[BLOCKED by risk] " first inside the
+symbol (trading_symbol, else series_key), the contract, the unit and, for a stock, the
+product ("BUY BANKNIFTY 25 NOV 52000 CE · 1 lot (30)", "SELL SBIN · 1 share · intraday
+short"); a risk-blocked alert is still sent, with "[BLOCKED by risk] " first inside the
 bold. The rest follows the AC1 order:
 
-    <b>{BUY|SELL} {series_key}[ {DD MMM} {strike} {CE|PE}] · {1 share | 1 lot (N)}</b>
+    <b>{BUY|SELL} {symbol}[ {DD MMM} {strike} {CE|PE}] · {1 share | 1 lot (N)}[ · {product}]</b>
     <i>{label}</i>                          omitted when it repeats the symbol
     Entry {price} {mkt | ask | est.}        stock: mkt; index: ask (live chain) | est. (synthetic)
     Underlying Stop {x} · Target {y|trail}  index only
@@ -14,7 +15,7 @@ bold. The rest follows the AC1 order:
     {strategy label} {timeframe}
     Conf {NN} {label}
     Valid till {HH:MM} IST ({M}m left | expired)
-    Data {live | <b>delayed ~15m</b>}       data.delayed only (US-028 single rule)
+    Data {live | <b>delayed ~15m</b> | n/a} data.delayed only (US-028); n/a unless a bool
     Alert {HH:MM:SS} IST · id <code>{first six}</code>
 
 Rules every formatter keeps:
@@ -46,8 +47,11 @@ from typing import Any, Literal
 import httpx
 
 from ..clock import to_ist
-from ..config import telegram_token_forms
+from ..config import TELEGRAM_TOKEN_SHAPE, telegram_redaction_literals
 from ..logging_setup import get_redactor, register_secrets
+from .base import shown_confidence
+
+log = logging.getLogger(__name__)
 
 MAX_LINES = 12
 MAX_CHARS = 600
@@ -60,11 +64,11 @@ ID_CHARS = 6
 # English and upper case from a table: strftime("%b") follows the process locale.
 _MONTHS = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
 
-# Caps in HTML characters after escaping; with these the fixed part of the longest
-# message (a blocked index alert) stays well under MAX_CHARS whatever the input
-# (test_the_fixed_part_leaves_the_label_room pins the worst case).
+# Caps in HTML characters after escaping. With them the fixed part of the longest message
+# (a blocked index alert, every capped field at its cap, the widest numbers) is at most 504
+# characters, so the label keeps at least 88 and MAX_CHARS always holds
+# (test_the_fixed_part_leaves_the_label_room pins it).
 _CAP_SYMBOL = 32
-_CAP_STRIKE = 12
 _CAP_STRATEGY = 48
 _CAP_TIMEFRAME = 24
 _CAP_CONF_LABEL = 24
@@ -74,9 +78,12 @@ _CENT = Decimal("0.01")
 _UNIT = Decimal(1)
 
 _OPTION_SIDES = ("BUY_CE", "BUY_PE")
-# C0/C1 controls that are not whitespace, and bidi overrides that could re-order a line.
+# C0/C1 controls that are not whitespace; bidi marks and overrides that could re-order a
+# line (U+061C, U+200E/F, U+202A-E, U+2066-9); the byte-order mark U+FEFF; and lone
+# surrogates U+D800-DFFF, which cannot be encoded, so one would make the alert unsendable.
 _INVISIBLE = re.compile(
-    "[\x00-\x08\x0e-\x1b\x7f-\x84\x86-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]"
+    "[\x00-\x08\x0e-\x1b\x7f-\x84\x86-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069"
+    "\ufeff\ud800-\udfff]"
 )
 
 
@@ -88,11 +95,17 @@ def _fields(value: Any) -> Mapping[str, Any]:
 
 def _plain(value: Any) -> str:
     """One line of text from a scalar: whitespace runs (newlines included) become one
-    space, invisible controls go. Containers and None give "" — never their repr."""
+    space, invisible controls go. Containers, None and bools give "" — never their repr,
+    and never True/False (a YAML ticker such as NO or ON arrives as a bool)."""
+    if isinstance(value, bool):
+        return ""
     if isinstance(value, str):
         text = value
     elif isinstance(value, (int, float, Decimal)):
-        text = str(value)
+        try:
+            text = str(value)
+        except ValueError:  # an int beyond Python's 4300-digit str() limit is unreadable
+            return ""
     else:
         return ""
     return " ".join(_INVISIBLE.sub("", text).split())
@@ -154,11 +167,10 @@ def _whole_signed(value: Any) -> str:
 
 
 def _strike(value: Any) -> str:
-    """52000.0 -> 52000, 22.5 -> 22.5."""
+    """52000.0 -> 52000, 22.5 -> 22.5. The strike is typed into Dhan, so anything that is
+    not a finite number (nan, inf, a bool, free text, missing) shows '?', never a word."""
     q = _rounded(value, _CENT)
-    if q is None:
-        return _fit(value, _CAP_STRIKE) or "?"
-    return f"{q.normalize():f}"
+    return "?" if q is None else f"{q.normalize():f}"
 
 
 def _when(value: Any) -> dt.datetime | None:
@@ -193,18 +205,24 @@ def _short_id(value: Any) -> str:
 
 
 # ── shared pieces ────────────────────────────────────────────────────────────
+def _symbol(payload: Mapping[str, Any]) -> str:
+    """The tradable symbol (plain text): trading_symbol when it is usable text (the NSE
+    symbol, e.g. 'M&M', added to the Desk payload in US-004), else series_key."""
+    return _plain(payload.get("trading_symbol")) or _plain(payload.get("series_key"))
+
+
 def _instrument(payload: Mapping[str, Any], option: Mapping[str, Any]) -> tuple[str, str]:
     """(action word, instrument) for an alert or a position, both escaped: the tradable
     symbol, plus expiry, strike and CE/PE for an option. The CE/PE comes from the Desk
     side ("BUY_CE"), never from free text."""
     side = _plain(payload.get("side")).upper()
-    symbol = _fit(payload.get("series_key"), _CAP_SYMBOL) or "?"
+    symbol = _fit(_symbol(payload), _CAP_SYMBOL) or "?"
     if side in _OPTION_SIDES:
         contract = (_expiry(option.get("expiry")), _strike(option.get("strike")), side[-2:])
         return "BUY", " ".join([symbol, *(part for part in contract if part)])
     if side in ("BUY", "SELL"):
         return side, symbol
-    return (_fit(side.replace("_", " "), _CAP_STRIKE) or "?"), symbol
+    return "?", symbol  # an unknown side is never echoed as a verb (like EXIT)
 
 
 def _unit(kind: str, economics: Mapping[str, Any]) -> str:
@@ -219,13 +237,29 @@ def _unit(kind: str, economics: Mapping[str, Any]) -> str:
     return f"1 lot ({lot:f})" if lot is not None and lot > 0 else "1 lot"
 
 
+def _product(kind: str, side: str, horizon: str) -> str:
+    """The Dhan product a STOCK alert needs (an option header carries none): a short is
+    always intraday (ADR-001 am. 8); a buy is intraday or, for a swing, delivery. An
+    unknown horizon gives "" so the product is left out, never guessed."""
+    if kind != "STOCK":
+        return ""
+    if side == "SELL":
+        return "intraday short"
+    if side == "BUY":
+        return {"intraday": "intraday", "swing": "delivery"}.get(horizon, "")
+    return ""
+
+
 def _header(alert: Mapping[str, Any]) -> str:
-    """'BUY BANKNIFTY 25 NOV 45000 CE · 1 lot (30)' — escaped, without tags."""
+    """'BUY BANKNIFTY 25 NOV 45000 CE · 1 lot (30)', 'BUY SBIN · 1 share · intraday' —
+    escaped, without tags."""
     economics = _fields(alert.get("economics"))
     action, instrument = _instrument(alert, _fields(economics.get("option")))
     kind = _plain(alert.get("kind")).upper()
-    unit = _unit(kind, economics)
-    return f"{action} {instrument}{SEP}{unit}" if unit else f"{action} {instrument}"
+    side = _plain(alert.get("side")).upper()
+    horizon = _plain(alert.get("horizon")).lower()
+    parts = [f"{action} {instrument}", _unit(kind, economics), _product(kind, side, horizon)]
+    return SEP.join(part for part in parts if part)
 
 
 def _levels(head: str, stop: Any, target: Any) -> str:
@@ -238,11 +272,12 @@ def _levels(head: str, stop: Any, target: Any) -> str:
 def format_alert(alert: Mapping[str, Any], now: dt.datetime) -> str:
     """The phone message for a Desk SIGNAL dict (see `Desk._raise_signal`).
 
-    Reads only: id, created_at, expires_at, series_key, label, kind, side, risk_allowed,
-    strategy_label (else strategy), timeframe, confidence.{score,label}, data.delayed and
-    economics.{qty, entry_price, stop_price, target_price, underlying_stop,
-    underlying_target, synthetic, option.{strike, expiry, lot}}. `now` drives the minutes
-    left, so format at send time. Only risk_allowed exactly False marks it blocked.
+    Reads only: id, created_at, expires_at, trading_symbol (else series_key), label, kind,
+    side, horizon, risk_allowed, strategy_label (else strategy), timeframe,
+    confidence.{score,label}, data.delayed and economics.{qty, entry_price, stop_price,
+    target_price, underlying_stop, underlying_target, synthetic, option.{strike, expiry,
+    lot}}. `now` drives the minutes left, so format at send time. Only risk_allowed
+    exactly False marks it blocked.
     """
     economics = _fields(alert.get("economics"))
     index = _plain(alert.get("kind")).upper() == "INDEX"
@@ -277,14 +312,18 @@ def format_alert(alert: Mapping[str, Any], now: dt.datetime) -> str:
 
 
 def _strategy_line(alert: Mapping[str, Any]) -> str:
-    name = alert.get("strategy_label") or alert.get("strategy")
-    parts = (_fit(name, _CAP_STRATEGY), _fit(alert.get("timeframe"), _CAP_TIMEFRAME))
+    """'{strategy label} {timeframe}'; the strategy name when the label is not usable text."""
+    name = _fit(alert.get("strategy_label"), _CAP_STRATEGY) or _fit(
+        alert.get("strategy"), _CAP_STRATEGY
+    )
+    parts = (name, _fit(alert.get("timeframe"), _CAP_TIMEFRAME))
     return " ".join(part for part in parts if part) or f"Strategy {NA}"
 
 
 def _confidence_line(confidence: Mapping[str, Any]) -> str:
-    score = _rounded(confidence.get("score"), _UNIT)
-    shown = NA if score is None else f"{score:f}"
+    """'Conf 72 high': the same floored number as the desk title (shown_confidence)."""
+    score = shown_confidence(confidence.get("score"))
+    shown = NA if score is None else str(score)
     label = _fit(confidence.get("label"), _CAP_CONF_LABEL)
     return f"Conf {shown} {label}" if label else f"Conf {shown}"
 
@@ -300,14 +339,18 @@ def _ttl_line(deadline: dt.datetime | None, now: dt.datetime) -> str:
 
 
 def _data_line(data: Mapping[str, Any]) -> str:
-    # US-028: data.delayed is the single rule; data.source is never re-derived here.
-    return f"Data <b>{DELAYED_TAG}</b>" if data.get("delayed") is True else "Data live"
+    """US-028: data.delayed is the single rule; data.source is never re-derived here.
+    Fail-safe: 'live' only for exactly False, so unknown freshness reads n/a, never live."""
+    delayed = data.get("delayed")
+    if delayed is True:
+        return f"Data <b>{DELAYED_TAG}</b>"
+    return "Data live" if delayed is False else f"Data {NA}"
 
 
 def _insert_label(lines: list[str], alert: Mapping[str, Any]) -> None:
     """Put the instrument label under the header, in the room the budget leaves."""
     label = _plain(alert.get("label"))
-    if not label or label == _plain(alert.get("series_key")):
+    if not label or label == _symbol(alert):
         return
     room = MAX_CHARS - len("\n".join(lines)) - len("\n<i></i>")
     fitted = _fit(label, room)
@@ -316,22 +359,37 @@ def _insert_label(lines: list[str], alert: Mapping[str, Any]) -> None:
 
 
 # ── format_exit / format_missed ───────────────────────────────────────────────
+def _closing(side: str, instrument: str, unit: str) -> str:
+    """'EXIT: SELL SBIN · 1 share' — the order that closes the position: SELL for a long
+    stock or any bought option, BUY for a short stock ('· cover short'). An unknown side
+    names no action ('EXIT SBIN · 1 share'), so a guess can never send the owner the wrong
+    way."""
+    tail = f"{instrument}{SEP}{unit}" if unit else instrument
+    if side in ("BUY", *_OPTION_SIDES):
+        return f"EXIT: SELL {tail}"
+    if side == "SELL":
+        return f"EXIT: BUY {tail}{SEP}cover short"
+    return f"EXIT {tail}"
+
+
 def format_exit(event: Mapping[str, Any], now: dt.datetime) -> str:
     """Four lines for a Desk EXIT payload {"advice": str, "position": {...}}:
-    EXIT and the instrument, the reason, the estimated P&L (whole rupees, as the Desk
-    rounds it) and the time of this message.
+    EXIT with the closing action and the instrument ("EXIT: SELL BANKNIFTY 26 NOV 52000 CE
+    · 1 lot (30)"), the reason, the estimated P&L (whole rupees, as the Desk rounds it)
+    and the time of this message.
 
-    Reads only advice and position.{series_key, kind, side, qty,
+    Reads only advice and position.{trading_symbol (else series_key), kind, side, qty,
     option.{strike, expiry, lot}, unrealized}.
     """
     position = _fields(event.get("position"))
     option = _fields(position.get("option"))
     _, instrument = _instrument(position, option)
     unit = _unit(_plain(position.get("kind")).upper(), position)
+    side = _plain(position.get("side")).upper()
     advice = _fit(_plain(event.get("advice")).replace("_", " "), _CAP_REASON) or NA
     return "\n".join(
         [
-            f"<b>EXIT {instrument}{SEP}{unit}</b>" if unit else f"<b>EXIT {instrument}</b>",
+            f"<b>{_closing(side, instrument, unit)}</b>",
             f"Reason: {advice}",
             f"Est. P&amp;L {_whole_signed(position.get('unrealized'))}",
             f"Time {_clock(to_ist(now), '%H:%M:%S')}",
@@ -354,8 +412,9 @@ TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
 CHAT_ENV = "TELEGRAM_CHAT_ID"
 TIMEOUT = httpx.Timeout(10.0)  # connect, read, write and pool alike
 # ASCII only: [0-9], never \d (which also matches full-width and other Unicode digits),
-# and always re.fullmatch, never $ (which also matches before a trailing newline).
-_TOKEN_SHAPE = re.compile(r"[0-9]{6,12}:[A-Za-z0-9_-]{30,}")
+# and always re.fullmatch, never $ (which also matches before a trailing newline). The
+# token shape lives in onelot.config so Settings (Secrets.masked) applies the same rule.
+_TOKEN_SHAPE = TELEGRAM_TOKEN_SHAPE
 _CHAT_SHAPE = re.compile(r"-?[1-9][0-9]{0,18}")
 _CAP_DESCRIPTION = 200
 _MASK = "***"
@@ -412,14 +471,13 @@ def _harden_logging(token: str) -> tuple[str, ...]:
     mostly the secret), and return its spellings, longest first.
 
     * every spelling (the token, its %3A form, the part after the colon) is registered with
-      the process-wide redactor; a value without a colon is not token-like and is skipped,
-      so a chat id pasted into the wrong field never scrubs numbers from every log line;
+      the process-wide redactor by the same rule Secrets uses (telegram_redaction_literals):
+      a chat id pasted into the wrong field is never registered, so numbers in logs survive;
     * that redactor is attached to the httpx logger itself, once: a filter on the logger
       scrubs each record before ANY handler sees it, even one added without setup_logging;
     * httpcore (and any child set lower) is raised to WARNING; a stricter level is kept.
     """
-    value = token.strip()
-    forms = telegram_token_forms(value) if ":" in value else []
+    forms = telegram_redaction_literals(token)
     register_secrets(forms)
     redactor = get_redactor()
     with _logging_lock:
@@ -557,8 +615,8 @@ class TelegramClient:
 
     def send_message(self, text: str, *, silent: bool = False) -> SendResult:
         """POST sendMessage with HTML parse mode; `silent` sends it without a sound.
-        Exactly one HTTP request (none when unavailable), with a 10 s timeout on every
-        phase whatever the injected client's own default is."""
+        Exactly one HTTP request (none when unavailable or closed), with a 10 s timeout on
+        every phase whatever the injected client's own default is. Never raises."""
         if not self._available or self._http is None:
             return _failed("unavailable", self._unavailable_reason or "not configured")
         payload: dict[str, Any] = {"chat_id": self._chat_id, "text": text, "parse_mode": "HTML"}
@@ -568,13 +626,17 @@ class TelegramClient:
             response = self._http.post(
                 f"{API_BASE}/bot{self._token}/sendMessage", json=payload, timeout=TIMEOUT
             )
+            return _classify(response, self._forms)
         except httpx.HTTPStatusError as exc:  # an http client that raises for status
             return _classify(exc.response, self._forms)
         except httpx.HTTPError as exc:  # network, timeout, protocol: the class name only
             return _failed("transient", f"network error: {type(exc).__name__}")
         except UnicodeEncodeError:  # a lone surrogate: this text can never be sent
             return _failed("permanent", "the text is not valid UTF-8")
-        return _classify(response, self._forms)
+        except Exception as exc:  # noqa: BLE001 - the contract: a SendResult, never a raise
+            # The class name only: an exception's text can quote the URL, and so the token.
+            log.warning("telegram send failed unexpectedly: %s", type(exc).__name__)
+            return _failed("transient", f"unexpected error: {type(exc).__name__}")
 
     def __repr__(self) -> str:
         return f"TelegramClient(available={self._available}, token={_MASK})"
@@ -582,7 +644,12 @@ class TelegramClient:
     __str__ = __repr__
 
     def close(self) -> None:
-        """Close the http client this object built itself; an injected one is the caller's."""
+        """Stop sending: from now on the client is unavailable and send_message returns
+        'unavailable' without a request. The http client this object built is closed; an
+        injected one is the caller's to close."""
+        if self._available:
+            self._available = False
+            self._unavailable_reason = "the Telegram client is closed"
         if self._owns_http and self._http is not None:
             self._http.close()
 

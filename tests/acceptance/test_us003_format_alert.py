@@ -1,26 +1,32 @@
 """US-003 AC1 and AC2: format_alert(alert, now) -> Telegram HTML.
 
-The line template (AC1 order, Manager decisions of 2026-11-01 for lines 1 and 2):
+The line template (AC1 order; Manager decisions of 2026-11-01 for lines 1 and 2, and the
+review-round and mode-B decisions for the product, the symbol, the confidence number and the
+data tag):
 
-    <b>{BUY|SELL} {series_key}[ {DD MMM expiry} {strike:g} {CE|PE}] . {1 share | 1 lot (N)}</b>
-    <i>{label}</i>                                     only when it differs from series_key
+    <b>{BUY|SELL} {symbol}[ {DD MMM expiry} {strike:g} {CE|PE}] . {1 share | 1 lot (N)}[ . {product}]</b>
+    <i>{label}</i>                                     only when it differs from the shown symbol
     Entry {price} {mkt | ask | est.}                   stock: mkt; index premium: ask (live) | est.
     Underlying Stop {x} . Target {y|trail}             INDEX ONLY, before the premium levels
     Stop {x} . Target {y|trail}                        stock: share prices; index: premium levels
     {strategy_label} {timeframe}
-    Conf {NN} {label}
+    Conf {NN} {label}                                  NN = the score FLOORED, clamped to 0..100
     Valid till {HH:MM} IST ({M}m left | expired)
-    Data {live | <b>delayed ~15m</b>}                  from data.delayed ONLY (US-028 single rule)
+    Data {live | <b>delayed ~15m</b> | n/a}            data.delayed ONLY: live only for exactly False
     Alert {HH:MM:SS} IST . id <code>{first six chars}</code>
 
 (the dot is the middle dot U+00B7, built with chr(); DD MMM is the expiry day and the upper-case
-English month, e.g. 26 NOV). A risk-blocked alert (risk_allowed False) is still formatted and
-its line 1 starts with '[BLOCKED by risk] '. Prices use `{:,.2f}`; the strike uses `{:g}`; NN
-is the score rounded. Every free-text value is HTML-escaped with whitespace runs collapsed to
-one space. Only these fields are read: id, created_at, expires_at, series_key, label, kind,
-side, strategy_label (else strategy), timeframe, risk_allowed, confidence.{score,label},
-data.delayed, economics.{qty, entry_price, stop_price, target_price, underlying_stop,
-underlying_target, synthetic, option.{strike, opt_type, expiry, lot}}.
+English month, e.g. 26 NOV). The product is stock-only: BUY with horizon intraday -> 'intraday',
+BUY with swing -> 'delivery', SELL -> 'intraday short'; an unknown horizon or side adds nothing
+and an option header carries none. The symbol is trading_symbol when present, else series_key.
+A risk-blocked alert (risk_allowed False) is still formatted and its line 1 starts with
+'[BLOCKED by risk] '. Prices use `{:,.2f}`; the strike uses `{:g}`; NN is the score floored
+(71.6 shows 71), so it never crosses a label threshold. Every free-text value is HTML-escaped
+with whitespace runs collapsed to one space. Only these fields are read: id, created_at,
+expires_at, trading_symbol (else series_key), label, kind, side, horizon, strategy_label (else
+strategy), timeframe, risk_allowed, confidence.{score,label}, data.delayed, economics.{qty,
+entry_price, stop_price, target_price, underlying_stop, underlying_target, synthetic,
+option.{strike, opt_type, expiry, lot}}.
 
 The module is imported lazily (us003_helpers.telegram) so each test fails on its own while
 onelot.notify.telegram is incomplete. No test file contains a unicode escape or a non-ASCII
@@ -86,12 +92,12 @@ def fmt(alert: Any, now: dt.datetime = NOW) -> str:
 # ==========================================================================================
 GOLDEN_STOCK_BUY = "\n".join(
     [
-        f"<b>BUY SBIN {DOT} 1 share</b>",
+        f"<b>BUY SBIN {DOT} 1 share {DOT} intraday</b>",
         "<i>State Bank of India</i>",
         "Entry 812.40 mkt",
         f"Stop 805.00 {DOT} Target 827.20",
         "Trend-filtered Mean Reversion 5m",
-        "Conf 72 high",
+        "Conf 71 high",  # 71.6 floored, never rounded up to 72
         "Valid till 10:37 IST (9m left)",
         "Data live",
         f"Alert 10:27:03 IST {DOT} id <code>a1b2c3</code>",
@@ -100,7 +106,7 @@ GOLDEN_STOCK_BUY = "\n".join(
 
 GOLDEN_STOCK_SELL_DELAYED = "\n".join(
     [
-        f"<b>SELL RELIANCE {DOT} 1 share</b>",
+        f"<b>SELL RELIANCE {DOT} 1 share {DOT} intraday short</b>",
         "<i>Reliance Industries</i>",
         "Entry 2,951.35 mkt",
         f"Stop 2,967.10 {DOT} Target 2,919.85",
@@ -135,7 +141,7 @@ GOLDEN_INDEX_PE_SYNTHETIC = "\n".join(
         f"Underlying Stop 24,610.00 {DOT} Target 24,320.50",
         f"Stop 92.10 {DOT} Target 150.45",
         "Supertrend (tuned) + volume + momentum 5m",
-        "Conf 45 low",
+        "Conf 44 low",  # 44.9 floored: stays below the 45 threshold of its label
         "Valid till 13:22 IST (6m left)",
         "Data live",
         f"Alert 13:12:09 IST {DOT} id <code>5e1f00</code>",
@@ -201,9 +207,10 @@ def test_every_golden_fixture_fits_the_budgets_and_is_well_formed(alert, now):
 # ==========================================================================================
 # AC1: the header (line 1) and the label (line 2)
 # ==========================================================================================
-def test_header_is_the_action_the_series_key_and_the_unit_for_stocks():
-    assert header_of(fmt(stock_buy())) == f"<b>BUY SBIN {DOT} 1 share</b>"
-    assert header_of(fmt(stock_sell(), NOW_SELL)) == f"<b>SELL RELIANCE {DOT} 1 share</b>"
+def test_header_is_the_action_the_symbol_the_unit_and_the_product_for_stocks():
+    assert header_of(fmt(stock_buy())) == f"<b>BUY SBIN {DOT} 1 share {DOT} intraday</b>"
+    sell = header_of(fmt(stock_sell(), NOW_SELL))
+    assert sell == f"<b>SELL RELIANCE {DOT} 1 share {DOT} intraday short</b>"
 
 
 def test_index_header_is_buy_with_expiry_strike_and_ce_or_pe_then_the_lot():
@@ -266,7 +273,7 @@ def test_a_missing_or_unreadable_expiry_never_breaks_the_message(expiry):
 
 
 def test_a_stock_header_has_no_expiry_strike_or_option_type():
-    assert visible(header_of(fmt(stock_buy()))) == f"BUY SBIN {DOT} 1 share"
+    assert visible(header_of(fmt(stock_buy()))) == f"BUY SBIN {DOT} 1 share {DOT} intraday"
 
 
 def test_the_label_follows_on_line_two_in_italics():
@@ -294,7 +301,7 @@ def test_an_empty_label_leaves_no_empty_italic_tag(label):
 
 
 def test_unit_is_one_share_for_stocks_and_one_lot_with_its_size_for_index():
-    assert header_of(fmt(stock_buy())).endswith(f"{DOT} 1 share</b>")
+    assert f"{DOT} 1 share {DOT} " in header_of(fmt(stock_buy()))  # the unit, then the product
     assert header_of(fmt(index_ce_live())).endswith(f"{DOT} 1 lot (30)</b>")
     assert header_of(fmt(index_pe_synthetic(), NOW_PE)).endswith(f"{DOT} 1 lot (65)</b>")
 
@@ -303,7 +310,7 @@ def test_unit_does_not_depend_on_the_unit_label_field_being_present():
     stock, index = stock_buy(), index_ce_live()
     del stock["economics"]["unit_label"]
     del index["economics"]["unit_label"]
-    assert header_of(fmt(stock)).endswith(f"{DOT} 1 share</b>")
+    assert f"{DOT} 1 share {DOT} intraday</b>" in header_of(fmt(stock))
     assert header_of(fmt(index)).endswith(f"{DOT} 1 lot (30)</b>")
 
 
@@ -340,12 +347,46 @@ def test_strategy_line_is_the_strategy_label_then_the_timeframe():
 
 @pytest.mark.parametrize(
     ("score", "shown"),
-    [(71.6, "72"), (72.4, "72"), (0.0, "0"), (100.0, "100"), (44.9, "45"), (9.2, "9")],
+    [
+        (71.6, "71"),  # floored, never rounded up
+        (72.4, "72"),
+        (72.0, "72"),
+        (0.0, "0"),
+        (0.9, "0"),
+        (100.0, "100"),
+        (44.9, "44"),
+        (9.2, "9"),
+        (64.9, "64"),  # never shows the 65 that reads 'high' next to a 'medium' label
+        (65.0, "65"),
+        (99.9, "99"),
+        (71, "71"),  # an int score works too
+        (100.5, "100"),  # clamped to 0..100
+        (250, "100"),
+        (-3.0, "0"),
+        (-0.4, "0"),
+    ],
 )
-def test_confidence_is_the_rounded_score_then_the_label(score, shown):
+def test_confidence_is_the_floored_score_clamped_to_0_100_then_the_label(score, shown):
     a = stock_buy()
     a["confidence"] = {"score": score, "label": "high", "parts": {}}
     assert f"Conf {shown} high" in fmt(a).split("\n")
+
+
+@pytest.mark.parametrize(
+    "score", [None, float("nan"), float("inf"), float("-inf"), True, False, [71], {"x": 1}]
+)
+def test_a_confidence_score_that_is_not_a_number_reads_n_a(score):
+    a = stock_buy()
+    a["confidence"] = {"score": score, "label": "high", "parts": {}}
+    assert "Conf n/a high" in fmt(a).split("\n")
+
+
+@given(tenths=st.integers(min_value=0, max_value=1000))
+@settings(max_examples=300, deadline=None, derandomize=True)
+def test_the_shown_confidence_is_the_floor_of_every_one_decimal_score(tenths):
+    a = stock_buy()
+    a["confidence"] = {"score": tenths / 10, "label": "medium", "parts": {}}
+    assert f"Conf {tenths // 10} medium" in fmt(a).split("\n")
 
 
 @pytest.mark.parametrize(
@@ -469,7 +510,7 @@ def test_a_risk_blocked_stock_alert_is_prefixed_on_line_one_and_otherwise_identi
     a["risk_allowed"] = False
     text = fmt(a)
     lines = text.split("\n")
-    assert visible(lines[0]) == f"{BLOCKED}BUY SBIN {DOT} 1 share"
+    assert visible(lines[0]) == f"{BLOCKED}BUY SBIN {DOT} 1 share {DOT} intraday"
     assert lines[1:] == GOLDEN_STOCK_BUY.split("\n")[1:]
     assert len(lines) == len(GOLDEN_STOCK_BUY.split("\n"))  # a prefix, not an extra line
     assert_well_formed(text)
@@ -671,7 +712,7 @@ def test_instrument_ampersand_is_escaped_in_the_header_and_the_label_line():
     a.update(series_key="M&M", instrument_key="M&M", label="Mahindra & Mahindra")
     text = fmt(a)
     lines = text.split("\n")
-    assert lines[0] == f"<b>BUY M&amp;M {DOT} 1 share</b>"
+    assert lines[0] == f"<b>BUY M&amp;M {DOT} 1 share {DOT} intraday</b>"
     assert lines[1] == "<i>Mahindra &amp; Mahindra</i>"
     assert "M&M" not in text
     assert_well_formed(text)
@@ -681,7 +722,7 @@ def test_a_label_equal_to_an_ampersand_symbol_is_omitted():
     a = stock_buy()
     a.update(series_key="M&M", label="M&M")
     text = fmt(a)
-    assert text.split("\n")[0] == f"<b>BUY M&amp;M {DOT} 1 share</b>"
+    assert text.split("\n")[0] == f"<b>BUY M&amp;M {DOT} 1 share {DOT} intraday</b>"
     assert "<i>" not in text
     assert_well_formed(text)
 
@@ -741,7 +782,7 @@ def test_angle_brackets_and_ampersands_are_escaped_in_every_dynamic_field():
     a["confidence"]["label"] = "<high>&"
     text = fmt(a)
     assert "A&lt;B &amp; C&gt;D &lt;5m&gt;" in text
-    assert "Conf 72 &lt;high&gt;&amp;" in text
+    assert "Conf 71 &lt;high&gt;&amp;" in text
     assert_well_formed(text)
 
 

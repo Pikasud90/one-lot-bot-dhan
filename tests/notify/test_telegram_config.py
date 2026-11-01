@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 import pytest
 
-from onelot.config import Secrets, telegram_token_forms
+from onelot.config import Secrets, telegram_redaction_literals, telegram_token_forms
 from onelot.notify import telegram as tg
 
 TOKEN = "123456789:AAH-" + "x" * 35  # fake, the AC4 shape
@@ -217,6 +217,17 @@ class TestSecretsWiring:
         assert OTHER_TOKEN.split(":", 1)[1] not in repr(masked)
         assert Secrets().masked()["telegram_bot_token"] is None
 
+    @pytest.mark.parametrize(
+        "token",
+        ["123456789:short", "4455667788", " " + TOKEN, TOKEN + "!", "bot" + TOKEN],
+        ids=["short-secret", "chat-id", "leading-space", "bad-char", "bot-prefix"],
+    )
+    def test_masked_says_invalid_for_a_token_that_fails_validation(self, token):
+        """'set' would claim Telegram is configured when the client will be unavailable."""
+        masked = Secrets(telegram_bot_token=token).masked()
+        assert masked["telegram_bot_token"] == "invalid"
+        assert token.strip() not in repr(masked)
+
     def test_repr_never_shows_the_token(self):
         s = Secrets(telegram_bot_token=TOKEN, telegram_chat_id=CHAT)
         assert TOKEN.split(":", 1)[1] not in repr(s) and TOKEN.split(":", 1)[1] not in str(s)
@@ -237,7 +248,37 @@ class TestTokenForms:
     def test_a_short_secret_part_is_never_registered_on_its_own(self):
         """A short literal would scrub ordinary words out of every log line."""
         assert telegram_token_forms("123456789:abcdef") == ["123456789:abcdef"]
-        assert telegram_token_forms("no-colon-at-all-here") == ["no-colon-at-all-here"]
+
+    @pytest.mark.parametrize(
+        "value", ["no-colon-at-all-here", "4455667788", "-1007766554433", "9" * 19], ids=str
+    )
+    def test_a_value_without_a_colon_has_no_token_forms(self, value):
+        """Decision 6 (BUG-1): no colon, not a token, so no token spellings."""
+        assert telegram_token_forms(value) == []
+
+    @pytest.mark.parametrize("value", ["4455667788", "-1007766554433", "9" * 19, "-5551234"])
+    def test_a_chat_id_pasted_into_the_token_field_is_never_a_redaction_literal(self, value):
+        assert telegram_redaction_literals(value) == []
+        assert value not in Secrets(telegram_bot_token=value).secret_values()
+
+    def test_a_bare_secret_pasted_alone_is_still_registered(self):
+        bare = "AAH-" + "Zx9" * 11  # 37 characters, no colon, not a number
+        assert telegram_redaction_literals(f" {bare}\n") == [bare]
+        assert bare in Secrets(telegram_bot_token=bare).secret_values()
+
+    def test_a_short_bare_value_is_never_registered(self):
+        """Shorter than a secret part could be: a literal that short scrubs ordinary words."""
+        assert telegram_redaction_literals("no-colon-here") == []
+
+    def test_a_token_like_value_gives_its_token_forms(self):
+        assert telegram_redaction_literals(f"  {TOKEN}\r\n") == telegram_token_forms(TOKEN)
+
+    def test_the_client_registers_by_the_same_rule(self):
+        from onelot.logging_setup import get_redactor
+
+        bare = "AAH-" + "Qw8" * 11
+        tg.TelegramClient(bare, CHAT, http=mock_http())
+        assert bare in get_redactor()._literals
 
     def test_the_secret_part_covers_every_other_spelling(self):
         forms = telegram_token_forms(TOKEN)

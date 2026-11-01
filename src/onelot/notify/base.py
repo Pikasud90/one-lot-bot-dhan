@@ -1,12 +1,36 @@
-"""Notification value types and the channel protocol."""
+"""Notification value types, the channel protocol and shared display rules."""
 
 from __future__ import annotations
 
 import datetime as dt
+import math
 import uuid
 from dataclasses import dataclass, field
+from decimal import Decimal
 from enum import Enum
 from typing import Protocol
+
+
+def shown_confidence(score: object) -> int | None:
+    """The confidence number every surface shows (the desk SIGNAL title, the phone).
+
+    The score floored to a whole number and clamped to 0..100, so the number shown never
+    crosses the label thresholds (high >= 65, low < 45: 64.9 shows 64, never a 'medium'
+    65). None when the score is missing or not a finite number (bools included). The
+    comparisons are exact, never through float, so an int or a Decimal beyond float range
+    (10**400) is clamped like any other, not an OverflowError.
+    """
+    if isinstance(score, bool) or not isinstance(score, (int, float, Decimal)):
+        return None
+    if isinstance(score, float) and not math.isfinite(score):
+        return None
+    if isinstance(score, Decimal) and not score.is_finite():
+        return None
+    if score >= 100:
+        return 100
+    if score <= 0:
+        return 0
+    return math.floor(score)
 
 
 class NotificationLevel(str, Enum):

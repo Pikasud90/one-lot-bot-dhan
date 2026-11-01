@@ -288,3 +288,28 @@ class TestEdgeCases:
         owned.close()
         assert owned._http is not None and owned._http.is_closed is True
         tg.TelegramClient("", "").close()  # nothing built, nothing to close
+
+    def test_after_close_the_client_is_unavailable_and_sends_nothing(self):
+        client, wire = client_for(answer(200, OK_BODY))
+        client.close()
+        assert client.available is False
+        assert client.unavailable_reason == "the Telegram client is closed"
+        result = client.send_message("t")
+        assert (result.ok, result.kind, result.message_id) == (False, "unavailable", None)
+        assert wire.requests == []
+
+    def test_close_keeps_the_original_reason_of_an_unconfigured_client(self):
+        client = tg.TelegramClient("", CHAT)
+        reason = client.unavailable_reason
+        client.close()
+        assert client.unavailable_reason == reason
+
+    @pytest.mark.parametrize("error", [RuntimeError, ValueError, KeyError, OSError])
+    def test_an_unexpected_exception_is_transient_and_names_only_its_class(self, error):
+        """send_message never raises; the exception text (which may quote the URL, and so
+        the token) never reaches the result."""
+        client, _ = client_for(raising(lambda req: error(f"boom at {req.url}")))
+        result = client.send_message("t")
+        assert (result.ok, result.kind) == (False, "transient")
+        assert result.detail == f"unexpected error: {error.__name__}"
+        assert TOKEN.split(":", 1)[1] not in repr(result)
