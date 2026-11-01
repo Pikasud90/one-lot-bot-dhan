@@ -27,9 +27,10 @@ venv/
 env/
 ENV/
 
-# Local data / runtime state
-data/
-logs/
+# Local data / runtime state (ANCHORED to the repo root: an unanchored 'data/' also hid the
+# source package src/onelot/data/ from git, so a fresh clone could not start)
+/data/
+/logs/
 *.db
 *.db-wal
 *.db-shm
