@@ -97,10 +97,7 @@ class OptionPricer:
         pos = s.index.searchsorted(day, side="right") - 1
         if pos < 0:
             return float(self.cfg.option_iv_constant)
-        vix = float(s.iloc[pos])
-        if not math.isfinite(vix) or vix <= 0.0:  # a bad close (a NaN Yahoo bar): never a NaN IV
-            return float(self.cfg.option_iv_constant)
-        return vix / 100.0 * float(self.cfg.option_iv_mult)
+        return float(s.iloc[pos]) / 100.0 * float(self.cfg.option_iv_mult)
 
     def premium(
         self, spot: float, k: float, ts: pd.Timestamp, expiry: dt.datetime, opt: str
