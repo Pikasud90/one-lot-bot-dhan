@@ -26,6 +26,9 @@ SENTINEL = "SENTINEL-7f3a9c"
 LINE_SEPARATOR = chr(0x2028)
 RTL_OVERRIDE = chr(0x202E)
 LTR_ISOLATE = chr(0x2066)
+LONE_SURROGATES = (chr(0xD800), chr(0xDBFF), chr(0xDC00), chr(0xDFFF))
+ARABIC_LETTER_MARK = chr(0x061C)
+BYTE_ORDER_MARK = chr(0xFEFF)
 
 
 class TestGoldenAlerts:
@@ -353,6 +356,27 @@ class TestEscapingAndWhitelist:
         lines = format_alert(alert, NOW).split("\n")
         assert lines[0] == "<b>BUY RELECNAI · 1 share</b>"
         assert lines[1] == "<i>Reliance Ind</i>"
+
+    @pytest.mark.parametrize(
+        "junk",
+        [*LONE_SURROGATES, ARABIC_LETTER_MARK, BYTE_ORDER_MARK],
+        ids=["d800", "dbff", "dc00", "dfff", "061c", "feff"],
+    )
+    def test_lone_surrogates_and_invisible_marks_are_dropped_so_the_text_encodes(self, junk):
+        """A lone surrogate cannot be encoded as UTF-8, so one stray character in a label
+        would make the whole alert undeliverable; U+061C and U+FEFF are invisible."""
+        alert = index_alert("CE", series_key=f"BANK{junk}NIFTY", label=f"NIFTY{junk} BANK")
+        alert["strategy_label"] = f"Opening{junk} Range Breakout"
+        for text in (
+            format_alert(alert, NOW),
+            format_missed(alert, NOW),
+            format_exit(exit_event("STOP", series_key=f"BANK{junk}NIFTY"), NOW),
+        ):
+            assert junk not in text
+            text.encode("utf-8")  # raises UnicodeEncodeError on a lone surrogate
+            assert "BANKNIFTY" in text
+        lines = format_alert(alert, NOW).split("\n")
+        assert lines[1] == "<i>NIFTY BANK</i>"
 
     def test_account_fields_never_reach_the_message(self):
         alert = stock_alert(

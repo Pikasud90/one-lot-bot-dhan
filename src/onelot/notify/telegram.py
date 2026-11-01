@@ -74,9 +74,12 @@ _CENT = Decimal("0.01")
 _UNIT = Decimal(1)
 
 _OPTION_SIDES = ("BUY_CE", "BUY_PE")
-# C0/C1 controls that are not whitespace, and bidi overrides that could re-order a line.
+# C0/C1 controls that are not whitespace; bidi marks and overrides that could re-order a
+# line (U+061C, U+200E/F, U+202A-E, U+2066-9); the byte-order mark U+FEFF; and lone
+# surrogates U+D800-DFFF, which cannot be encoded, so one would make the alert unsendable.
 _INVISIBLE = re.compile(
-    "[\x00-\x08\x0e-\x1b\x7f-\x84\x86-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]"
+    "[\x00-\x08\x0e-\x1b\x7f-\x84\x86-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069"
+    "\ufeff\ud800-\udfff]"
 )
 
 
