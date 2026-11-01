@@ -31,6 +31,7 @@ from typing import Any, Literal, NamedTuple, cast
 import pandas as pd  # type: ignore[import-untyped]
 from sqlalchemy import Engine, Text, and_, case, inspect, or_, select, type_coerce
 from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
+from sqlalchemy.types import NullType
 
 from ..clock import IST, now_ist
 from ..config import BacktestCfg, PaperCfg
@@ -492,7 +493,8 @@ class PaperBook:
 
         Each is `onelot.paper.view.trade_view`: money as rupee strings from paise, times
         ISO-8601 IST, None for what is not known yet. A row that cannot be read (an unknown
-        status, a corrupt plan) is logged and left out, never fatal to the listing.
+        status, a corrupt plan or time, money that is not integer paise) is logged and left
+        out, never fatal to the listing: the cells are fetched raw and decoded per row.
         """
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
             raise ValueError(f"limit={limit!r} must be a positive int")
@@ -500,15 +502,18 @@ class PaperBook:
         newest_first = (t.created_at.desc(), t.id.desc())
         managed_first = case((t.status.in_(ACTIVE_STATUSES), 0), else_=1)
         shown = select(t.id).order_by(managed_first, *newest_first).limit(limit)
-        plan_text = type_coerce(t.plan, Text).label("plan")  # parsed per row
-        columns = [c for c in paper_trades.c if c.name != "plan"] + [plan_text]
-        stmt = select(*columns).where(t.id.in_(shown)).order_by(*newest_first)
+        raw = [type_coerce(c, NullType()).label(c.name) for c in paper_trades.c]
+        stmt = select(*raw).where(t.id.in_(shown)).order_by(*newest_first)
         with self.engine.connect() as conn:
+            decoders = {
+                c.name: c.type.dialect_impl(conn.dialect).result_processor(conn.dialect, None)
+                for c in paper_trades.c
+            }
             rows = conn.execute(stmt).mappings().all()
         views: list[dict[str, Any]] = []
         for row in rows:
             try:
-                stored = {**row, "plan": json.loads(row["plan"])}
+                stored = {k: _decoded(k, v, decoders[k]) for k, v in row.items()}
                 views.append(trade_view(PaperTrade.from_row(stored)))
             except Exception as exc:  # noqa: BLE001 - one bad row never hides the others
                 log.warning(
@@ -524,7 +529,9 @@ class PaperBook:
         """The CLOSED trades closed on `now`'s IST calendar date (`closed_totals`).
 
         A trade is closed at its exit_ts, or at updated_at when it has none. NO_FILL trades
-        never filled, so they are not counted. A naive `now` is rejected (ValueError).
+        never filled, so they are not counted. An amount that is not integer paise (a
+        corrupt cell) is logged and read as unknown, so that sum is None, as for a missing
+        one. A naive `now` is rejected (ValueError).
         """
         _require_aware(now, "now")
         start = dt.datetime.combine(now.astimezone(IST).date(), dt.time(0), tzinfo=IST)
@@ -534,10 +541,13 @@ class PaperBook:
             and_(t.exit_ts >= start, t.exit_ts < end),
             and_(t.exit_ts.is_(None), t.updated_at >= start, t.updated_at < end),
         )
-        stmt = select(t.gross_paise, t.net_paise).where(t.status == "CLOSED", closed_today)
+        stmt = select(t.id, t.gross_paise, t.net_paise).where(t.status == "CLOSED", closed_today)
         with self.engine.connect() as conn:
             rows = conn.execute(stmt).all()
-        return closed_totals((gross, net) for gross, net in rows)
+        return closed_totals(
+            (_paise_or_unknown(i, "gross_paise", gross), _paise_or_unknown(i, "net_paise", net))
+            for i, gross, net in rows
+        )
 
     # ── opening ───────────────────────────────────────────────────────────
     def _open(
@@ -1110,3 +1120,26 @@ def _ist_or_none(value: dt.datetime | None) -> dt.datetime | None:
 
 def _int_or_none(value: object) -> int | None:
     return None if value is None else int(cast(int, value))
+
+
+def _is_paise(value: object) -> bool:
+    """A stored amount: None or a plain int. A float or a string is corrupt, never truncated."""
+    return value is None or (isinstance(value, int) and not isinstance(value, bool))
+
+
+def _decoded(name: str, value: object, decode: Callable[[Any], Any] | None) -> Any:
+    """One raw cell of a `recent()` row, decoded as its column type would (ValueError if bad)."""
+    value = decode(value) if decode is not None else value
+    if name.endswith("_paise") and not _is_paise(value):
+        raise ValueError(f"{name}={value!r} is not integer paise")
+    return value
+
+
+def _paise_or_unknown(trade_id: object, name: str, value: object) -> int | None:
+    """today_totals(): a corrupt amount is logged and read as unknown (None)."""
+    if _is_paise(value):
+        return cast(int | None, value)
+    log.warning(
+        "paper: trade %s %s=%r is not integer paise; read as unknown", trade_id, name, value
+    )
+    return None

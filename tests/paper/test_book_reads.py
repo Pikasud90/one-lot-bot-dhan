@@ -295,6 +295,41 @@ class TestRecentRobustness:
         assert [v["alert_id"] for v in views] == ["good"]
         assert "not shown" in caplog.text
 
+    @pytest.mark.parametrize("column", ["created_at", "entry_ts", "updated_at"])
+    def test_a_corrupt_time_hides_only_that_row(self, make_book, engine, caplog, column):
+        # Decoded per row: the driver's own datetime parsing must not fail the whole fetch.
+        book = make_book()
+        open_alert(book, "good", ist(THU, 10, 1))
+        open_alert(book, "bad", ist(THU, 10, 2))
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                f"UPDATE paper_trades SET {column} = 'garbage' WHERE alert_id = 'bad'"
+            )
+
+        with caplog.at_level(logging.WARNING, logger="onelot.paper.book"):
+            views = book.recent()
+
+        assert [v["alert_id"] for v in views] == ["good"]
+        assert "not shown" in caplog.text
+
+    @pytest.mark.parametrize("value", ["12.5", "'abc'"])
+    def test_money_that_is_not_integer_paise_hides_the_row_never_truncated(
+        self, make_book, engine, caplog, value
+    ):
+        book = make_book()
+        open_alert(book, "good", ist(THU, 10, 1))
+        open_alert(book, "bad", ist(THU, 10, 2))
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                f"UPDATE paper_trades SET entry_paise = {value} WHERE alert_id = 'bad'"
+            )
+
+        with caplog.at_level(logging.WARNING, logger="onelot.paper.book"):
+            views = book.recent()
+
+        assert [v["alert_id"] for v in views] == ["good"]  # never "0.12" from int(12.5)
+        assert "entry_paise" in caplog.text
+
     def test_an_index_plan_without_an_option_falls_back_to_the_label(self, make_book, engine):
         book = make_book()
         book.on_alert(make_alert("INDEX", "long"), ist(THU, 10, 5, 4))
@@ -445,3 +480,28 @@ class TestTodayTotals:
     def test_a_naive_now_is_rejected(self, make_book):
         with pytest.raises(ValueError, match="timezone-aware"):
             make_book().today_totals(dt.datetime(2026, 10, 29, 15, 0))
+
+    @pytest.mark.parametrize("value", ["12.5", "'abc'"])
+    def test_an_amount_that_is_not_integer_paise_makes_that_sum_unknown(
+        self, make_book, engine, caplog, value
+    ):
+        # Unknown, like a missing amount: never truncated, never a crash of the API.
+        book = make_book()
+        closed_trade(book, engine, "good", ist(THU, 11, 0), gross_paise=970)
+        closed_trade(book, engine, "bad", ist(THU, 12, 0), gross_paise=100)
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                f"UPDATE paper_trades SET gross_paise = {value} WHERE alert_id = 'bad'"
+            )
+
+        with caplog.at_level(logging.WARNING, logger="onelot.paper.book"):
+            totals = book.today_totals(self.NOW)
+
+        assert totals == {
+            "closed": 2,
+            "wins": 1,
+            "losses": 0,
+            "gross_paise": None,
+            "net_paise": None,
+        }
+        assert "gross_paise" in caplog.text

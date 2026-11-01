@@ -154,6 +154,27 @@ class TestEnabled:
         assert resp.status_code == 503
         assert "paper" in resp.json()["detail"]
 
+    @pytest.mark.parametrize(
+        "corrupt",
+        [
+            "created_at = 'garbage'",
+            "exit_ts = 'garbage', status = 'CLOSED'",
+            "gross_paise = 'abc', status = 'CLOSED', exit_ts = updated_at",
+        ],
+    )
+    def test_a_corrupt_row_is_left_out_never_a_500(self, make_book, engine, corrupt):
+        book = make_book()
+        now = now_ist().replace(microsecond=0)
+        for alert_id in ("good", "bad"):
+            book.on_alert(make_alert(alert_id=alert_id, created=now - dt.timedelta(minutes=1)), now)
+        with engine.begin() as conn:
+            conn.exec_driver_sql(f"UPDATE paper_trades SET {corrupt} WHERE alert_id = 'bad'")
+
+        resp = client_for(stub_desk(book)).get("/api/paper")
+
+        assert resp.status_code == 200, resp.text[:300]
+        assert "good" in [t["alert_id"] for t in resp.json()["trades"]]
+
 
 class TestOff:
     OFF = {"enabled": False, "trades": [], "totals_today": None}
