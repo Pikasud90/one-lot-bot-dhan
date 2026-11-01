@@ -1,8 +1,19 @@
 """Telegram phone messages for Desk alerts (ADR-002, US-003).
 
 The formatters turn a Desk payload into Telegram HTML that the owner can act on from
-the lock screen: the first line says exactly what to do ("BUY BANKNIFTY 45000 CE ·
-1 lot (30)"), the rest gives levels, strategy, confidence, the deadline and the feed.
+the lock screen. The first line says exactly what to do ("BUY BANKNIFTY 45000 CE ·
+1 lot (30)"); the rest follows the AC1 order:
+
+    <b>{BUY|SELL} {symbol}[ {strike} {CE|PE}] · {1 share | 1 lot (N)}</b>
+    <i>{label}</i>                          omitted when it repeats the symbol
+    Entry {price} {mkt | ask | est.}        stock: mkt; index: ask (live chain) | est. (synthetic)
+    Underlying Stop {x} · Target {y|trail}  index only
+    Stop {x} · Target {y|trail}             stock: share prices; index: premium levels
+    {strategy label} {timeframe}
+    Conf {NN} {label}
+    Valid till {HH:MM} IST ({M}m left | expired)
+    Data {live | <b>delayed ~15m</b>}       data.delayed only (US-028 single rule)
+    Alert {HH:MM:SS} IST · id <code>{first six}</code>
 
 Rules every formatter keeps:
   * a WHITELIST of fields is read and every other key is ignored, so account data
@@ -39,24 +50,15 @@ ID_CHARS = 6
 # message (an index alert) stays well under MAX_CHARS whatever the input.
 _CAP_SYMBOL = 32
 _CAP_STRIKE = 12
-_CAP_UNIT = 20
-_CAP_STRATEGY = 32
-_CAP_TIMEFRAME = 8
+_CAP_STRATEGY = 48
+_CAP_TIMEFRAME = 24
 _CAP_CONF_LABEL = 24
-_CAP_REASON = 32
+_CAP_REASON = 48
 _MAX_ABS_NUMBER = Decimal("1e12")  # no price, level or P&L here is a trillion rupees
 _CENT = Decimal("0.01")
+_UNIT = Decimal(1)
 
 _OPTION_SIDES = ("BUY_CE", "BUY_PE")
-_EXIT_REASONS = {
-    "STOP": "stop hit",
-    "TRAIL_STOP": "trailing stop hit",
-    "TARGET": "target hit",
-    "SIGNAL_EXIT": "strategy exit signal",
-    "OPPOSITE_SIGNAL": "opposite signal",
-    "SQUARE_OFF": "square-off time",
-    "TIME_STOP": "time stop",
-}
 # C0/C1 controls that are not whitespace, and bidi overrides that could re-order a line.
 _INVISIBLE = re.compile(
     "[\x00-\x08\x0e-\x1b\x7f-\x84\x86-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]"
@@ -116,29 +118,32 @@ def _decimal(value: Any) -> Decimal | None:
     return number
 
 
-def _num(value: Any, prefix: str = "") -> str:
-    """2-decimal, comma-grouped, rounded half-up (2.675 -> 2.68, unlike float formatting)."""
+def _rounded(value: Any, step: Decimal) -> Decimal | None:
+    """Rounded half-up (2.675 -> 2.68, unlike binary-float formatting)."""
     number = _decimal(value)
-    if number is None:
-        return NA
-    q = number.quantize(_CENT, rounding=ROUND_HALF_UP)
-    return f"{'-' if q < 0 else ''}{prefix}{abs(q):,.2f}"
+    return None if number is None else number.quantize(step, rounding=ROUND_HALF_UP)
 
 
-def _signed(value: Any, prefix: str = "", suffix: str = "") -> str:
-    number = _decimal(value)
-    if number is None:
+def _num(value: Any) -> str:
+    """2 decimals, comma-grouped: 2,951.35."""
+    q = _rounded(value, _CENT)
+    return NA if q is None else f"{'-' if q < 0 else ''}{abs(q):,.2f}"
+
+
+def _whole_signed(value: Any) -> str:
+    """Whole rupees with a sign: +1,235 / -7 / 0."""
+    q = _rounded(value, _UNIT)
+    if q is None:
         return NA
-    q = number.quantize(_CENT, rounding=ROUND_HALF_UP)
-    sign = "+" if q > 0 else ("-" if q < 0 else "")
-    return f"{sign}{prefix}{abs(q):,.2f}{suffix}"
+    return f"{'+' if q > 0 else '-' if q < 0 else ''}{abs(q):,.0f}"
 
 
 def _strike(value: Any) -> str:
-    number = _decimal(value)
-    if number is None:
+    """52000.0 -> 52000, 22.5 -> 22.5."""
+    q = _rounded(value, _CENT)
+    if q is None:
         return _fit(value, _CAP_STRIKE) or "?"
-    return f"{number.quantize(_CENT, rounding=ROUND_HALF_UP).normalize():f}"
+    return f"{q.normalize():f}"
 
 
 def _when(value: Any) -> dt.datetime | None:
@@ -153,18 +158,18 @@ def _when(value: Any) -> dt.datetime | None:
     return None
 
 
-def _hms(moment: dt.datetime | None) -> str:
-    return f"{moment:%H:%M:%S} IST" if moment is not None else NA
+def _clock(moment: dt.datetime | None, pattern: str) -> str:
+    return f"{moment.strftime(pattern)} IST" if moment is not None else NA
 
 
 def _short_id(value: Any) -> str:
-    return "#" + _esc(_plain(value)[:ID_CHARS])
+    return f"id <code>{_esc(_plain(value)[:ID_CHARS])}</code>"
 
 
 # ── shared pieces ────────────────────────────────────────────────────────────
-def _contract(payload: Mapping[str, Any], option: Mapping[str, Any]) -> tuple[str, str]:
-    """(action word, instrument) for an alert or a position, both escaped.
-    Options take the CE/PE from the Desk side ("BUY_CE"), never from free text."""
+def _instrument(payload: Mapping[str, Any], option: Mapping[str, Any]) -> tuple[str, str]:
+    """(action word, instrument) for an alert or a position, both escaped. The CE/PE
+    comes from the Desk side ("BUY_CE"), never from free text."""
     side = _plain(payload.get("side")).upper()
     symbol = _fit(payload.get("series_key"), _CAP_SYMBOL) or "?"
     if side in _OPTION_SIDES:
@@ -174,95 +179,100 @@ def _contract(payload: Mapping[str, Any], option: Mapping[str, Any]) -> tuple[st
     return (_fit(side.replace("_", " "), _CAP_STRIKE) or "?"), symbol
 
 
+def _unit(kind: str, economics: Mapping[str, Any]) -> str:
+    """Derived from the kind and the lot size, never from free text ("" if unknown)."""
+    if kind == "STOCK":
+        return "1 share"
+    if kind != "INDEX":
+        return ""
+    lot = _rounded(economics.get("qty"), _UNIT) or _rounded(
+        _fields(economics.get("option")).get("lot"), _UNIT
+    )
+    return f"1 lot ({lot:f})" if lot is not None and lot > 0 else "1 lot"
+
+
 def _header(alert: Mapping[str, Any]) -> str:
     """'BUY BANKNIFTY 45000 CE · 1 lot (30)' — escaped, without tags."""
     economics = _fields(alert.get("economics"))
-    action, instrument = _contract(alert, _fields(economics.get("option")))
-    unit = _fit(economics.get("unit_label"), _CAP_UNIT)
+    action, instrument = _instrument(alert, _fields(economics.get("option")))
+    kind = _plain(alert.get("kind")).upper()
+    unit = _unit(kind, economics)
     return f"{action} {instrument}{SEP}{unit}" if unit else f"{action} {instrument}"
 
 
-def _level_pair(stop: str, target: Any, money: str, target_word: str, trail: str) -> str:
-    tail = f"{target_word} {_num(target, money)}" if target is not None else trail
-    return f"{stop}{SEP}{tail}"
+def _levels(head: str, stop: Any, target: Any) -> str:
+    """'{head} {stop} · Target {target}', or 'Target trail' when there is none."""
+    shown = "trail" if target is None else _num(target)
+    return f"{head} {_num(stop)}{SEP}Target {shown}"
 
 
-# ── public formatters ─────────────────────────────────────────────────────────
+# ── format_alert ──────────────────────────────────────────────────────────────
 def format_alert(alert: Mapping[str, Any], now: dt.datetime) -> str:
     """The phone message for a Desk SIGNAL dict (see `Desk._raise_signal`).
 
-    Reads only: id, created_at, expires_at, series_key, label, kind, side, strategy,
-    timeframe, confidence.{score,label}, data.delayed and economics.{unit_label,
-    entry_price, stop_price, target_price, underlying_stop, underlying_target,
-    synthetic, option.strike}. `now` drives the minutes left (formatted at send time).
+    Reads only: id, created_at, expires_at, series_key, label, kind, side,
+    strategy_label (else strategy), timeframe, confidence.{score,label}, data.delayed and
+    economics.{qty, entry_price, stop_price, target_price, underlying_stop,
+    underlying_target, synthetic, option.{strike,lot}}. `now` drives the minutes left,
+    so format at send time.
     """
     economics = _fields(alert.get("economics"))
     index = _plain(alert.get("kind")).upper() == "INDEX"
     if not index:
         entry_tag = "mkt"
     else:  # a live-chain premium is the ask you pay; anything else is a model estimate
-        entry_tag = "mkt (ask)" if economics.get("synthetic") is False else "est."
+        entry_tag = "ask" if economics.get("synthetic") is False else "est."
     lines = [
         f"<b>{_header(alert)}</b>",
-        f"Entry {_num(economics.get('entry_price'), '₹')} {entry_tag}",
-        _level_pair(
-            f"Stop {_num(economics.get('stop_price'), '₹')}",
-            economics.get("target_price"),
-            "₹",
-            "Target",
-            "trail (no target)",
-        ),
+        f"Entry {_num(economics.get('entry_price'))} {entry_tag}",
     ]
     if index:
         lines.append(
-            _level_pair(
-                f"Underlying stop {_num(economics.get('underlying_stop'))}",
+            _levels(
+                "Underlying Stop",
+                economics.get("underlying_stop"),
                 economics.get("underlying_target"),
-                "",
-                "target",
-                "trail",
             )
         )
     lines += [
+        _levels("Stop", economics.get("stop_price"), economics.get("target_price")),
         _strategy_line(alert),
+        _confidence_line(_fields(alert.get("confidence"))),
         _ttl_line(_when(alert.get("expires_at")), to_ist(now)),
-        _data_line(alert),
+        _data_line(_fields(alert.get("data"))),
+        f"Alert {_clock(_when(alert.get('created_at')), '%H:%M:%S')}{SEP}"
+        + _short_id(alert.get("id")),
     ]
     _insert_label(lines, alert)
     return "\n".join(lines)
 
 
 def _strategy_line(alert: Mapping[str, Any]) -> str:
-    name = " ".join(
-        part
-        for part in (
-            _fit(alert.get("strategy"), _CAP_STRATEGY),
-            _fit(alert.get("timeframe"), _CAP_TIMEFRAME),
-        )
-        if part
-    )
-    conf = _fields(alert.get("confidence"))
-    score = _decimal(conf.get("score"))
-    shown = NA if score is None else f"{score.quantize(Decimal(1), rounding=ROUND_HALF_UP):f}"
-    label = _fit(conf.get("label"), _CAP_CONF_LABEL)
-    confidence = f"conf {shown} {label}" if label else f"conf {shown}"
-    return f"{name}{SEP}{confidence}" if name else confidence
+    name = alert.get("strategy_label") or alert.get("strategy")
+    parts = (_fit(name, _CAP_STRATEGY), _fit(alert.get("timeframe"), _CAP_TIMEFRAME))
+    return " ".join(part for part in parts if part) or f"Strategy {NA}"
+
+
+def _confidence_line(confidence: Mapping[str, Any]) -> str:
+    score = _rounded(confidence.get("score"), _UNIT)
+    shown = NA if score is None else f"{score:f}"
+    label = _fit(confidence.get("label"), _CAP_CONF_LABEL)
+    return f"Conf {shown} {label}" if label else f"Conf {shown}"
 
 
 def _ttl_line(deadline: dt.datetime | None, now: dt.datetime) -> str:
+    """Floored minutes; 'expired' once they reach 0, so the last 59 s read expired too
+    (AC1: 'expired when 0 or less' — a stale alert is never offered as actionable)."""
     if deadline is None:
         return f"Valid till {NA}"
     minutes = int((deadline - now).total_seconds() // 60)
-    left = f"{minutes} min left" if minutes > 0 else "expired"
-    return f"Valid till {_hms(deadline)}{SEP}{left}"
+    left = f"{minutes}m left" if minutes > 0 else "expired"
+    return f"Valid till {_clock(deadline, '%H:%M')} ({left})"
 
 
-def _data_line(alert: Mapping[str, Any]) -> str:
+def _data_line(data: Mapping[str, Any]) -> str:
     # US-028: data.delayed is the single rule; data.source is never re-derived here.
-    delayed = _fields(alert.get("data")).get("delayed") is True
-    feed = f"<b>{DELAYED_TAG}</b>" if delayed else "live"
-    created = _hms(_when(alert.get("created_at")))
-    return f"Data {feed}{SEP}alert {created}{SEP}{_short_id(alert.get('id'))}"
+    return f"Data <b>{DELAYED_TAG}</b>" if data.get("delayed") is True else "Data live"
 
 
 def _insert_label(lines: list[str], alert: Mapping[str, Any]) -> None:
@@ -276,34 +286,26 @@ def _insert_label(lines: list[str], alert: Mapping[str, Any]) -> None:
         lines.insert(1, f"<i>{fitted}</i>")
 
 
+# ── format_exit / format_missed ───────────────────────────────────────────────
 def format_exit(event: Mapping[str, Any], now: dt.datetime) -> str:
-    """At most four lines for a Desk EXIT payload {"advice": str, "position": {...}}.
+    """Four lines for a Desk EXIT payload {"advice": str, "position": {...}}:
+    EXIT and the instrument, the reason, the estimated P&L (whole rupees, as the Desk
+    rounds it) and the time of this message.
 
-    Reads only advice and position.{id, series_key, kind, side, qty, option.strike,
-    unrealized, r_now}.
+    Reads only advice and position.{series_key, kind, side, qty, option.{strike,lot},
+    unrealized}.
     """
-    advice = _plain(event.get("advice")).upper()
     position = _fields(event.get("position"))
-    _, instrument = _contract(position, _fields(position.get("option")))
-    kind = _plain(position.get("kind")).upper()
-    unit = ""
-    if kind == "INDEX":
-        unit = f"{SEP}1 lot ({_fit(position.get('qty'), _CAP_STRIKE) or '?'})"
-    elif kind == "STOCK":
-        short = _plain(position.get("side")).upper() == "SELL"
-        unit = f"{SEP}1 share" + (" (short)" if short else "")
-    reason = _EXIT_REASONS.get(advice) or (
-        _fit(advice.replace("_", " ").lower(), _CAP_REASON) or "exit advised"
-    )
-    pnl = _signed(position.get("unrealized"), "₹")
-    r_now = _signed(position.get("r_now"), suffix="R")
-    pnl_line = f"Est. P&amp;L {pnl}" + (f" ({r_now})" if pnl != NA and r_now != NA else "")
+    option = _fields(position.get("option"))
+    _, instrument = _instrument(position, option)
+    unit = _unit(_plain(position.get("kind")).upper(), position)
+    advice = _fit(_plain(event.get("advice")).replace("_", " "), _CAP_REASON) or NA
     return "\n".join(
         [
-            f"<b>EXIT {instrument}{unit}</b>",
-            f"Reason: {reason}",
-            pnl_line,
-            f"{_hms(to_ist(now))}{SEP}{_short_id(position.get('id'))}",
+            f"<b>EXIT {instrument}{SEP}{unit}</b>" if unit else f"<b>EXIT {instrument}</b>",
+            f"Reason: {advice}",
+            f"Est. P&amp;L {_whole_signed(position.get('unrealized'))}",
+            f"Time {_clock(to_ist(now), '%H:%M:%S')}",
         ]
     )
 
@@ -312,8 +314,6 @@ def format_missed(alert: Mapping[str, Any], now: dt.datetime) -> str:
     """One line for an alert whose window passed before it could be delivered. It starts
     with "Missed", never with the action, so a lock-screen preview cannot prompt a trade."""
     deadline = _when(alert.get("expires_at"))
-    if deadline is not None and to_ist(now) < deadline:
-        window = f"valid till {_hms(deadline)}"
-    else:
-        window = f"expired {_hms(deadline)}"
+    passed = deadline is None or to_ist(now) >= deadline
+    window = f"{'expired' if passed else 'valid till'} {_clock(deadline, '%H:%M')}"
     return SEP.join(["<b>Missed</b>", _header(alert), window, _short_id(alert.get("id"))])
