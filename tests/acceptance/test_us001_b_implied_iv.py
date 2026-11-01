@@ -6,7 +6,8 @@ Manager decision h: an index alert without an IV gets one IMPLIED once from its 
 (`plan.pricing.iv_source` = alert | implied | missing, and the option's iv). If it cannot be
 implied the IV stays missing and every repricing is PRICING_UNAVAILABLE: a constant IV is never
 used. A live-chain alert (`synthetic` false) also records its basis (chain premium minus the
-model premium at the alert, paise) in the plan; it is RECORDED here, applied in US-023.
+model premium at the alert, paise) in the plan; it is RECORDED here and APPLIED by US-023 to
+every premium of the trade (entry fill, exit fill, marks; Manager decision, 2026-11-02).
 
 The book is the one the Engine builds (`build_paper_book`: the real Black-76 pricer, the real
 specs and costs); the oracle for every premium is the Lab's own `OptionPricer`.
@@ -312,7 +313,7 @@ class TestRefusedAtTheBounds:
         assert "pricing" not in trade.plan or trade.plan["pricing"] in ({}, None)
 
 
-class TestTheLiveChainBasisIsRecordedNotApplied:
+class TestTheLiveChainBasisIsRecordedAndApplied:
     def test_the_basis_is_the_chain_premium_minus_the_model_premium_at_the_alert(self, db):
         alert = index_alert(sigma=0.2, iv=0.2, premium=480.0, synthetic=False)
         trade = H.open_trade(real_book(db.engine), alert)
@@ -337,19 +338,19 @@ class TestTheLiveChainBasisIsRecordedNotApplied:
         assert pricing(trade)["iv_source"] == "implied"
         assert abs(pricing(trade)["basis_paise"]) <= 5  # the IV reproduces the quote to a few paise
 
-    def test_the_basis_is_not_applied_to_the_fill(self, db):
-        """Same IV, same bars: a chain alert 30 rupees above the model fills exactly like a synthetic
-        one (the basis is applied in US-023, not here)."""
+    def test_the_basis_is_applied_to_the_fill_and_to_the_risk_leg(self, db):
+        """Same IV, same bars: a chain alert quoted 30 rupees above another fills 30 x 1.006 =
+        30.18 rupees higher (premium = model + basis, then the spread and slippage; the fill is
+        snapped up to a tick, so within one tick). US-023 applies the basis; it used to be only
+        recorded, and the two fills were then equal."""
         book = real_book(db.engine)
         cheap = index_alert("C1", sigma=0.2, iv=0.2, premium=450.0, synthetic=False)
         rich = index_alert("C2", sigma=0.2, iv=0.2, premium=480.0, synthetic=False)
         H.open_trade(book, cheap)
         H.open_trade(book, rich)
         book.step(H.at(10, 8), H.Feed(BANKNIFTY=index_frame()))
-        assert (
-            H.trade_row(db.engine, "C1")["entry_paise"]
-            == H.trade_row(db.engine, "C2")["entry_paise"]
-        )
-        assert (
-            H.trade_row(db.engine, "C1")["risk_paise"] == H.trade_row(db.engine, "C2")["risk_paise"]
-        )
+        c1, c2 = H.trade_row(db.engine, "C1"), H.trade_row(db.engine, "C2")
+        assert abs((c2["entry_paise"] - c1["entry_paise"]) - 3018) <= 5
+        # the stop leg carries the basis too, so the two risks are alike (about 30 x 0.012
+        # rupees x one lot apart), not 30 rupees x one lot apart
+        assert 0 < c1["risk_paise"] and abs(c2["risk_paise"] - c1["risk_paise"]) <= 2000

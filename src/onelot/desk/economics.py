@@ -11,7 +11,10 @@ INDEX  : 1 lot of a delta-selected option (CE for bullish, PE for bearish), pric
 from __future__ import annotations
 
 import datetime as dt
+import math
+import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pandas as pd
 
@@ -56,11 +59,34 @@ class Economics:
         return d
 
 
+# costs.yaml parsed once per process (US-023 AC4), keyed by its path so a settings reload onto
+# another project root reads that project's table; one CostModel per (path, cost product).
+_cost_tables: dict[Path, CostConfig] = {}
+_cost_models: dict[tuple[Path, str], CostModel] = {}
+_cost_lock = threading.Lock()
+
+
 def _costs_for(spec: InstrumentSpec) -> CostModel:
-    s = current_settings()
-    return CostModel(
-        CostConfig.load(s.project_root / "config" / "costs.yaml").product(spec.product)
-    )
+    """The CostModel of `spec.product`. The table is parsed on the first call only: under the
+    lock, so racing threads never parse it twice. CostModel is a stateless calculator, so
+    one shared instance per product is safe."""
+    path = Path(current_settings().project_root) / "config" / "costs.yaml"
+    key = (path, str(spec.product))
+    with _cost_lock:
+        model = _cost_models.get(key)
+        if model is None:
+            table = _cost_tables.get(path)
+            if table is None:
+                table = _cost_tables[path] = CostConfig.load(path)
+            model = _cost_models[key] = CostModel(table.product(spec.product))
+    return model
+
+
+def _clear_cost_cache() -> None:
+    """Forget the parsed cost tables (tests; a later call parses the file again)."""
+    with _cost_lock:
+        _cost_tables.clear()
+        _cost_models.clear()
 
 
 def stock_economics(
@@ -108,8 +134,10 @@ def index_option_economics(
     opt = "CE" if sign > 0 else "PE"
     risk_pts = abs(entry - stop)
     target = entry + sign * target_r * risk_pts if target_r > 0 else None
+    # NaN is truthy: only a finite, positive VIX is used, anything else is no VIX (US-023)
+    usable = vix is not None and math.isfinite(vix) and vix > 0
     vix_series = (
-        pd.Series([vix], index=[pd.Timestamp(now).tz_convert(IST).normalize()]) if vix else None
+        pd.Series([vix], index=[pd.Timestamp(now).tz_convert(IST).normalize()]) if usable else None
     )
     pricer = OptionPricer(bt, vix_series)
     ts = pd.Timestamp(now).tz_convert(IST)

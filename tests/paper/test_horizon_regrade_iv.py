@@ -194,8 +194,9 @@ def test_an_alert_iv_is_kept_as_it_is(make_book):
     assert trade.plan["alert"]["economics"]["option"]["iv"] == 0.1532
 
 
-def test_a_live_chain_alert_records_its_basis_without_applying_it(make_book):
-    """basis = chain premium - model premium at the alert (ADR-001 am. 6), recorded only."""
+def test_a_live_chain_alert_records_its_basis(make_book):
+    """basis = chain premium - model premium at the alert (ADR-001 am. 6), recorded at the
+    alert; the fills and marks that apply it are pinned in test_marks.py (US-023 decision 1)."""
     book = make_book(premium_at=b76)
     with_iv = book.on_alert(index_alert("c1", iv=0.1532, synthetic=False), ist(THU, 10, 5, 4))
     implied = book.on_alert(index_alert("c2", iv=None, synthetic=False), ist(THU, 10, 5, 4))

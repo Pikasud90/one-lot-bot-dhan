@@ -48,6 +48,8 @@ TRADE_KEYS = {
     "exit",
     "gross",
     "net",
+    "mark",
+    "unrealised",
     "created_at",
     "closed_at",
 }
@@ -128,6 +130,8 @@ class TestRecentShape:
             "exit": None,
             "gross": None,
             "net": None,
+            "mark": None,
+            "unrealised": None,
             "created_at": "2026-10-29T10:05:03+05:30",
             "closed_at": None,
         }

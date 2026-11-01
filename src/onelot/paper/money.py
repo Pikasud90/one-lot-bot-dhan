@@ -13,6 +13,7 @@ from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 from numbers import Integral, Real
 
 PAISE_PER_RUPEE = 100
+MAX_EXACT_FLOAT = 2**53  # beyond it a float no longer holds every whole number of paise
 
 
 def to_decimal(value: object) -> Decimal:
@@ -47,6 +48,24 @@ def to_paise(value: object) -> int:
     """Rupees -> integer paise, ROUND_HALF_EVEN. `1000.3` -> `100030`."""
     paise = (to_decimal(value) * PAISE_PER_RUPEE).quantize(Decimal(1), rounding=ROUND_HALF_EVEN)
     return int(paise)
+
+
+def stored_paise(value: object) -> int | None:
+    """A money cell read back from the database as integer paise; None (SQL NULL) stays None.
+
+    An int is taken as it is; a whole, finite float within 2**53 is exact and accepted. Anything
+    else (a REAL 1030.5, NaN, text, a bool) is not a whole number of paise: ValueError, so the
+    caller reads it as UNKNOWN and never truncates it into a wrong amount.
+    """
+    if value is None:
+        return None
+    if isinstance(value, Integral) and not isinstance(value, bool):
+        return int(value)
+    if isinstance(value, Real) and not isinstance(value, bool):
+        f = float(value)
+        if math.isfinite(f) and f.is_integer() and abs(f) <= MAX_EXACT_FLOAT:
+            return int(f)
+    raise ValueError(f"{value!r} is not a whole number of paise")
 
 
 def format_rupees(paise: int | None) -> str | None:

@@ -589,15 +589,24 @@ class TestRiskIsSetAtTheFill:
         assert "PRICING_UNAVAILABLE" in kinds, kinds
 
 
-class TestLiveChainAlertsAreNotRebased:
-    def test_the_fill_ignores_the_alerts_chain_premium_until_the_basis_story(self, db):
-        """Manager: the live-chain basis is only recorded in plan at on_alert and applied in
-        US-023. Here a chain-shaped alert (premium 480 against a model of 450) fills exactly like a
-        synthetic one: premium_at at the fill bar, spread and ticks, no basis."""
+class TestLiveChainAlertsAreRebasedOnTheirBasis:
+    def test_the_fill_is_priced_on_the_model_premium_plus_the_alerts_basis(self, db):
+        """US-023 (Manager, 2026-11-02): a live-chain alert's premium is model + basis in every
+        fill. Here premium 480 against a model of 450 is a basis of +30.00; the fill is
+        480.00 x 1.006 + 2 ticks (0.10) = 482.98 -> 483.00, not the synthetic 452.80 (it used to
+        ignore the basis until US-023 applied it)."""
         alert = _option_alert("long", premium=480.0)
         eco = alert["economics"]
         eco["synthetic"] = False
         eco["option"].update({"bid": 479.0, "ask": 480.0, "spread_pct": 0.21, "security_id": "1"})
+        _, row, events = fill(db, alert=alert, frame=_option_frame(54000.0))
+        assert row["entry_paise"] == 48300
+        (filled,) = [e for e in events if H.val(e.kind) == "FILLED"]
+        assert filled.detail["basis_paise"] == 3000, "the FILLED event records the basis it used"
+        assert filled.detail["entry_paise"] == 48300
+
+    def test_a_synthetic_alert_has_no_basis_and_fills_as_before(self, db):
+        alert = _option_alert("long", premium=480.0)  # synthetic: its premium is not a quote
         _, row, _ = fill(db, alert=alert, frame=_option_frame(54000.0))
         assert row["entry_paise"] == 45280
 

@@ -49,6 +49,7 @@ from .alert import (
     jsonable,
     trade_values,
 )
+from .charges import leg_sides, round_trip_paise
 from .events import PaperEvent
 from .fill import (
     Bars,
@@ -74,7 +75,7 @@ from .manage import (
     normalise_ohlc,
     remember_exit,
 )
-from .money import to_paise
+from .money import stored_paise, to_paise
 from .position import (
     initial_position,
     position_from_json,
@@ -210,12 +211,12 @@ class PaperTrade:
             exit_ts=_ist_or_none(row["exit_ts"]),
             last_bar_ts=_ist_or_none(row["last_bar_ts"]),
             resolution_min=_int_or_none(row["resolution_min"]),
-            entry_paise=_int_or_none(row["entry_paise"]),
-            exit_paise=_int_or_none(row["exit_paise"]),
-            gross_paise=_int_or_none(row["gross_paise"]),
-            costs_paise=_int_or_none(row["costs_paise"]),
-            net_paise=_int_or_none(row["net_paise"]),
-            risk_paise=_int_or_none(row["risk_paise"]),
+            entry_paise=_paise_or_none(row, "entry_paise"),
+            exit_paise=_paise_or_none(row, "exit_paise"),
+            gross_paise=_paise_or_none(row, "gross_paise"),
+            costs_paise=_paise_or_none(row, "costs_paise"),
+            net_paise=_paise_or_none(row, "net_paise"),
+            risk_paise=_paise_or_none(row, "risk_paise"),
             created_at=_ist(row["created_at"]),
             expires_at=_ist(row["expires_at"]),
             plan_json=json.dumps(row["plan"], sort_keys=True, separators=(",", ":")),
@@ -257,11 +258,14 @@ class PaperBook:
         self._retry_logged: set[str] = set()  # retries whose traceback was already logged
         self._tracked: frozenset[str] | None = None  # the desk's series (retire_untracked)
         self._callback_failed: set[int] = set()  # trades whose strategy_exit traceback is logged
+        # options whose premium_at is failing now: warned once per streak (review 1 NIT)
+        self._pricer_failing: set[tuple[str, str, str]] = set()
         # (trade id, reason) a read already warned about: the panel polls every few seconds,
         # so a repeat is DEBUG (US-030 review MINOR). Its own lock: reads never take _lock.
         self._read_warned: OrderedDict[tuple[object, str], None] = OrderedDict()
         self._read_warn_lock = threading.Lock()
         METADATA.create_all(engine, tables=[paper_trades, paper_events])  # no-op if present
+        self._backfill_costs()  # also when disabled: it completes closes, it opens nothing
         self._load_active()
         if cfg.enabled:  # a disabled book opens nothing, not even at startup
             self._reconcile()
@@ -791,7 +795,8 @@ class PaperBook:
         the underlying entry and created_at (Manager decision h); if that fails the IV stays
         missing and every repricing is PRICING_UNAVAILABLE, never a constant IV.
         Basis: for a live-chain alert, chain premium minus the model premium at the alert,
-        in paise. Only RECORDED here (ADR-001 amendment 6); US-023 applies it.
+        in paise (ADR-001 amendment 6). It is added to every premium the trade is priced at
+        later, its fills and its marks alike (`_quote`, `_mark`; US-023 decision 1).
         """
         alert = plan["alert"]
         eco = alert["economics"]
@@ -857,17 +862,177 @@ class PaperBook:
         log.info("paper: reconciled %d of %d unbooked desk signal(s)", opened, len(rows))
         return opened
 
+    # ── the startup backfill of costs and net (US-023 NFR) ────────────────
+    def _backfill_costs(self) -> int:
+        """Book costs and net, once, for CLOSED rows a close left without them.
+
+        US-002 closed trades with costs_paise/net_paise NULL; a close whose cost model failed
+        (T1) does too. Each priced one (entry, exit and gross known, costs AND net NULL) gets
+        exactly what a close books today: `charges.round_trip_paise` on its real sides from
+        `cost_for(instrument_key)`, and net = gross - costs. It runs at every start, also with
+        paper.enabled false (it opens nothing), and is idempotent: a costed row is never a
+        candidate again, so a later start, even with other rates, changes nothing.
+
+        Never a guess: a money cell that is not whole paise (`money.stored_paise`), a gross
+        that disagrees with sign x (exit - entry) x qty, or a cost model that fails leaves the
+        row NULL, warned and counted in hook_errors, with no event (Manager); a later start
+        retries it. The costs are computed before any write, then every row is written in one
+        transaction by an UPDATE guarded on the money it was computed from and on costs and net
+        still being NULL, so a value another book wrote meanwhile is never overwritten. A
+        database that fails defers the whole backfill to the next start (logged, counted);
+        it never stops the book. Returns how many rows were written.
+        """
+        t = paper_trades.c
+        stmt = (
+            select(*(t[name] for name in _BACKFILL_COLUMNS))
+            .where(
+                t.status == "CLOSED",
+                t.costs_paise.is_(None),
+                t.net_paise.is_(None),
+                t.entry_paise.is_not(None),
+                t.exit_paise.is_not(None),
+                t.gross_paise.is_not(None),
+            )
+            .order_by(t.id)
+        )
+        try:
+            with self.engine.connect() as conn:
+                rows = conn.execute(stmt).mappings().all()
+        except DBAPIError as exc:
+            self._backfill_deferred(exc)
+            return 0
+        if not rows:
+            return 0
+        planned: list[tuple[_Uncosted, int]] = []
+        for row in rows:
+            item = _uncosted(row)
+            costs = None if item is None else self._backfill_leg_costs(item)
+            if item is not None and costs is not None:
+                planned.append((item, costs))
+        failed = len(rows) - len(planned)
+        written = self._write_backfill(planned)
+        if failed:
+            with self._lock:
+                self._counts["hook_errors"] += failed
+        log.info(
+            "paper: backfilled costs and net for %d of %d closed trade(s); %d left NULL",
+            written,
+            len(rows),
+            failed,
+        )
+        return written
+
+    def _backfill_leg_costs(self, item: _Uncosted) -> int | None:
+        """round_trip_paise for one candidate, or None (warned) when the cost model fails."""
+        try:
+            model = self.cost_for(item.instrument_key)
+            return round_trip_paise(
+                model, item.kind, item.direction, item.entry_paise, item.exit_paise, item.qty
+            )
+        except Exception as exc:
+            log.warning(
+                "paper: paper_trades.id=%s (alert %s) not backfilled, costs stay NULL until a "
+                "start that can price them: %s: %s",
+                item.trade_id,
+                item.alert_id,
+                type(exc).__name__,
+                exc,
+            )
+            return None
+
+    def _write_backfill(self, planned: list[tuple[_Uncosted, int]]) -> int:
+        """Write the planned costs in one transaction, each UPDATE guarded; rows written."""
+        if not planned:
+            return 0
+        t = paper_trades.c
+        written = 0
+        try:
+            with self.engine.begin() as conn:
+                for item, costs in planned:
+                    guarded = paper_trades.update().where(
+                        t.id == item.trade_id,
+                        t.status == "CLOSED",
+                        t.costs_paise.is_(None),
+                        t.net_paise.is_(None),
+                        t.entry_paise == item.entry_paise,
+                        t.exit_paise == item.exit_paise,
+                        t.gross_paise == item.gross_paise,
+                    )
+                    net = item.gross_paise - costs
+                    changed = conn.execute(guarded.values(costs_paise=costs, net_paise=net))
+                    if changed.rowcount != 1:  # another book costed (or changed) it first
+                        log.info("paper: trade %s costed elsewhere; left as it is", item.trade_id)
+                    written += max(changed.rowcount, 0)
+        except DBAPIError as exc:
+            self._backfill_deferred(exc)
+            return 0
+        return written
+
+    def _backfill_deferred(self, exc: DBAPIError) -> None:
+        log.error(
+            "paper: the costs backfill could not use the database; deferred to the next start "
+            "(nothing was written): %s",
+            _brief(exc),
+        )
+        with self._lock:
+            self._counts["hook_errors"] += 1
+
     # ── persistence ───────────────────────────────────────────────────────
     def _load_active(self) -> None:
-        stmt = select(paper_trades).where(paper_trades.c.status.in_(ACTIVE_STATUSES))
+        """Reload the PENDING_FILL and OPEN trades, one row at a time.
+
+        One corrupt row (a JSON plan or a time that does not parse, an unknown grade) is
+        logged, counted in hook_errors and skipped, so the book still starts and manages the
+        others (US-023 carry-over); read together, one bad cell would fail every row. A
+        database that cannot be read at all still raises: starting with no trades would
+        leave them unmanaged without a word.
+        """
+        ids_stmt = (
+            select(paper_trades.c.id)
+            .where(paper_trades.c.status.in_(ACTIVE_STATUSES))
+            .order_by(paper_trades.c.id)
+        )
         with self.engine.connect() as conn:
-            rows = conn.execute(stmt).mappings().all()
-        with self._lock:
-            for row in rows:
-                trade = PaperTrade.from_row(row)
+            ids = [int(i) for i in conn.execute(ids_stmt).scalars().all()]
+        loaded = skipped = 0
+        for trade_id in ids:
+            try:
+                trade = self._fetch_id(trade_id)
+            except (IntegrityError, DataError) as exc:  # this row's data, not the database
+                skipped += self._skip_corrupt(trade_id, exc)
+                continue
+            except DBAPIError:
+                raise
+            except Exception as exc:
+                skipped += self._skip_corrupt(trade_id, exc)
+                continue
+            if trade is None or not trade.is_active:  # closed or deleted meanwhile
+                continue
+            with self._lock:
                 self._active[trade.alert_id] = trade
-        if rows:
-            log.info("paper: reloaded %d active paper trade(s)", len(rows))
+            loaded += 1
+        if skipped:
+            with self._lock:
+                self._counts["hook_errors"] += skipped
+        if loaded:
+            log.info("paper: reloaded %d active paper trade(s)", loaded)
+
+    @staticmethod
+    def _skip_corrupt(trade_id: int, exc: Exception) -> int:
+        log.warning(
+            "paper: active paper_trades.id=%s is unreadable and was skipped (not managed until "
+            "the row is repaired): %s: %s",
+            trade_id,
+            type(exc).__name__,
+            exc,
+        )
+        return 1
+
+    def _fetch_id(self, trade_id: int) -> PaperTrade | None:
+        stmt = select(paper_trades).where(paper_trades.c.id == trade_id)
+        with self.engine.connect() as conn:
+            row = conn.execute(stmt).mappings().first()
+        return PaperTrade.from_row(row) if row is not None else None
 
     def _fetch(self, alert_id: str) -> PaperTrade | None:
         stmt = select(paper_trades).where(paper_trades.c.alert_id == alert_id)
@@ -1043,6 +1208,7 @@ class PaperBook:
         new, managed = manage_view(start, view, rules, data_now, reported)
         if new == state and not managed and "rules" in plan:
             return []  # nothing new: no write at all
+        before = plan.get("position")
         plan["position"] = position_to_json(new)
         plan["rules"] = rules_to_json(rules)  # already there, unless opened before US-002
         # the row's cursor never goes back to None before the fill bar is managed (NIT)
@@ -1050,28 +1216,119 @@ class PaperBook:
         values: dict[str, Any] = {"plan": plan, "last_bar_ts": last_bar_ts, "updated_at": now}
         booked: list[Booked] = [(e.kind, e.ts, dict(e.detail)) for e in managed]
         if new.closed is None:
+            if trade.kind == "INDEX":
+                booked += self._mark(trade, plan, before, state, new)
             return self._commit(trade, values, booked, counter=None)
         exit_paise, also = self._price_exit(trade, plan, new.closed)
         for kind, _, detail in booked:
             if kind == CLOSED:
                 detail["exit_paise"] = exit_paise  # the rule level stays in price_paise (A13)
+        gross = _gross(trade, exit_paise)
+        costs, uncosted = self._costs(trade, exit_paise, new.closed.at)
+        net = None if gross is None or costs is None else gross - costs
         values |= {
             "status": "CLOSED",
             "close_reason": new.closed.reason,
             "exit_ts": new.closed.at,
             "exit_paise": exit_paise,
-            "gross_paise": _gross(trade, exit_paise),
-            # costs_paise and net_paise stay NULL until US-023 books them (never a fake 0)
+            "gross_paise": gross,
+            # booked in the same transaction as the close (US-023 AC1); NULL without a price
+            "costs_paise": costs,
+            "net_paise": net,
         }
         log.info(
-            "paper: trade %s (alert %s) closed %s at %s, exit %s paise",
+            "paper: trade %s (alert %s) closed %s at %s, exit %s, gross %s, costs %s, net %s paise",
             trade.id,
             trade.alert_id,
             new.closed.reason,
             new.closed.at.isoformat(),
             exit_paise,
+            gross,
+            costs,
+            net,
         )
-        return self._commit(trade, values, [*booked, *also], counter="closed")
+        return self._commit(trade, values, [*booked, *also, *uncosted], counter="closed")
+
+    def _costs(
+        self, trade: PaperTrade, exit_paise: int | None, at: dt.datetime
+    ) -> tuple[int | None, list[Booked]]:
+        """The trade's charges in paise (US-023 AC1), or None with why.
+
+        Two legs on their real sides, each rounded once half-up (`charges.round_trip_paise`),
+        from the injected `cost_for(instrument_key)`. No exit price: None, nothing asked (the
+        exit's PRICING_UNAVAILABLE already says why). A cost model that fails: the close is
+        still booked, costs and net stay NULL (never a fake 0), a COSTS_UNAVAILABLE event says
+        why, and the failure is logged and counted in hook_errors.
+        """
+        if exit_paise is None or trade.entry_paise is None:
+            return None, []
+        try:
+            model = self.cost_for(trade.instrument_key)
+            costs = round_trip_paise(
+                model, trade.kind, trade.direction, trade.entry_paise, exit_paise, trade.qty
+            )
+        except Exception as exc:
+            log.exception(
+                "paper: trade %s (alert %s) closed without costs: the cost model failed",
+                trade.id,
+                trade.alert_id,
+            )
+            with self._lock:
+                self._counts["hook_errors"] += 1
+            detail = {"error": f"{type(exc).__name__}: {exc}", "exit_paise": exit_paise}
+            return None, [("COSTS_UNAVAILABLE", at, detail)]
+        return costs, []
+
+    def _mark(
+        self,
+        trade: PaperTrade,
+        plan: dict[str, Any],
+        before: object,
+        state: PositionState,
+        new: PositionState,
+    ) -> list[Booked]:
+        """Mark an OPEN option at the last close managed (US-023 AC3); mutates `plan`.
+
+        A new close: mark_paise = max(to_paise(premium_at(option, close, close time)) + basis,
+        one tick), the option frozen at the alert; rounded once (HALF_EVEN, `to_paise`). No
+        new close (a step that only remembered an exit, or skipped unusable bars): the mark
+        stays what it was. A mark that cannot be priced is None, never 0 and never the stale
+        one, with ONE PRICING_UNAVAILABLE leg="mark" event per failure streak: a later
+        failure books nothing, a recovery books nothing, a failure after it is a new event.
+        """
+        record = plan["position"]
+        known = before if isinstance(before, Mapping) else {}
+        close, at = new.last_close_paise, new.last_close_at
+        if close is None or at is None or at == state.last_close_at:
+            if "mark_paise" in known:
+                record["mark_paise"] = known["mark_paise"]
+            return []
+        option = plan["alert"]["economics"].get("option") or {}
+        fair, why = self._premium(option, close, at)
+        if fair is not None:
+            tick = to_paise(self._tick(trade))
+            record["mark_paise"] = max(to_paise(fair) + _basis_paise(plan), tick)
+            return []
+        record["mark_paise"] = None
+        if "mark_paise" in known and known["mark_paise"] is None:
+            return []  # the streak was already said
+        return [
+            ("PRICING_UNAVAILABLE", at, {"leg": "mark", "underlying_paise": close, "error": why})
+        ]
+
+    def _quote(
+        self, trade: PaperTrade, plan: Mapping[str, Any], underlying_paise: int, ts: dt.datetime
+    ) -> tuple[float | None, str | None]:
+        """The option premium a fill is priced from: the model plus the live-chain basis
+        (Manager decision 1, option A: entry, exit and the risk leg alike, so a live-chain
+        trade never shows P&L at birth), never below one tick. A synthetic alert has no
+        basis: the model's premium, untouched (the Lab differential stays exact)."""
+        option = plan["alert"]["economics"].get("option") or {}
+        fair, why = self._premium(option, underlying_paise, ts)
+        basis = _basis_paise(plan)
+        if fair is None or basis == 0:
+            return fair, why
+        return max(fair + basis / 100, self._tick(trade)), None
 
     def _position(self, trade: PaperTrade, plan: Mapping[str, Any]) -> PositionState:
         """The managed state: the plan's record, or (a row filled before US-002) the fill."""
@@ -1148,9 +1405,10 @@ class PaperBook:
 
         A stock mirrors the Lab: slipped by slippage_pct against the trader and snapped to
         the tick against the trader, except a TARGET (a limit fill, unslipped). An option is
-        sold at `option_exit_paise` of the premium at the UNSLIPPED underlying level and the
-        close time, the option frozen at the alert; if that premium is unavailable the close
-        is still booked, with no exit price and a PRICING_UNAVAILABLE event (amendment 6).
+        sold at `option_exit_paise` of the premium (`_quote`: model + live-chain basis) at the
+        UNSLIPPED underlying level and the close time, the option frozen at the alert; if that
+        premium is unavailable the close is still booked, with no exit price and a
+        PRICING_UNAVAILABLE event (amendment 6).
         A close with no rule level (a session that ended before one usable bar, MINOR-1) is
         booked the same way.
         """
@@ -1168,8 +1426,7 @@ class PaperBook:
             return stock_exit_paise(
                 close.price_paise, trade.direction, self.bt.slippage_pct, tick
             ), []
-        option = plan["alert"]["economics"].get("option") or {}
-        fair, why = self._premium(option, close.price_paise, close.at)
+        fair, why = self._quote(trade, plan, close.price_paise, close.at)
         if fair is None:
             problem = {"leg": "exit", "underlying_paise": close.price_paise, "error": why}
             return None, [("PRICING_UNAVAILABLE", close.at, problem)]
@@ -1202,14 +1459,14 @@ class PaperBook:
     ) -> _Priced | str:
         """One lot, priced like `execute_trade`; or why the fill bar cannot be priced.
 
-        risk = (entry premium - the stop EXIT fill the Lab would book) x qty, the stop leg
-        priced at the underlying stop with the option frozen at the alert (Manager decision
+        The premium is the model's plus the live-chain basis (`_quote`; none for a synthetic
+        alert). risk = (entry premium - the stop EXIT fill the Lab would book) x qty, the stop
+        leg priced at the underlying stop with the option frozen at the alert (Manager decision
         (a): paper R and Lab R are comparable). If that repricing fails, or the stop exit is
         not below the entry, the trade still fills with risk_paise NULL and a
         PRICING_UNAVAILABLE event (ADR-001 amendment 6).
         """
-        option = plan["alert"]["economics"].get("option") or {}
-        fair, why = self._premium(option, open_paise, bar_ts)
+        fair, why = self._quote(trade, plan, open_paise, bar_ts)
         if fair is None:
             return why or "no premium"
         bt = self.bt
@@ -1220,7 +1477,10 @@ class PaperBook:
             "option_spread_pct": bt.option_spread_pct,
             "option_slippage_ticks": bt.option_slippage_ticks,
         }
-        stop_fair, why = self._premium(option, stop_paise, bar_ts)
+        basis = _basis_paise(plan)
+        if basis:
+            inputs["basis_paise"] = basis  # included in fair_premium_paise
+        stop_fair, why = self._quote(trade, plan, stop_paise, bar_ts)
         risk = None
         if stop_fair is not None:
             spread, ticks = bt.option_spread_pct, bt.option_slippage_ticks
@@ -1284,12 +1544,33 @@ class PaperBook:
     def _premium(
         self, option: Mapping[str, Any], underlying_paise: int, ts: dt.datetime
     ) -> tuple[float | None, str | None]:
-        """premium_at(option, underlying, ts), or (None, why): never a silent zero."""
+        """premium_at(option, underlying, ts), or (None, why): never a silent zero.
+
+        A pricer that raises is logged at WARNING once per failure streak of that option
+        (strike, CE/PE, expiry) and at DEBUG while the streak lasts; a call that returns
+        ends the streak, so the next failure warns again (review round 1 NIT), like the
+        PRICING_UNAVAILABLE event. The set is bounded by READ_WARN_CAP.
+        """
+        key = _option_key(option)
         try:
             value = self.premium_at(dict(option), underlying_paise / 100, ts)
         except Exception as exc:
-            log.warning("paper: premium_at failed for %s at %s: %s", option, ts, exc)
+            with self._lock:
+                first = key not in self._pricer_failing
+                if first and len(self._pricer_failing) >= READ_WARN_CAP:
+                    self._pricer_failing.clear()  # bounded: a forgotten streak warns again
+                self._pricer_failing.add(key)
+            log.log(
+                logging.WARNING if first else logging.DEBUG,
+                "paper: premium_at failed for %s at %s: %s%s",
+                option,
+                ts,
+                exc,
+                "" if first else " (still failing)",
+            )
             return None, f"{type(exc).__name__}: {exc}"
+        with self._lock:
+            self._pricer_failing.discard(key)
         if value is None or isinstance(value, bool) or not isinstance(value, Real):
             return None, f"premium_at returned {value!r}"
         fair = float(value)
@@ -1451,6 +1732,22 @@ _NO_BARS = OhlcBars(
 )
 
 
+def _option_key(option: Mapping[str, Any]) -> tuple[str, str, str]:
+    """The contract an option dict names (strike, CE/PE, expiry), as text: a log key only."""
+    return str(option.get("strike")), str(option.get("opt_type")), str(option.get("expiry"))
+
+
+def _basis_paise(plan: Mapping[str, Any]) -> int:
+    """The live-chain basis frozen at the alert, in paise; 0 for a synthetic alert, for a row
+    opened before it was recorded, and when the model could not price the alert (None): the
+    trade is then priced on the model alone, as a synthetic one is."""
+    pricing = plan.get("pricing")
+    basis = pricing.get("basis_paise") if isinstance(pricing, Mapping) else None
+    if isinstance(basis, bool) or not isinstance(basis, int):
+        return 0
+    return basis
+
+
 def _gross(trade: PaperTrade, exit_paise: int | None) -> int | None:
     """sign x (exit - entry) x qty. An option is LONG PREMIUM whatever the direction on the
     underlying (a BUY_PE gains as the underlying falls); None without an exit price."""
@@ -1458,6 +1755,91 @@ def _gross(trade: PaperTrade, exit_paise: int | None) -> int | None:
         return None
     sign = 1 if trade.kind == "INDEX" or trade.direction == "long" else -1
     return sign * (exit_paise - trade.entry_paise) * trade.qty
+
+
+# The cells the costs backfill reads: plain integers and strings, so no column decoder (JSON,
+# times) runs and one corrupt plan or time elsewhere in a row cannot stop it.
+_BACKFILL_COLUMNS = (
+    "id",
+    "alert_id",
+    "instrument_key",
+    "kind",
+    "direction",
+    "qty",
+    "entry_paise",
+    "exit_paise",
+    "gross_paise",
+)
+
+
+class _Uncosted(NamedTuple):
+    """A CLOSED row with a priced exit and no costs yet, its cells checked."""
+
+    trade_id: int
+    alert_id: str
+    instrument_key: str
+    kind: str
+    direction: str
+    qty: int
+    entry_paise: int
+    exit_paise: int
+    gross_paise: int
+
+
+def _uncosted(row: Mapping[Any, Any]) -> _Uncosted | None:
+    """The checked candidate, or None (warned) when a cell would make its net a guess: money
+    or a qty that is not a whole number, a kind or direction with no cost sides, a qty below
+    one, or a gross that is not sign x (exit - entry) x qty."""
+    trade_id = row["id"]
+    whole: dict[str, int] = {}
+    for column in ("qty", "entry_paise", "exit_paise", "gross_paise"):
+        try:
+            value = stored_paise(row[column])
+        except ValueError:
+            value = None
+        if value is None:
+            log.warning(
+                "paper: paper_trades.id=%s not backfilled: %s=%r is not a whole number; "
+                "left as it is, never truncated",
+                trade_id,
+                column,
+                row[column],
+            )
+            return None
+        whole[column] = value
+    kind, direction = str(row["kind"]), str(row["direction"])
+    try:
+        entry_side, _ = leg_sides(kind, direction)
+    except ValueError as exc:
+        log.warning("paper: paper_trades.id=%s not backfilled: %s", trade_id, exc)
+        return None
+    qty, entry, exit_, gross = (
+        whole[c] for c in ("qty", "entry_paise", "exit_paise", "gross_paise")
+    )
+    sign = 1 if entry_side == "buy" else -1
+    if qty < 1 or gross != sign * (exit_ - entry) * qty:
+        log.warning(
+            "paper: paper_trades.id=%s not backfilled: gross_paise=%s is not %+d x (%s - %s) x "
+            "%s; a net from it would be a guess",
+            trade_id,
+            gross,
+            sign,
+            exit_,
+            entry,
+            qty,
+        )
+        return None
+    return _Uncosted(
+        int(trade_id),
+        str(row["alert_id"]),
+        str(row["instrument_key"]),
+        kind,
+        direction,
+        qty,
+        entry,
+        exit_,
+        gross,
+    )
 
 
 def closed_totals(trades: Iterable[tuple[object, object]]) -> DayTotals:
@@ -1569,6 +1951,37 @@ def _ist_or_none(value: dt.datetime | None) -> dt.datetime | None:
 
 def _int_or_none(value: object) -> int | None:
     return None if value is None else int(cast(int, value))
+
+
+_MONEY_WARNED: set[tuple[object, str]] = set()  # (trade id, column) already warned about
+_MONEY_WARNED_LOCK = threading.Lock()
+
+
+def _paise_or_none(row: Mapping[Any, Any], column: str) -> int | None:
+    """A money column read back as integer paise, or None when it is not a whole number.
+
+    A non-integer (a REAL 1030.5, text, NaN, a bool) is UNKNOWN, never truncated to a wrong
+    amount (US-023 carry-over); it is warned about once per trade and column. A whole float
+    within 2**53 is exact and accepted (`money.stored_paise`, shared with the ledger).
+    """
+    value = row[column]
+    try:
+        return stored_paise(value)
+    except ValueError:
+        pass
+    key = (row["id"], column)
+    with _MONEY_WARNED_LOCK:
+        first = key not in _MONEY_WARNED
+        _MONEY_WARNED.add(key)
+    if first:
+        log.warning(
+            "paper_trades.id=%s: %s=%r is not a whole number of paise; read as unknown, "
+            "never truncated",
+            row["id"],
+            column,
+            value,
+        )
+    return None
 
 
 def _is_paise(value: object) -> bool:

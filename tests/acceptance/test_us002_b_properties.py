@@ -25,6 +25,7 @@ from collections import Counter
 import pytest
 import us001_helpers as H
 import us002_helpers as U
+import us023_helpers as W
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from test_us002_ac7_truncation import cases
@@ -113,7 +114,10 @@ class TestTheBookIsManageStepPlusPricing:
             assert row["status"] == "CLOSED" and row["close_reason"] == want.reason
             assert row["exit_paise"] == level and H.same_instant(row["exit_ts"], want.at)
             assert row["gross_paise"] == U.expected_gross(row["entry_paise"], level, case.direction)
-            assert row["costs_paise"] is None and row["net_paise"] is None
+            costs = W.expected_costs(  # US-023 books the two legs' charges with the close
+                W.model_for("SBIN"), "STOCK", case.direction, row["entry_paise"], level, 1, True
+            )
+            assert (row["costs_paise"], row["net_paise"]) == (costs, row["gross_paise"] - costs)
             moved = [e for e in events if str(e.kind) == "STOP_MOVED"]
             assert U.canon(moved) == U.canon(e for e in expected if str(e.kind) == "STOP_MOVED")
 

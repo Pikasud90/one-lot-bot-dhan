@@ -26,6 +26,7 @@ import pandas as pd
 import pytest
 import us001_helpers as H
 import us002_helpers as U
+import us023_helpers as W
 
 from onelot.config import AppConfig, RiskCfg
 from onelot.data.universe import load_specs
@@ -159,7 +160,11 @@ class TestStockThroughTheDeskPoll:
         assert row["exit_paise"] == U.expected_stock_exit(stop, "long", "STOP", rig.slippage())
         assert H.same_instant(row["exit_ts"], rig.bar_ts("SBIN", 2)), "the bar's OPEN time"
         assert row["gross_paise"] == row["exit_paise"] - row["entry_paise"]
-        assert row["costs_paise"] is None and row["net_paise"] is None
+        # US-023 books the two legs' charges with the close (was: NULL until then)
+        costs = W.expected_costs(
+            W.model_for("SBIN"), "STOCK", "long", row["entry_paise"], row["exit_paise"], 1, True
+        )
+        assert (row["costs_paise"], row["net_paise"]) == (costs, row["gross_paise"] - costs)
 
     def test_ac1_a_gap_through_the_stop_exits_at_the_open_slipped(self, rig):
         alert = rig.alert("SBIN")
