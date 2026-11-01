@@ -71,7 +71,7 @@
     "src/onelot/strategies/supertrend_vol.py": 1,
     "src/onelot/strategies/turtle_soup.py": 1,
     "src/onelot/strategies/vwap_pullback.py": 1,
-    "src/onelot/strategy/alpha.py": 24,
+    "src/onelot/strategy/alpha.py": 23,
     "src/onelot/strategy/lab_source.py": 1,
     "src/onelot/strategy/selector.py": 1,
     "src/onelot/trade/guardian.py": 4
