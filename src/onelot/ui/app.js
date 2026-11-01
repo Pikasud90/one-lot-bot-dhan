@@ -529,8 +529,13 @@ const paperPanel = (p, view = "today") => { if (!p || !p.enabled) return paperEm
 const paperSince = (s) => { const errors = (Number(s.hook_errors) || 0) + (Number(s.desk_hook_errors) || 0); return `since restart: ${s.opened ?? 0} opened · ${s.filled ?? 0} filled · ${s.no_fill ?? 0} no fill${errors ? ` · ${errors} errors (see the log)` : ""}`; };
 const paperTotals = (label, d) => `${label}: ${d.closed ?? 0} closed · ${d.wins ?? 0} won · ${d.losses ?? 0} lost · gross ${inr(d.gross_rupees)} · net ${inr(d.net_rupees)}${d.net_rupees == null ? " (no costs yet)" : ""}`;
 const paperMeta = (p, view = "today") => { if (!p || !p.enabled) return ""; const st = p.status || {}, s = paperSession(p), last = s ? paperTotals(`last session ${paperDay(s.date)}`, s.totals || {}) : "last session: none before today"; if (view === "all") return `all: ${paperList(p.trades).length} trades listed, newest first (at most 200) · ${paperSince(st)}`; if (view === "last") return `${last} · ${paperSince(st)}`; if (paperFallback(p)) return `${last} · today: nothing closed yet · ${paperSince(st)}`; return `${paperTotals("today", p.totals_today || {})} · ${paperSince(st)}`; };
+// US-032: which trades the panel shows. Arrow keys / Home / End move along the radio group.
+const PAPER_VIEWS = ["today", "last", "all"];
+const paperViewOf = (v) => PAPER_VIEWS.includes(v) ? v : "today";
+const paperViewKey = (view, key) => { const n = PAPER_VIEWS.length, i = PAPER_VIEWS.indexOf(paperViewOf(view)); return key === "ArrowRight" || key === "ArrowDown" ? PAPER_VIEWS[(i + 1) % n] : key === "ArrowLeft" || key === "ArrowUp" ? PAPER_VIEWS[(i + n - 1) % n] : key === "Home" ? PAPER_VIEWS[0] : key === "End" ? PAPER_VIEWS[n - 1] : null; };
 // Fetched when the desk snapshot's version moves (and on opening the tab), at most every 5 s.
-const paperFeed = { at: 0, timer: null, version: null, shown: false };
+// `view` is the chosen view, `last` the last good answer (re-rendered at once on a switch).
+const paperFeed = { at: 0, timer: null, version: null, shown: false, view: "today", last: null };
 const liveTabActive = () => { const s = document.querySelector('section[data-tab="live"]'); return !!s && s.classList.contains("active"); };
 function wantPaper(force) {
   if (paperFeed.timer || (!force && paperFeed.version === lastDeskVersion)) return;
@@ -548,9 +553,10 @@ async function loadPaper() {
     if (!p || typeof p.enabled !== "boolean") throw new Error("unexpected reply from /api/paper");
     paperFeed.version = version;
     paperFeed.shown = true;
-    $("desk-paper").innerHTML = paperPanel(p);
+    paperFeed.last = p;
+    $("desk-paper").innerHTML = paperPanel(p, paperFeed.view);
     $("desk-paper-meta").className = "muted";
-    $("desk-paper-meta").textContent = paperMeta(p);
+    $("desk-paper-meta").textContent = paperMeta(p, paperFeed.view);
   } catch (e) {
     // The last table stays (still worth reading); the day line turns into a warning, and a
     // panel that never loaded says why instead of "Loading" for ever.
@@ -563,6 +569,26 @@ async function loadPaper() {
     if (paperFeed.version !== lastDeskVersion && liveTabActive()) wantPaper(false);
   }
 }
+// Select a view: one checked, tabbable button (roving tabindex), remembered per browser through
+// `store` (localStorage in a try/catch: a private window simply forgets), shown at once from
+// the last good answer. A failure line on the day line is left as it is.
+function showPaperView(view) {
+  paperFeed.view = paperViewOf(view);
+  store.set("paper.view", paperFeed.view);
+  document.querySelectorAll("[data-paper-view]").forEach((b) => {
+    const on = b.dataset.paperView === paperFeed.view;
+    b.setAttribute("aria-checked", on ? "true" : "false");
+    b.tabIndex = on ? 0 : -1;
+  });
+  if (!paperFeed.last) return;
+  $("desk-paper").innerHTML = paperPanel(paperFeed.last, paperFeed.view);
+  if ($("desk-paper-meta").className !== "warn") $("desk-paper-meta").textContent = paperMeta(paperFeed.last, paperFeed.view);
+}
+const paperViewClick = (e) => { const b = e.target && e.target.closest ? e.target.closest("[data-paper-view]") : null; if (b) showPaperView(b.dataset.paperView); };
+const paperViewKeydown = (e) => { const b = e.target && e.target.closest ? e.target.closest("[data-paper-view]") : null, next = b ? paperViewKey(b.dataset.paperView, e.key) : null; if (!next) return; e.preventDefault(); showPaperView(next); const nb = document.querySelector(`[data-paper-view="${next}"]`); if (nb) nb.focus(); };
+document.addEventListener("click", paperViewClick);
+document.addEventListener("keydown", paperViewKeydown);
+showPaperView(store.get("paper.view", "today"));
 function accRow(r, isOpen) {
   const L = r.last || {}, R = r.regime || {}, H = r.health || {}, K = r.risk || {};
   const chips = (r.strategies || []).map(s => `<span class="schip ${s.verdict !== "none" ? s.verdict : ""} ${s.error ? "err" : ""}" title="${esc(s.reason || "")}">${esc(s.name)}@${esc(s.timeframe)}</span>`).join("");
