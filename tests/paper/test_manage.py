@@ -277,6 +277,157 @@ class TestAC2Target:
         assert state.closed is None
 
 
+# ── AC3: the trailing stop (written red for Dev Alpha) ─────────────────────────
+
+
+class TestAC3Trail:
+    def test_the_trail_ratchets_at_the_close_and_applies_from_the_next_bar(self) -> None:
+        # close 1005.00 is +1R (risk 5.00): stop -> 1005.00 - 1 x 2.00 = 1003.00. This bar's
+        # own low 999.50 is below 1003.00, yet the new stop must not act within the bar.
+        bar1 = (1000.00, 1005.50, 999.50, 1005.00)
+        state, events = step(position(target=None), [bar1], rules=TRAIL)
+        assert state.closed is None
+        assert (state.stop_paise, state.trail_active) == (100_300, True)
+        state, _ = step(state, [bar1, (1004.00, 1004.50, 1003.00, 1003.50)], rules=TRAIL)
+        assert state.closed == PaperClose("TRAIL_STOP", 100_300, at(7), gap=False)
+
+    def test_a_moved_stop_is_booked_at_the_bar_close(self) -> None:
+        _, events = step(position(target=None), [(1000.00, 1005.50, 999.50, 1005.00)], rules=TRAIL)
+        assert [(e.kind, e.ts) for e in events] == [("STOP_MOVED", at(7))]
+        assert (events[0].detail["from_paise"], events[0].detail["to_paise"]) == (99_500, 100_300)
+
+    def test_activation_is_judged_on_the_close_not_the_high(self) -> None:
+        # high +2R, close 1004.95 is 0.99R: no trail (a deliberate difference from the Lab)
+        state, events = step(
+            position(target=None), [(1000.00, 1010.00, 999.50, 1004.95)], rules=TRAIL
+        )
+        assert (state.stop_paise, state.trail_active, events) == (99_500, False, [])
+
+    def test_the_trail_never_loosens(self) -> None:
+        rows = [
+            (1000.00, 1005.50, 999.50, 1005.00),  # -> 1003.00
+            (1005.00, 1006.50, 1004.50, 1006.00),  # -> 1004.00
+            (1006.00, 1006.50, 1005.00, 1005.50),  # +1.1R, candidate 1003.50: kept 1004.00
+        ]
+        state, _ = step(position(target=None), rows, rules=TRAIL)
+        assert state.closed is None and state.stop_paise == 100_400
+
+    @pytest.mark.parametrize("atr", [None, 0.0, math.nan])
+    def test_an_unusable_frozen_atr_disables_the_trail(self, atr: float | None) -> None:
+        rules = replace(TRAIL, atr=atr)
+        rows = [(1000.00, 1010.00, 999.50, 1009.00), (1000.00, 1001.00, 995.00, 996.00)]
+        state, _ = step(position(target=None), rows, rules=rules)
+        assert state.closed == PaperClose("STOP", 99_500, at(7), gap=False)
+        assert state.trail_active is False
+
+    def test_no_fallback_to_an_atr_column_in_the_bars(self) -> None:
+        bars = frame([(1000.00, 1010.00, 999.50, 1009.00)]).assign(atr=2.0, atr_trail=2.0)
+        state, _ = manage_step(position(target=None), bars, replace(TRAIL, atr=None), at(7))
+        assert (state.stop_paise, state.trail_active) == (99_500, False)
+
+    def test_an_activated_trail_that_never_moves_the_stop_still_closes_stop(self) -> None:
+        # ATR 5.00: candidate 1005.00 - 5.00 = 1000.00 > 995.00 would move; ATR 10.00 gives
+        # exactly the initial 995.00, so the stop never moved: STOP, not TRAIL_STOP.
+        rules = replace(TRAIL, atr=10.0)
+        rows = [(1000.00, 1005.50, 999.50, 1005.00), (1000.00, 1001.00, 995.00, 996.00)]
+        state, events = step(position(target=None), rows, rules=rules)
+        assert state.closed == PaperClose("STOP", 99_500, at(7), gap=False)
+        assert [e.kind for e in events] == ["CLOSED"]
+
+    def test_a_short_trail_mirrors(self) -> None:
+        rows = [(1000.00, 1000.50, 994.50, 995.00), (996.00, 997.00, 995.50, 996.50)]
+        state, _ = step(position("short", target=None), rows, rules=TRAIL)
+        assert state.closed == PaperClose("TRAIL_STOP", 99_700, at(7), gap=False)
+
+    def test_a_trailed_stop_snaps_to_the_tick_against_the_trader(self) -> None:
+        # 1005.00 - 2.03 = 1002.97 -> a long's stop floors to 1002.95
+        rules = replace(TRAIL, atr=2.03)
+        state, _ = step(position(target=None), [(1000.00, 1005.50, 999.50, 1005.00)], rules=rules)
+        assert state.stop_paise == 100_295
+
+    def test_a_gap_through_a_trailed_stop_closes_at_the_open(self) -> None:
+        rows = [(1000.00, 1005.50, 999.50, 1005.00), (1002.00, 1002.50, 1001.00, 1002.00)]
+        state, _ = step(position(target=None), rows, rules=TRAIL)
+        assert state.closed == PaperClose("TRAIL_STOP", 100_200, at(7), gap=True)
+
+
+# ── AC4: strategy exits (written red for Dev Alpha) ────────────────────────────
+
+
+def exit_at(minute: int, reason: str = "SIGNAL_EXIT") -> StrategyExit:
+    return StrategyExit(reason, at(minute))  # type: ignore[arg-type]
+
+
+FOUR_QUIET = [QUIET] * 4  # 10:06 .. 10:09
+
+
+class TestAC4StrategyExit:
+    def test_a_signal_exit_closes_at_the_first_fine_open_after_the_signal_bar(self) -> None:
+        rows = [*FOUR_QUIET, (1002.00, 1003.00, 1001.00, 1002.50), QUIET]
+        state, events = step(position(), rows, strategy_exit=exit_at(10))
+        assert state.closed == PaperClose("SIGNAL_EXIT", 100_200, at(10), gap=False)
+        assert [e.kind for e in events] == ["CLOSED"]
+
+    def test_an_opposite_signal_closes_the_same_way(self) -> None:
+        rows = [*FOUR_QUIET, (1002.00, 1003.00, 1001.00, 1002.50)]
+        state, _ = step(position(), rows, strategy_exit=exit_at(10, "OPPOSITE_SIGNAL"))
+        assert state.closed == PaperClose("OPPOSITE_SIGNAL", 100_200, at(10), gap=False)
+
+    def test_the_exit_waits_for_the_next_closed_fine_bar_across_steps(self) -> None:
+        rows = [*FOUR_QUIET, (1002.00, 1003.00, 1001.00, 1002.50)]
+        forming = at(10) + dt.timedelta(seconds=30)
+        state, events = step(position(), rows, now=forming, strategy_exit=exit_at(10))
+        assert (state.closed, events) == (None, [])
+        state, _ = step(state, rows, now=at(11))  # the callback no longer says so
+        assert state.closed == PaperClose("SIGNAL_EXIT", 100_200, at(10), gap=False)
+
+    @pytest.mark.parametrize("minute", [5, 6])
+    def test_a_signal_bar_that_closed_before_the_fill_is_ignored(self, minute: int) -> None:
+        state, events = step(position(), [QUIET] * 5, strategy_exit=exit_at(minute))
+        assert (state.closed, events) == (None, [])
+
+    def test_a_signal_bar_closing_after_now_is_look_ahead(self) -> None:
+        with pytest.raises(ValueError, match="bar_close_ts"):
+            step(position(), [QUIET] * 5, now=at(11), strategy_exit=exit_at(15))
+
+    def test_a_gap_through_the_stop_at_the_due_open_closes_stop(self) -> None:
+        rows = [*FOUR_QUIET, (994.00, 995.00, 993.00, 994.50)]
+        state, _ = step(position(), rows, strategy_exit=exit_at(10))
+        assert state.closed == PaperClose("STOP", 99_400, at(10), gap=True)
+
+    def test_a_gap_through_the_target_at_the_due_open_closes_target(self) -> None:
+        rows = [*FOUR_QUIET, (1011.00, 1012.00, 1010.50, 1011.50)]
+        state, _ = step(position(), rows, strategy_exit=exit_at(10))
+        assert state.closed == PaperClose("TARGET", 101_000, at(10), gap=True)
+
+    @pytest.mark.parametrize(
+        "bar",
+        [
+            (1000.00, 1001.00, 994.00, 996.00),  # the stop is touched later in the bar
+            (1000.00, 1012.00, 999.00, 1011.00),  # the target trades through later
+        ],
+    )
+    def test_an_exit_due_at_the_open_closes_before_anything_inside_the_bar(self, bar: Row) -> None:
+        state, _ = step(position(), [*FOUR_QUIET, bar], strategy_exit=exit_at(10))
+        assert state.closed == PaperClose("SIGNAL_EXIT", 100_000, at(10), gap=False)
+
+    def test_signal_exit_beats_opposite_signal_due_on_the_same_open(self) -> None:
+        rows = [*FOUR_QUIET, (1002.00, 1003.00, 1001.00, 1002.50)]
+        forming = at(10) + dt.timedelta(seconds=30)
+        state, _ = step(position(), rows, now=forming, strategy_exit=exit_at(10, "OPPOSITE_SIGNAL"))
+        state, _ = step(state, rows, now=at(11), strategy_exit=exit_at(10))
+        assert state.closed == PaperClose("SIGNAL_EXIT", 100_200, at(10), gap=False)
+
+    def test_an_earlier_pending_exit_is_not_displaced_by_a_later_one(self) -> None:
+        rows = [*FOUR_QUIET, (1002.00, 1003.00, 1001.00, 1002.50), QUIET]
+        forming = at(8) + dt.timedelta(seconds=30)
+        state, _ = step(
+            position(), rows[:3], now=forming, strategy_exit=exit_at(8, "OPPOSITE_SIGNAL")
+        )
+        state, _ = step(state, rows, strategy_exit=exit_at(10))
+        assert state.closed == PaperClose("OPPOSITE_SIGNAL", 100_000, at(8), gap=False)
+
+
 # ── the contract ───────────────────────────────────────────────────────────────
 
 
