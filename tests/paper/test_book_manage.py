@@ -143,7 +143,8 @@ class TestTheClose:
 
 
 class TestTheStateSurvivesARestart:
-    TRAIL = {"trail_atr_mult": 1.0, "atr": 2.0}
+    # a 1-minute strategy: every 1-minute close is a strategy-bar close the trail may use
+    TRAIL = {"trail_atr_mult": 1.0, "atr": 2.0, "tf_min": 1}
 
     def test_a_trailed_stop_is_persisted(self, make_book, engine):
         alert = make_alert()

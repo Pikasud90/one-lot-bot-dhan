@@ -73,7 +73,9 @@ RULES = ManageRules(
     exit_time=dt.time(15, 15),
     tick_paise=TICK,
 )
-TRAIL = replace(RULES, trail_atr_mult=1.0, trail_activate_r=1.0, atr=2.0)  # ATR in RUPEES
+# ATR in RUPEES. A 1-minute strategy over 1-minute bars: every fine bar closes a strategy bar,
+# so the trail may move at each close (review round 1, MAJOR-1: only strategy-bar closes).
+TRAIL = replace(RULES, trail_atr_mult=1.0, trail_activate_r=1.0, atr=2.0, tf_min=1)
 QUIET = (1000.00, 1001.00, 999.00, 1000.50)  # a bar that touches nothing
 BAR_KEYS = ("bar_open_paise", "bar_high_paise", "bar_low_paise", "bar_close_paise")  # A1
 
@@ -382,6 +384,44 @@ class TestAC3Trail:
         flat_risk = position(stop=100_000, target=None)  # entry == stop: there is no R
         state, events = step(flat_risk, [(1001.00, 1005.50, 1000.50, 1005.00)], rules=TRAIL)
         assert (state.stop_paise, state.trail_active, events) == (100_000, False, [])
+
+    # Review round 1, MAJOR-1: the trail is the STRATEGY's, so it arms and ratchets only at
+    # strategy-bar closes. Strategy bars are tf_min wide from 09:15 IST, like resample_bars.
+
+    def test_on_a_slower_strategy_it_moves_only_at_the_strategy_bar_close(self) -> None:
+        rules = replace(TRAIL, tf_min=5)  # strategy bars [10:05, 10:10), [10:10, 10:15)
+        rows = [
+            (1000.00, 1005.50, 999.50, 1005.00),  # 10:06: +1.0 R, but mid strategy bar
+            (1005.00, 1007.00, 1004.50, 1006.50),  # 10:07
+            (1006.50, 1008.00, 1006.00, 1007.50),  # 10:08
+            (1007.50, 1008.00, 1006.50, 1007.00),  # 10:09 closes it: 1007.00 - 2.00
+        ]
+        state, events = step(position(target=None), rows, rules=rules)
+        assert [(e.kind, e.ts, e.detail["to_paise"]) for e in events] == [
+            ("STOP_MOVED", at(10), 100_500)
+        ]
+        assert (state.stop_paise, state.trail_active) == (100_500, True)
+
+    def test_a_fine_close_mid_strategy_bar_moves_nothing_a_later_dip_can_touch(self) -> None:
+        rules = replace(TRAIL, tf_min=5)
+        rows = [(1000.00, 1005.50, 999.50, 1005.00), (1005.00, 1005.50, 1003.00, 1004.00)]
+        state, events = step(position(target=None), rows, rules=rules)
+        assert (state.closed, events, state.stop_paise) == (None, [], 99_500)
+
+    def test_coarse_fine_bars_close_a_strategy_bar_when_they_cross_its_end(self) -> None:
+        # resample_bars puts the 2-minute bars of 10:05, 10:07 and 10:09 into the 10:05
+        # strategy bar; the 10:09 bar closes at 10:11, past its end, so it is the last one.
+        rows = [
+            (1000.00, 1005.50, 999.50, 1005.00),
+            (1005.00, 1006.00, 1004.50, 1005.50),
+            (1005.50, 1006.50, 1005.00, 1006.00),
+        ]
+        bars = frame(rows, at(5), res_min=2)
+        rules = replace(TRAIL, tf_min=5)
+        state, events = manage_step(position(target=None, opened=at(5)), bars, rules, at(11))
+        assert [(e.kind, e.ts, e.detail["to_paise"]) for e in events] == [
+            ("STOP_MOVED", at(11), 100_400)
+        ]
 
 
 # ── AC4: strategy exits ────────────────────────────────────────────────────────

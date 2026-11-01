@@ -21,9 +21,13 @@ Rules for one bar, in time order (ported from `lab.simulator.simulate`, never ca
   inside       the stop on a touch (a long's low at or below it), at the stop; the target
                only when traded THROUGH by one tick, at exactly the target. STOP beats
                TARGET: which came first inside the bar is unknown, so the adverse one wins.
-  at the close the trail ratchets from the close once the close is `trail_activate_r` in
-               profit (AC3); the moved stop acts from the NEXT bar and is booked as a
-               STOP_MOVED event stamped with this bar's close.
+  at the close when this fine bar closes a STRATEGY bar, the trail ratchets from that close
+               once the close is `trail_activate_r` in profit (AC3); the moved stop acts
+               from the NEXT bar and is booked as a STOP_MOVED event stamped with this
+               bar's close. Strategy bars are `tf_min` wide from 09:15 IST on the bar's date,
+               as `data.resample.resample_bars` builds them; a fine bar closes one when its
+               close reaches the end of the strategy bar its open falls in (review round 1,
+               MAJOR-1: the Lab trails once per strategy bar, never per fine bar).
 A strategy exit reported before its exit bar has closed waits in `PositionState.pending_exit`
 (the earliest one wins; on a tie, the higher precedence), so a caller that reports it once
 still gets it. The session end (the first open at or after `exit_time` on the opening date)
@@ -37,7 +41,11 @@ managed, stamped with that bar's close time (Manager decisions A5 and T2). A pos
 never saw a usable bar is logged and left open: no price is invented.
 Deliberate differences from the Lab: a target needs a trade-through and fills at exactly T
 (the Lab fills on a touch, at the open on a gap); no partial exits; the trail activates on
-the close, not on the bar's best price; no forced end-of-day close in swing (US-027).
+the strategy-bar close, not on the best price so far; the trail's ATR is FROZEN at the
+alert (the strategy's ATR(trail_atr_period), `manage.atr_trail`) while the Lab re-reads its
+evolving ATR at every strategy bar; a trailed stop snaps to the tick against the trader;
+a strategy bar whose last fine bar is missing from the feed does not move the trail; no
+forced end-of-day close in swing (US-027).
 """
 
 from __future__ import annotations
@@ -99,6 +107,9 @@ STRATEGY_EXIT_REASONS: frozenset[str] = frozenset(get_args(StrategyExitReason))
 CLOSED = "CLOSED"  # the event kind of a close
 STOP_MOVED = "STOP_MOVED"  # the event kind of a trail that tightened the stop
 PRICE_COLUMNS = ("open", "high", "low", "close")
+# Strategy bars start at the NSE session open, as `data.resample.resample_bars` anchors them
+# (origin start_day, offset 09:15, closed and labelled left).
+STRATEGY_BAR_ANCHOR = dt.time(9, 15)
 
 
 @dataclass(frozen=True)
@@ -351,10 +362,11 @@ def _manage(
             events.append(_closed_event(state, closed, bar, stop, res_min))
             break
         last_close, last_close_at = bar.close, bar_ts + res
-        trailed = _trailed_stop(state, stop, bar.close, trail_atr, rules)
-        if trailed != stop:  # the bar's close moved it: it acts from the next bar on
-            events.append(_stop_moved_event(state, stop, trailed, bar, bar_ts, bar_ts + res))
-            stop, trail_active = trailed, True
+        if trail_atr is not None and closes_strategy_bar(bar_ts, res, rules.tf_min):
+            trailed = _trailed_stop(state, stop, bar.close, trail_atr, rules)
+            if trailed != stop:  # the strategy bar's close moved it: from the next bar on
+                events.append(_stop_moved_event(state, stop, trailed, bar, bar_ts, bar_ts + res))
+                stop, trail_active = trailed, True
 
     session_over = now >= dt.datetime.combine(session_date, SESSION_CLOSE_IST, IST)
     if closed is None and session_over:
@@ -456,6 +468,23 @@ def _pick(due: dict[str, tuple[int, bool]], bar_ts: dt.datetime) -> PaperClose:
     reason = exit_priority(due)
     price, gap = due[reason]
     return PaperClose(cast(CloseReason, reason), price, bar_ts, gap)
+
+
+def closes_strategy_bar(bar_ts: dt.datetime, res: dt.timedelta, tf_min: int) -> bool:
+    """True when the fine bar opening at `bar_ts` (`res` long) is the last fine bar of its
+    strategy bar: its close reaches the end of the `tf_min`-minute strategy bar its open
+    falls in, strategy bars running from 09:15 IST on the bar's date (`resample_bars`).
+
+    With fine bars that divide the timeframe this is a close ON a boundary (1-minute bars,
+    15-minute strategy: the bars opening 09:29, 09:44, ...). With coarser fine bars it is
+    the bar that crosses the boundary (2-minute bars, 5-minute strategy: 09:19 closes the
+    09:15 bar at 09:21), which is the last bar resample_bars puts into that strategy bar.
+    """
+    local = bar_ts.astimezone(IST)
+    anchor = dt.datetime.combine(local.date(), STRATEGY_BAR_ANCHOR, IST)
+    width = dt.timedelta(minutes=tf_min)
+    end = anchor + ((local - anchor) // width + 1) * width
+    return local + res >= end
 
 
 def _trail_atr_paise(rules: ManageRules) -> float | None:
