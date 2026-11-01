@@ -45,6 +45,7 @@ from .alert import (
     jsonable,
     trade_values,
 )
+from .events import PaperEvent
 from .fill import (
     Bars,
     FillDecision,
@@ -89,16 +90,6 @@ class _Priced(NamedTuple):
     risk_paise: int | None
     inputs: dict[str, Any]
     also: tuple[Booked, ...] = ()
-
-
-@dataclass(frozen=True)
-class PaperEvent:
-    """One booked event of a paper trade (a `paper_events` row)."""
-
-    trade_id: int
-    ts: dt.datetime  # bar or decision time (data time), never wall time
-    kind: str  # OPENED | FILLED | NO_FILL (US-002 adds CLOSED and friends)
-    detail: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
