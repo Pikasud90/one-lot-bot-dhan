@@ -80,7 +80,8 @@ writes to your desk journal.
   follow the bars' time, not the wall clock. The one exception: a waiting trade on a series
   the desk no longer tracks (taken off the watchlist) never gets bars, so it closes `NO_FILL`
   (`series_untracked`) once the wall clock passes its deadline (plus the feed delay when
-  delayed).
+  delayed). Like every `NO_FILL`, that is final: adding the series back to the watchlist later
+  does not revive the trade.
 * **Grade:** `live` when Dhan served the bars, `delayed` otherwise; a live trade whose feed
   turns out to mix 1- and 2-minute bars is regraded `delayed` (a `REGRADED` event says when).
 * **Restart:** open paper trades reload; alerts from the last `paper.reconcile_days` days that

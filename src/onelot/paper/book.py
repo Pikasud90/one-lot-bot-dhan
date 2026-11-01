@@ -431,7 +431,12 @@ class PaperBook:
 
     def _guarded(self, trade: PaperTrade, work: Callable[[], list[PaperEvent]]) -> list[PaperEvent]:
         """One trade's work. A failure is logged, counted and skipped; a LOCKED database
-        stops the whole step (BUG-1): logged once without a traceback, then _StepStopped."""
+        stops the whole step (BUG-1): logged once without a traceback, then _StepStopped.
+
+        Each write commits on its own, so a unit that commits one write and then fails (a
+        REGRADED event, then a locked fill) leaves that committed event in the database
+        but out of step()'s return value: paper_events, not the returned list, is the record.
+        """
         try:
             return work()
         except OperationalError as exc:
