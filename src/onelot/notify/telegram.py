@@ -2,11 +2,12 @@
 
 The formatters turn a Desk payload into Telegram HTML that the owner can act on from
 the lock screen. The first line names exactly what to type into Dhan: the tradable
-symbol (series_key), the contract and the unit ("BUY BANKNIFTY 25 NOV 52000 CE · 1 lot
-(30)"); a risk-blocked alert is still sent, with "[BLOCKED by risk] " first inside the
+symbol (trading_symbol, else series_key), the contract, the unit and, for a stock, the
+product ("BUY BANKNIFTY 25 NOV 52000 CE · 1 lot (30)", "SELL SBIN · 1 share · intraday
+short"); a risk-blocked alert is still sent, with "[BLOCKED by risk] " first inside the
 bold. The rest follows the AC1 order:
 
-    <b>{BUY|SELL} {series_key}[ {DD MMM} {strike} {CE|PE}] · {1 share | 1 lot (N)}</b>
+    <b>{BUY|SELL} {symbol}[ {DD MMM} {strike} {CE|PE}] · {1 share | 1 lot (N)}[ · {product}]</b>
     <i>{label}</i>                          omitted when it repeats the symbol
     Entry {price} {mkt | ask | est.}        stock: mkt; index: ask (live chain) | est. (synthetic)
     Underlying Stop {x} · Target {y|trail}  index only
@@ -231,13 +232,29 @@ def _unit(kind: str, economics: Mapping[str, Any]) -> str:
     return f"1 lot ({lot:f})" if lot is not None and lot > 0 else "1 lot"
 
 
+def _product(kind: str, side: str, horizon: str) -> str:
+    """The Dhan product a STOCK alert needs (an option header carries none): a short is
+    always intraday (ADR-001 am. 8); a buy is intraday or, for a swing, delivery. An
+    unknown horizon gives "" so the product is left out, never guessed."""
+    if kind != "STOCK":
+        return ""
+    if side == "SELL":
+        return "intraday short"
+    if side == "BUY":
+        return {"intraday": "intraday", "swing": "delivery"}.get(horizon, "")
+    return ""
+
+
 def _header(alert: Mapping[str, Any]) -> str:
-    """'BUY BANKNIFTY 25 NOV 45000 CE · 1 lot (30)' — escaped, without tags."""
+    """'BUY BANKNIFTY 25 NOV 45000 CE · 1 lot (30)', 'BUY SBIN · 1 share · intraday' —
+    escaped, without tags."""
     economics = _fields(alert.get("economics"))
     action, instrument = _instrument(alert, _fields(economics.get("option")))
     kind = _plain(alert.get("kind")).upper()
-    unit = _unit(kind, economics)
-    return f"{action} {instrument}{SEP}{unit}" if unit else f"{action} {instrument}"
+    side = _plain(alert.get("side")).upper()
+    horizon = _plain(alert.get("horizon")).lower()
+    parts = [f"{action} {instrument}", _unit(kind, economics), _product(kind, side, horizon)]
+    return SEP.join(part for part in parts if part)
 
 
 def _levels(head: str, stop: Any, target: Any) -> str:
@@ -251,11 +268,11 @@ def format_alert(alert: Mapping[str, Any], now: dt.datetime) -> str:
     """The phone message for a Desk SIGNAL dict (see `Desk._raise_signal`).
 
     Reads only: id, created_at, expires_at, trading_symbol (else series_key), label, kind,
-    side, risk_allowed, strategy_label (else strategy), timeframe, confidence.{score,label},
-    data.delayed and
-    economics.{qty, entry_price, stop_price, target_price, underlying_stop,
-    underlying_target, synthetic, option.{strike, expiry, lot}}. `now` drives the minutes
-    left, so format at send time. Only risk_allowed exactly False marks it blocked.
+    side, horizon, risk_allowed, strategy_label (else strategy), timeframe,
+    confidence.{score,label}, data.delayed and economics.{qty, entry_price, stop_price,
+    target_price, underlying_stop, underlying_target, synthetic, option.{strike, expiry,
+    lot}}. `now` drives the minutes left, so format at send time. Only risk_allowed
+    exactly False marks it blocked.
     """
     economics = _fields(alert.get("economics"))
     index = _plain(alert.get("kind")).upper() == "INDEX"

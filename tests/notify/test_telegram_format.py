@@ -34,7 +34,7 @@ BYTE_ORDER_MARK = chr(0xFEFF)
 class TestGoldenAlerts:
     def test_stock_buy(self):
         assert format_alert(stock_alert(), NOW) == (
-            "<b>BUY RELIANCE · 1 share</b>\n"
+            "<b>BUY RELIANCE · 1 share · intraday</b>\n"
             "<i>Reliance Industries</i>\n"
             "Entry 2,950.50 mkt\n"
             "Stop 2,921.00 · Target 3,009.50\n"
@@ -62,7 +62,7 @@ class TestGoldenAlerts:
             side="SELL", entry_price=4100.0, stop_price=4141.0, target_price=4018.0
         )
         assert format_alert(alert, NOW) == (
-            "<b>SELL TCS · 1 share</b>\n"
+            "<b>SELL TCS · 1 share · intraday short</b>\n"
             "<i>Tata Consultancy</i>\n"
             "Entry 4,100.00 mkt\n"
             "Stop 4,141.00 · Target 4,018.00\n"
@@ -197,7 +197,7 @@ class TestHeader:
     def test_a_risk_blocked_alert_is_prefixed_inside_the_bold_and_otherwise_unchanged(self):
         plain = format_alert(stock_alert(), NOW).split("\n")
         blocked = format_alert(stock_alert(risk_allowed=False), NOW).split("\n")
-        assert blocked[0] == "<b>[BLOCKED by risk] BUY RELIANCE · 1 share</b>"
+        assert blocked[0] == "<b>[BLOCKED by risk] BUY RELIANCE · 1 share · intraday</b>"
         assert blocked[1:] == plain[1:]
 
     @pytest.mark.parametrize("flag", [True, None, 0, "", "false", "no"])
@@ -227,6 +227,29 @@ class TestHeader:
         alert = index_alert("CE")
         alert["economics"]["option"]["strike"] = "52000.0"
         assert " 52000 CE" in format_alert(alert, NOW).split("\n")[0]
+
+    @pytest.mark.parametrize(
+        ("side", "horizon", "product"),
+        [
+            ("BUY", "intraday", " · intraday"),
+            ("BUY", "swing", " · delivery"),
+            ("SELL", "intraday", " · intraday short"),
+            ("SELL", "swing", " · intraday short"),  # stock shorts are intraday only
+            ("BUY", None, ""),  # unknown: the product is left out, never guessed
+            ("BUY", "weekly", ""),
+        ],
+    )
+    def test_a_stock_header_carries_the_product(self, side, horizon, product):
+        """Decision 1: the product decides the order type in Dhan (intraday vs delivery)."""
+        alert = stock_alert(side=side, horizon=horizon)
+        expected = f"<b>{side} RELIANCE · 1 share{product}</b>"
+        assert format_alert(alert, NOW).split("\n")[0] == expected
+        assert f" · {side} RELIANCE · 1 share{product} · " in format_missed(alert, NOW)
+
+    @pytest.mark.parametrize("horizon", ["intraday", "swing", None])
+    def test_an_option_header_never_carries_a_product(self, horizon):
+        header = format_alert(index_alert("CE", horizon=horizon), NOW).split("\n")[0]
+        assert header.endswith(" CE · 1 lot (30)</b>")
 
     def test_the_trading_symbol_is_preferred_over_the_series_key(self):
         """US-004 adds trading_symbol (the NSE symbol, e.g. M&M) to the Desk payload; the
@@ -327,7 +350,7 @@ class TestFieldRules:
         stock["economics"]["unit_label"] = SENTINEL
         del index["economics"]["unit_label"]
         index["economics"]["qty"] = None  # falls back to option.lot
-        assert format_alert(stock, NOW).split("\n")[0] == "<b>BUY RELIANCE · 1 share</b>"
+        assert format_alert(stock, NOW).split("\n")[0] == "<b>BUY RELIANCE · 1 share · intraday</b>"
         header = format_alert(index, NOW).split("\n")[0]
         assert header == "<b>BUY BANKNIFTY 25 NOV 45000 CE · 1 lot (30)</b>"
 
@@ -338,7 +361,7 @@ class TestFieldRules:
 
     def test_numeric_text_fields_are_rendered_as_numbers(self):
         lines = format_alert(stock_alert(series_key=500325, timeframe=5), NOW).split("\n")
-        assert lines[0] == "<b>BUY 500325 · 1 share</b>"
+        assert lines[0] == "<b>BUY 500325 · 1 share · intraday</b>"
         assert lines[4] == "Opening Range Breakout 5"
 
     def test_label_line_is_omitted_when_it_repeats_the_symbol(self):
@@ -381,7 +404,7 @@ class TestEscapingAndWhitelist:
         )
         msg = format_alert(alert, NOW)
         lines = msg.split("\n")
-        assert lines[0] == "<b>BUY M&amp;M · 1 share</b>"
+        assert lines[0] == "<b>BUY M&amp;M · 1 share · intraday</b>"
         assert lines[1] == "<i>&lt;b&gt;Mahindra&lt;/b&gt; &amp; Mahindra 🚜</i>"
         assert lines[4] == "a&lt;b&gt;c &lt;5m&gt;"
         assert lines[5] == "Conf 70 hi&lt;i&gt;gh"
@@ -396,7 +419,7 @@ class TestEscapingAndWhitelist:
         msg = format_alert(alert, NOW)
         lines = msg.split("\n")
         assert len(lines) == 9
-        assert lines[0] == "<b>BUY M&amp;M EVIL · 1 share</b>"
+        assert lines[0] == "<b>BUY M&amp;M EVIL · 1 share · intraday</b>"
         assert lines[1] == "<i>Mahindra and Mahindra Ltd</i>"
         assert lines[4] == "orb fast 5m"
         assert LINE_SEPARATOR not in msg and "\r" not in msg
@@ -407,7 +430,7 @@ class TestEscapingAndWhitelist:
             series_key=f"REL{RTL_OVERRIDE}ECNAI\x00", label=f"Reliance{LTR_ISOLATE} Ind\x07"
         )
         lines = format_alert(alert, NOW).split("\n")
-        assert lines[0] == "<b>BUY RELECNAI · 1 share</b>"
+        assert lines[0] == "<b>BUY RELECNAI · 1 share · intraday</b>"
         assert lines[1] == "<i>Reliance Ind</i>"
 
     @pytest.mark.parametrize(
@@ -470,7 +493,7 @@ class TestBudget:
         label_line = msg.split("\n")[1]
         assert label_line.startswith("<i>Reliance Industries Reliance")
         assert label_line.endswith("…</i>")
-        assert msg.split("\n")[0] == "<b>BUY RELIANCE · 1 share</b>"
+        assert msg.split("\n")[0] == "<b>BUY RELIANCE · 1 share · intraday</b>"
         assert msg.endswith("id <code>a1b2c3</code>")
         assert_telegram_html(msg)
 
