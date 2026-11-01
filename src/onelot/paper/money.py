@@ -3,6 +3,7 @@
 Bar prices and alert levels arrive as floats (or numpy floats). They are converted
 here exactly once with Decimal and ROUND_HALF_EVEN; everything downstream in the
 paper ledger is a plain Python `int` of paise, so no float sum ever reaches a row.
+The way back out, for display only, is `format_rupees` (US-030): exact, never a float.
 """
 
 from __future__ import annotations

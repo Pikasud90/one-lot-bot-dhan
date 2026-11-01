@@ -97,7 +97,7 @@ class TestEnabled:
             "net_rupees": None,
         }
 
-    def test_an_empty_book_serves_zero_totals(self, make_book):
+    def test_an_empty_book_serves_zero_totals_and_no_net(self, make_book):
         body = client_for(stub_desk(make_book(), hook_errors=0)).get("/api/paper").json()
         assert body["enabled"] is True and body["trades"] == []
         assert body["totals_today"] == {
@@ -105,7 +105,7 @@ class TestEnabled:
             "wins": 0,
             "losses": 0,
             "gross_rupees": "0.00",
-            "net_rupees": "0.00",
+            "net_rupees": None,
         }
         assert body["status"] == dict.fromkeys(STATUS_KEYS, 0)
 

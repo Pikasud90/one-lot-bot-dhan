@@ -1003,7 +1003,9 @@ def closed_totals(trades: Iterable[tuple[object, object]]) -> DayTotals:
     A trade is a win or a loss on its net when it has one, else on its gross (before
     US-023 there are no costs, so no net); zero is neither, and a trade with neither has
     no outcome. A sum is None as soon as one trade lacks that amount: a partial sum would
-    look like a real total.
+    look like a real total. With no trades the gross is 0 but the net stays None: no net
+    has been computed, and a "0.00" net would read as costs already applied (US-030
+    contract: net null until US-023).
     """
     closed = wins = losses = 0
     gross: int | None = 0
@@ -1023,7 +1025,7 @@ def closed_totals(trades: Iterable[tuple[object, object]]) -> DayTotals:
         "wins": wins,
         "losses": losses,
         "gross_paise": gross,
-        "net_paise": net,
+        "net_paise": net if closed else None,
     }
 
 

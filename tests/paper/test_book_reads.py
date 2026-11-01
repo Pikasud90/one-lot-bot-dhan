@@ -51,7 +51,8 @@ TRADE_KEYS = {
     "created_at",
     "closed_at",
 }
-ZERO_TOTALS = {"closed": 0, "wins": 0, "losses": 0, "gross_paise": 0, "net_paise": 0}
+# No net is ever invented: an empty day has a zero gross but no net (contract: null until US-023).
+ZERO_TOTALS = {"closed": 0, "wins": 0, "losses": 0, "gross_paise": 0, "net_paise": None}
 
 
 def open_alert(book, alert_id: str, created: dt.datetime, **kw: Any) -> None:
@@ -317,7 +318,7 @@ class TestRecentRobustness:
 class TestTodayTotals:
     NOW = ist(THU, 15, 0)
 
-    def test_no_closed_trades_is_all_zero(self, make_book):
+    def test_no_closed_trades_is_zero_with_no_net(self, make_book):
         assert make_book().today_totals(self.NOW) == ZERO_TOTALS
 
     def test_wins_and_losses_go_by_gross_while_no_net_exists(self, make_book, engine):
@@ -359,7 +360,7 @@ class TestTodayTotals:
     def test_a_scratch_is_neither_a_win_nor_a_loss(self, make_book, engine):
         book = make_book()
         closed_trade(book, engine, "s", ist(THU, 11, 0), gross_paise=0)
-        assert book.today_totals(self.NOW) == {**ZERO_TOTALS, "closed": 1, "net_paise": None}
+        assert book.today_totals(self.NOW) == {**ZERO_TOTALS, "closed": 1}
 
     def test_a_closed_trade_without_gross_makes_the_day_gross_unknown(self, make_book, engine):
         book = make_book()

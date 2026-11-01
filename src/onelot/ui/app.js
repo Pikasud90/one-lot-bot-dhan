@@ -18,6 +18,8 @@ const spct = (v, d = 2) => (v === null || v === undefined || Number.isNaN(Number
 const tsf = (s) => s ? String(s).replace("T", " ").slice(0, 16) : "–";
 const hhmm = (s) => s ? String(s).slice(11, 16) : "–";
 const tile = (l, v, i = "", c = "") => `<div class="tile"><small>${l}</small><b class="${c}">${v}</b><i>${i}</i></div>`;
+// A rupee STRING from the API ("-12.05", exact from integer paise) for display: "−₹12.05", Indian digit grouping, never through a float. Plain text: esc() it in HTML.
+const inr = (s) => (s === null || s === undefined || s === "") ? "–" : (String(s).startsWith("-") ? "−₹" : "₹") + String(s).replace(/^-/, "").replace(/^\d+/, (w) => w.replace(/(\d)(?=(\d\d)*\d{3}$)/g, "$1,"));
 const store = { get(k, d) { try { return JSON.parse(localStorage.getItem("onelot." + k)) ?? d; } catch (e) { return d; } },
                 set(k, v) { try { localStorage.setItem("onelot." + k, JSON.stringify(v)); } catch (e) {} } };
 const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -503,6 +505,39 @@ function positionsTable(ps) {
       <td><input type="number" step="0.05" id="dx_${p.id}" placeholder="exit price" style="width:110px;display:inline-block;margin:0">
         <button class="btn small danger" data-dclose="${p.id}">Closed</button></td></tr>`).join("") + `</tbody></table>`;
 }
+/* ── paper trades (US-030): every alert's paper trade · one unit · never an order ──
+   Pure one-line helpers (node-tested) render GET /api/paper; money arrives as rupee strings. */
+const todayIST = () => { const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date()).map((x) => [x.type, x.value])); return `${p.year}-${p.month}-${p.day}`; };
+const paperChip = (st) => { const c = st === "PENDING_FILL" ? ["pending", "pending"] : st === "OPEN" ? ["open", "open"] : st === "NO_FILL" ? ["nofill", "no fill"] : st === "CLOSED" ? ["closed", "closed"] : ["", String(st ?? "?").toLowerCase()]; return `<span class="pchip ${c[0]}">${esc(c[1])}</span>`; };
+const paperWhen = (s, today) => !s ? "–" : (String(s).slice(0, 10) === today ? hhmm(s) : tsf(s));
+const paperRow = (t, today = todayIST()) => `<tr><td>${paperChip(t.status)}</td> <td><b>${esc(t.instrument)}</b> <span class="dim">${esc(t.strategy)} · ${esc(t.timeframe)}${t.qty > 1 ? ` · qty ${esc(t.qty)}` : ""}</span></td> <td>${esc(String(t.side ?? "").replace(/_/g, " "))}</td> <td class="${t.grade === "live" ? "pos" : "warn"}">${esc(t.grade)}</td> <td class="n">${esc(inr(t.entry))}</td> <td class="n">${esc(inr(t.exit))}</td> <td class="n ${t.gross == null ? "" : cls(Number(t.gross))}">${esc(inr(t.gross))}</td> <td class="n ${t.net == null ? "" : cls(Number(t.net))}">${esc(inr(t.net))}</td> <td>${esc(t.close_reason ? String(t.close_reason).replace(/_/g, " ") : "–")}</td> <td class="n">${esc(paperWhen(t.created_at, today))}${t.closed_at ? ` → ${esc(paperWhen(t.closed_at, today))}` : ""}</td></tr>`;
+const paperShown = (trades, today) => { const all = Array.isArray(trades) ? trades.filter((t) => t && typeof t === "object") : []; return [...all.filter((t) => t.status === "PENDING_FILL" || t.status === "OPEN"), ...all.filter((t) => (t.status === "CLOSED" || t.status === "NO_FILL") && String(t.closed_at ?? "").slice(0, 10) === today)]; };
+const paperPanel = (p) => { if (!p || !p.enabled) return `<div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sleep"/></svg> Paper trading is off: no new paper trades are opened.</div>`; const today = todayIST(), rows = paperShown(p.trades, today); if (!rows.length) return `<div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sleep"/></svg> ${Array.isArray(p.trades) && p.trades.length ? "Nothing open, and none closed today." : "No paper trades yet."}</div>`; return `<table class="paper"><thead><tr><th>Status</th> <th>Instrument</th> <th>Side</th> <th>Grade</th> <th class="n">Entry</th> <th class="n">Exit</th> <th class="n">Gross</th> <th class="n">Net</th> <th>Close reason</th> <th class="n">Time</th></tr></thead><tbody>${rows.map((t) => paperRow(t, today)).join("")}</tbody></table>`; };
+const paperMeta = (p) => { if (!p || !p.enabled) return ""; const s = p.status || {}, d = p.totals_today || {}, errors = (Number(s.hook_errors) || 0) + (Number(s.desk_hook_errors) || 0); return `today: ${d.closed ?? 0} closed · ${d.wins ?? 0} won · ${d.losses ?? 0} lost · gross ${inr(d.gross_rupees)} · net ${inr(d.net_rupees)}${d.net_rupees == null ? " (no costs yet)" : ""} · since restart: ${s.opened ?? 0} opened · ${s.filled ?? 0} filled · ${s.no_fill ?? 0} no fill${errors ? ` · ${errors} errors (see the log)` : ""}`; };
+// Fetched when the desk snapshot's version moves (and on opening the tab), at most every 5 s.
+const paperFeed = { at: 0, timer: null, version: null };
+const liveTabActive = () => { const s = document.querySelector('section[data-tab="live"]'); return !!s && s.classList.contains("active"); };
+function wantPaper(force) {
+  if (paperFeed.timer || (!force && paperFeed.version === lastDeskVersion)) return;
+  paperFeed.timer = setTimeout(loadPaper, Math.max(0, 5000 - (Date.now() - paperFeed.at)));
+}
+async function loadPaper() {
+  const version = lastDeskVersion;
+  paperFeed.at = Date.now();
+  try {
+    const r = await fetch("/api/paper");  // a read: no token, and no toast every 5 s on failure
+    const p = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(p.detail || `HTTP ${r.status}`);
+    paperFeed.version = version;
+    $("desk-paper").innerHTML = paperPanel(p);
+    $("desk-paper-meta").textContent = paperMeta(p);
+  } catch (e) {
+    $("desk-paper-meta").textContent = `paper trades unavailable: ${e.message}`;
+  } finally {
+    paperFeed.timer = null;
+    if (paperFeed.version !== lastDeskVersion && liveTabActive()) wantPaper(false);
+  }
+}
 function accRow(r, isOpen) {
   const L = r.last || {}, R = r.regime || {}, H = r.health || {}, K = r.risk || {};
   const chips = (r.strategies || []).map(s => `<span class="schip ${s.verdict !== "none" ? s.verdict : ""} ${s.error ? "err" : ""}" title="${esc(s.reason || "")}">${esc(s.name)}@${esc(s.timeframe)}</span>`).join("");
@@ -616,7 +651,7 @@ function applyStream(payload) {
   renderPanels(latest); renderJournal(latest); renderFeed(payload.notifications);
   const changed = latest.desk && latest.desk.version !== lastDeskVersion;
   if (changed) lastDeskVersion = latest.desk.version;
-  if (document.querySelector('[data-tab="live"]').classList.contains("active")) { renderDesk(latest.desk); if (changed) renderFocus(latest.desk); }
+  if (document.querySelector('[data-tab="live"]').classList.contains("active")) { renderDesk(latest.desk); if (changed) { renderFocus(latest.desk); wantPaper(false); } }
   if (changed && document.querySelector('[data-tab="home"]').classList.contains("active")) { renderHomePositions(latest.desk); if (Date.now() - alerts.loadedAt > 15000) { alerts.loadedAt = Date.now(); loadAlerts(true).catch(() => {}); } }
 }
 function connect() {
@@ -663,7 +698,7 @@ function renderFocus(d) {
 }
 $("focus-key").onchange = () => { focus.key = $("focus-key").value; store.set("focus.key", focus.key); if (latest) renderFocus(latest.desk); };
 $("focus-tf").onchange = () => { if (latest) renderFocus(latest.desk); };
-tabLoaders.live = () => { renderGates(); desk.force = true; if (latest) { renderDesk(latest.desk); focus.lastAt = 0; renderFocus(latest.desk); } };
+tabLoaders.live = () => { renderGates(); desk.force = true; wantPaper(true); if (latest) { renderDesk(latest.desk); focus.lastAt = 0; renderFocus(latest.desk); } };
 
 /* ═══════════════════════════════ LAB ════════════════════════════════ */
 const lab = { strategies: [], instruments: [], focus: [], focusTfs: [], cat: store.get("lab.cat", "DESK"), runs: [], waiting: null, poll: null, shown: null };

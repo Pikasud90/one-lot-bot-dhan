@@ -274,6 +274,16 @@ tr.sel{background:var(--bad-bg)}
 .sigcard.blocked{border-left-color:var(--warn)}
 .sigcard pre{white-space:pre-wrap;font-family:var(--ui);font-size:15px;line-height:1.45;margin:8px 0;background:var(--panel2);padding:10px 12px;border:1px solid var(--line)}
 .pos-advice{font-weight:800;letter-spacing:.08em}
+
+/* ── paper trades (US-030): status chips skew on ::before so the text stays upright ── */
+table.paper{font-size:15.5px}
+table.paper td b{font:20px/1 var(--display);letter-spacing:.05em}
+.pchip{position:relative;isolation:isolate;display:inline-block;padding:5px 12px;font:800 12.5px/1 var(--ui);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
+.pchip::before{content:"";position:absolute;inset:0;z-index:-1;transform:skew(-12deg);background:var(--panel3)}
+.pchip.pending{color:var(--warn)} .pchip.pending::before{background:var(--warn-bg)}
+.pchip.open{color:var(--cyan)} .pchip.open::before{background:var(--cyan-bg)}
+.pchip.nofill{color:var(--dim)} .pchip.nofill::before{background:transparent;border:1px dashed var(--line2)}
+.pchip.closed{color:var(--text)} .pchip.closed::before{background:var(--line2)}
 .legacy>summary{cursor:pointer;list-style:none}
 .legacy>summary::-webkit-details-marker{display:none}
 .legacy>summary h2{margin:0}
