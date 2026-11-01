@@ -170,7 +170,25 @@ class TestRow:
         text = re.sub(r"<[^>]+>", "", js("paperRow(P)", trade(side="BUY", grade="delayed")))
         assert re.search(r"\bBUY delayed\b", text), text
         header = re.sub(r"<[^>]+>", "", js("paperPanel(P)", {"enabled": True, "trades": [trade()]}))
-        assert header.startswith("Status Instrument Side Grade Entry Exit Gross Net"), header
+        assert header.startswith("Status Instrument Side Grade Entry / unit Exit / unit"), header
+
+    def test_the_header_says_entry_and_exit_are_per_unit_and_gross_net_per_trade(self):
+        # One lot of 30 shows a ₹312.45 entry but a gross 30 times larger: the header says so.
+        html = js("paperPanel(P)", {"enabled": True, "trades": [trade()]})
+        head = re.findall(r"<th(?:\s[^>]*)?>(.*?)</th>", html)  # <th>, never <thead>
+        assert head == [
+            "Status",
+            "Instrument",
+            "Side",
+            "Grade",
+            "Entry / unit",
+            "Exit / unit",
+            "Gross (trade)",
+            "Net (trade)",
+            "Close reason",
+            "Time",
+        ]
+        assert html.count(' title="') >= 4  # each money column explains itself on hover
 
     def test_a_closed_trade_shows_exit_gross_and_a_dash_for_the_missing_net(self):
         html = js("paperRow(P)", closed())
