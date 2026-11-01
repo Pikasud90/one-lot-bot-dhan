@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import stat
 import subprocess
 import sys
 from collections.abc import Iterator, Sequence
@@ -549,6 +551,18 @@ class TestUpdate:
         assert code == 1
         assert "src/pkg/a.py" in out and "--allow-regression" in out
         assert not rig.baseline.exists(), "a refused bootstrap must not write a baseline"
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+    def test_the_written_baseline_is_world_readable_like_any_tracked_file(
+        self, ratchet, rig: Rig, capsys
+    ):
+        """mkstemp creates 0600; the tracked baseline must not end up private."""
+        mask = os.umask(0)
+        os.umask(mask)
+        rig.mypy(mypy_output({}))
+        code, _, _ = run(ratchet, rig, capsys, "--update")
+        assert code == 0
+        assert stat.S_IMODE(rig.baseline.stat().st_mode) == 0o644 & ~mask
 
     def test_bootstrapping_a_clean_baseline_needs_no_flag(self, ratchet, rig: Rig, capsys):
         rig.mypy(mypy_output({}))

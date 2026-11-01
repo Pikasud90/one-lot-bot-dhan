@@ -64,6 +64,8 @@ MYPY_FLAGS: tuple[str, ...] = (
     "src",
 )
 MYPY_TIMEOUT_S = 600
+# The baseline is a tracked file: readable by everyone, like the rest of the checkout.
+BASELINE_MODE = 0o644
 # Environment variables that would change what mypy sees without changing the flags.
 SCRUBBED_ENV = ("MYPYPATH",)
 
@@ -258,6 +260,7 @@ def write_baseline(path: Path, version: str, counts: Mapping[str, int]) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(text)
+        os.chmod(tmp, BASELINE_MODE & ~_current_umask())  # mkstemp made it 0600
         os.replace(tmp, path)
     except BaseException as err:
         Path(tmp).unlink(missing_ok=True)
@@ -360,6 +363,13 @@ def _print_changes(changes: Mapping[str, tuple[int, int]]) -> None:
 
 def _err(message: str) -> None:
     print(message, file=sys.stderr)
+
+
+def _current_umask() -> int:
+    """The process umask (reading it means setting it, so it is put straight back)."""
+    mask = os.umask(0)
+    os.umask(mask)
+    return mask
 
 
 def _decode(raw: bytes) -> str:
