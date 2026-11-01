@@ -205,9 +205,11 @@ docs/                    00–08 live-engine design docs · 09–13 unified desk
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q            # all (slow tests excluded with -m "not slow")
-.venv/bin/python -m ruff check src tests
+scripts/gate.sh                          # the quality gate: format, lint, mypy ratchet, tests
+.venv/bin/python -m pytest               # tests only; `live` tests are skipped by default
 ```
+
+`scripts/gate.sh` runs exactly the commands listed in [CONTRIBUTING.md](CONTRIBUTING.md#running-everything).
 
 Invariants enforced by tests: no order-placement identifiers anywhere in `src/`; secrets never
 reach logs; closed bars only (signals on truncated history equal signals on full history);
