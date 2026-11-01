@@ -30,7 +30,7 @@ instruments automatically; lot sizes there are fallbacks overridden by the Dhan 
 ## Running everything
 
 `scripts/gate.sh` is the quality gate. From the repo root it runs exactly these commands, in
-this order, with `.venv/bin/python` (plain `python` when there is no `.venv`), and stops with a
+this order, with `.venv/bin/python` (else `python`, or `python3`, from `PATH`), and stops with a
 non-zero exit at the first one that fails. CI runs the same script.
 
 ```bash

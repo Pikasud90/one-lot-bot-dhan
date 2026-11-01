@@ -9,8 +9,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 if [[ -x "$ROOT/.venv/bin/python" ]]; then
   PY="$ROOT/.venv/bin/python"
-else
+elif command -v python >/dev/null 2>&1; then
   PY="python"
+else
+  PY="python3" # stock macOS and Debian ship no bare `python`
 fi
 trap 'echo "gate: FAIL (exit $?) at: $BASH_COMMAND" >&2' ERR
 echo "gate: $PY in $ROOT"

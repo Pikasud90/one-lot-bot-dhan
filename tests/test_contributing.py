@@ -118,9 +118,14 @@ def _gate_copy(tmp_path: Path, *, venv: bool) -> tuple[Path, Path]:
     return root, fake
 
 
-def _run_gate(root: Path, tmp_path: Path, fail_on: str = "", path_prefix: str = ""):
+def _run_gate(
+    root: Path, tmp_path: Path, fail_on: str = "", path_prefix: str = "", path: str | None = None
+):
+    """Run gate.sh from outside the repo; ``path`` replaces PATH, ``path_prefix`` extends it."""
     log = tmp_path / "steps.log"
     env = dict(os.environ, FAKE_LOG=str(log), FAKE_FAIL_ON=fail_on)
+    if path is not None:
+        env["PATH"] = path
     if path_prefix:
         env["PATH"] = path_prefix + os.pathsep + env["PATH"]
     proc = subprocess.run(
@@ -161,3 +166,19 @@ def test_gate_falls_back_to_python_on_path_without_a_venv(tmp_path: Path) -> Non
     proc, steps = _run_gate(root, tmp_path, path_prefix=str(fake.parent))
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert [s.split(" ", 1)[1] for s in steps] == LOGGED_STEPS
+
+
+@needs_bash
+def test_gate_falls_back_to_python3_without_a_venv_or_a_bare_python(tmp_path: Path) -> None:
+    """Stock macOS and Debian ship only ``python3``; the gate must still find it."""
+    root, fake = _gate_copy(tmp_path, venv=False)
+    python3 = fake.rename(fake.with_name("python3"))
+    tools = tmp_path / "tools"  # just what gate.sh and the fake need: no real python on PATH
+    tools.mkdir()
+    for tool in ("bash", "dirname"):
+        found = shutil.which(tool)
+        assert found, f"{tool} is not on PATH"
+        (tools / tool).symlink_to(found)
+    proc, steps = _run_gate(root, tmp_path, path=f"{python3.parent}{os.pathsep}{tools}")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert steps == [f"{python3} {step}" for step in LOGGED_STEPS]
