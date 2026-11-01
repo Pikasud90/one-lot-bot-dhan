@@ -67,9 +67,9 @@ writes to your desk journal.
 
 * **Unit:** 1 share for a stock, one lot of the alerted option for an index (the lot the alert
   names; a lot that disagrees with `universe.yaml` is kept and logged), whatever `risk.lots_per_trade` says.
-* **Fill:** the open of the first desk bar that **closed after the alert**, on the same trading
-  day, within the alert's validity (plus `paper.feed_delay_minutes` for delayed-grade alerts,
-  whose bars arrive late). Stocks pay `backtest.slippage_pct` (a percent) against you, snapped to
+* **Fill:** the open of the first desk bar that **opens after the alert and has closed**, on
+  the same trading day and opening before the 15:30 close, within the alert's validity (plus
+  `paper.feed_delay_minutes` for delayed-grade alerts, whose bars arrive late). Stocks pay `backtest.slippage_pct` (a percent) against you, snapped to
   the tick; options are priced like the Lab (`fair × (1 + option_spread_pct) +
   option_slippage_ticks × tick`, rounded up) with the strike, expiry and IV frozen at the alert.
   When the alert carries no IV it is implied once from the alert's premium.

@@ -19,7 +19,7 @@ import datetime as dt
 import logging
 import threading
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 from sqlalchemy import Engine, select, update
@@ -39,6 +39,9 @@ from .economics import (
     stock_economics,
 )
 from .tracker import InstrumentTracker, StrategySlot, Verdict
+
+if TYPE_CHECKING:  # annotation only: the paper package is never imported by the desk
+    from ..paper.book import PaperBook
 
 log = logging.getLogger(__name__)
 
@@ -73,7 +76,7 @@ class Desk:
         desk_cfg: DeskConfig | None = None,
         feed_getter=None,
         calendar=None,
-        paper=None,
+        paper: PaperBook | None = None,
     ) -> None:
         self.engine = engine
         # The paper book (US-001): opens a paper trade per alert and fills it on later polls.

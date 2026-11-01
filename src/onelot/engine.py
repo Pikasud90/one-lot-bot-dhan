@@ -20,6 +20,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -45,6 +46,9 @@ from .strategy.alpha import AlphaEngine, EvaluationContext
 from .trade.guardian import Guardian, GuardianInputs, check_entry_slippage
 from .trade.journal import TradeJournal
 from .trade.state import ExitReason, TradeStateMachine
+
+if TYPE_CHECKING:  # annotation only: the factory is imported lazily in _paper_book
+    from .paper.book import PaperBook
 
 log = logging.getLogger(__name__)
 
@@ -146,7 +150,7 @@ class Engine:
         self._last_renew_error: str | None = None
 
     # ── startup ───────────────────────────────────────────────────────────
-    def _paper_book(self):
+    def _paper_book(self) -> PaperBook | None:
         """The paper book for the Live Desk (US-001 AC8), or None when it cannot be built.
 
         A paper book that fails to build must never stop the desk: it is logged, shown as
