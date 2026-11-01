@@ -50,6 +50,7 @@ from .fill import (
     normalise_bars,
     option_entry_paise,
     option_exit_paise,
+    spacing_gaps,
     stock_entry_paise,
 )
 from .money import to_paise
@@ -415,10 +416,47 @@ class PaperBook:
 
     # ── the fill (AC2/AC3) ────────────────────────────────────────────────
     def _step_waiting(self, trade: PaperTrade, view: Bars, now: dt.datetime) -> list[PaperEvent]:
+        """Regrade if the feed mixes resolutions, then fill, close NO_FILL, or keep waiting."""
+        resolution = trade.resolution_min or infer_resolution_min(view)
+        events: list[PaperEvent] = []
+        if trade.grade == "live":
+            gaps = spacing_gaps(
+                view, base_min=resolution, session_date=trade.created_at.date(), now=now
+            )
+            if gaps:  # before the fill decision: the delayed window then applies
+                events = self._regrade(trade, gaps, resolution, now)
+                with self._lock:
+                    current = self._active.get(trade.alert_id)
+                if current is None or current.status != "PENDING_FILL":
+                    return events
+                trade = current
+        return events + self._fill_or_wait(trade, view, resolution, now)
+
+    def _regrade(
+        self, trade: PaperTrade, gaps: tuple[dt.datetime, ...], base_min: int, now: dt.datetime
+    ) -> list[PaperEvent]:
+        """live -> delayed, persisted with a REGRADED event (Manager decisions 6 and g).
+
+        Never the other way: a feed that mixed resolutions once is not trusted as live again
+        for this trade.
+        """
+        detail = {
+            "from": trade.grade,
+            "to": "delayed",
+            "reason": "mixed_spacing",
+            "base_min": base_min,
+            "gap_bars": [ts.isoformat() for ts in gaps],
+        }
+        log.warning("paper: trade %s regraded delayed: mixed bar spacing %s", trade.id, gaps)
+        values = {"grade": "delayed", "updated_at": now}
+        return self._commit(trade, values, [("REGRADED", gaps[-1], detail)], counter=None)
+
+    def _fill_or_wait(
+        self, trade: PaperTrade, view: Bars, resolution: int, now: dt.datetime
+    ) -> list[PaperEvent]:
         """Fill, close NO_FILL, or keep waiting one PENDING_FILL trade."""
         plan = trade.plan
         stop_paise = int(plan["levels"]["underlying_stop_paise"])
-        resolution = trade.resolution_min or infer_resolution_min(view)
         decision = decide_fill(
             view,
             created_at=trade.created_at,
@@ -596,14 +634,22 @@ class PaperBook:
         trade: PaperTrade,
         values: Mapping[str, Any],
         booked: list[Booked],
-        counter: str,
+        counter: str | None,
     ) -> list[PaperEvent]:
-        """One transaction: the guarded status change plus its events. Memory after commit."""
+        """One transaction: the guarded change plus its events. Memory after commit.
+
+        The guard is the status AND grade this book last saw, so a trade another book on
+        the same database moved first is adopted, never booked twice.
+        """
         events = [PaperEvent(trade.id, ts, kind, detail) for kind, ts, detail in booked]
         with self.engine.begin() as conn:
             changed = conn.execute(
                 paper_trades.update()
-                .where(paper_trades.c.id == trade.id, paper_trades.c.status == trade.status)
+                .where(
+                    paper_trades.c.id == trade.id,
+                    paper_trades.c.status == trade.status,
+                    paper_trades.c.grade == trade.grade,
+                )
                 .values(**values)
             ).rowcount
             if changed == 1:
@@ -620,7 +666,8 @@ class PaperBook:
             return []
         stored = PaperTrade.from_row(row)
         with self._lock:
-            self._counts[counter] += 1
+            if counter is not None:
+                self._counts[counter] += 1
             self._set_active(stored)
         return events
 

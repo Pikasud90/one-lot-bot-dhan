@@ -146,6 +146,21 @@ class Engine:
         self._last_renew_error: str | None = None
 
     # ── startup ───────────────────────────────────────────────────────────
+    def _paper_book(self):
+        """The paper book for the Live Desk (US-001 AC8), or None when it cannot be built.
+
+        A paper book that fails to build must never stop the desk: it is logged, shown as
+        a status warning, and the desk runs without paper trades.
+        """
+        try:
+            from .paper.factory import build_paper_book
+
+            return build_paper_book(self.cfg, self.db.engine)
+        except Exception:
+            log.exception("paper book failed to build; the Live Desk runs without paper trades")
+            self.status.warnings.append("Paper book failed to build — no paper trades; see the log")
+            return None
+
     def start(self) -> None:
         self.lock.acquire()
         self.status.running = True
@@ -214,6 +229,7 @@ class Engine:
                 data_api_active=self._data_api_active,
                 feed_getter=lambda: self.feed,
                 calendar=self.calendar,
+                paper=self._paper_book(),
             )
             self.desk.start()
         except Exception:

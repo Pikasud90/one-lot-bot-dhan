@@ -14,6 +14,7 @@ place an order.
 
 from __future__ import annotations
 
+import copy
 import datetime as dt
 import logging
 import threading
@@ -72,8 +73,14 @@ class Desk:
         desk_cfg: DeskConfig | None = None,
         feed_getter=None,
         calendar=None,
+        paper=None,
     ) -> None:
         self.engine = engine
+        # The paper book (US-001): opens a paper trade per alert and fills it on later polls.
+        # Evidence, not permission: nothing it does (or fails to do) can stop an alert, its
+        # notification or the poll. Its failures are counted here (Manager decision 5).
+        self.paper = paper
+        self.hook_errors = 0
         self.app_cfg = cfg_app
         self.notifier = notifier
         self.governor = governor
@@ -116,6 +123,7 @@ class Desk:
             "source": {"name": self.source.name},
             "booting": True,
             "version": 0,
+            "paper": None,
         }
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -260,6 +268,9 @@ class Desk:
                     self._raise_signal(t, slot, v, now)
             if market_ok or self.positions:
                 self._manage_positions(now, window)
+            # Every poll, even with the market shut: a waiting paper trade must still be
+            # able to close NO_FILL once its data reaches the session end.
+            self._step_paper(now)
             self._audit_archive(now)
             self._rebuild_snapshot(now, window)
         try:
@@ -445,6 +456,14 @@ class Desk:
                     payload=sig,
                 )
             )
+        # After the desk_signals insert (a crash here is reconciled at the next start) and
+        # before anyone is told: the paper trade exists before the notification goes out.
+        if self.paper is not None:
+            try:
+                self.paper.on_alert(copy.deepcopy(sig), now)
+            except Exception:  # noqa: BLE001 - the alert must go out whatever the book does
+                self.hook_errors += 1
+                log.exception("paper: on_alert failed for alert %s", sid)
         title = (
             f"{eco.side.replace('_', ' ')} {t.series.label}"
             + (f" {eco.option['strike']:g} {eco.option['opt_type']}" if eco.option else "")
@@ -1042,6 +1061,33 @@ class Desk:
             rows.append(row)
         return rows
 
+    # ── paper book (US-001) ───────────────────────────────────────────────
+    def _paper_bars(self, series_key: str) -> pd.DataFrame | None:
+        """The bars the book fills from: a tracker's own frame (read-only), else None."""
+        tracker = self.trackers.get(series_key)
+        return tracker.bars if tracker is not None else None
+
+    def _step_paper(self, now: dt.datetime) -> None:
+        if self.paper is None:
+            return
+        try:
+            self.paper.step(now, self._paper_bars)
+        except Exception:  # noqa: BLE001 - the poll carries on whatever the book does
+            self.hook_errors += 1
+            log.exception("paper: step failed (poll %d)", self.polls)
+
+    def _paper_block(self) -> dict | None:
+        """snapshot["paper"]: the book's status() and the desk's own hook_errors, apart."""
+        if self.paper is None:
+            return None
+        try:
+            status = dict(self.paper.status())
+        except Exception:  # noqa: BLE001 - a broken status() cannot break the snapshot
+            self.hook_errors += 1
+            log.exception("paper: status() failed")
+            status = {}
+        return {**status, "desk_hook_errors": self.hook_errors}
+
     # ── snapshot ──────────────────────────────────────────────────────────
     def _rebuild_snapshot(self, now: dt.datetime, window) -> None:
         market_open = bool(window and window.is_open(now))
@@ -1089,6 +1135,7 @@ class Desk:
                 if r["instrument_key"] == d["tracked"]
             ][:5]
         risk = self.governor.snapshot().as_dict()
+        paper = self._paper_block()
         socket = None
         if self.source.primary is not None and hasattr(self.source.primary, "socket_alive"):
             socket = {
@@ -1127,6 +1174,7 @@ class Desk:
             "indices": [d for d in trackers if d["kind"] == "INDEX"],
             "stocks": [d for d in trackers if d["kind"] == "STOCK"],
             "risk": risk,
+            "paper": paper,
             "scoreboard": self.scoreboard,
             "counts": {
                 "instruments": len(trackers),

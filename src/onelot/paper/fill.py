@@ -126,6 +126,38 @@ def infer_resolution_min(bars: Bars) -> int:
     return int(values[int(np.argmax(counts))])
 
 
+def spacing_gaps(
+    bars: Bars, *, base_min: int, session_date: dt.date, now: dt.datetime
+) -> tuple[dt.datetime, ...]:
+    """The bar opens around the first run of TWO OR MORE consecutive gaps larger than
+    `base_min`, among the bars of `session_date` (IST) that have closed by `now`; () if none.
+
+    That run is a feed that changed resolution (Manager decision 6). One hole is an outage,
+    and the overnight gap never counts because only one date is looked at.
+    """
+    base_ns = max(int(base_min), 1) * NS_PER_MINUTE
+    day_ns = to_ns(dt.datetime.combine(session_date, dt.time(0), tzinfo=IST))
+    lo = int(np.searchsorted(bars.ns, day_ns, side="left"))
+    hi = min(
+        int(np.searchsorted(bars.ns, day_ns + 24 * 60 * NS_PER_MINUTE, side="left")),
+        int(np.searchsorted(bars.ns, to_ns(now) - base_ns, side="right")),
+    )
+    day = bars.ns[lo:hi]
+    wide = np.diff(day) > base_ns  # wide[i]: the gap between day[i] and day[i + 1]
+    pairs = np.flatnonzero(wide[:-1] & wide[1:])
+    if pairs.size == 0:
+        return ()
+    start = end = int(pairs[0])
+    while end + 1 < wide.size and wide[end + 1]:
+        end += 1
+    return tuple(from_ns(int(ns)) for ns in day[start : end + 2])
+
+
+def mixed_spacing(bars: Bars, *, base_min: int, session_date: dt.date, now: dt.datetime) -> bool:
+    """True when the session's closed bars mix resolutions (see `spacing_gaps`)."""
+    return bool(spacing_gaps(bars, base_min=base_min, session_date=session_date, now=now))
+
+
 def decide_fill(
     bars: Bars,
     *,
