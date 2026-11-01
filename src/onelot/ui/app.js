@@ -571,11 +571,12 @@ async function loadPaper() {
   }
 }
 // Select a view: one checked, tabbable button (roving tabindex), remembered per browser through
-// `store` (localStorage in a try/catch: a private window simply forgets), shown at once from
-// the last good answer. A failure line on the day line is left as it is.
-function showPaperView(view) {
+// `store` (localStorage in a try/catch: a private window simply forgets) unless `remember` is
+// false (the start-up restore), shown at once from the last good answer. A failure line on the
+// day line is left as it is. Keys with Alt / Ctrl / Meta / Shift are the browser's, not ours.
+function showPaperView(view, remember = true) {
   paperFeed.view = paperViewOf(view);
-  store.set("paper.view", paperFeed.view);
+  if (remember) store.set("paper.view", paperFeed.view);  // start-up restores, never writes
   document.querySelectorAll("[data-paper-view]").forEach((b) => {
     const on = b.dataset.paperView === paperFeed.view;
     b.setAttribute("aria-checked", on ? "true" : "false");
@@ -586,10 +587,10 @@ function showPaperView(view) {
   if ($("desk-paper-meta").className !== "warn") $("desk-paper-meta").textContent = paperMeta(paperFeed.last, paperFeed.view);
 }
 const paperViewClick = (e) => { const b = e.target && e.target.closest ? e.target.closest("[data-paper-view]") : null; if (b) showPaperView(b.dataset.paperView); };
-const paperViewKeydown = (e) => { const b = e.target && e.target.closest ? e.target.closest("[data-paper-view]") : null, next = b ? paperViewKey(b.dataset.paperView, e.key) : null; if (!next) return; e.preventDefault(); showPaperView(next); const nb = document.querySelector(`[data-paper-view="${next}"]`); if (nb) nb.focus(); };
+const paperViewKeydown = (e) => { if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return; const b = e.target && e.target.closest ? e.target.closest("[data-paper-view]") : null, next = b ? paperViewKey(b.dataset.paperView, e.key) : null; if (!next) return; e.preventDefault(); showPaperView(next); const nb = document.querySelector(`[data-paper-view="${next}"]`); if (nb) nb.focus(); };
 document.addEventListener("click", paperViewClick);
 document.addEventListener("keydown", paperViewKeydown);
-showPaperView(store.get("paper.view", "today"));
+showPaperView(store.get("paper.view", "today"), false);
 function accRow(r, isOpen) {
   const L = r.last || {}, R = r.regime || {}, H = r.health || {}, K = r.risk || {};
   const chips = (r.strategies || []).map(s => `<span class="schip ${s.verdict !== "none" ? s.verdict : ""} ${s.error ? "err" : ""}" title="${esc(s.reason || "")}">${esc(s.name)}@${esc(s.timeframe)}</span>`).join("");

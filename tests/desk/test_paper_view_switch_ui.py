@@ -50,7 +50,7 @@ const document = {
 const paperPanel = (p, v) => `PANEL ${v}`;
 const paperMeta = (p, v) => `META ${v}`;
 const btn = (v) => buttons.find((b) => b.dataset.paperView === v);
-const key = (target, k) => ({ target, key: k, preventDefault() { prevented++; } });
+const key = (target, k, mods = {}) => ({ target, key: k, ...mods, preventDefault() { prevented++; } });
 const state = () => ({
   view: paperFeed.view, stored, focused, prevented,
   checked: buttons.filter((b) => b.attrs["aria-checked"] === "true").map((b) => b.dataset.paperView),
@@ -192,8 +192,28 @@ class TestShowPaperView:
         ids=["remembered", "corrupt", "unknown", "storage-throws", "first-visit"],
     )
     def test_the_start_up_view(self, setup, view):
-        got = run(f'{setup} showPaperView(store.get("paper.view", "today"));')
+        got = run(f'{setup} showPaperView(store.get("paper.view", "today"), false);')
         assert got["view"] == view
+
+    @pytest.mark.parametrize(
+        "setup",
+        [
+            'stored["onelot.paper.view"] = JSON.stringify("all");',
+            'stored["onelot.paper.view"] = "not json";',
+            "",
+        ],
+        ids=["remembered", "corrupt", "first-visit"],
+    )
+    def test_restoring_at_start_up_writes_nothing(self, setup):
+        # review round 1 NIT: only the owner's own choice is ever written
+        before = run(setup)["stored"]
+        got = run(f'{setup} showPaperView(store.get("paper.view", "today"), false);')
+        assert got["stored"] == before
+
+    def test_app_js_restores_without_remembering(self):
+        assert re.search(
+            r'^showPaperView\(store\.get\("paper\.view", "today"\), false\);$', APP_JS, re.M
+        ), "the start-up call must pass remember = false"
 
 
 class TestHandlers:
@@ -208,6 +228,13 @@ class TestHandlers:
     def test_an_arrow_key_moves_the_selection_and_the_focus(self):
         got = run('paperViewKeydown(key(btn("today"), "ArrowRight"));')
         assert (got["view"], got["focused"], got["prevented"]) == ("last", "last", 1)
+
+    @pytest.mark.parametrize("modifier", ["altKey", "ctrlKey", "metaKey", "shiftKey"])
+    def test_a_modified_arrow_is_left_to_the_browser(self, modifier):
+        # review round 1 NIT: Alt+Left is "back", Cmd/Ctrl+arrows move the caret or the page,
+        # Shift+arrows extend a text selection
+        got = run(f'paperViewKeydown(key(btn("today"), "ArrowRight", {{ {modifier}: true }}));')
+        assert (got["view"], got["focused"], got["prevented"]) == ("today", None, 0)
 
     def test_other_keys_are_left_to_the_browser(self):
         got = run(
