@@ -299,19 +299,22 @@ def check(root: Path, baseline_path: Path) -> int:
 
 
 def update(root: Path, baseline_path: Path, allow_regression: bool) -> int:
-    """Rewrite the baseline from a fresh run; refuses to raise a count unless allowed."""
-    previous = load_baseline(baseline_path, root) if baseline_path.exists() else None
+    """Rewrite the baseline from a fresh run; refuses to raise a count unless allowed.
+
+    A missing baseline counts as an empty one, so deleting the file cannot launder new
+    errors: bootstrapping a baseline that holds any error needs --allow-regression.
+    """
+    previous_files = load_baseline(baseline_path, root).files if baseline_path.exists() else {}
     version = installed_mypy_version(root)
     observed = observe(root, MYPY_FLAGS)
-    if previous is not None:
-        result = compare(previous.files, observed, root)
-        if result.regressions and not allow_regression:
-            print(
-                f"mypy ratchet: refusing to raise the baseline for {len(result.regressions)} file(s):"
-            )
-            _print_changes(result.regressions)
-            print("fix them, or pass --allow-regression to accept them deliberately")
-            return EXIT_REGRESSION
+    result = compare(previous_files, observed, root)
+    if result.regressions and not allow_regression:
+        print(
+            f"mypy ratchet: refusing to raise the baseline for {len(result.regressions)} file(s):"
+        )
+        _print_changes(result.regressions)
+        print("fix them, or pass --allow-regression to accept them deliberately")
+        return EXIT_REGRESSION
     write_baseline(baseline_path, version, observed)
     print(
         f"mypy ratchet: baseline written: {sum(observed.values())} errors in "

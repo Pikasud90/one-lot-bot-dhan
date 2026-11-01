@@ -472,7 +472,7 @@ class TestCheck:
 class TestUpdate:
     def test_update_creates_a_missing_baseline(self, ratchet, rig: Rig, capsys):
         rig.mypy(mypy_output({"src\\pkg\\b.py": 1, "src/pkg/a.py": 2}))
-        code, _, _ = run(ratchet, rig, capsys, "--update")
+        code, _, _ = run(ratchet, rig, capsys, "--update", "--allow-regression")
         assert code == 0
         assert rig.read_baseline() == {
             "_meta": {"mypy_version": VERSION, "flags": rig.flags},
@@ -481,6 +481,22 @@ class TestUpdate:
         text = rig.baseline.read_text(encoding="utf-8")
         assert text.endswith("\n") and "\r" not in text
         assert list(json.loads(text)["files"]) == ["src/pkg/a.py", "src/pkg/b.py"], "sorted"
+
+    def test_bootstrapping_a_baseline_with_errors_needs_allow_regression(
+        self, ratchet, rig: Rig, capsys
+    ):
+        """A missing baseline is an empty one: deleting it must not launder new errors."""
+        rig.mypy(mypy_output({"src/pkg/a.py": 1}))
+        code, out, _ = run(ratchet, rig, capsys, "--update")
+        assert code == 1
+        assert "src/pkg/a.py" in out and "--allow-regression" in out
+        assert not rig.baseline.exists(), "a refused bootstrap must not write a baseline"
+
+    def test_bootstrapping_a_clean_baseline_needs_no_flag(self, ratchet, rig: Rig, capsys):
+        rig.mypy(mypy_output({}))
+        code, _, _ = run(ratchet, rig, capsys, "--update")
+        assert code == 0
+        assert rig.read_baseline()["files"] == {}
 
     def test_update_locks_in_a_decrease_and_drops_clean_and_deleted_files(
         self, ratchet, rig: Rig, capsys
@@ -537,7 +553,10 @@ class TestUpdate:
         blocker = tmp_path / "a file, not a directory"
         blocker.write_text("x", encoding="utf-8")
         rig.mypy(mypy_output({"src/pkg/a.py": 1}))
-        code, _, err = run(ratchet, rig, capsys, "--update", "--baseline", str(blocker / "b.json"))
+        target = str(blocker / "b.json")
+        code, _, err = run(
+            ratchet, rig, capsys, "--update", "--allow-regression", "--baseline", target
+        )
         assert code == 2
         assert "cannot write" in err
 
