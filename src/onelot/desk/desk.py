@@ -753,18 +753,22 @@ class Desk:
                 )
 
     def _note_session_over(self, pid: str, p: dict) -> None:
-        """An intraday position from an earlier session (US-004 decision E): the broker has
-        squared it off, so it raises no EXIT (nothing to trade, no phone reminders). Its card
-        says so, and the owner is told once, as an INFO (INFO never reaches Telegram); the
-        flag is in the stored payload, so a restart does not say it again."""
+        """An intraday position from an earlier session (US-004 decision E): it raises no EXIT
+        (no trading advice, no phone reminders) and the desk stops watching it. The broker
+        squares off an intraday (MIS) position at the close, but not one bought NRML (an option
+        held past the close), so the note covers both. The card says so, and the owner is told
+        once, as an INFO (INFO never reaches Telegram); the flag is in the stored payload, so a
+        restart does not say it again."""
         p["hold_check"] = SESSION_OVER_NOTE
         if p.get("session_over"):
             return
         p["session_over"] = True
         self.notifier.info(
             f"Session over: {p['label']} {p['side'].replace('_', ' ')}",
-            "This intraday position is from an earlier session; the broker squared it off "
-            "at the close. Record the square-off price with Closed.",
+            "This intraday position is from an earlier session. If the broker squared it off "
+            "at the close, record the square-off price with Closed. If you still hold it, the "
+            "desk no longer watches it: close it on your terminal, then record the exit with "
+            "Closed.",
             dedup_key=f"desk:session_over:{pid}",
         )
 

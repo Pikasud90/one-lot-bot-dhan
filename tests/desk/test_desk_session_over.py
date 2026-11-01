@@ -123,3 +123,21 @@ def test_a_swing_long_from_an_earlier_session_is_managed_as_before(cfg, db):
 
     assert desk.positions[pid]["exit_advice"] == "STOP"
     assert [n.level for n in sent] == [NotificationLevel.EXIT]
+
+
+def test_the_note_also_covers_a_position_the_broker_did_not_close(cfg, db):
+    """The broker squares off an intraday (MIS) position, but not one bought NRML (an option
+    held past the close): the note must be right either way, and say the desk stops watching."""
+    desk = _desk(cfg, db)
+    pid = _taken(desk, "short")
+    _opened_yesterday(desk, pid)
+
+    (note,) = _manage(desk, _today(10, 0))
+
+    assert desk.positions[pid]["hold_check"] == SESSION_OVER, "the card text is unchanged"
+    assert "If the broker squared it off at the close" in note.body
+    assert (
+        "If you still hold it, the desk no longer watches it: close it on your terminal, "
+        "then record the exit with Closed." in note.body
+    )
+    assert "session; the broker squared it off" not in note.body, "never claims it was closed"
