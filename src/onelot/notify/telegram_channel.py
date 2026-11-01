@@ -187,11 +187,10 @@ class TelegramChannel:
         )
         advice = _plain(event.get("advice"))
         with self._lock:
+            self._forget_stale_episodes(now)  # back after an hour: a fresh budget
             episode = self._episodes.get(pid)
-            if episode is not None and (
-                episode.advice != advice or now - episode.last_raised_at >= EXIT_EPISODE_GAP
-            ):
-                episode = None  # a different advice, or back after an hour: a fresh budget
+            if episode is not None and episode.advice != advice:
+                episode = None  # a different advice: a fresh budget
             if episode is not None:
                 episode.last_raised_at = now
                 if episode.messages > EXIT_MAX_REMINDERS:
@@ -213,6 +212,18 @@ class TelegramChannel:
                 sent_before = 0 if episode is None else episode.messages
                 self._episodes[pid] = _ExitEpisode(advice, sent_before + 1, now, now)
             return queued
+
+    def _forget_stale_episodes(self, now: dt.datetime) -> None:
+        """Caller holds self._lock. Drop every episode not raised for EXIT_EPISODE_GAP: its
+        position was closed (the Desk no longer raises it) or the advice went away, and the
+        same advice raised again would start a fresh budget anyway."""
+        stale = [
+            pid
+            for pid, episode in self._episodes.items()
+            if now - episode.last_raised_at >= EXIT_EPISODE_GAP
+        ]
+        for pid in stale:
+            del self._episodes[pid]
 
     def _send_critical(self, n: Notification) -> bool:
         now = self._clock()

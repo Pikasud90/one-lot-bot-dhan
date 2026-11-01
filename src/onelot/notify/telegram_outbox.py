@@ -448,7 +448,14 @@ class TelegramOutbox:
                 return 0  # flood control applies to the whole chat
             if self._busy_with_a_hung_request():
                 return 0  # a row claimed now would only wait behind it
-            for row in sorted((r for r in queued if r.due(now)), key=_Row.priority):
+            due = sorted((r for r in queued if r.due(now)), key=_Row.priority)
+            if not due:
+                return 0
+            # Wait BEFORE the claim: a crash in the wait leaves the row queued, not 'sending'
+            # (which would bring back a never-sent message with the resend marker).
+            self._pace()
+            now = self._clock()
+            for row in due:
                 claimed = self._claim(row.id, now)
                 if claimed is not None:
                     self._orphan = claimed.id  # until its outcome is recorded
@@ -490,7 +497,6 @@ class TelegramOutbox:
         return _Row.of(m)
 
     def _deliver(self, row: _Row) -> None:
-        self._pace()
         now = self._clock()
         if row.expired(now):  # it ran out during the pacing wait
             with self._engine.begin() as conn:

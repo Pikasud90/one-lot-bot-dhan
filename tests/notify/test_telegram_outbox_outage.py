@@ -314,3 +314,26 @@ def test_the_missed_digest_lists_the_best_confidence_first_and_a_zero_is_a_score
 
     scores = [a["confidence"]["score"] for a in digest["payload"]["alerts"]]
     assert scores == [90.0, 70.0, 50.0, 30.0, 10.0, 0.0, 0.0, None, None]
+
+
+# ========================= (G) the spacing wait comes before the claim ===================
+def test_the_spacing_wait_happens_before_the_row_is_claimed(make_rig):
+    """A crash during the 1 s spacing wait must not leave a never-sent row in 'sending' (it
+    would come back with the resend marker): the row is claimed only after the wait."""
+    from onelot.notify.telegram_outbox import TelegramOutbox
+
+    rig = make_rig()
+    during_wait: list[list[str]] = []
+
+    def sleep(seconds: float) -> None:
+        during_wait.append([r["status"] for r in rig.rows()])
+        rig.clock.sleep(seconds)
+
+    outbox = TelegramOutbox(rig.db.engine, rig.client, clock=rig.clock, sleep=sleep)
+    rig.enqueue(rig.alert(1))
+    rig.enqueue(rig.alert(2))
+
+    assert outbox.drain_once() == 1 and outbox.drain_once() == 1
+
+    assert during_wait == [["sent", "queued"]]
+    assert rig.clock.sleeps == [1.0]

@@ -112,3 +112,48 @@ def test_the_channel_uses_the_same_key_without_the_notifier(make_rig):
     channel.send(critical("Feed down", T0 + dt.timedelta(minutes=5)))
 
     assert len(rig.rows()) == 1
+
+
+# ========================= (G) the EXIT episode memory is pruned =========================
+def exit_for(pid: str, at: dt.datetime) -> Notification:
+    return Notification(
+        title="EXIT",
+        body="",
+        level=L.EXIT,
+        position_id=pid,
+        created_at=at,
+        payload={"advice": "STOP", "position": {"series_key": "SBIN", "kind": "STOCK"}},
+    )
+
+
+def test_episodes_older_than_the_gap_are_forgotten(make_rig):
+    """A closed position is never raised again: its episode must not stay in memory for the
+    life of the process. Anything not raised for the episode gap (60 min) would start a fresh
+    budget anyway, so it is dropped."""
+    rig = make_rig()
+    channel = TelegramChannel(rig.client, rig.outbox, NotifyCfg(), lambda m: True, clock=rig.clock)
+    for i in range(50):
+        channel.send(exit_for(f"p{i}", T0))
+    assert len(channel._episodes) == 50
+
+    rig.clock.advance(59 * 60)
+    channel.send(exit_for("p0", rig.clock()))  # still raised: kept
+    rig.clock.advance(60)
+    channel.send(exit_for("new", rig.clock()))
+
+    assert sorted(channel._episodes) == ["new", "p0"]
+
+
+def test_a_pruned_position_raised_again_starts_a_fresh_budget(make_rig):
+    rig = make_rig()
+    channel = TelegramChannel(rig.client, rig.outbox, NotifyCfg(), lambda m: True, clock=rig.clock)
+    for minute in range(31):
+        rig.clock.now = T0 + dt.timedelta(minutes=minute)
+        channel.send(exit_for("p1", rig.clock()))
+    assert len(rig.rows()) == 4
+
+    rig.clock.now = T0 + dt.timedelta(minutes=90)
+    channel.send(exit_for("other", rig.clock()))  # prunes p1
+    channel.send(exit_for("p1", rig.clock()))
+
+    assert [r["alert_id"] for r in rig.rows()][-1] == "p1#5"

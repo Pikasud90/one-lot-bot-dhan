@@ -108,7 +108,9 @@ Command line equivalents:
 SIGNAL, EXIT and CRITICAL alerts also go to a private Telegram chat (INFO, WARNING and the
 startup self-test stay in the app). Messages are queued in the database first (`telegram_outbox`),
 sent at most one per second and retried after outages; an alert that expired while Telegram was
-unreachable arrives as a short "Missed" note instead. Outside market hours they arrive silently.
+unreachable arrives as a short "Missed" note instead (one "Missed N alerts" digest after a long
+outage), and a late EXIT or CRITICAL shows the time it happened plus "sent late". Outside market
+hours SIGNAL and EXIT arrive silently; CRITICAL always sounds.
 
 1. In Telegram, open **@BotFather**, send `/newbot` and follow the prompts. BotFather replies with
    the bot token: put it in `.env` as `TELEGRAM_BOT_TOKEN`.
