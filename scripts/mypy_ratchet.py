@@ -65,7 +65,9 @@ MYPY_TIMEOUT_S = 600
 # Environment variables that would change what mypy sees without changing the flags.
 SCRUBBED_ENV = ("MYPYPATH",)
 
-_ERROR_LINE = re.compile(r"^(?P<path>.+?):(?P<line>\d+)(?::\d+)?: error: ")
+# The path holds no colon except a Windows drive's, so a note quoting "x.py:5: error: "
+# cannot match as a second error line.
+_ERROR_LINE = re.compile(r"^(?P<path>(?:[A-Za-z]:)?[^:]+):(?P<line>\d+)(?::\d+)?: error: ")
 _SUCCESS = re.compile(r"^Success: no issues found\b", re.MULTILINE)
 _FOUND = re.compile(r"^Found (?P<errors>\d+) errors? in (?P<files>\d+) files?\b", re.MULTILINE)
 _VERSION = re.compile(r"^mypy (?P<version>\d+(?:\.\d+)*\S*)", re.MULTILINE)

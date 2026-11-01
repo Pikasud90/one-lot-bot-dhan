@@ -183,6 +183,22 @@ class TestParseMypyOutput:
         text = mypy_output({"src/pkg/a.py": 2, "src/pkg/b.py": 1})
         assert ratchet.parse_mypy_output(text, tmp_path) == {"src/pkg/a.py": 2, "src/pkg/b.py": 1}
 
+    def test_a_note_that_quotes_an_error_location_is_not_counted(
+        self, ratchet: ModuleType, tmp_path: Path
+    ):
+        """The path stops at the first colon (a drive letter aside), so text inside a
+        note can never pose as a second error line."""
+        text = (
+            "src/pkg/a.py:3: error: boom  [misc]\n"
+            "src/pkg/a.py:3: note: Revealed type is \"Literal['b.py:5: error: x']\"\n"
+            "C:\\repo\\src\\pkg\\c.py:7: error: on Windows  [misc]\n"
+            "Found 2 errors in 2 files (checked 3 source files)\n"
+        )
+        assert ratchet.parse_mypy_output(text, Path("C:/repo")) == {
+            "src/pkg/a.py": 1,
+            "src/pkg/c.py": 1,
+        }
+
     def test_success_summary_means_no_errors(self, ratchet: ModuleType, tmp_path: Path):
         assert ratchet.parse_mypy_output(mypy_output({}), tmp_path) == {}
 
