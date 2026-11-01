@@ -18,7 +18,7 @@ import datetime as dt
 from typing import Any
 
 import pytest
-from us003_helpers import install_network_guard, telegram, visible
+from us003_helpers import DOT, install_network_guard, telegram, visible
 from us004_helpers import (
     build_notifier,
     exit_notification,
@@ -111,7 +111,8 @@ def test_the_first_exit_is_the_plain_formatted_exit_sent_immediately(make_rig):
     raised = run_polls(rig, notifier, "pos000000001", [0], t0)
 
     assert rig.rec.texts() == [tg.format_exit(raised[0], t0)]
-    assert visible(rig.rec.texts()[0]).startswith("EXIT ")
+    # US-003 decision 7: line 1 names the CLOSING action (a long stock is closed by a SELL)
+    assert visible(rig.rec.texts()[0]).split("\n")[0] == f"EXIT: SELL SBIN {DOT} 1 share"
 
 
 def test_every_reminder_carries_the_position_as_of_the_poll_that_triggered_it(make_rig):

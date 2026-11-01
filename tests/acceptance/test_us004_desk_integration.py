@@ -242,7 +242,7 @@ def test_an_exit_the_desk_raises_on_every_poll_is_one_message_and_three_reminder
         exits = [
             (at - origin).total_seconds()
             for at, text in zip(rig.rec.times, rig.rec.texts(), strict=True)
-            if visible(text).startswith("EXIT ")
+            if visible(text).startswith("EXIT: SELL SBIN")  # US-003 decision 7: closing action
         ]
         assert exits == [0.0, 300.0, 600.0, 900.0], (
             "1 EXIT + 3 reminders, 5 minutes apart, while the Desk keeps raising it"

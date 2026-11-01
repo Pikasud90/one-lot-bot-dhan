@@ -18,7 +18,7 @@ import datetime as dt
 from typing import Any
 
 import pytest
-from us003_helpers import install_network_guard, telegram, visible
+from us003_helpers import DOT, install_network_guard, telegram, visible
 from us004_helpers import (
     alert_at,
     alert_id,
@@ -153,7 +153,8 @@ def test_exit_and_critical_go_first_and_only_signal_alerts_are_capped_and_digest
     plain = [visible(t) for t in texts]
     assert len(texts) == 11, f"expected 2 + 8 + 1 messages, got {len(texts)}"
     first_two = plain[:2]
-    assert any(p.startswith("EXIT ") for p in first_two), "EXIT goes first"
+    closing = f"EXIT: SELL SBIN {DOT} 1 share"  # US-003 decision 7: the closing action
+    assert any(p.split("\n")[0] == closing for p in first_two), "EXIT goes first"
     assert any("Dhan token expired" in p for p in first_two), "CRITICAL goes first"
     assert [code_ids(t) for t in texts[2:10]] == [[a["id"][:6]] for a in ranked[:8]]
     assert mentions_count(texts[10], 2), f"the digest covers the 2 other alerts: {texts[10]!r}"

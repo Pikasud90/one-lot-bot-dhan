@@ -15,6 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 MODULE = "onelot.notify.telegram"
@@ -27,6 +29,7 @@ def _acceptance_files() -> list[str]:
     return sorted(str(p) for p in HERE.glob("test_us003_*.py") if p.name not in skip)
 
 
+@pytest.mark.slow  # reruns about 1000 tests under coverage (~20 s); the US-003 Reviewer asked
 def test_the_acceptance_tests_alone_cover_the_telegram_module_at_least_80_percent(tmp_path):
     report = tmp_path / "coverage.json"
     env = dict(os.environ, COVERAGE_FILE=str(tmp_path / ".coverage"))
