@@ -247,3 +247,25 @@ class TestASeriesThatGoesQuiet:
         assert (row["close_reason"], row["exit_ts"]) == ("SESSION_END", at(8))
         # 1000.40 x 0.9997 = 1000.0999 -> 1000.05 for a seller
         assert row["exit_paise"] == 100_005 and [e.kind for e in events] == ["CLOSED"]
+
+    @pytest.mark.parametrize(
+        "spoil",
+        [
+            lambda f: f.tz_localize(None),  # a naive index: never guessed
+            lambda f: f.drop(columns="high"),  # a feed without the full OHLC
+        ],
+        ids=["naive-index", "no-high-column"],
+    )
+    def test_an_open_trade_whose_frame_cannot_be_read_still_closes_once_its_session_is_over(
+        self, make_book, engine, spoil
+    ):
+        """A frame the OHLC view rejects is no bars for this step: nothing is managed on it,
+        yet the trade is not carried overnight either (AC5)."""
+        book = opened(make_book)
+        book.step(at(8), feed(RELIANCE=bars([FILL, (1000.00, 1001.00, 999.00, 1000.40)])))
+        unreadable = spoil(bars([FILL, QUIET, QUIET]))
+        assert book.step(ist(THU, 15, 29), feed(RELIANCE=unreadable)) == []
+        events = book.step(ist(THU, 15, 30), feed(RELIANCE=unreadable))
+        row = the_row(engine)
+        assert (row["close_reason"], row["exit_ts"]) == ("SESSION_END", at(8))
+        assert row["exit_paise"] == 100_005 and [e.kind for e in events] == ["CLOSED"]

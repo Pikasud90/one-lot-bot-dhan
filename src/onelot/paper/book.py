@@ -347,10 +347,8 @@ class PaperBook:
             events += self._guarded(trade, partial(self._step_waiting, trade, waiting, now))
             trade = self._current(alert_id)
         if trade is not None and trade.status == "OPEN":
-            ohlc = views.ohlc
-            if ohlc is not None:
-                work = partial(self._step_open, trade, ohlc, now, strategy_exit)
-                events += self._guarded(trade, work)
+            work = partial(self._step_open, trade, views.ohlc, now, strategy_exit)
+            events += self._guarded(trade, work)
         return events
 
     def _current(self, alert_id: str) -> PaperTrade | None:
@@ -1147,7 +1145,7 @@ class PaperBook:
 class _SeriesViews:
     """One series' frame, read ONCE per step and normalised at most once per use: the fill
     view (opens) for waiting trades, the OHLC view for open ones (AC8). A frame that one use
-    cannot read is logged once and skipped for that use only."""
+    cannot read is logged once: no fill view, or an OHLC view with no bars."""
 
     def __init__(self, series_key: str, frame: pd.DataFrame) -> None:
         self.series_key = series_key
@@ -1191,14 +1189,13 @@ class _SeriesViews:
         return self._fill
 
     @property
-    def ohlc(self) -> OhlcBars | None:
-        """The OHLC view, possibly with no bars (management can still end a session on
-        an empty one); None only for a frame that cannot be read at all."""
-        if "ohlc" not in self._tried:
-            self._tried.add("ohlc")
-            if self.frame.empty:
-                self._ohlc = _NO_BARS
-            else:
+    def ohlc(self) -> OhlcBars:
+        """The OHLC view, possibly with no bars: an empty frame, or one that cannot be read
+        (logged once), manages nothing this step, yet an OPEN trade on it can still reach its
+        session-over close on the last close it saw (no overnight carry, AC5)."""
+        if self._ohlc is None:
+            self._ohlc = _NO_BARS
+            if not self.frame.empty:
                 try:
                     self._ohlc = normalise_ohlc(self.frame)
                 except Exception as exc:
