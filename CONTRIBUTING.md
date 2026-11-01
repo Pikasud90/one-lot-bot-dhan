@@ -29,11 +29,25 @@ instruments automatically; lot sizes there are fallbacks overridden by the Dhan 
 
 ## Running everything
 
+`scripts/gate.sh` is the quality gate. From the repo root it runs exactly these commands, in
+this order, with `.venv/bin/python` (plain `python` when there is no `.venv`), and stops with a
+non-zero exit at the first one that fails. CI runs the same script.
+
 ```bash
-.venv/bin/python -m pytest -q
-.venv/bin/python -m ruff check src tests
-.venv/bin/python -m onelot run --mock
+.venv/bin/python -m ruff format --check .
+.venv/bin/python -m ruff check .
+.venv/bin/python scripts/mypy_ratchet.py
+.venv/bin/python -m pytest
 ```
+
+pytest skips tests marked `live` by default (`addopts` in `pyproject.toml`). The mypy ratchet
+lets type errors fall but never rise per file; after removing some, run the ratchet with
+`--update` and commit `scripts/mypy_baseline.json`.
+
+**Ruff format policy:** all Python is formatted by `ruff format` with ruff==0.17.3, pinned in
+`requirements-dev.txt`. Format before committing, keep formatting-only changes in their own
+`style:` commit, and move the pin only in a dedicated commit that also reformats. Markdown under
+`.agile/` and `docs/` is excluded, so code fences in prose are never rewritten.
 
 ## Commit messages
 
