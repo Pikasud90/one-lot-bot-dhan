@@ -9,8 +9,9 @@ Instead every file's error count is held at or below the tracked baseline
      "files": {"src/onelot/x.py": 3, ...}}
 
 Paths are POSIX and relative to the repo root; a file absent from ``files`` has a
-baseline of 0. Counts are only comparable for the same mypy and the same flags, so
-either one changing is a tool error, not a pass.
+baseline of 0. Counts are only comparable for the same mypy and the same flags: a
+check re-runs mypy with the flags recorded in ``_meta.flags``, and a different mypy
+version is a tool error, not a pass. ``--update`` records this script's MYPY_FLAGS.
 
 Usage::
 
@@ -19,9 +20,9 @@ Usage::
     .venv/bin/python scripts/mypy_ratchet.py --update --allow-regression
 
 Exit codes: 0 ok (a decrease asks you to run --update) · 1 regression (or --update
-refused to raise a count) · 2 tool error: mypy missing, crashed, version or flags
-differ from the baseline, unparsable output, errors prevented further checking, or
-a missing or invalid baseline. Exit 2 never means "probably fine".
+refused to raise a count) · 2 tool error: mypy missing or crashed, its version differs
+from the baseline's, unparsable output, errors prevented further checking, or a
+missing or invalid baseline. Exit 2 never means "probably fine".
 
 Deliberately NOT a mypy config file: a [tool.mypy] section, mypy.ini or setup.cfg
 would make the team's gate treat mypy as a hard requirement on the legacy code.
@@ -47,7 +48,8 @@ EXIT_OK = 0
 EXIT_REGRESSION = 1
 EXIT_TOOL_ERROR = 2
 
-# Recorded in the baseline's _meta.flags. Changing them is a re-baseline (--update).
+# What --update runs and records in _meta.flags; a check re-runs the RECORDED flags, so
+# editing this tuple takes effect at the next --update (commit both together).
 #   --config-file=      ignore any user-level or repo mypy config: same flags, same counts
 #   --python-version    pin the typeshed view, so the interpreter running mypy cannot move it
 MYPY_FLAGS: tuple[str, ...] = (
@@ -218,9 +220,9 @@ def installed_mypy_version(root: Path) -> str:
     return parse_version(proc.stdout)
 
 
-def observe(root: Path) -> dict[str, int]:
-    """Run mypy with MYPY_FLAGS and return per-file error counts."""
-    proc = run_mypy(MYPY_FLAGS, root)
+def observe(root: Path, flags: Sequence[str]) -> dict[str, int]:
+    """Run mypy with ``flags`` and return per-file error counts."""
+    proc = run_mypy(flags, root)
     output = proc.stdout + "\n" + proc.stderr
     if proc.returncode not in (0, 1):
         raise RatchetError(
@@ -262,11 +264,11 @@ def check(root: Path, baseline_path: Path) -> int:
             "installed: install the pinned mypy, or re-baseline with --update"
         )
     if baseline.flags != MYPY_FLAGS:
-        raise RatchetError(
-            f"baseline flags {list(baseline.flags)} differ from {list(MYPY_FLAGS)}: "
-            "re-baseline with --update"
+        _err(
+            f"note: checking with the baseline's recorded flags {list(baseline.flags)}; "
+            f"this script's MYPY_FLAGS {list(MYPY_FLAGS)} take effect at the next --update"
         )
-    observed = observe(root)
+    observed = observe(root, baseline.flags)
     result = compare(baseline.files, observed, root)
     for path in result.deleted:
         _err(f"warning: baseline entry for deleted file {path}; run --update to drop it")
@@ -287,7 +289,7 @@ def update(root: Path, baseline_path: Path, allow_regression: bool) -> int:
     """Rewrite the baseline from a fresh run; refuses to raise a count unless allowed."""
     previous = load_baseline(baseline_path, root) if baseline_path.exists() else None
     version = installed_mypy_version(root)
-    observed = observe(root)
+    observed = observe(root, MYPY_FLAGS)
     if previous is not None:
         result = compare(previous.files, observed, root)
         if result.regressions and not allow_regression:

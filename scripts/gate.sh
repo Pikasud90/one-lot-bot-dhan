@@ -2,7 +2,8 @@
 # Quality gate: the exact checks CONTRIBUTING.md lists and CI runs. Stops at the first
 # failing step with a non-zero exit. Needs nothing outside this repo and its venv.
 #   scripts/gate.sh
-# pytest takes its options from pyproject.toml (addopts: -m "not live").
+# pyproject.toml already deselects live tests; the gate says so again so that editing
+# pytest's options there can never make the gate need broker credentials.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -17,6 +18,6 @@ echo "gate: $PY in $ROOT"
 "$PY" -m ruff format --check .
 "$PY" -m ruff check .
 "$PY" scripts/mypy_ratchet.py
-"$PY" -m pytest
+"$PY" -m pytest -m "not live"
 
 echo "gate: PASS"

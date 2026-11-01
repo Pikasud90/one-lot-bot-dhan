@@ -37,10 +37,11 @@ non-zero exit at the first one that fails. CI runs the same script.
 .venv/bin/python -m ruff format --check .
 .venv/bin/python -m ruff check .
 .venv/bin/python scripts/mypy_ratchet.py
-.venv/bin/python -m pytest
+.venv/bin/python -m pytest -m "not live"
 ```
 
-pytest skips tests marked `live` by default (`addopts` in `pyproject.toml`). The mypy ratchet
+Tests marked `live` need real broker credentials and never run in the gate; a bare `pytest`
+skips them too (`addopts` in `pyproject.toml`). The mypy ratchet
 lets type errors fall but never rise per file; after removing some, run the ratchet with
 `--update` and commit `scripts/mypy_baseline.json`.
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -21,12 +22,15 @@ ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / "scripts" / "gate.sh"
 CONTRIBUTING = ROOT / "CONTRIBUTING.md"
 VENV_PYTHON = ".venv/bin/python"
+# The interpreter's arguments for each step, spelled as in gate.sh (shell quoting included).
 GATE_STEPS = [
     "-m ruff format --check .",
     "-m ruff check .",
     "scripts/mypy_ratchet.py",
-    "-m pytest",
+    '-m pytest -m "not live"',
 ]
+# The same steps as the fake interpreter logs them: "$*" after the shell removed quotes.
+LOGGED_STEPS = [" ".join(shlex.split(step)) for step in GATE_STEPS]
 
 FAKE_PYTHON = """\
 #!/usr/bin/env bash
@@ -137,16 +141,16 @@ def test_gate_runs_every_step_with_the_venv_python_from_the_repo_root(tmp_path: 
     root, fake = _gate_copy(tmp_path, venv=True)
     proc, steps = _run_gate(root, tmp_path)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert steps == [f"{fake} {step}" for step in GATE_STEPS]
+    assert steps == [f"{fake} {step}" for step in LOGGED_STEPS]
 
 
 @needs_bash
-@pytest.mark.parametrize("failing", range(len(GATE_STEPS)), ids=GATE_STEPS)
+@pytest.mark.parametrize("failing", range(len(LOGGED_STEPS)), ids=LOGGED_STEPS)
 def test_gate_stops_with_a_non_zero_exit_at_the_first_failing_step(
     tmp_path: Path, failing: int
 ) -> None:
     root, _ = _gate_copy(tmp_path, venv=True)
-    proc, steps = _run_gate(root, tmp_path, fail_on=GATE_STEPS[failing])
+    proc, steps = _run_gate(root, tmp_path, fail_on=LOGGED_STEPS[failing])
     assert proc.returncode != 0
     assert len(steps) == failing + 1, f"steps after the failure still ran: {steps}"
 
@@ -156,4 +160,4 @@ def test_gate_falls_back_to_python_on_path_without_a_venv(tmp_path: Path) -> Non
     root, fake = _gate_copy(tmp_path, venv=False)
     proc, steps = _run_gate(root, tmp_path, path_prefix=str(fake.parent))
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert [s.split(" ", 1)[1] for s in steps] == GATE_STEPS
+    assert [s.split(" ", 1)[1] for s in steps] == LOGGED_STEPS

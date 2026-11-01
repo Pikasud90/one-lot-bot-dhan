@@ -400,11 +400,24 @@ class TestCheck:
         assert code == 2
         assert err.strip(), "a tool error must say what went wrong"
 
-    def test_a_flag_change_since_the_baseline_is_a_tool_error(self, ratchet, rig: Rig, capsys):
-        rig.write_baseline({}, flags=["--strict", "src"])
+    def test_a_check_reruns_the_flags_recorded_in_the_baseline_and_says_so(
+        self, ratchet, rig: Rig, capsys
+    ):
+        """Counts are only comparable under the flags they were captured with."""
+        rig.write_baseline({"src/pkg/a.py": 1}, flags=["--strict", "src"])
+        rig.mypy(mypy_output({"src/pkg/a.py": 1}))
         code, _, err = run(ratchet, rig, capsys)
-        assert code == 2
-        assert "--update" in err
+        assert code == 0
+        assert rig.calls()[-1]["argv"] == ["--strict", "src"]
+        assert "recorded flags" in err and "--update" in err
+
+    def test_update_runs_and_records_the_scripts_flags(self, ratchet, rig: Rig, capsys):
+        rig.write_baseline({"src/pkg/a.py": 1}, flags=["--strict", "src"])
+        rig.mypy(mypy_output({"src/pkg/a.py": 1}))
+        code, _, _ = run(ratchet, rig, capsys, "--update")
+        assert code == 0
+        assert rig.calls()[-1]["argv"] == rig.flags
+        assert rig.read_baseline()["_meta"]["flags"] == rig.flags
 
     def test_a_missing_baseline_is_a_tool_error(self, ratchet, rig: Rig, capsys):
         code, _, err = run(ratchet, rig, capsys)
