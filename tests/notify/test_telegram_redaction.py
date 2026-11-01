@@ -244,6 +244,23 @@ class TestRedactorWiring:
         tg.TelegramClient(fake_token("httpcore-strict"), CHAT, http=mock_http())
         assert logging.getLogger("httpcore").level == logging.ERROR
 
+    def test_an_httpcore_child_set_lower_is_raised_and_a_stricter_one_kept(
+        self, restore_logger_levels
+    ):
+        logging.getLogger("httpcore.http11").setLevel(logging.DEBUG)
+        logging.getLogger("httpcore.connection").setLevel(logging.ERROR)
+        tg.TelegramClient(fake_token("httpcore-child"), CHAT, http=mock_http())
+        assert logging.getLogger("httpcore.http11").level == logging.WARNING
+        assert logging.getLogger("httpcore.connection").level == logging.ERROR
+
+    def test_a_value_without_a_colon_is_not_token_like_and_never_registered(self):
+        """A chat id pasted into the token field must not scrub numbers from every log."""
+        swapped = "-1007777777777"
+        client = tg.TelegramClient(swapped, CHAT, http=mock_http())
+        assert client.available is False
+        literals = get_redactor()._literals
+        assert swapped not in literals and swapped.lstrip("-") not in literals
+
     @settings(max_examples=60, deadline=None, derandomize=True)
     @given(
         pre=st.text(max_size=30),

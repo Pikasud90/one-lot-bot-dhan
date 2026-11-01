@@ -33,9 +33,11 @@ from __future__ import annotations
 
 import datetime as dt
 import html
+import logging
 import math
 import os
 import re
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
@@ -44,6 +46,8 @@ from typing import Any, Literal
 import httpx
 
 from ..clock import to_ist
+from ..config import telegram_token_forms
+from ..logging_setup import get_redactor, register_secrets
 
 MAX_LINES = 12
 MAX_CHARS = 600
@@ -354,6 +358,11 @@ TIMEOUT = httpx.Timeout(10.0)  # connect, read, write and pool alike
 _TOKEN_SHAPE = re.compile(r"[0-9]{6,12}:[A-Za-z0-9_-]{30,}")
 _CHAT_SHAPE = re.compile(r"-?[1-9][0-9]{0,18}")
 _CAP_DESCRIPTION = 200
+_MASK = "***"
+# httpx logs every request URL, and so /bot<token>/, at INFO; httpcore logs more at DEBUG.
+_HTTPX_LOGGER = "httpx"
+_HTTPCORE_LOGGER = "httpcore"
+_logging_lock = threading.Lock()  # two clients built at once attach the filter once
 
 SendKind = Literal["ok", "rate_limited", "permanent", "transient", "unavailable"]
 
@@ -398,6 +407,45 @@ def _chat_problem(chat_id: str) -> str | None:
     return None
 
 
+def _harden_logging(token: str) -> tuple[str, ...]:
+    """Make sure no log line can carry `token`, valid or not (a typo in .env is still
+    mostly the secret), and return its spellings, longest first.
+
+    * every spelling (the token, its %3A form, the part after the colon) is registered with
+      the process-wide redactor; a value without a colon is not token-like and is skipped,
+      so a chat id pasted into the wrong field never scrubs numbers from every log line;
+    * that redactor is attached to the httpx logger itself, once: a filter on the logger
+      scrubs each record before ANY handler sees it, even one added without setup_logging;
+    * httpcore (and any child set lower) is raised to WARNING; a stricter level is kept.
+    """
+    value = token.strip()
+    forms = telegram_token_forms(value) if ":" in value else []
+    register_secrets(forms)
+    redactor = get_redactor()
+    with _logging_lock:
+        httpx_logger = logging.getLogger(_HTTPX_LOGGER)
+        if redactor not in httpx_logger.filters:
+            httpx_logger.addFilter(redactor)
+        httpcore = logging.getLogger(_HTTPCORE_LOGGER)
+        if httpcore.level < logging.WARNING:  # NOTSET too: never inherit a DEBUG root
+            httpcore.setLevel(logging.WARNING)
+        for name, child in list(logging.Logger.manager.loggerDict.items()):
+            if (
+                name.startswith(f"{_HTTPCORE_LOGGER}.")
+                and isinstance(child, logging.Logger)
+                and logging.NOTSET < child.level < logging.WARNING
+            ):
+                child.setLevel(logging.WARNING)
+    return tuple(sorted(forms, key=len, reverse=True))
+
+
+def _scrub(text: str, forms: tuple[str, ...]) -> str:
+    """`text` with every spelling of the token masked (longest first)."""
+    for form in forms:
+        text = text.replace(form, _MASK)
+    return text
+
+
 def _json_object(response: httpx.Response) -> Mapping[str, Any] | None:
     """The body as a JSON object, or None for anything else (never raises)."""
     try:
@@ -407,10 +455,14 @@ def _json_object(response: httpx.Response) -> Mapping[str, Any] | None:
     return body if isinstance(body, dict) else None
 
 
-def _status_detail(status: int, body: Mapping[str, Any] | None, fallback: str = "") -> str:
-    """'HTTP 403: Forbidden: bot was blocked by the user' — status and description only."""
+def _status_detail(
+    status: int, body: Mapping[str, Any] | None, forms: tuple[str, ...], fallback: str = ""
+) -> str:
+    """'HTTP 403: Forbidden: bot was blocked by the user' — status and description only.
+    A description that echoes the request path (a proxy, a bad gateway) has the token
+    masked BEFORE the cap, so a cut can never leave part of the secret behind."""
     raw = body.get("description") if body is not None else None
-    description = _plain(raw)[:_CAP_DESCRIPTION] if isinstance(raw, str) else ""
+    description = _scrub(_plain(raw), forms)[:_CAP_DESCRIPTION] if isinstance(raw, str) else ""
     note = description or fallback
     return f"HTTP {status}: {note}" if note else f"HTTP {status}"
 
@@ -428,8 +480,8 @@ def _retry_after(body: Mapping[str, Any] | None) -> float | None:
     return seconds if math.isfinite(seconds) and seconds >= 0 else None
 
 
-def _classify(response: httpx.Response) -> SendResult:
-    """Map one Bot API response to a SendResult (AC3).
+def _classify(response: httpx.Response, forms: tuple[str, ...]) -> SendResult:
+    """Map one Bot API response to a SendResult (AC3); `forms` are masked in the detail.
 
     429 is rate_limited; any other 4xx is permanent (the same request fails the same way
     again), except 408, which a proxy sends when it timed out; 2xx needs ok true and an
@@ -438,19 +490,23 @@ def _classify(response: httpx.Response) -> SendResult:
     status = response.status_code
     body = _json_object(response)
     if status == 429:
-        return _failed("rate_limited", _status_detail(status, body), _retry_after(body))
+        return _failed("rate_limited", _status_detail(status, body, forms), _retry_after(body))
     if 400 <= status < 500 and status != 408:
-        return _failed("permanent", _status_detail(status, body))
+        return _failed("permanent", _status_detail(status, body, forms))
     if not 200 <= status < 300:
-        return _failed("transient", _status_detail(status, body))
+        return _failed("transient", _status_detail(status, body, forms))
     if body is None:
-        return _failed("transient", _status_detail(status, None, "the body is not a JSON object"))
+        return _failed(
+            "transient", _status_detail(status, None, forms, "the body is not a JSON object")
+        )
     if body.get("ok") is not True:
-        return _failed("transient", _status_detail(status, body, "ok is not true"))
+        return _failed("transient", _status_detail(status, body, forms, "ok is not true"))
     result = body.get("result")
     message_id = result.get("message_id") if isinstance(result, Mapping) else None
     if not isinstance(message_id, int) or isinstance(message_id, bool):
-        return _failed("transient", _status_detail(status, None, "no message_id in the result"))
+        return _failed(
+            "transient", _status_detail(status, None, forms, "no message_id in the result")
+        )
     return SendResult(True, "ok", message_id, None, f"HTTP {status}")
 
 
@@ -462,9 +518,15 @@ class TelegramClient:
     per-call state, so one instance may serve many threads (httpx.Client is thread-safe).
     A missing or malformed token or chat id makes it unavailable: it then makes no HTTP
     call at all, and `unavailable_reason` says which variable is wrong without echoing it.
+
+    The token (AC4) lives only in a private attribute; repr and str are masked; building a
+    client hardens logging for it (see `_harden_logging`), and SendResult.detail is built
+    from the status and Telegram's description with the token masked, never from an
+    exception's text.
     """
 
     def __init__(self, token: str, chat_id: str, http: httpx.Client | None = None) -> None:
+        self._forms = _harden_logging(token)  # first, and for a malformed value too
         problems = [p for p in (_token_problem(token), _chat_problem(chat_id)) if p]
         self._unavailable_reason = "; ".join(problems) or None
         self._available = not problems
@@ -507,12 +569,17 @@ class TelegramClient:
                 f"{API_BASE}/bot{self._token}/sendMessage", json=payload, timeout=TIMEOUT
             )
         except httpx.HTTPStatusError as exc:  # an http client that raises for status
-            return _classify(exc.response)
+            return _classify(exc.response, self._forms)
         except httpx.HTTPError as exc:  # network, timeout, protocol: the class name only
             return _failed("transient", f"network error: {type(exc).__name__}")
         except UnicodeEncodeError:  # a lone surrogate: this text can never be sent
             return _failed("permanent", "the text is not valid UTF-8")
-        return _classify(response)
+        return _classify(response, self._forms)
+
+    def __repr__(self) -> str:
+        return f"TelegramClient(available={self._available}, token={_MASK})"
+
+    __str__ = __repr__
 
     def close(self) -> None:
         """Close the http client this object built itself; an injected one is the caller's."""
