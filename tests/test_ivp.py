@@ -111,6 +111,8 @@ class TestAtmIvExtraction:
         assert np.isnan(atm_iv_from_chain([], 54_000.0))
 
     def test_zero_ivs_are_ignored(self):
-        rows = [{"strike": 54_000.0, "iv": 0.0, "type": "CE"},
-                {"strike": 54_000.0, "iv": 0.144, "type": "PE"}]
+        rows = [
+            {"strike": 54_000.0, "iv": 0.0, "type": "CE"},
+            {"strike": 54_000.0, "iv": 0.144, "type": "PE"},
+        ]
         assert atm_iv_from_chain(rows, 54_000.0) == pytest.approx(0.144)

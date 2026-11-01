@@ -42,7 +42,9 @@ class Database:
             if path and path != ":memory:":
                 Path(path).parent.mkdir(parents=True, exist_ok=True)
             eng = create_engine(
-                url, echo=echo, future=True,
+                url,
+                echo=echo,
+                future=True,
                 connect_args={"check_same_thread": False, "timeout": 30.0},
             )
 

@@ -53,8 +53,14 @@ def use_database(db: Database) -> None:
         _db = db
 
 
-def upsert(engine: Engine, table: Table, rows: Sequence[dict[str, Any]], keys: Iterable[str],
-           update_cols: Iterable[str] | None = None, chunk: int = 5000) -> int:
+def upsert(
+    engine: Engine,
+    table: Table,
+    rows: Sequence[dict[str, Any]],
+    keys: Iterable[str],
+    update_cols: Iterable[str] | None = None,
+    chunk: int = 5000,
+) -> int:
     """INSERT ... ON CONFLICT (keys) DO UPDATE, batched. SQLite dialect."""
     if not rows:
         return 0
@@ -66,11 +72,12 @@ def upsert(engine: Engine, table: Table, rows: Sequence[dict[str, Any]], keys: I
     n = 0
     with engine.begin() as conn:
         for i in range(0, len(rows), chunk):
-            part = rows[i:i + chunk]
+            part = rows[i : i + chunk]
             stmt = sqlite.insert(table).values(part)
             if update_cols:
                 stmt = stmt.on_conflict_do_update(
-                    index_elements=keys, set_={c: getattr(stmt.excluded, c) for c in update_cols})
+                    index_elements=keys, set_={c: getattr(stmt.excluded, c) for c in update_cols}
+                )
             else:
                 stmt = stmt.on_conflict_do_nothing(index_elements=keys)
             conn.execute(stmt)
@@ -92,13 +99,17 @@ def get_setting(engine: Engine, key: str, default: Any = None) -> Any:
     return row["value"] if row else default
 
 
-def log_event(engine: Engine, kind: str, message: str, level: str = "INFO",
-              payload: Any = None) -> None:
+def log_event(
+    engine: Engine, kind: str, message: str, level: str = "INFO", payload: Any = None
+) -> None:
     from ..store.schema import engine_events
 
     try:
         with engine.begin() as conn:
-            conn.execute(engine_events.insert().values(
-                ts=utcnow(), level=level, kind=kind, message=message, payload=payload))
+            conn.execute(
+                engine_events.insert().values(
+                    ts=utcnow(), level=level, kind=kind, message=message, payload=payload
+                )
+            )
     except Exception:  # noqa: BLE001 - never let bookkeeping break a job
         pass

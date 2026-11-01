@@ -39,48 +39,96 @@ class StrategyParams(BaseModel):
     entry_end: str = Field("14:45", description="No new entries after (HH:MM)")
     exit_time: str = Field("15:15", description="Intraday exit time (HH:MM)")
     # risk / exits
-    stop_atr_min: float = Field(0.4, description="Minimum initial risk in ATR(14) units (stop widened to this)",
-                                json_schema_extra=opt(0.2, 1.0, 0.1))
-    stop_atr_max: float = Field(2.5, description="Skip setups whose initial risk exceeds this many ATR(14)",
-                                json_schema_extra=opt(1.0, 4.0, 0.5))
-    min_risk_pct: float = Field(0.35, description="Friction floor: initial risk at least this % of price "
-                                "(keeps slippage+charges a small fraction of R)", json_schema_extra=opt(0.0, 1.0, 0.1))
-    stop_datr_min: float = Field(0.0, description="Initial risk at least this fraction of the prior day's ATR (0 = off)",
-                                 json_schema_extra=opt(0.0, 0.5, 0.05))
-    max_risk_pct: float = Field(2.0, description="Skip setups whose initial risk exceeds this % of price")
-    target_r: float = Field(2.0, description="Profit target in R multiples (0 = no fixed target)",
-                            json_schema_extra=opt(0.0, 4.0, 0.5))
-    trail_atr_mult: float = Field(1.5, description="Trailing stop distance k in k x ATR(n) (0 = off)",
-                                  json_schema_extra=opt(0.0, 3.0, 0.5))
-    trail_atr_period: int = Field(5, description="ATR period n for the trailing stop",
-                                  json_schema_extra=opt(3, 14, 1))
-    trail_activate_r: float = Field(1.0, description="Start trailing once the trade is this many R in profit",
-                                    json_schema_extra=opt(0.0, 2.0, 0.5))
-    partial_r: float = Field(0.0, description="Book a partial at this R (0 = off)",
-                             json_schema_extra=opt(0.0, 2.0, 0.5))
+    stop_atr_min: float = Field(
+        0.4,
+        description="Minimum initial risk in ATR(14) units (stop widened to this)",
+        json_schema_extra=opt(0.2, 1.0, 0.1),
+    )
+    stop_atr_max: float = Field(
+        2.5,
+        description="Skip setups whose initial risk exceeds this many ATR(14)",
+        json_schema_extra=opt(1.0, 4.0, 0.5),
+    )
+    min_risk_pct: float = Field(
+        0.35,
+        description="Friction floor: initial risk at least this % of price "
+        "(keeps slippage+charges a small fraction of R)",
+        json_schema_extra=opt(0.0, 1.0, 0.1),
+    )
+    stop_datr_min: float = Field(
+        0.0,
+        description="Initial risk at least this fraction of the prior day's ATR (0 = off)",
+        json_schema_extra=opt(0.0, 0.5, 0.05),
+    )
+    max_risk_pct: float = Field(
+        2.0, description="Skip setups whose initial risk exceeds this % of price"
+    )
+    target_r: float = Field(
+        2.0,
+        description="Profit target in R multiples (0 = no fixed target)",
+        json_schema_extra=opt(0.0, 4.0, 0.5),
+    )
+    trail_atr_mult: float = Field(
+        1.5,
+        description="Trailing stop distance k in k x ATR(n) (0 = off)",
+        json_schema_extra=opt(0.0, 3.0, 0.5),
+    )
+    trail_atr_period: int = Field(
+        5, description="ATR period n for the trailing stop", json_schema_extra=opt(3, 14, 1)
+    )
+    trail_activate_r: float = Field(
+        1.0,
+        description="Start trailing once the trade is this many R in profit",
+        json_schema_extra=opt(0.0, 2.0, 0.5),
+    )
+    partial_r: float = Field(
+        0.0, description="Book a partial at this R (0 = off)", json_schema_extra=opt(0.0, 2.0, 0.5)
+    )
     partial_frac: float = Field(0.5, description="Fraction booked at the partial target")
     breakeven_after_partial: bool = Field(True, description="Move stop to entry after the partial")
-    max_bars: int = Field(0, description="Time stop in bars (0 = off)", json_schema_extra=opt(0, 36, 6))
+    max_bars: int = Field(
+        0, description="Time stop in bars (0 = off)", json_schema_extra=opt(0, 36, 6)
+    )
     # signal hygiene
-    min_strength: float = Field(0.0, description="Minimum strength score (0-100) to act on a signal",
-                                json_schema_extra=opt(0, 80, 10))
-    market_filter: bool = Field(True, description="Block longs when NIFTY is strongly bearish (and vice versa)")
-    regime_filter: bool = Field(True, description="Only trade in the regimes this strategy is designed for")
-    cooldown_bars: int = Field(6, description="Bars to wait after an exit before re-entering the same symbol",
-                               json_schema_extra=opt(0, 24, 3))
-    max_trades_per_day: int = Field(2, description="Per symbol per day", json_schema_extra=opt(1, 4, 1))
+    min_strength: float = Field(
+        0.0,
+        description="Minimum strength score (0-100) to act on a signal",
+        json_schema_extra=opt(0, 80, 10),
+    )
+    market_filter: bool = Field(
+        True, description="Block longs when NIFTY is strongly bearish (and vice versa)"
+    )
+    regime_filter: bool = Field(
+        True, description="Only trade in the regimes this strategy is designed for"
+    )
+    cooldown_bars: int = Field(
+        6,
+        description="Bars to wait after an exit before re-entering the same symbol",
+        json_schema_extra=opt(0, 24, 3),
+    )
+    max_trades_per_day: int = Field(
+        2, description="Per symbol per day", json_schema_extra=opt(1, 4, 1)
+    )
 
 
 @dataclass
 class Context:
     symbol: str = ""
-    daily: pd.DataFrame | None = None     # daily bars of the symbol (for prior-day levels / daily ATR)
-    market: pd.DataFrame | None = None    # NIFTY bars at the same timeframe (for market bias)
+    daily: pd.DataFrame | None = None  # daily bars of the symbol (for prior-day levels / daily ATR)
+    market: pd.DataFrame | None = None  # NIFTY bars at the same timeframe (for market bias)
     extras: dict[str, Any] = field(default_factory=dict)
 
 
-SIGNAL_COLUMNS = ["long_entry", "short_entry", "long_stop", "short_stop", "long_score", "short_score",
-                  "long_exit", "short_exit"]
+SIGNAL_COLUMNS = [
+    "long_entry",
+    "short_entry",
+    "long_stop",
+    "short_stop",
+    "long_score",
+    "short_score",
+    "long_exit",
+    "short_exit",
+]
 
 
 class Strategy(ABC):
@@ -90,7 +138,12 @@ class Strategy(ABC):
     regimes: ClassVar[tuple[str, ...]] = (TREND, NEUTRAL, RANGE, VOLATILE)
     Params: ClassVar[type[StrategyParams]] = StrategyParams
     # pillar weights for the strength score
-    weights: ClassVar[dict[str, float]] = {"price": 0.3, "momentum": 0.3, "volatility": 0.2, "volume": 0.2}
+    weights: ClassVar[dict[str, float]] = {
+        "price": 0.3,
+        "momentum": 0.3,
+        "volatility": 0.2,
+        "volume": 0.2,
+    }
 
     def __init__(self, params: dict | StrategyParams | None = None) -> None:
         if isinstance(params, StrategyParams):
@@ -113,8 +166,12 @@ class Strategy(ABC):
         out = {}
         for name, f in cls.Params.model_fields.items():
             extra = f.json_schema_extra if isinstance(f.json_schema_extra, dict) else {}
-            out[name] = {"default": f.default, "description": f.description or extra.get("desc", ""),
-                         "opt": extra.get("opt"), "type": type(f.default).__name__}
+            out[name] = {
+                "default": f.default,
+                "description": f.description or extra.get("desc", ""),
+                "opt": extra.get("opt"),
+                "type": type(f.default).__name__,
+            }
         return out
 
     # ------------------------------------------------------------------ features
@@ -202,10 +259,22 @@ class Strategy(ABC):
         f["blk_strength_short"] = f["short_score"] < p.min_strength
         f["setup_long"] = f["long_entry"].fillna(False).astype(bool)
         f["setup_short"] = f["short_entry"].fillna(False).astype(bool)
-        f["long_entry"] = (f["setup_long"] & in_window & ~f["blk_regime"] & ~f["blk_mkt_long"]
-                           & ~f["blk_strength_long"] & p.allow_long)
-        f["short_entry"] = (f["setup_short"] & in_window & ~f["blk_regime"] & ~f["blk_mkt_short"]
-                            & ~f["blk_strength_short"] & p.allow_short)
+        f["long_entry"] = (
+            f["setup_long"]
+            & in_window
+            & ~f["blk_regime"]
+            & ~f["blk_mkt_long"]
+            & ~f["blk_strength_long"]
+            & p.allow_long
+        )
+        f["short_entry"] = (
+            f["setup_short"]
+            & in_window
+            & ~f["blk_regime"]
+            & ~f["blk_mkt_short"]
+            & ~f["blk_strength_short"]
+            & p.allow_short
+        )
         for side in ("long", "short"):
             if f"{side}_exit" not in f.columns:
                 f[f"{side}_exit"] = False
@@ -225,7 +294,9 @@ class Strategy(ABC):
         if row.get(f"blk_mkt_{side}", False):
             blockers.append("NIFTY is strongly against this direction")
         if row.get(f"blk_strength_{side}", False):
-            blockers.append(f"Strength {row[f'{side}_score']:.0f} below minimum {self.p.min_strength:.0f}")
+            blockers.append(
+                f"Strength {row[f'{side}_score']:.0f} below minimum {self.p.min_strength:.0f}"
+            )
         vw = row.get("vwap")
         if vw and not np.isnan(vw):
             rel = "above" if row["close"] > vw else "below"
@@ -234,7 +305,9 @@ class Strategy(ABC):
             reasons.append(f"Relative volume {row['rvol']:.1f}x")
         reasons.append(f"Regime: {row['regime']}; ADX {row['adx']:.0f}")
         mb = row.get("mkt_bias", 0)
-        reasons.append(f"NIFTY bias {mb:+.0f} ({'supportive' if mb * sign > 0 else 'neutral' if mb == 0 else 'against'})")
+        reasons.append(
+            f"NIFTY bias {mb:+.0f} ({'supportive' if mb * sign > 0 else 'neutral' if mb == 0 else 'against'})"
+        )
         return {"reasons": reasons, "blockers": blockers, "implies": self.implies(side)}
 
     def _reasons(self, f: pd.DataFrame, i: int, side: str) -> tuple[list[str], list[str]]:
@@ -299,7 +372,9 @@ def clip01(x: pd.Series | np.ndarray) -> pd.Series:
 def vol_pillar(atr_pct: pd.Series) -> pd.Series:
     """Healthy volatility (20th-85th percentile) scores 1; dead or extreme volatility scores lower."""
     x = atr_pct.fillna(50)
-    score = np.where(x < 20, 0.3 + 0.7 * x / 20, np.where(x > 85, np.maximum(0.3, 1 - (x - 85) / 20), 1.0))
+    score = np.where(
+        x < 20, 0.3 + 0.7 * x / 20, np.where(x > 85, np.maximum(0.3, 1 - (x - 85) / 20), 1.0)
+    )
     return pd.Series(score, index=atr_pct.index)
 
 

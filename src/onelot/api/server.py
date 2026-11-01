@@ -36,7 +36,8 @@ UI_DIR = Path(__file__).resolve().parent.parent / "ui"
 class AckBody(BaseModel):
     action: str = Field(..., description="TAKE or SKIP")
     fill_price: float | None = Field(
-        None, description="the price you ACTUALLY filled at, not the signalled price")
+        None, description="the price you ACTUALLY filled at, not the signalled price"
+    )
     source: str = "dashboard"
 
 
@@ -55,17 +56,17 @@ class BacktestBody(BaseModel):
     slippage_pct: float | None = None
     cost_multiplier: float = 1.0
     label: str = ""
-    sentiment_mode: str = "off"          # off | follow | strict | contrarian
+    sentiment_mode: str = "off"  # off | follow | strict | contrarian
     sentiment_scope: str = "MARKET"
     sentiment_symbol: str | None = None
     sentiment_threshold: float = 0.2
 
 
 class OptimizeBody(BacktestBody):
-    kind: str = "optimize"          # optimize | walkforward
+    kind: str = "optimize"  # optimize | walkforward
     trials: int = 40
-    space: dict | None = None       # {param: {"choices":[...]} | {"lo","hi","step"}}
-    is_days: int | None = None      # None = windows auto-sized from the available sessions
+    space: dict | None = None  # {param: {"choices":[...]} | {"lo","hi","step"}}
+    is_days: int | None = None  # None = windows auto-sized from the available sessions
     oos_days: int | None = None
 
 
@@ -77,10 +78,10 @@ class DeskContextBody(BaseModel):
 
 
 class SweepBody(BaseModel):
-    strategies: list[str] | None = None     # None = every registered strategy
-    instruments: list[str] | None = None    # None = the desk watchlist (config/desk.yaml)
-    timeframes: list[str] | None = None     # None = 5m, 15m, 30m, 60m
-    presets: bool = False                   # True = low / default / high setting per strategy (3x runs)
+    strategies: list[str] | None = None  # None = every registered strategy
+    instruments: list[str] | None = None  # None = the desk watchlist (config/desk.yaml)
+    timeframes: list[str] | None = None  # None = 5m, 15m, 30m, 60m
+    presets: bool = False  # True = low / default / high setting per strategy (3x runs)
     slippage_pct: float | None = None
     cost_multiplier: float = 1.0
     sentiment_mode: str = "off"
@@ -122,7 +123,9 @@ class SentimentImportBody(BaseModel):
     symbol: str | None = None
     source: str = "import"
     horizon: str | None = "daily"
-    replace_source: bool = Field(False, description="Delete earlier rows from the same source first")
+    replace_source: bool = Field(
+        False, description="Delete earlier rows from the same source first"
+    )
 
 
 class CredentialsBody(BaseModel):
@@ -140,19 +143,25 @@ def _iso(v):
 
 
 def create_app(engine, api_token: str) -> FastAPI:
-    app = FastAPI(title="One Lot Bot — Dhan trade desk",
-                  description="Signal-only. This service places no orders.",
-                  version="3.0.0", docs_url="/api/docs")
+    app = FastAPI(
+        title="One Lot Bot — Dhan trade desk",
+        description="Signal-only. This service places no orders.",
+        version="3.0.0",
+        docs_url="/api/docs",
+    )
     db = engine.db
 
     def require_token(request: Request) -> None:
         """Reads are open; MUTATIONS always require the secret."""
-        supplied = (request.headers.get("x-onelot-token")
-                    or request.query_params.get("token", ""))
+        supplied = request.headers.get("x-onelot-token") or request.query_params.get("token", "")
         if not api_token or supplied != api_token:
-            raise HTTPException(status_code=401, detail=(
-                "invalid or missing API token: this page's session token no longer matches the engine "
-                "(the engine was restarted or data/api_token.txt changed). Reload the page once."))
+            raise HTTPException(
+                status_code=401,
+                detail=(
+                    "invalid or missing API token: this page's session token no longer matches the engine "
+                    "(the engine was restarted or data/api_token.txt changed). Reload the page once."
+                ),
+            )
 
     # ── live desk (unchanged contract) ────────────────────────────────────
     @app.get("/api/state")
@@ -162,7 +171,11 @@ def create_app(engine, api_token: str) -> FastAPI:
     @app.get("/api/health")
     def health() -> dict:
         snap = engine.snapshot()
-        return {"ok": bool(snap.get("health")), "health": snap.get("health"), "status": snap.get("status")}
+        return {
+            "ok": bool(snap.get("health")),
+            "health": snap.get("health"),
+            "status": snap.get("status"),
+        }
 
     @app.get("/api/notifications")
     def notifications(since: int = Query(0, ge=0)) -> dict:
@@ -175,8 +188,10 @@ def create_app(engine, api_token: str) -> FastAPI:
 
     @app.get("/api/journal")
     def journal() -> dict:
-        return {"metrics": engine.journal.metrics(engine.cfg.mode),
-                "trades": engine.journal.entries(engine.cfg.mode, limit=200)}
+        return {
+            "metrics": engine.journal.metrics(engine.cfg.mode),
+            "trades": engine.journal.entries(engine.cfg.mode, limit=200),
+        }
 
     @app.get("/api/journal.csv", response_class=PlainTextResponse)
     def journal_csv() -> str:
@@ -211,8 +226,11 @@ def create_app(engine, api_token: str) -> FastAPI:
                     yield 'data: {"error": "snapshot failed"}\n\n'
                 await asyncio.sleep(1.0)
 
-        return StreamingResponse(gen(), media_type="text/event-stream",
-                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.post("/api/signal/{signal_id}/ack", dependencies=[Depends(require_token)])
     def ack(signal_id: str, body: AckBody) -> dict:
@@ -285,7 +303,9 @@ def create_app(engine, api_token: str) -> FastAPI:
         return _desk().signals_view(days)
 
     @app.get("/api/desk/bars")
-    def desk_bars(key: str, timeframe: str | None = None, n: int = Query(300, ge=20, le=3000)) -> dict:
+    def desk_bars(
+        key: str, timeframe: str | None = None, n: int = Query(300, ge=20, le=3000)
+    ) -> dict:
         return _desk().bars_view(key, timeframe, n)
 
     # ── account (free Trading API; cached, never polled) ──────────────────
@@ -321,7 +341,10 @@ def create_app(engine, api_token: str) -> FastAPI:
             out.append(d)
         order = {"OPTIONS": 0, "FUTURES": 1, "STOCK": 2, "CURRENCY": 3, "INDEX": 4}
         out.sort(key=lambda d: (order.get(d["category"], 9), d["key"]))
-        return {"instruments": out, "tradeable": [i.key for i in tradeable_instruments(instruments)]}
+        return {
+            "instruments": out,
+            "tradeable": [i.key for i in tradeable_instruments(instruments)],
+        }
 
     @app.get("/api/lab/coverage")
     def lab_coverage() -> dict:
@@ -335,12 +358,24 @@ def create_app(engine, api_token: str) -> FastAPI:
         from ..lab.runner import BacktestConfig
 
         cfg = BacktestConfig.from_settings(
-            body.strategy, body.instrument_key.upper(), params=body.params, timeframe=body.timeframe,
-            start=body.start, end=body.end, cost_multiplier=body.cost_multiplier, label=body.label,
-            sentiment_mode=body.sentiment_mode, sentiment_scope=body.sentiment_scope,
-            sentiment_symbol=body.sentiment_symbol, sentiment_threshold=body.sentiment_threshold,
-            **({"slippage_pct": body.slippage_pct} if body.slippage_pct is not None else {}))
-        rid = engine.lab_jobs.submit_backtest(cfg.__dict__, label=body.label or f"{body.strategy} {body.instrument_key} {body.timeframe}")
+            body.strategy,
+            body.instrument_key.upper(),
+            params=body.params,
+            timeframe=body.timeframe,
+            start=body.start,
+            end=body.end,
+            cost_multiplier=body.cost_multiplier,
+            label=body.label,
+            sentiment_mode=body.sentiment_mode,
+            sentiment_scope=body.sentiment_scope,
+            sentiment_symbol=body.sentiment_symbol,
+            sentiment_threshold=body.sentiment_threshold,
+            **({"slippage_pct": body.slippage_pct} if body.slippage_pct is not None else {}),
+        )
+        rid = engine.lab_jobs.submit_backtest(
+            cfg.__dict__,
+            label=body.label or f"{body.strategy} {body.instrument_key} {body.timeframe}",
+        )
         return {"run_id": rid}
 
     @app.post("/api/lab/optimize", dependencies=[Depends(require_token)])
@@ -350,8 +385,14 @@ def create_app(engine, api_token: str) -> FastAPI:
         from ..strategies.registry import REGISTRY
 
         cfg = BacktestConfig.from_settings(
-            body.strategy, body.instrument_key.upper(), params=body.params, timeframe=body.timeframe,
-            start=body.start, end=body.end, label=body.label)
+            body.strategy,
+            body.instrument_key.upper(),
+            params=body.params,
+            timeframe=body.timeframe,
+            start=body.start,
+            end=body.end,
+            label=body.label,
+        )
         space = body.space
         if not space:
             space = SPACES.get(body.strategy)
@@ -359,11 +400,18 @@ def create_app(engine, api_token: str) -> FastAPI:
             cls = REGISTRY.get(body.strategy)
             if cls is None:
                 raise HTTPException(404, f"unknown strategy {body.strategy}")
-            space = {k: {"lo": lo, "hi": hi, "step": st} for k, (lo, hi, st) in cls.param_space().items()}
+            space = {
+                k: {"lo": lo, "hi": hi, "step": st} for k, (lo, hi, st) in cls.param_space().items()
+            }
         rid = engine.lab_jobs.submit_optimize(
-            cfg.__dict__, space, trials=max(5, min(body.trials, 300)), kind=body.kind,
+            cfg.__dict__,
+            space,
+            trials=max(5, min(body.trials, 300)),
+            kind=body.kind,
             wf={"is_days": body.is_days, "oos_days": body.oos_days},
-            label=body.label or f"{body.kind} {body.strategy} {body.instrument_key} {body.timeframe}")
+            label=body.label
+            or f"{body.kind} {body.strategy} {body.instrument_key} {body.timeframe}",
+        )
         return {"run_id": rid}
 
     @app.get("/api/lab/runs")
@@ -383,7 +431,9 @@ def create_app(engine, api_token: str) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         if len(combos) > 4000:
-            raise HTTPException(400, f"{len(combos)} runs is too many for one sweep; narrow the grid")
+            raise HTTPException(
+                400, f"{len(combos)} runs is too many for one sweep; narrow the grid"
+            )
         base = {"cost_multiplier": body.cost_multiplier, "sentiment_mode": body.sentiment_mode}
         if body.slippage_pct is not None:
             base["slippage_pct"] = body.slippage_pct
@@ -391,13 +441,29 @@ def create_app(engine, api_token: str) -> FastAPI:
         return {"run_id": rid, "combos": len(combos)}
 
     @app.get("/api/lab/leaderboard")
-    def lab_leaderboard(strategy: str | None = None, instrument: str | None = None, timeframe: str | None = None,
-                        category: str | None = None, kind: str | None = None, sweep_id: int | None = None,
-                        min_trades: int = Query(10, ge=1, le=500), limit: int = Query(300, ge=1, le=2000)) -> dict:
+    def lab_leaderboard(
+        strategy: str | None = None,
+        instrument: str | None = None,
+        timeframe: str | None = None,
+        category: str | None = None,
+        kind: str | None = None,
+        sweep_id: int | None = None,
+        min_trades: int = Query(10, ge=1, le=500),
+        limit: int = Query(300, ge=1, le=2000),
+    ) -> dict:
         from ..lab.sweep import leaderboard, summarise
 
-        rows = leaderboard(db.engine, strategy=strategy, instrument=instrument, timeframe=timeframe,
-                           category=category, kind=kind, min_trades=min_trades, sweep_id=sweep_id, limit=limit)
+        rows = leaderboard(
+            db.engine,
+            strategy=strategy,
+            instrument=instrument,
+            timeframe=timeframe,
+            category=category,
+            kind=kind,
+            min_trades=min_trades,
+            sweep_id=sweep_id,
+            limit=limit,
+        )
         return {"rows": rows, "summary": summarise(rows)}
 
     @app.get("/api/lab/matrix")
@@ -441,13 +507,19 @@ def create_app(engine, api_token: str) -> FastAPI:
     @app.get("/api/lab/research_report", response_class=PlainTextResponse)
     def lab_research_report() -> str:
         p = engine.cfg.project_root / "docs" / "research" / "RESEARCH_REPORT.md"
-        return p.read_text(encoding="utf-8") if p.exists() else "No research report yet. Run `python -m onelot research`."
+        return (
+            p.read_text(encoding="utf-8")
+            if p.exists()
+            else "No research report yet. Run `python -m onelot research`."
+        )
 
     # ── data corpus ───────────────────────────────────────────────────────
     @app.post("/api/data/backfill", dependencies=[Depends(require_token)])
     def data_backfill(body: BackfillBody) -> dict:
         adapter = getattr(engine, "account_adapter", None)
-        jid = engine.lab_jobs.submit_backfill(body.series, body.resolutions, body.provider, adapter, body.full)
+        jid = engine.lab_jobs.submit_backfill(
+            body.series, body.resolutions, body.provider, adapter, body.full
+        )
         return {"job_id": jid}
 
     @app.get("/api/data/jobs")
@@ -463,7 +535,10 @@ def create_app(engine, api_token: str) -> FastAPI:
         from ..data.backfill import quality_report
 
         q = quality_report(db.engine, resolution)
-        return {"resolution": resolution, "rows": json.loads(q.to_json(orient="records")) if not q.empty else []}
+        return {
+            "resolution": resolution,
+            "rows": json.loads(q.to_json(orient="records")) if not q.empty else [],
+        }
 
     # ── news + sentiment (endpoints now; the scorer is a separate project) ─
     @app.get("/api/data/eda")
@@ -481,7 +556,9 @@ def create_app(engine, api_token: str) -> FastAPI:
             keys = [k.strip().upper() for k in series.split(",") if k.strip()]
         else:
             cfg_d = desk_config()
-            keys = ["NIFTY", "BANKNIFTY", "SENSEX", "INDIAVIX"] + [str(x["key"]).upper() for x in cfg_d.get("stocks") or []]
+            keys = ["NIFTY", "BANKNIFTY", "SENSEX", "INDIAVIX"] + [
+                str(x["key"]).upper() for x in cfg_d.get("stocks") or []
+            ]
         return correlation(db.engine, keys)
 
     @app.get("/api/news")
@@ -492,7 +569,11 @@ def create_app(engine, api_token: str) -> FastAPI:
         with db.engine.connect() as conn:
             rows = [dict(r) for r in conn.execute(q).mappings().all()]
         if symbol:
-            rows = [r for r in rows if symbol.upper() in [str(s).upper() for s in (r.get("symbols") or [])]]
+            rows = [
+                r
+                for r in rows
+                if symbol.upper() in [str(s).upper() for s in (r.get("symbols") or [])]
+            ]
         for r in rows:
             r["ts"], r["created_at"] = _iso(r.get("ts")), _iso(r.get("created_at"))
         return {"items": rows}
@@ -504,15 +585,25 @@ def create_app(engine, api_token: str) -> FastAPI:
 
         ts = dt.datetime.fromisoformat(body.ts) if body.ts else utcnow()
         with db.engine.begin() as conn:
-            nid = conn.execute(news_items.insert().values(
-                ts=ts, source=body.source, headline=body.headline, body=body.body, url=body.url,
-                symbols=[s.upper() for s in body.symbols], sentiment=body.sentiment, meta=body.meta,
-                created_at=utcnow())).inserted_primary_key[0]
+            nid = conn.execute(
+                news_items.insert().values(
+                    ts=ts,
+                    source=body.source,
+                    headline=body.headline,
+                    body=body.body,
+                    url=body.url,
+                    symbols=[s.upper() for s in body.symbols],
+                    sentiment=body.sentiment,
+                    meta=body.meta,
+                    created_at=utcnow(),
+                )
+            ).inserted_primary_key[0]
         return {"id": int(nid)}
 
     @app.get("/api/sentiment")
-    def sentiment(limit: int = Query(200, ge=1, le=2000), scope: str | None = None,
-                  symbol: str | None = None) -> dict:
+    def sentiment(
+        limit: int = Query(200, ge=1, le=2000), scope: str | None = None, symbol: str | None = None
+    ) -> dict:
         from ..data.schema import sentiment_scores
 
         q = select(sentiment_scores).order_by(desc(sentiment_scores.c.ts)).limit(limit)
@@ -548,10 +639,19 @@ def create_app(engine, api_token: str) -> FastAPI:
 
         ts = dt.datetime.fromisoformat(body.ts) if body.ts else utcnow()
         with db.engine.begin() as conn:
-            sid = conn.execute(sentiment_scores.insert().values(
-                ts=ts, scope=body.scope.upper(), symbol=(body.symbol or "").upper() or None,
-                score=body.score, confidence=body.confidence, horizon=body.horizon, source=body.source,
-                note=body.note, created_at=utcnow())).inserted_primary_key[0]
+            sid = conn.execute(
+                sentiment_scores.insert().values(
+                    ts=ts,
+                    scope=body.scope.upper(),
+                    symbol=(body.symbol or "").upper() or None,
+                    score=body.score,
+                    confidence=body.confidence,
+                    horizon=body.horizon,
+                    source=body.source,
+                    note=body.note,
+                    created_at=utcnow(),
+                )
+            ).inserted_primary_key[0]
         return {"id": int(sid)}
 
     @app.get("/api/sentiment/pulse")
@@ -576,14 +676,42 @@ def create_app(engine, api_token: str) -> FastAPI:
         scope, symbol = body.scope.upper(), (body.symbol or "").upper() or None
         with db.engine.begin() as conn:
             if body.replace_source:
-                conn.execute(delete(sentiment_scores).where(
-                    (sentiment_scores.c.source == body.source) & (sentiment_scores.c.scope == scope)
-                    & ((sentiment_scores.c.symbol == symbol) if symbol else sentiment_scores.c.symbol.is_(None))))
-            conn.execute(sentiment_scores.insert(), [
-                {"ts": r["ts"], "scope": scope, "symbol": symbol, "score": r["score"], "confidence": r["confidence"],
-                 "horizon": body.horizon, "source": body.source, "note": None, "created_at": utcnow()} for r in rows])
-        return {"imported": len(rows), "first": rows[0]["ts"].isoformat(), "last": rows[-1]["ts"].isoformat(),
-                "scope": scope, "symbol": symbol, "source": body.source}
+                conn.execute(
+                    delete(sentiment_scores).where(
+                        (sentiment_scores.c.source == body.source)
+                        & (sentiment_scores.c.scope == scope)
+                        & (
+                            (sentiment_scores.c.symbol == symbol)
+                            if symbol
+                            else sentiment_scores.c.symbol.is_(None)
+                        )
+                    )
+                )
+            conn.execute(
+                sentiment_scores.insert(),
+                [
+                    {
+                        "ts": r["ts"],
+                        "scope": scope,
+                        "symbol": symbol,
+                        "score": r["score"],
+                        "confidence": r["confidence"],
+                        "horizon": body.horizon,
+                        "source": body.source,
+                        "note": None,
+                        "created_at": utcnow(),
+                    }
+                    for r in rows
+                ],
+            )
+        return {
+            "imported": len(rows),
+            "first": rows[0]["ts"].isoformat(),
+            "last": rows[-1]["ts"].isoformat(),
+            "scope": scope,
+            "symbol": symbol,
+            "source": body.source,
+        }
 
     # ── settings / credentials ────────────────────────────────────────────
     @app.get("/api/settings")
@@ -598,8 +726,11 @@ def create_app(engine, api_token: str) -> FastAPI:
             "backtest": cfg.backtest.model_dump(),
             "live": cfg.strategy.live.model_dump(),
             "risk": cfg.risk.model_dump(),
-            "data": {"provider": cfg.data.provider, "history_start": cfg.data.history_start,
-                     "corpus_resolutions": cfg.data.corpus_resolutions},
+            "data": {
+                "provider": cfg.data.provider,
+                "history_start": cfg.data.history_start,
+                "corpus_resolutions": cfg.data.corpus_resolutions,
+            },
             "postback_url_hint": f"http://{cfg.api.host}:{cfg.api.port}/api/dhan/postback",
             "env_path": str(cfg.project_root / ".env"),
             "feed_live": not isinstance(engine.broker, MockBroker),
@@ -613,10 +744,13 @@ def create_app(engine, api_token: str) -> FastAPI:
 
     @app.post("/api/settings/dhan", dependencies=[Depends(require_token)])
     def settings_dhan(body: CredentialsBody) -> dict:
-        if not any([body.client_id, body.access_token, body.data_access_token, body.pin, body.totp_secret]):
+        if not any(
+            [body.client_id, body.access_token, body.data_access_token, body.pin, body.totp_secret]
+        ):
             raise HTTPException(400, "nothing to update")
-        return engine.update_credentials(body.client_id, body.access_token, body.data_access_token,
-                                         body.pin, body.totp_secret)
+        return engine.update_credentials(
+            body.client_id, body.access_token, body.data_access_token, body.pin, body.totp_secret
+        )
 
     @app.post("/api/settings/dhan/renew", dependencies=[Depends(require_token)])
     def settings_dhan_renew() -> dict:
@@ -641,31 +775,51 @@ def create_app(engine, api_token: str) -> FastAPI:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}
         today = dt.datetime.now(IST).date()
         y = year or today.year
+
         def rows(section):
             out = []
-            for e in ((raw.get(section) or {}).get(y) or []):
+            for e in (raw.get(section) or {}).get(y) or []:
                 d = dt.date.fromisoformat(str(e["date"]))
-                out.append({"date": d.isoformat(), "weekday": d.strftime("%a"), "name": str(e.get("name", "")),
-                            "past": d < today, "today": d == today, "days_away": (d - today).days})
+                out.append(
+                    {
+                        "date": d.isoformat(),
+                        "weekday": d.strftime("%a"),
+                        "name": str(e.get("name", "")),
+                        "past": d < today,
+                        "today": d == today,
+                        "days_away": (d - today).days,
+                    }
+                )
             return out
+
         hol = rows("holidays")
         upcoming = [h for h in hol if not h["past"]]
         window = engine.session_clock.current_window(dt.datetime.now(IST))
-        return {"year": y, "verified": bool(raw.get("verified")), "verified_on": raw.get("verified_on"),
-                "sources": raw.get("sources") or [], "holidays": hol, "weekend_holidays": rows("weekend_holidays"),
-                "special_sessions": [{**x, "date": str(x.get("date"))} for x in (raw.get("special_sessions") or [])],
-                "next_holiday": upcoming[0] if upcoming else None, "today": today.isoformat(),
-                "today_is_trading_day": window is not None,
-                "session": {"open": "09:15", "close": "15:30", "square_off": "15:15"},
-                "years_available": sorted(int(k) for k in (raw.get("holidays") or {}))}
+        return {
+            "year": y,
+            "verified": bool(raw.get("verified")),
+            "verified_on": raw.get("verified_on"),
+            "sources": raw.get("sources") or [],
+            "holidays": hol,
+            "weekend_holidays": rows("weekend_holidays"),
+            "special_sessions": [
+                {**x, "date": str(x.get("date"))} for x in (raw.get("special_sessions") or [])
+            ],
+            "next_holiday": upcoming[0] if upcoming else None,
+            "today": today.isoformat(),
+            "today_is_trading_day": window is not None,
+            "session": {"open": "09:15", "close": "15:30", "square_off": "15:15"},
+            "years_available": sorted(int(k) for k in (raw.get("holidays") or {})),
+        }
 
     @app.post("/api/settings/dhan/test", dependencies=[Depends(require_token)])
     def settings_dhan_test() -> dict:
         adapter = engine.account.adapter
         if adapter is None:
             raise HTTPException(400, "no Dhan credentials configured")
-        res = adapter.preflight(engine.cfg.instrument.index_security_id,
-                                engine.cfg.instrument.exchange_segment_index)
+        res = adapter.preflight(
+            engine.cfg.instrument.index_security_id, engine.cfg.instrument.exchange_segment_index
+        )
         return res
 
     @app.post("/api/dhan/postback")
@@ -676,8 +830,13 @@ def create_app(engine, api_token: str) -> FastAPI:
             payload = await request.json()
         except Exception:  # noqa: BLE001
             payload = {"raw": (await request.body())[:2000].decode("utf-8", "replace")}
-        engine.repo.event(dt.datetime.now(dt.timezone.utc), "INFO", "dhan_postback",
-                          "postback received (recorded, not acted upon)", payload)
+        engine.repo.event(
+            dt.datetime.now(dt.timezone.utc),
+            "INFO",
+            "dhan_postback",
+            "postback received (recorded, not acted upon)",
+            payload,
+        )
         return {"received": True}
 
     # ── UI ────────────────────────────────────────────────────────────────
@@ -691,9 +850,16 @@ def create_app(engine, api_token: str) -> FastAPI:
         p = (UI_DIR / name).resolve()
         if not p.is_file() or UI_DIR.resolve() not in p.parents:
             raise HTTPException(404, "not found")
-        media = {"js": "application/javascript", "css": "text/css", "svg": "image/svg+xml",
-                 "png": "image/png", "woff2": "font/woff2", "woff": "font/woff", "ttf": "font/ttf",
-                 "json": "application/json"}.get(p.suffix.lstrip("."), "application/octet-stream")
+        media = {
+            "js": "application/javascript",
+            "css": "text/css",
+            "svg": "image/svg+xml",
+            "png": "image/png",
+            "woff2": "font/woff2",
+            "woff": "font/woff",
+            "ttf": "font/ttf",
+            "json": "application/json",
+        }.get(p.suffix.lstrip("."), "application/octet-stream")
         # Vendored libraries and fonts are immutable per version: cache them hard.
         cache = "public, max-age=604800" if name.startswith("vendor/") else "no-cache"
         return FileResponse(str(p), media_type=media, headers={"Cache-Control": cache})

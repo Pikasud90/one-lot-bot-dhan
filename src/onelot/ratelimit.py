@@ -130,9 +130,12 @@ class RateLimiterStats:
 class RateLimiter:
     """One limiter per process. Every broker call must pass through it."""
 
-    def __init__(self, endpoints: tuple[EndpointSpec, ...] = DEFAULT_ENDPOINTS,
-                 global_rate: float = GLOBAL_RATE_PER_SEC,
-                 global_capacity: float = GLOBAL_CAPACITY):
+    def __init__(
+        self,
+        endpoints: tuple[EndpointSpec, ...] = DEFAULT_ENDPOINTS,
+        global_rate: float = GLOBAL_RATE_PER_SEC,
+        global_capacity: float = GLOBAL_CAPACITY,
+    ):
         self._buckets = {
             e.name: TokenBucket(e.rate_per_sec, e.capacity, name=e.name) for e in endpoints
         }
@@ -169,8 +172,9 @@ class RateLimiter:
             log.debug("Waited %.2fs for %s quota", waited, endpoint)
         return True
 
-    def note_rate_limited(self, endpoint: str, attempt: int = 1,
-                          base_backoff: float = 4.0, max_backoff: float = 120.0) -> float:
+    def note_rate_limited(
+        self, endpoint: str, attempt: int = 1, base_backoff: float = 4.0, max_backoff: float = 120.0
+    ) -> float:
         """Called when the broker returns RL001 / HTTP 429.
 
         Jittered exponential backoff: a fixed backoff makes every caller retry
@@ -178,12 +182,13 @@ class RateLimiter:
         storm that turns a brief throttle into a sustained lockout).
         """
         delay = min(max_backoff, base_backoff * (2 ** max(0, attempt - 1)))
-        delay *= 0.5 + random.random()      # jitter in [0.5x, 1.5x]
+        delay *= 0.5 + random.random()  # jitter in [0.5x, 1.5x]
         self.bucket(endpoint).penalise(delay)
         self._global.penalise(min(delay / 2.0, 10.0))
         self.stats.penalties += 1
-        log.warning("Broker rate-limited %s (attempt %d) — backing off %.1fs",
-                    endpoint, attempt, delay)
+        log.warning(
+            "Broker rate-limited %s (attempt %d) — backing off %.1fs", endpoint, attempt, delay
+        )
         return delay
 
     def snapshot(self) -> dict:
@@ -191,9 +196,11 @@ class RateLimiter:
             "global_available": round(self._global.available, 2),
             "global_penalised_for": round(self._global.penalised_for, 2),
             "endpoints": {
-                n: {"available": round(b.available, 2),
+                n: {
+                    "available": round(b.available, 2),
                     "penalised_for": round(b.penalised_for, 2),
-                    "rate_per_sec": round(b.rate, 4)}
+                    "rate_per_sec": round(b.rate, 4),
+                }
                 for n, b in self._buckets.items()
             },
             "stats": {
@@ -201,7 +208,8 @@ class RateLimiter:
                 "timeouts": self.stats.timeouts,
                 "penalties": self.stats.penalties,
                 "avg_wait_sec": round(
-                    self.stats.total_wait_sec / max(1, self.stats.acquisitions), 4),
+                    self.stats.total_wait_sec / max(1, self.stats.acquisitions), 4
+                ),
                 "per_endpoint": dict(self.stats.per_endpoint),
             },
         }

@@ -101,7 +101,11 @@ class Evaluator:
             _CACHE = cache
             workers = 1
         self.workers = workers if workers is not None else max(1, min(4, (os.cpu_count() or 2) - 2))
-        self._pool = ProcessPoolExecutor(self.workers, initializer=_init_worker) if self.workers > 1 else None
+        self._pool = (
+            ProcessPoolExecutor(self.workers, initializer=_init_worker)
+            if self.workers > 1
+            else None
+        )
 
     def map(self, cfgs: list[BacktestConfig], keep_trades: bool = False):
         payload = [{**asdict(c), "_keep_trades": keep_trades} for c in cfgs]
@@ -130,9 +134,17 @@ class OptResult:
     robust_scores: dict = field(default_factory=dict)
 
 
-def optimize(base: BacktestConfig, space: Space, evaluator: Evaluator, n_trials: int = 40, seed: int = 7,
-             min_trades: int = 20, top_k: int = 5, n_jitter: int = 4,
-             progress: Callable[[float, str], None] | None = None) -> OptResult:
+def optimize(
+    base: BacktestConfig,
+    space: Space,
+    evaluator: Evaluator,
+    n_trials: int = 40,
+    seed: int = 7,
+    min_trades: int = 20,
+    top_k: int = 5,
+    n_jitter: int = 4,
+    progress: Callable[[float, str], None] | None = None,
+) -> OptResult:
     rng = random.Random(seed)
     candidates = [dict(base.params)]  # always include the current/default parameters
     seen = {tuple(sorted(candidates[0].items()))}
@@ -148,9 +160,24 @@ def optimize(base: BacktestConfig, space: Space, evaluator: Evaluator, n_trials:
     results = evaluator.map(cfgs)
     rows = []
     for params, m, _ in results:
-        rows.append({**{f"p_{k}": v for k, v in params.items() if k in space}, "score": score(m, min_trades),
-                     **{k: m.get(k) for k in ("trades", "win_rate", "profit_factor", "expectancy_r", "net_pnl", "sharpe")},
-                     "_params": params})
+        rows.append(
+            {
+                **{f"p_{k}": v for k, v in params.items() if k in space},
+                "score": score(m, min_trades),
+                **{
+                    k: m.get(k)
+                    for k in (
+                        "trades",
+                        "win_rate",
+                        "profit_factor",
+                        "expectancy_r",
+                        "net_pnl",
+                        "sharpe",
+                    )
+                },
+                "_params": params,
+            }
+        )
     trials = pd.DataFrame(rows).sort_values("score", ascending=False).reset_index(drop=True)
     if progress:
         progress(0.7, "robust selection")
@@ -159,7 +186,9 @@ def optimize(base: BacktestConfig, space: Space, evaluator: Evaluator, n_trials:
     neigh_cfgs, owners = [], []
     for i, row in top.iterrows():
         for _ in range(n_jitter):
-            neigh_cfgs.append(replace(base, params={**base.params, **jitter(row["_params"], space, rng)}))
+            neigh_cfgs.append(
+                replace(base, params={**base.params, **jitter(row["_params"], space, rng)})
+            )
             owners.append(i)
     neigh = evaluator.map(neigh_cfgs) if neigh_cfgs else []
     robust: dict[int, list[float]] = {i: [row["score"]] for i, row in top.iterrows()}
@@ -170,9 +199,16 @@ def optimize(base: BacktestConfig, space: Space, evaluator: Evaluator, n_trials:
     best = trials.loc[best_i]
     if progress:
         progress(1.0, "done")
-    return OptResult(best["_params"], float(robust_med.get(best_i, best["score"])),
-                     {k: best[k] for k in ("trades", "win_rate", "profit_factor", "expectancy_r", "net_pnl", "sharpe")},
-                     trials.drop(columns=["_params"]), {int(k): v for k, v in robust_med.items()})
+    return OptResult(
+        best["_params"],
+        float(robust_med.get(best_i, best["score"])),
+        {
+            k: best[k]
+            for k in ("trades", "win_rate", "profit_factor", "expectancy_r", "net_pnl", "sharpe")
+        },
+        trials.drop(columns=["_params"]),
+        {int(k): v for k, v in robust_med.items()},
+    )
 
 
 # ----------------------------------------------------------------------------- walk-forward
@@ -189,8 +225,13 @@ class WFResult:
 MIN_WF_SESSIONS = 12
 
 
-def plan_windows(n_days: int, is_days: int | None = None, oos_days: int | None = None,
-                 min_folds: int = 3, target_folds: int = 4) -> tuple[int, int, str]:
+def plan_windows(
+    n_days: int,
+    is_days: int | None = None,
+    oos_days: int | None = None,
+    min_folds: int = 3,
+    target_folds: int = 4,
+) -> tuple[int, int, str]:
     """Pick in-sample / out-of-sample lengths (in sessions) that FIT the data.
 
     The old defaults (40 in / 10 out) silently produced zero folds on a 40-session
@@ -200,16 +241,24 @@ def plan_windows(n_days: int, is_days: int | None = None, oos_days: int | None =
     error -- there is nothing honest to compute.
     """
     if n_days < MIN_WF_SESSIONS:
-        raise ValueError(f"walk-forward needs at least {MIN_WF_SESSIONS} sessions after warm-up; "
-                         f"this instrument/timeframe has {n_days}. Backfill more history "
-                         "(Dhan gives 5 years of 1-minute bars) or use a coarser timeframe.")
+        raise ValueError(
+            f"walk-forward needs at least {MIN_WF_SESSIONS} sessions after warm-up; "
+            f"this instrument/timeframe has {n_days}. Backfill more history "
+            "(Dhan gives 5 years of 1-minute bars) or use a coarser timeframe."
+        )
 
     def folds_for(i: int, o: int) -> int:
         return max(0, (n_days - i) // o) if i > 0 and o > 0 else 0
 
     if is_days and oos_days and folds_for(is_days, oos_days) >= min_folds:
-        return int(is_days), int(oos_days), (f"{folds_for(is_days, oos_days)} folds of "
-                                            f"{is_days} in / {oos_days} out sessions, as requested")
+        return (
+            int(is_days),
+            int(oos_days),
+            (
+                f"{folds_for(is_days, oos_days)} folds of "
+                f"{is_days} in / {oos_days} out sessions, as requested"
+            ),
+        )
     oos = max(3, n_days // (target_folds + 2))
     is_ = n_days - target_folds * oos
     if is_ < 2 * oos:
@@ -218,9 +267,12 @@ def plan_windows(n_days: int, is_days: int | None = None, oos_days: int | None =
         oos = max(2, n_days // (min_folds + 2))
         is_ = n_days - min_folds * oos
     f = folds_for(is_, oos)
-    why = (f"requested {is_days} in / {oos_days} out would give only "
-           f"{folds_for(is_days or 0, oos_days or 1)} fold(s) on {n_days} sessions; " if is_days and oos_days
-           else f"{n_days} sessions available; ")
+    why = (
+        f"requested {is_days} in / {oos_days} out would give only "
+        f"{folds_for(is_days or 0, oos_days or 1)} fold(s) on {n_days} sessions; "
+        if is_days and oos_days
+        else f"{n_days} sessions available; "
+    )
     return int(is_), int(oos), why + f"auto-sized to {is_} in / {oos} out = {f} folds"
 
 
@@ -229,10 +281,20 @@ def trading_days(cache: DataCache, series_key: str, timeframe: str) -> list[pd.T
     return sorted(set(b.index.normalize().unique())) if not b.empty else []
 
 
-def walk_forward(base: BacktestConfig, space: Space, evaluator: Evaluator, days: list[pd.Timestamp],
-                 is_days: int | None = None, oos_days: int | None = None, warmup: int = 3, n_trials: int = 40,
-                 min_trades: int = 15, seed: int = 11,
-                 progress: Callable[[float, str], None] | None = None, auto_size: bool = True) -> WFResult:
+def walk_forward(
+    base: BacktestConfig,
+    space: Space,
+    evaluator: Evaluator,
+    days: list[pd.Timestamp],
+    is_days: int | None = None,
+    oos_days: int | None = None,
+    warmup: int = 3,
+    n_trials: int = 40,
+    min_trades: int = 15,
+    seed: int = 11,
+    progress: Callable[[float, str], None] | None = None,
+    auto_size: bool = True,
+) -> WFResult:
     days = days[warmup:]
     if auto_size:
         is_days, oos_days, note = plan_windows(len(days), is_days, oos_days)
@@ -240,8 +302,14 @@ def walk_forward(base: BacktestConfig, space: Space, evaluator: Evaluator, days:
         if not is_days or not oos_days:
             raise ValueError("is_days and oos_days are required when auto_size=False")
         note = f"{is_days} in / {oos_days} out as requested"
-    plan = {"sessions": len(days), "is_days": is_days, "oos_days": oos_days, "note": note,
-            "first": str(days[0].date()) if days else None, "last": str(days[-1].date()) if days else None}
+    plan = {
+        "sessions": len(days),
+        "is_days": is_days,
+        "oos_days": oos_days,
+        "note": note,
+        "first": str(days[0].date()) if days else None,
+        "last": str(days[-1].date()) if days else None,
+    }
     folds_def = []
     start = 0
     while start + is_days + 1 <= len(days):
@@ -256,19 +324,32 @@ def walk_forward(base: BacktestConfig, space: Space, evaluator: Evaluator, days:
         if progress:
             progress(k / max(1, len(folds_def)), f"fold {k + 1}/{len(folds_def)}")
         is_cfg = replace(base, start=str(is_d[0].date()), end=str(is_d[-1].date()))
-        opt = optimize(is_cfg, space, evaluator, n_trials=n_trials, seed=seed + k, min_trades=min_trades)
+        opt = optimize(
+            is_cfg, space, evaluator, n_trials=n_trials, seed=seed + k, min_trades=min_trades
+        )
         oos_cfg = replace(base, start=str(oos_d[0].date()), end=str(oos_d[-1].date()))
         (_, m_oos, t_oos), (_, m_def, t_def) = evaluator.map(
-            [replace(oos_cfg, params=opt.best_params), oos_cfg], keep_trades=True)
+            [replace(oos_cfg, params=opt.best_params), oos_cfg], keep_trades=True
+        )
         oos_parts.append(t_oos)
         default_parts.append(t_def)
         chosen.append(opt.best_params)
-        folds.append({"fold": k + 1, "is": f"{is_d[0].date()}..{is_d[-1].date()}",
-                      "oos": f"{oos_d[0].date()}..{oos_d[-1].date()}", "is_score": opt.best_score,
-                      "is_trades": opt.best_metrics.get("trades"), "is_pf": opt.best_metrics.get("profit_factor"),
-                      "oos_trades": m_oos.get("trades", 0), "oos_pf": m_oos.get("profit_factor"),
-                      "oos_exp_r": m_oos.get("expectancy_r"), "oos_win_rate": m_oos.get("win_rate"),
-                      "default_oos_pf": m_def.get("profit_factor"), "default_oos_exp_r": m_def.get("expectancy_r")})
+        folds.append(
+            {
+                "fold": k + 1,
+                "is": f"{is_d[0].date()}..{is_d[-1].date()}",
+                "oos": f"{oos_d[0].date()}..{oos_d[-1].date()}",
+                "is_score": opt.best_score,
+                "is_trades": opt.best_metrics.get("trades"),
+                "is_pf": opt.best_metrics.get("profit_factor"),
+                "oos_trades": m_oos.get("trades", 0),
+                "oos_pf": m_oos.get("profit_factor"),
+                "oos_exp_r": m_oos.get("expectancy_r"),
+                "oos_win_rate": m_oos.get("win_rate"),
+                "default_oos_pf": m_def.get("profit_factor"),
+                "default_oos_exp_r": m_def.get("expectancy_r"),
+            }
+        )
     oos_nz = [t for t in oos_parts if t is not None and not t.empty]
     def_nz = [t for t in default_parts if t is not None and not t.empty]
     oos = pd.concat(oos_nz, ignore_index=True) if oos_nz else pd.DataFrame()
@@ -308,6 +389,9 @@ def monte_carlo_drawdown(pnl: np.ndarray, n: int = 2000, seed: int = 3) -> dict:
         peak = np.maximum.accumulate(np.r_[0.0, eq])[1:]
         dds.append(float((peak - eq).max()))
         finals.append(float(eq[-1]))
-    return {"mc_dd_median_inr": float(np.median(dds)), "mc_dd_p95_inr": float(np.percentile(dds, 95)),
-            "mc_final_median_inr": float(np.median(finals)),
-            "mc_prob_loss": float(np.mean(np.array(finals) < 0) * 100)}
+    return {
+        "mc_dd_median_inr": float(np.median(dds)),
+        "mc_dd_p95_inr": float(np.percentile(dds, 95)),
+        "mc_final_median_inr": float(np.median(finals)),
+        "mc_prob_loss": float(np.mean(np.array(finals) < 0) * 100),
+    }

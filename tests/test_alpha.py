@@ -29,6 +29,7 @@ def bull(conf=0.9):
 
 # ─────────────────────────── gate unit tests ──────────────────────────────
 
+
 class TestGateSemantics:
     def test_there_is_no_capital_gate(self, cfg):
         """Capital is optional now: with one fixed lot there is nothing to
@@ -87,8 +88,8 @@ class TestGateSemantics:
 
     def test_theta_gate_uses_expected_hold_not_overnight(self):
         """v1 defect B6: overnight theta is meaningless for an intraday system."""
-        assert G.gate_theta(-8.0, 300.0, 1.5, 0.10).passed        # 4% burn
-        assert not G.gate_theta(-40.0, 300.0, 1.5, 0.10).passed   # 20% burn
+        assert G.gate_theta(-8.0, 300.0, 1.5, 0.10).passed  # 4% burn
+        assert not G.gate_theta(-40.0, 300.0, 1.5, 0.10).passed  # 20% burn
 
     def test_theta_gate_blocks_when_unavailable(self):
         assert not G.gate_theta(None, 300.0, 1.5, 0.10).passed
@@ -149,23 +150,28 @@ class TestGateReport:
 
 # ─────────────────────────── end to end ───────────────────────────────────
 
+
 class SessionRunner:
     """Drives the alpha engine across a synthetic session."""
 
-    def __init__(self, cfg, seed=7, sessions=200, drift=0.0, trend=0.006,
-                 ivp_mode="strict"):
+    def __init__(self, cfg, seed=7, sessions=200, drift=0.0, trend=0.006, ivp_mode="strict"):
         self.cfg = cfg
-        self.cm = CostModel(__import__("onelot.config", fromlist=["CostConfig"])
-                            .CostConfig.load("config/costs.yaml"))
+        self.cm = CostModel(
+            __import__("onelot.config", fromlist=["CostConfig"]).CostConfig.load(
+                "config/costs.yaml"
+            )
+        )
         self.alpha = AlphaEngine(cfg, self.cm)
         self.cal = TradingCalendar({}, verified=True)
         self.sclock = SessionClock(cfg.session, self.cal)
         self.ivpe = IVPercentileEngine(ivp_mode, 252, 60)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            self.m = SyntheticMarket(SyntheticConfig(
-                seed=seed, sessions=sessions, drift_per_session=drift,
-                trend_strength=trend))
+            self.m = SyntheticMarket(
+                SyntheticConfig(
+                    seed=seed, sessions=sessions, drift_per_session=drift, trend_strength=trend
+                )
+            )
         daily = self.m.daily_bars("index")
         self.ddates = [b.ts.date() for b in daily]
         self.dcloses = np.array([b.close for b in daily])
@@ -179,12 +185,18 @@ class SessionRunner:
             idx.seed_from_history(self.m.bars(d, 5, "index"))
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            reg, self.model = compute_for_date(self.ddates, self.dcloses, day,
-                                               model=self.model)
-        ivh = [self.m.atm_iv(dt.datetime.combine(d, dt.time(12, 0), tzinfo=IST))
-               for d in self.m.session_dates if d < day]
-        chain = ChainCache(b, "BANKNIFTY", b.expiry_date.isoformat(),
-                           forward_price_fn=lambda: self.m.futures_price(b.now()))
+            reg, self.model = compute_for_date(self.ddates, self.dcloses, day, model=self.model)
+        ivh = [
+            self.m.atm_iv(dt.datetime.combine(d, dt.time(12, 0), tzinfo=IST))
+            for d in self.m.session_dates
+            if d < day
+        ]
+        chain = ChainCache(
+            b,
+            "BANKNIFTY",
+            b.expiry_date.isoformat(),
+            forward_price_fn=lambda: self.m.futures_price(b.now()),
+        )
         sigs, outcomes = [], []
         idx_c = b.instruments("BANKNIFTY")[0]
         t = win.open_at
@@ -198,18 +210,27 @@ class SessionRunner:
                 chain.poll_once(b.expiry_dt, t)
                 a = idx.arrays()
                 base = {
-                    "now": t, "bar_ts": closed[-1].ts, "session_window": win,
-                    "health_may_signal": True, "health_reasons": [],
-                    "index_high": a["high"], "index_low": a["low"],
+                    "now": t,
+                    "bar_ts": closed[-1].ts,
+                    "session_window": win,
+                    "health_may_signal": True,
+                    "health_reasons": [],
+                    "index_high": a["high"],
+                    "index_low": a["low"],
                     "index_close": a["close"],
                     "chain_rows": chain.snapshot.rows if chain.snapshot else [],
-                    "chain_age_sec": chain.age_seconds(t), "regime": reg,
+                    "chain_age_sec": chain.age_seconds(t),
+                    "regime": reg,
                     "ivp": self.ivpe.compute(ivh, chain.atm_iv()),
-                    "expiry": b.expiry_date.isoformat(), "lot_size": 35,
-                    "risk_allowed": True, "risk_reason": "ok",
-                    "risk_state": "ACTIVE", "open_positions": 0,
+                    "expiry": b.expiry_date.isoformat(),
+                    "lot_size": 35,
+                    "risk_allowed": True,
+                    "risk_reason": "ok",
+                    "risk_state": "ACTIVE",
+                    "open_positions": 0,
                     "last_signal_at": sigs[-1].created_at if sigs else None,
-                    "recent_signal_keys": {s.contract_key for s in sigs}}
+                    "recent_signal_keys": {s.contract_key for s in sigs},
+                }
                 base.update(ctx_over)
                 out = self.alpha.evaluate(EvaluationContext(**base))
                 outcomes.append(out)
@@ -222,9 +243,11 @@ class SessionRunner:
 @pytest.fixture(scope="module")
 def runner_bull():
     from onelot.config import AppConfig
+
     cfg = AppConfig.load()
-    cfg = cfg.model_copy(update={
-        "account": cfg.account.model_copy(update={"capital_inr": 1_000_000.0})})
+    cfg = cfg.model_copy(
+        update={"account": cfg.account.model_copy(update={"capital_inr": 1_000_000.0})}
+    )
     return SessionRunner(cfg)
 
 
@@ -269,8 +292,7 @@ class TestEndToEnd:
         if seen == 0:
             pytest.skip("no signals in the sampled window on this tape")
 
-    def test_extreme_volatility_is_filtered_upstream_not_by_a_risk_gate(
-            self, runner_bull):
+    def test_extreme_volatility_is_filtered_upstream_not_by_a_risk_gate(self, runner_bull):
         """Risk on one lot scales with ATR, and the only thing bounding it is
         the intraday chop filter's ATR-percentile band. If a signal fires, its
         ATR must have been inside that band."""
@@ -281,14 +303,17 @@ class TestEndToEnd:
                 assert s.chop is not None and s.chop.is_trending
                 pct = s.chop.atr_percentile
                 if not np.isnan(pct):
-                    assert (cfg.strategy.intraday_chop.atr_percentile_min
-                            <= pct
-                            <= cfg.strategy.intraday_chop.atr_percentile_max)
+                    assert (
+                        cfg.strategy.intraday_chop.atr_percentile_min
+                        <= pct
+                        <= cfg.strategy.intraday_chop.atr_percentile_max
+                    )
 
     def test_put_signals_fire_on_a_bearish_tape(self, rich_cfg):
         """*** v1 defect A8 REGRESSION *** — a put must actually be signallable."""
-        r = SessionRunner(rich_cfg, seed=19, sessions=200, drift=-0.005,
-                          trend=0.004, ivp_mode="degraded")
+        r = SessionRunner(
+            rich_cfg, seed=19, sessions=200, drift=-0.005, trend=0.004, ivp_mode="degraded"
+        )
         pes = []
         for day in r.m.session_dates[-30:]:
             sigs, _ = r.run(day)
@@ -308,9 +333,18 @@ class TestAuditCompleteness:
         assert outcomes
         for out in outcomes:
             names = {g["gate"] for g in out.all_gate_dicts()}
-            for expected in ("health", "session", "risk_governor",
-                             "CE:regime", "CE:trend", "CE:momentum", "CE:ivp",
-                             "CE:contract", "PE:regime", "PE:trend"):
+            for expected in (
+                "health",
+                "session",
+                "risk_governor",
+                "CE:regime",
+                "CE:trend",
+                "CE:momentum",
+                "CE:ivp",
+                "CE:contract",
+                "PE:regime",
+                "PE:trend",
+            ):
                 assert expected in names, f"{expected} missing from the audit trail"
 
     def test_both_directions_are_always_evaluated(self, runner_bull):
@@ -328,8 +362,9 @@ class TestBlockingConditions:
     def test_undeclared_capital_does_not_suppress_signals(self, cfg):
         """Regression: an earlier capital gate would have blocked every signal
         once capital became optional."""
-        zero = cfg.model_copy(update={
-            "account": cfg.account.model_copy(update={"capital_inr": 0.0})})
+        zero = cfg.model_copy(
+            update={"account": cfg.account.model_copy(update={"capital_inr": 0.0})}
+        )
         r = SessionRunner(zero)
         for day in r.m.session_dates[-3:]:
             _, outcomes = r.run(day)
@@ -339,14 +374,16 @@ class TestBlockingConditions:
         """INVARIANT I4."""
         for day in runner_bull.m.session_dates[-3:]:
             sigs, outcomes = runner_bull.run(
-                day, health_may_signal=False, health_reasons=["WebSocket down"])
+                day, health_may_signal=False, health_reasons=["WebSocket down"]
+            )
             assert not sigs
             assert all(o.blocked_by == "health" for o in outcomes)
 
     def test_risk_halt_suppresses_signals(self, runner_bull):
         for day in runner_bull.m.session_dates[-3:]:
-            sigs, _ = runner_bull.run(day, risk_allowed=False,
-                                      risk_reason="daily loss limit", risk_state="HALTED")
+            sigs, _ = runner_bull.run(
+                day, risk_allowed=False, risk_reason="daily loss limit", risk_state="HALTED"
+            )
             assert not sigs
 
     def test_open_position_suppresses_new_signals(self, runner_bull):
@@ -361,8 +398,17 @@ class TestBlockingConditions:
 
     def test_strict_ivp_with_no_history_suppresses_signals(self, rich_cfg):
         r = SessionRunner(rich_cfg, ivp_mode="strict")
-        empty = IVPResult(float("nan"), float("nan"), 0.14, 0, 60, False,
-                          "strict", False, "no ATM IV history recorded yet")
+        empty = IVPResult(
+            float("nan"),
+            float("nan"),
+            0.14,
+            0,
+            60,
+            False,
+            "strict",
+            False,
+            "no ATM IV history recorded yet",
+        )
         for day in r.m.session_dates[-3:]:
             sigs, _ = r.run(day, ivp=empty)
             assert not sigs

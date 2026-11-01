@@ -69,17 +69,23 @@ class RegimeResult:
     probabilities: dict[str, float] = field(default_factory=dict)
     method: str = "hmm"
     model_hash: str | None = None
-    as_of: str | None = None          # the DATE whose data produced this
+    as_of: str | None = None  # the DATE whose data produced this
     note: str = ""
 
     def as_dict(self) -> dict:
-        return {"regime": self.regime.value, "confidence": round(self.confidence, 4),
-                "probabilities": {k: round(v, 4) for k, v in self.probabilities.items()},
-                "method": self.method, "model_hash": self.model_hash,
-                "as_of": self.as_of, "note": self.note}
+        return {
+            "regime": self.regime.value,
+            "confidence": round(self.confidence, 4),
+            "probabilities": {k: round(v, 4) for k, v in self.probabilities.items()},
+            "method": self.method,
+            "model_hash": self.model_hash,
+            "as_of": self.as_of,
+            "note": self.note,
+        }
 
 
 # ─────────────────────────── features ─────────────────────────────────────
+
 
 def build_features(closes: np.ndarray, vol_window: int = 10) -> np.ndarray:
     """Two features per session: log return, and log realised volatility.
@@ -92,7 +98,7 @@ def build_features(closes: np.ndarray, vol_window: int = 10) -> np.ndarray:
     logret = np.diff(np.log(closes))
     feats = []
     for i in range(vol_window, len(logret)):
-        window = logret[i - vol_window:i]
+        window = logret[i - vol_window : i]
         rv = float(np.std(window))
         feats.append([logret[i], np.log(max(rv, 1e-6))])
     return np.asarray(feats, dtype=float)
@@ -100,10 +106,11 @@ def build_features(closes: np.ndarray, vol_window: int = 10) -> np.ndarray:
 
 def feature_dates(dates: list[dt.date], vol_window: int = 10) -> list[dt.date]:
     """Dates aligned to `build_features` output."""
-    return list(dates[vol_window + 1:])
+    return list(dates[vol_window + 1 :])
 
 
 # ─────────────────────────── forward filtering ────────────────────────────
+
 
 def _log_gaussian_diag(x: np.ndarray, means: np.ndarray, covars: np.ndarray) -> np.ndarray:
     """Log emission probabilities for a diagonal-covariance Gaussian HMM.
@@ -131,8 +138,9 @@ def _logsumexp(a: np.ndarray, axis=None, keepdims=False) -> np.ndarray:
     return out if keepdims else np.squeeze(out, axis=axis)
 
 
-def filtered_state_probabilities(framelogprob: np.ndarray, startprob: np.ndarray,
-                                 transmat: np.ndarray) -> np.ndarray:
+def filtered_state_probabilities(
+    framelogprob: np.ndarray, startprob: np.ndarray, transmat: np.ndarray
+) -> np.ndarray:
     """FORWARD-ONLY filtering: returns P(state_t | observations 1..t).
 
     This is the function that closes v1 defect C1. Note there is no backward
@@ -154,12 +162,18 @@ def filtered_state_probabilities(framelogprob: np.ndarray, startprob: np.ndarray
 
 # ─────────────────────────── the model ────────────────────────────────────
 
+
 class RegimeModel:
     """Daily 3-state Gaussian HMM with deterministic, stable labelling."""
 
-    def __init__(self, n_states: int = 3, vol_window: int = 10,
-                 min_confidence: float = 0.60, random_state: int = 42,
-                 n_iter: int = 200):
+    def __init__(
+        self,
+        n_states: int = 3,
+        vol_window: int = 10,
+        min_confidence: float = 0.60,
+        random_state: int = 42,
+        n_iter: int = 200,
+    ):
         self.n_states = n_states
         self.vol_window = vol_window
         self.min_confidence = min_confidence
@@ -197,15 +211,20 @@ class RegimeModel:
 
         try:
             import warnings
+
             with warnings.catch_warnings():
                 # hmmlearn emits a ConvergenceMonitor warning when EM plateaus.
                 # That is normal on noisy financial data and is not an error;
                 # what matters is whether the fitted parameters are usable,
                 # which the label map and confidence floor already police.
                 warnings.simplefilter("ignore")
-                m = GaussianHMM(n_components=self.n_states, covariance_type="diag",
-                                n_iter=self.n_iter, random_state=self.random_state,
-                                init_params="stmc")
+                m = GaussianHMM(
+                    n_components=self.n_states,
+                    covariance_type="diag",
+                    n_iter=self.n_iter,
+                    random_state=self.random_state,
+                    init_params="stmc",
+                )
                 m.fit(feats)
         except Exception as exc:
             self.fit_note = f"HMM fit failed: {type(exc).__name__}: {exc}"
@@ -214,7 +233,7 @@ class RegimeModel:
 
         self._means = np.asarray(m.means_, dtype=float)
         self._covars = np.asarray(m.covars_, dtype=float)
-        if self._covars.ndim == 3:                      # (k, d, d) -> diagonal
+        if self._covars.ndim == 3:  # (k, d, d) -> diagonal
             self._covars = np.array([np.diag(c) for c in self._covars])
         self._startprob = np.asarray(m.startprob_, dtype=float)
         self._transmat = np.asarray(m.transmat_, dtype=float)
@@ -223,10 +242,15 @@ class RegimeModel:
         self.fitted_through = through_date.isoformat() if through_date else None
         self.fit_note = "ok"
 
-        log.info("Regime model fitted (%d rows, hash %s). States: %s",
-                 len(feats), self.model_hash,
-                 {self._label_map[i].value: f"mean_ret={self._means[i][0]:+.5f}"
-                  for i in range(self.n_states)})
+        log.info(
+            "Regime model fitted (%d rows, hash %s). States: %s",
+            len(feats),
+            self.model_hash,
+            {
+                self._label_map[i].value: f"mean_ret={self._means[i][0]:+.5f}"
+                for i in range(self.n_states)
+            },
+        )
         return True
 
     def _build_label_map(self, means: np.ndarray) -> dict[int, Regime]:
@@ -235,7 +259,7 @@ class RegimeModel:
         Highest mean return -> BULL, lowest -> BEAR, remainder -> CHOP.
         Applied on EVERY fit, so semantics survive a refit.
         """
-        order = np.argsort(means[:, 0])          # ascending mean return
+        order = np.argsort(means[:, 0])  # ascending mean return
         mapping: dict[int, Regime] = {}
         mapping[int(order[0])] = Regime.BEAR
         mapping[int(order[-1])] = Regime.BULL
@@ -257,12 +281,14 @@ class RegimeModel:
         result — the property `tests/test_regime.py` asserts directly.
         """
         if not self.is_fitted:
-            return RegimeResult(Regime.UNKNOWN, 0.0, method="unfitted",
-                                note=self.fit_note or "model not fitted")
+            return RegimeResult(
+                Regime.UNKNOWN, 0.0, method="unfitted", note=self.fit_note or "model not fitted"
+            )
         feats = build_features(closes, self.vol_window)
         if len(feats) == 0:
-            return RegimeResult(Regime.UNKNOWN, 0.0, method="hmm",
-                                note="not enough observations to build features")
+            return RegimeResult(
+                Regime.UNKNOWN, 0.0, method="hmm", note="not enough observations to build features"
+            )
 
         flp = _log_gaussian_diag(feats, self._means, self._covars)
         filt = filtered_state_probabilities(flp, self._startprob, self._transmat)
@@ -278,23 +304,36 @@ class RegimeModel:
 
         if conf < self.min_confidence:
             # v1 had no confidence floor: a 34/33/33 split counted as a regime.
-            return RegimeResult(Regime.CHOP, conf, probs, "hmm", self.model_hash,
-                                note=f"max confidence {conf:.2f} < {self.min_confidence} "
-                                     f"— treated as CHOP")
+            return RegimeResult(
+                Regime.CHOP,
+                conf,
+                probs,
+                "hmm",
+                self.model_hash,
+                note=f"max confidence {conf:.2f} < {self.min_confidence} — treated as CHOP",
+            )
         return RegimeResult(Regime(best_label), conf, probs, "hmm", self.model_hash)
 
     # ── persistence ───────────────────────────────────────────────────────
     def save(self, path: str | Path) -> None:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_bytes(pickle.dumps({
-            "n_states": self.n_states, "vol_window": self.vol_window,
-            "min_confidence": self.min_confidence, "means": self._means,
-            "covars": self._covars, "startprob": self._startprob,
-            "transmat": self._transmat,
-            "label_map": {k: v.value for k, v in self._label_map.items()},
-            "model_hash": self.model_hash, "fitted_through": self.fitted_through,
-        }))
+        p.write_bytes(
+            pickle.dumps(
+                {
+                    "n_states": self.n_states,
+                    "vol_window": self.vol_window,
+                    "min_confidence": self.min_confidence,
+                    "means": self._means,
+                    "covars": self._covars,
+                    "startprob": self._startprob,
+                    "transmat": self._transmat,
+                    "label_map": {k: v.value for k, v in self._label_map.items()},
+                    "model_hash": self.model_hash,
+                    "fitted_through": self.fitted_through,
+                }
+            )
+        )
 
     @classmethod
     def load(cls, path: str | Path) -> RegimeModel | None:
@@ -306,8 +345,9 @@ class RegimeModel:
         except Exception as exc:
             log.warning("Could not load regime model: %s", exc)
             return None
-        m = cls(n_states=d["n_states"], vol_window=d["vol_window"],
-                min_confidence=d["min_confidence"])
+        m = cls(
+            n_states=d["n_states"], vol_window=d["vol_window"], min_confidence=d["min_confidence"]
+        )
         m._means, m._covars = d["means"], d["covars"]
         m._startprob, m._transmat = d["startprob"], d["transmat"]
         m._label_map = {int(k): Regime(v) for k, v in d["label_map"].items()}
@@ -318,8 +358,10 @@ class RegimeModel:
 
 # ─────────────────────────── fallback ─────────────────────────────────────
 
-def rule_based_regime(closes: np.ndarray, fast: int = 21, slow: int = 50,
-                      slope_lookback: int = 5) -> RegimeResult:
+
+def rule_based_regime(
+    closes: np.ndarray, fast: int = 21, slow: int = 50, slope_lookback: int = 5
+) -> RegimeResult:
     """Deterministic fallback when hmmlearn is unavailable or the fit fails.
 
     Deliberately crude: a fast/slow EMA relationship plus slope. Being obviously
@@ -327,25 +369,26 @@ def rule_based_regime(closes: np.ndarray, fast: int = 21, slow: int = 50,
     """
     closes = np.asarray(closes, dtype=float)
     if len(closes) < slow + slope_lookback + 1:
-        return RegimeResult(Regime.UNKNOWN, 0.0, method="rule_based",
-                            note="insufficient history")
+        return RegimeResult(Regime.UNKNOWN, 0.0, method="rule_based", note="insufficient history")
     f, s = ema(closes, fast), ema(closes, slow)
     if np.isnan(f[-1]) or np.isnan(s[-1]) or np.isnan(f[-1 - slope_lookback]):
-        return RegimeResult(Regime.UNKNOWN, 0.0, method="rule_based",
-                            note="indicators undefined")
+        return RegimeResult(Regime.UNKNOWN, 0.0, method="rule_based", note="indicators undefined")
     spread = (f[-1] - s[-1]) / s[-1]
     slope = (f[-1] - f[-1 - slope_lookback]) / f[-1 - slope_lookback]
     conf = float(min(1.0, abs(spread) * 120.0))
     if spread > 0.002 and slope > 0:
-        return RegimeResult(Regime.BULL, max(conf, 0.6), method="rule_based",
-                            note="EMA21 above EMA50 and rising")
+        return RegimeResult(
+            Regime.BULL, max(conf, 0.6), method="rule_based", note="EMA21 above EMA50 and rising"
+        )
     if spread < -0.002 and slope < 0:
-        return RegimeResult(Regime.BEAR, max(conf, 0.6), method="rule_based",
-                            note="EMA21 below EMA50 and falling")
+        return RegimeResult(
+            Regime.BEAR, max(conf, 0.6), method="rule_based", note="EMA21 below EMA50 and falling"
+        )
     return RegimeResult(Regime.CHOP, 0.5, method="rule_based", note="no clear trend")
 
 
 # ─────────────────────────── intraday filter ──────────────────────────────
+
 
 @dataclass
 class IntradayChopResult:
@@ -355,15 +398,25 @@ class IntradayChopResult:
     reason: str
 
     def as_dict(self) -> dict:
-        return {"is_trending": self.is_trending, "adx": round(self.adx, 2),
-                "atr_percentile": round(self.atr_percentile, 1), "reason": self.reason}
+        return {
+            "is_trending": self.is_trending,
+            "adx": round(self.adx, 2),
+            "atr_percentile": round(self.atr_percentile, 1),
+            "reason": self.reason,
+        }
 
 
-def intraday_chop_filter(high: np.ndarray, low: np.ndarray, close: np.ndarray,
-                         adx_min: float = 20.0, atr_pct_min: float = 20.0,
-                         atr_pct_max: float = 90.0, adx_period: int = 14,
-                         atr_period: int = 14,
-                         atr_lookback: int = 200) -> IntradayChopResult:
+def intraday_chop_filter(
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
+    adx_min: float = 20.0,
+    atr_pct_min: float = 20.0,
+    atr_pct_max: float = 90.0,
+    adx_period: int = 14,
+    atr_period: int = 14,
+    atr_lookback: int = 200,
+) -> IntradayChopResult:
     """The per-bar gate the daily HMM cannot provide (v1 defect C3).
 
     Two conditions:
@@ -381,30 +434,43 @@ def intraday_chop_filter(high: np.ndarray, low: np.ndarray, close: np.ndarray,
     atr_pct = rolling_percentile_of_last(atr_series, atr_lookback)
 
     if np.isnan(cur_adx):
-        return IntradayChopResult(False, float("nan"), atr_pct,
-                                  "ADX undefined — insufficient bars (warm-up)")
+        return IntradayChopResult(
+            False, float("nan"), atr_pct, "ADX undefined — insufficient bars (warm-up)"
+        )
     if cur_adx < adx_min:
-        return IntradayChopResult(False, cur_adx, atr_pct,
-                                  f"ADX {cur_adx:.1f} < {adx_min} — intraday chop")
+        return IntradayChopResult(
+            False, cur_adx, atr_pct, f"ADX {cur_adx:.1f} < {adx_min} — intraday chop"
+        )
     if not np.isnan(atr_pct):
         if atr_pct < atr_pct_min:
-            return IntradayChopResult(False, cur_adx, atr_pct,
-                                      f"ATR percentile {atr_pct:.0f} < {atr_pct_min} "
-                                      "— too quiet to cover costs")
+            return IntradayChopResult(
+                False,
+                cur_adx,
+                atr_pct,
+                f"ATR percentile {atr_pct:.0f} < {atr_pct_min} — too quiet to cover costs",
+            )
         if atr_pct > atr_pct_max:
-            return IntradayChopResult(False, cur_adx, atr_pct,
-                                      f"ATR percentile {atr_pct:.0f} > {atr_pct_max} "
-                                      "— volatility extreme, stops will be run")
-    return IntradayChopResult(True, cur_adx, atr_pct,
-                              f"ADX {cur_adx:.1f}, ATR pct {atr_pct:.0f}")
+            return IntradayChopResult(
+                False,
+                cur_adx,
+                atr_pct,
+                f"ATR percentile {atr_pct:.0f} > {atr_pct_max} "
+                "— volatility extreme, stops will be run",
+            )
+    return IntradayChopResult(True, cur_adx, atr_pct, f"ADX {cur_adx:.1f}, ATR pct {atr_pct:.0f}")
 
 
 # ─────────────────────────── orchestration ────────────────────────────────
 
-def compute_for_date(dates: list[dt.date], closes: np.ndarray, target_date: dt.date,
-                     model: RegimeModel | None = None,
-                     fallback: str = "rule_based",
-                     engine: str = "rule_based") -> tuple[RegimeResult, RegimeModel | None]:
+
+def compute_for_date(
+    dates: list[dt.date],
+    closes: np.ndarray,
+    target_date: dt.date,
+    model: RegimeModel | None = None,
+    fallback: str = "rule_based",
+    engine: str = "rule_based",
+) -> tuple[RegimeResult, RegimeModel | None]:
     """Regime for `target_date`, using ONLY data strictly before it.
 
     This function is where v1 defect C1 is actually prevented. It slices the
@@ -421,8 +487,9 @@ def compute_for_date(dates: list[dt.date], closes: np.ndarray, target_date: dt.d
 
     keep = [i for i, d in enumerate(dates) if d < target_date]
     if not keep:
-        return RegimeResult(Regime.UNKNOWN, 0.0, method="none",
-                            note="no history before the target date"), model
+        return RegimeResult(
+            Regime.UNKNOWN, 0.0, method="none", note="no history before the target date"
+        ), model
     hist = closes[: keep[-1] + 1]
     through = dates[keep[-1]]
 
@@ -452,8 +519,17 @@ def compute_for_date(dates: list[dt.date], closes: np.ndarray, target_date: dt.d
         res.note = (res.note + " (HMM unavailable: " + (m.fit_note or "?") + ")").strip()
         return res, m
     if fallback == "allow":
-        return RegimeResult(Regime.UNKNOWN, 0.0, method="disabled",
-                            as_of=through.isoformat(),
-                            note="regime gate disabled by config"), m
-    return RegimeResult(Regime.CHOP, 0.0, method="blocked", as_of=through.isoformat(),
-                        note="regime unavailable and fallback=block"), m
+        return RegimeResult(
+            Regime.UNKNOWN,
+            0.0,
+            method="disabled",
+            as_of=through.isoformat(),
+            note="regime gate disabled by config",
+        ), m
+    return RegimeResult(
+        Regime.CHOP,
+        0.0,
+        method="blocked",
+        as_of=through.isoformat(),
+        note="regime unavailable and fallback=block",
+    ), m

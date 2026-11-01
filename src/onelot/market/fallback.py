@@ -55,9 +55,12 @@ class YFinanceFallback:
 
     name = "yfinance"
 
-    def __init__(self, symbol: str = "BANKNIFTY",
-                 poll_interval_sec: float = 300.0,
-                 divergence_pct: float = 0.005):
+    def __init__(
+        self,
+        symbol: str = "BANKNIFTY",
+        poll_interval_sec: float = 300.0,
+        divergence_pct: float = 0.005,
+    ):
         self.symbol = symbol
         self.ticker = YF_SYMBOLS.get(symbol.upper(), symbol)
         self.poll_interval_sec = poll_interval_sec
@@ -72,18 +75,21 @@ class YFinanceFallback:
     def _probe(self) -> bool:
         try:
             import yfinance  # noqa: F401
+
             return True
         except ImportError:
-            log.info("yfinance not installed — the free fallback is disabled. "
-                     "The engine works without it; you lose the independent "
-                     "index cross-check and free history backfill.")
+            log.info(
+                "yfinance not installed — the free fallback is disabled. "
+                "The engine works without it; you lose the independent "
+                "index cross-check and free history backfill."
+            )
             return False
 
     # ── history ───────────────────────────────────────────────────────────
     def _download(self, period: str, interval: str):
         import yfinance as yf
-        return yf.Ticker(self.ticker).history(
-            period=period, interval=interval, auto_adjust=False)
+
+        return yf.Ticker(self.ticker).history(period=period, interval=interval, auto_adjust=False)
 
     def _to_bars(self, frame, has_volume: bool) -> list[Bar]:
         out: list[Bar] = []
@@ -95,8 +101,12 @@ class YFinanceFallback:
             except Exception:
                 continue
             try:
-                o, h, low, c = (float(row["Open"]), float(row["High"]),
-                                float(row["Low"]), float(row["Close"]))
+                o, h, low, c = (
+                    float(row["Open"]),
+                    float(row["High"]),
+                    float(row["Low"]),
+                    float(row["Close"]),
+                )
             except (KeyError, TypeError, ValueError):
                 continue
             if not all(v > 0 for v in (o, h, low, c)):
@@ -149,9 +159,10 @@ class YFinanceFallback:
             return None
         now = now or dt.datetime.now(IST)
         with self._lock:
-            fresh = (self._last_price_at is not None
-                     and (now - self._last_price_at).total_seconds()
-                     < self.poll_interval_sec)
+            fresh = (
+                self._last_price_at is not None
+                and (now - self._last_price_at).total_seconds() < self.poll_interval_sec
+            )
             if fresh:
                 return self._last_price
         try:
@@ -166,8 +177,9 @@ class YFinanceFallback:
             self._last_price_at = now
             return self._last_price
 
-    def check_divergence(self, broker_price: float | None,
-                         now: dt.datetime | None = None) -> tuple[bool, str]:
+    def check_divergence(
+        self, broker_price: float | None, now: dt.datetime | None = None
+    ) -> tuple[bool, str]:
         """Compare the broker's index level against an independent source.
 
         Catches the failure a staleness check cannot see: a feed that is still
@@ -184,16 +196,17 @@ class YFinanceFallback:
             return False, (
                 f"broker index {broker_price:,.0f} vs {self.name} {ref:,.0f} "
                 f"differ by {diff:.2%} (limit {self.divergence_pct:.2%}) — "
-                "one of the two feeds is wrong; verify on your terminal")
+                "one of the two feeds is wrong; verify on your terminal"
+            )
         return True, f"agrees within {diff:.3%}"
 
     def status(self) -> dict:
         return {
-            "source": self.name, "ticker": self.ticker,
+            "source": self.name,
+            "ticker": self.ticker,
             "available": self.available,
             "last_price": self._last_price,
-            "last_price_at": (self._last_price_at.isoformat()
-                              if self._last_price_at else None),
+            "last_price_at": (self._last_price_at.isoformat() if self._last_price_at else None),
             "divergence_warnings": self.divergence_warnings,
             "last_error": self.last_error,
             "note": "index data only — cannot supply an option chain or greeks",

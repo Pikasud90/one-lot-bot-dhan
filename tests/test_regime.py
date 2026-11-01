@@ -75,7 +75,7 @@ class TestLookAheadLeak:
         for cut in range(420, 480, 5):
             now_label = m.infer(closes[:cut]).regime
             idx = len(build_features(closes[:cut], m.vol_window)) - 1
-            with_future = self._filtered_label_at(m, closes[:cut + 100], idx)
+            with_future = self._filtered_label_at(m, closes[: cut + 100], idx)
             assert now_label == with_future, (
                 f"FILTERED label at cut={cut} changed once future data existed "
                 f"({now_label} -> {with_future}). The forward pass is leaking."
@@ -100,15 +100,15 @@ class TestLookAheadLeak:
             warnings.simplefilter("ignore")
             for seed in (11, 23, 47, 101, 202):
                 feats = build_features(synth_closes(600, seed), 10)
-                m = GaussianHMM(n_components=3, covariance_type="diag",
-                                n_iter=200, random_state=42)
+                m = GaussianHMM(n_components=3, covariance_type="diag", n_iter=200, random_state=42)
                 m.fit(feats[:300])
                 for cut in (320, 360, 380, 420, 460):
                     for extra in (20, 60, 120):
                         if cut + extra > len(feats):
                             continue
-                        changed = int(np.sum(
-                            m.predict(feats[:cut]) != m.predict(feats[:cut + extra])[:cut]))
+                        changed = int(
+                            np.sum(m.predict(feats[:cut]) != m.predict(feats[: cut + extra])[:cut])
+                        )
                         total += 1
                         rewritten += changed
                         leaky += bool(changed)
@@ -130,14 +130,14 @@ class TestLookAheadLeak:
         feats = build_features(synth_closes(600), 10)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            m = GaussianHMM(n_components=3, covariance_type="diag",
-                            n_iter=200, random_state=42)
+            m = GaussianHMM(n_components=3, covariance_type="diag", n_iter=200, random_state=42)
             m.fit(feats[:300])
         cut = 380
         p_short = m.predict_proba(feats[:cut])[-1]
-        p_long = m.predict_proba(feats[:cut + 120])[cut - 1]
+        p_long = m.predict_proba(feats[: cut + 120])[cut - 1]
         assert not np.allclose(p_short, p_long, atol=1e-6), (
-            "smoothed posteriors should differ once future data is available")
+            "smoothed posteriors should differ once future data is available"
+        )
 
     def test_compute_for_date_never_sees_the_target_day(self):
         closes = synth_closes(400)
@@ -182,7 +182,8 @@ class TestLabelStability:
             bear = [i for i, lbl in m._label_map.items() if lbl is Regime.BEAR][0]
             assert m._means[bull][0] > m._means[bear][0], (
                 "BULL must always be the higher-mean-return state, whatever "
-                "index EM happened to assign it")
+                "index EM happened to assign it"
+            )
 
     def test_model_hash_changes_when_the_model_changes(self):
         a, b = RegimeModel(), RegimeModel()
@@ -301,6 +302,5 @@ class TestIntradayChopFilter:
         assert not r.is_trending and "extreme" in r.reason
 
     def test_insufficient_bars_blocks_rather_than_guesses(self):
-        r = intraday_chop_filter(np.array([1.0, 2.0]), np.array([0.5, 1.0]),
-                                 np.array([0.8, 1.5]))
+        r = intraday_chop_filter(np.array([1.0, 2.0]), np.array([0.5, 1.0]), np.array([0.8, 1.5]))
         assert not r.is_trending and "warm-up" in r.reason

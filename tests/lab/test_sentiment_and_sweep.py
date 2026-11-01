@@ -17,7 +17,7 @@ class TestPlanWindows:
         assert (is_, oos) == (40, 10) and "as requested" in note
 
     def test_old_defaults_on_a_small_corpus_are_resized_not_zero_folds(self):
-        is_, oos, note = plan_windows(37, 40, 10)        # the live failure: 0 folds
+        is_, oos, note = plan_windows(37, 40, 10)  # the live failure: 0 folds
         folds = (37 - is_) // oos
         assert folds >= 3 and is_ >= 2 * oos and "auto-sized" in note
 
@@ -40,35 +40,67 @@ class TestSentiment:
 
     def test_bias_uses_only_scores_at_or_before_bar_close(self):
         idx = pd.date_range("2026-10-01 09:15", periods=6, freq="5min", tz="Asia/Kolkata")
-        scores = pd.Series([0.9, -0.9], index=pd.DatetimeIndex([
-            pd.Timestamp("2026-10-01 09:00", tz="Asia/Kolkata"),   # before the session: applies
-            pd.Timestamp("2026-10-01 09:31", tz="Asia/Kolkata"),   # applies from the bar closing >= 09:31
-        ]))
+        scores = pd.Series(
+            [0.9, -0.9],
+            index=pd.DatetimeIndex(
+                [
+                    pd.Timestamp(
+                        "2026-10-01 09:00", tz="Asia/Kolkata"
+                    ),  # before the session: applies
+                    pd.Timestamp(
+                        "2026-10-01 09:31", tz="Asia/Kolkata"
+                    ),  # applies from the bar closing >= 09:31
+                ]
+            ),
+        )
         b = bias_at(scores, idx, 5, threshold=0.2)
         # bars close at 09:20, 09:25, 09:30, 09:35, 09:40, 09:45
         assert b.tolist() == [1, 1, 1, -1, -1, -1]
 
     def test_stale_scores_are_ignored(self):
         idx = pd.date_range("2026-10-20 09:15", periods=3, freq="5min", tz="Asia/Kolkata")
-        scores = pd.Series([0.9], index=pd.DatetimeIndex([pd.Timestamp("2026-10-01", tz="Asia/Kolkata")]))
+        scores = pd.Series(
+            [0.9], index=pd.DatetimeIndex([pd.Timestamp("2026-10-01", tz="Asia/Kolkata")])
+        )
         assert bias_at(scores, idx, 5, max_age_days=5).tolist() == [0, 0, 0]
 
-    @pytest.mark.parametrize("mode,bias,exp_long,exp_short", [
-        ("off", 1, True, True), ("follow", -1, False, True), ("follow", 0, True, True), ("follow", 1, True, False),
-        ("strict", 0, False, False), ("strict", 1, True, False), ("contrarian", 1, False, True), ("contrarian", -1, True, False),
-    ])
+    @pytest.mark.parametrize(
+        "mode,bias,exp_long,exp_short",
+        [
+            ("off", 1, True, True),
+            ("follow", -1, False, True),
+            ("follow", 0, True, True),
+            ("follow", 1, True, False),
+            ("strict", 0, False, False),
+            ("strict", 1, True, False),
+            ("contrarian", 1, False, True),
+            ("contrarian", -1, True, False),
+        ],
+    )
     def test_gate_modes(self, mode, bias, exp_long, exp_short):
-        f = pd.DataFrame({"long_entry": [True], "short_entry": [True]}, index=[pd.Timestamp("2026-10-01 09:15", tz="Asia/Kolkata")])
+        f = pd.DataFrame(
+            {"long_entry": [True], "short_entry": [True]},
+            index=[pd.Timestamp("2026-10-01 09:15", tz="Asia/Kolkata")],
+        )
         g = apply_gate(f, np.array([bias]), mode)
-        assert bool(g["long_entry"].iloc[0]) is exp_long and bool(g["short_entry"].iloc[0]) is exp_short
+        assert (
+            bool(g["long_entry"].iloc[0]) is exp_long
+            and bool(g["short_entry"].iloc[0]) is exp_short
+        )
         assert bool(g["blk_sentiment_long"].iloc[0]) is (not exp_long)
 
     def test_parse_import_handles_headers_dates_and_scales(self):
-        rows = parse_import("date,score,conf\n2024-01-02,0.8,0.9\n2024-01-03 10:00,0.5\n# comment\n\n2024-01-04;0.1;0.4")
+        rows = parse_import(
+            "date,score,conf\n2024-01-02,0.8,0.9\n2024-01-03 10:00,0.5\n# comment\n\n2024-01-04;0.1;0.4"
+        )
         assert len(rows) == 3
-        assert rows[0]["ts"].hour == 9 and rows[0]["ts"].minute == 15      # date-only -> 09:15 IST
+        assert rows[0]["ts"].hour == 9 and rows[0]["ts"].minute == 15  # date-only -> 09:15 IST
         assert rows[1]["ts"].hour == 10
-        assert [round(r["score"], 2) for r in rows] == [0.6, 0.0, -0.8]     # 0..1 scale mapped to -1..1
+        assert [round(r["score"], 2) for r in rows] == [
+            0.6,
+            0.0,
+            -0.8,
+        ]  # 0..1 scale mapped to -1..1
         assert rows[2]["confidence"] == 0.4
 
 
@@ -76,7 +108,9 @@ class TestSweep:
     def test_plan_is_the_full_grid_over_the_desk_watchlist(self):
         combos = plan(["ema_cross", "orb"], None, ["5m", "15m"])
         insts = {c["instrument_key"] for c in combos}
-        assert "BANKNIFTY_OPT" in insts and "RELIANCE" in insts and "MM" in insts and len(insts) == 15
+        assert (
+            "BANKNIFTY_OPT" in insts and "RELIANCE" in insts and "MM" in insts and len(insts) == 15
+        )
         assert len(combos) == 2 * 15 * 2
         with pytest.raises(ValueError):
             plan(["nope"], ["SBIN"], ["5m"])
@@ -96,23 +130,49 @@ class TestSweep:
             cfg = {"strategy": strat, "instrument_key": inst, "timeframe": tf, "params": {}}
             if sweep:
                 cfg["_sweep_id"] = sweep
-            return {"id": i, "created_at": utcnow(), "kind": kind, "label": f"{strat} {inst}", "config": cfg,
-                    "status": "DONE", "progress": 1.0, "metrics": {"trades": trades, "expectancy_r": er, "profit_factor": pf,
-                                                                 "net_pnl": er * trades * 100, "category": "STOCK"}}
+            return {
+                "id": i,
+                "created_at": utcnow(),
+                "kind": kind,
+                "label": f"{strat} {inst}",
+                "config": cfg,
+                "status": "DONE",
+                "progress": 1.0,
+                "metrics": {
+                    "trades": trades,
+                    "expectancy_r": er,
+                    "profit_factor": pf,
+                    "net_pnl": er * trades * 100,
+                    "category": "STOCK",
+                },
+            }
+
         with lab_engine.begin() as conn:
-            conn.execute(backtest_runs.insert(), [
-                row(1, "ema_cross", "SBIN", "5m", 40, 0.1, 1.3),
-                row(2, "ema_cross", "SBIN", "5m", 45, 0.3, 1.6, sweep=9),      # newer duplicate config -> wins
-                row(3, "orb", "RELIANCE", "15m", 4, 1.0, 5.0),                 # too few trades -> unranked
-                row(4, "orb", "RELIANCE", "15m", 60, 0.05, 1.1, kind="walkforward"),
-            ])
-            conn.execute(backtest_runs.insert().values(id=5, created_at=utcnow(), kind="single", status="FAILED",
-                                                       config={"strategy": "x", "instrument_key": "Y", "timeframe": "5m"}))
+            conn.execute(
+                backtest_runs.insert(),
+                [
+                    row(1, "ema_cross", "SBIN", "5m", 40, 0.1, 1.3),
+                    row(
+                        2, "ema_cross", "SBIN", "5m", 45, 0.3, 1.6, sweep=9
+                    ),  # newer duplicate config -> wins
+                    row(3, "orb", "RELIANCE", "15m", 4, 1.0, 5.0),  # too few trades -> unranked
+                    row(4, "orb", "RELIANCE", "15m", 60, 0.05, 1.1, kind="walkforward"),
+                ],
+            )
+            conn.execute(
+                backtest_runs.insert().values(
+                    id=5,
+                    created_at=utcnow(),
+                    kind="single",
+                    status="FAILED",
+                    config={"strategy": "x", "instrument_key": "Y", "timeframe": "5m"},
+                )
+            )
         rows = leaderboard(lab_engine)
         assert [r["run_id"] for r in rows][:2] == [2, 4]
         assert rows[0]["sweep_id"] == 9 and rows[0]["trades"] == 45
         assert any(r["run_id"] == 3 and r["score"] is None for r in rows)
-        assert not any(r["run_id"] == 1 for r in rows)                        # superseded by run 2
+        assert not any(r["run_id"] == 1 for r in rows)  # superseded by run 2
         assert [r["run_id"] for r in leaderboard(lab_engine, sweep_id=9)] == [2]
         assert [r["run_id"] for r in leaderboard(lab_engine, kind="walkforward")] == [4]
         s = summarise(rows)

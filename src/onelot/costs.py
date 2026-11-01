@@ -64,11 +64,17 @@ class CostBreakdown:
 
     def as_dict(self) -> dict[str, float]:
         return {
-            "side": self.side, "premium": self.premium, "qty": self.qty,
-            "turnover": round(self.turnover, 2), "brokerage": round(self.brokerage, 2),
-            "stt": round(self.stt, 2), "exchange_txn": round(self.exchange_txn, 2),
-            "sebi_fee": round(self.sebi_fee, 4), "ipft": round(self.ipft, 4),
-            "stamp_duty": round(self.stamp_duty, 2), "gst": round(self.gst, 2),
+            "side": self.side,
+            "premium": self.premium,
+            "qty": self.qty,
+            "turnover": round(self.turnover, 2),
+            "brokerage": round(self.brokerage, 2),
+            "stt": round(self.stt, 2),
+            "exchange_txn": round(self.exchange_txn, 2),
+            "sebi_fee": round(self.sebi_fee, 4),
+            "ipft": round(self.ipft, 4),
+            "stamp_duty": round(self.stamp_duty, 2),
+            "gst": round(self.gst, 2),
             "total": round(self.total, 2),
         }
 
@@ -103,9 +109,18 @@ class CostModel:
 
         total = brokerage + stt + exchange_txn + sebi_fee + ipft + stamp_duty + gst
         return CostBreakdown(
-            side=side, premium=premium, qty=qty, turnover=turnover,
-            brokerage=brokerage, stt=stt, exchange_txn=exchange_txn,
-            sebi_fee=sebi_fee, ipft=ipft, stamp_duty=stamp_duty, gst=gst, total=total,
+            side=side,
+            premium=premium,
+            qty=qty,
+            turnover=turnover,
+            brokerage=brokerage,
+            stt=stt,
+            exchange_txn=exchange_txn,
+            sebi_fee=sebi_fee,
+            ipft=ipft,
+            stamp_duty=stamp_duty,
+            gst=gst,
+            total=total,
         )
 
     # ── round trip ────────────────────────────────────────────────────────
@@ -156,6 +171,7 @@ class CostModel:
 
 # ─────────────────────── execution-effective pricing ──────────────────────
 
+
 @dataclass(frozen=True)
 class Quote:
     """A two-sided market. `ltp` is deliberately NOT used for sizing decisions."""
@@ -205,6 +221,7 @@ def effective_exit(level: float, exec_cfg: ExecAssumptionsCfg, tick: float) -> f
 
 # ────────────────────────── trade economics ───────────────────────────────
 
+
 @dataclass(frozen=True)
 class TradeEconomics:
     """Everything the gates and the human need, in net rupees.
@@ -223,9 +240,9 @@ class TradeEconomics:
     stop_exit_eff: float
     target_exit_eff: float
 
-    r_per_unit: float          # premium points of risk, per unit, gross
-    net_risk: float            # rupees lost if the stop fills
-    net_reward: float          # rupees made if the target fills
+    r_per_unit: float  # premium points of risk, per unit, gross
+    net_risk: float  # rupees lost if the stop fills
+    net_reward: float  # rupees made if the target fills
     rr_net: float
     breakeven: float
 
@@ -240,13 +257,19 @@ class TradeEconomics:
 
     def as_dict(self) -> dict:
         return {
-            "qty": self.qty, "lots": self.lots, "lot_size": self.lot_size,
-            "entry_eff": self.entry_eff, "stop_level": self.stop_level,
+            "qty": self.qty,
+            "lots": self.lots,
+            "lot_size": self.lot_size,
+            "entry_eff": self.entry_eff,
+            "stop_level": self.stop_level,
             "target_level": self.target_level,
-            "stop_exit_eff": self.stop_exit_eff, "target_exit_eff": self.target_exit_eff,
+            "stop_exit_eff": self.stop_exit_eff,
+            "target_exit_eff": self.target_exit_eff,
             "r_per_unit": round(self.r_per_unit, 2),
-            "net_risk": round(self.net_risk, 2), "net_reward": round(self.net_reward, 2),
-            "rr_net": round(self.rr_net, 3), "breakeven": self.breakeven,
+            "net_risk": round(self.net_risk, 2),
+            "net_reward": round(self.net_reward, 2),
+            "rr_net": round(self.rr_net, 3),
+            "breakeven": self.breakeven,
             "premium_outlay": round(self.premium_outlay, 2),
             "total_cost_at_target": round(self.total_cost_at_target, 2),
             "cost_pct_of_gross": round(self.cost_pct_of_gross, 4),
@@ -286,13 +309,25 @@ def compute_economics(
         # Still return a coherent object so the audit log can record *why*.
         zero = cost_model.leg(entry_eff, 0, "buy")
         return TradeEconomics(
-            qty=0, lots=0, lot_size=lot_size, entry_eff=entry_eff,
-            stop_level=stop_level, target_level=target_level,
-            stop_exit_eff=stop_exit_eff, target_exit_eff=target_exit_eff,
-            r_per_unit=stop_distance, net_risk=0.0, net_reward=0.0, rr_net=0.0,
+            qty=0,
+            lots=0,
+            lot_size=lot_size,
+            entry_eff=entry_eff,
+            stop_level=stop_level,
+            target_level=target_level,
+            stop_exit_eff=stop_exit_eff,
+            target_exit_eff=target_exit_eff,
+            r_per_unit=stop_distance,
+            net_risk=0.0,
+            net_reward=0.0,
+            rr_net=0.0,
             breakeven=cost_model.breakeven_premium(entry_eff, lot_size, tick),
-            entry_costs=zero, stop_costs=zero, target_costs=zero,
-            premium_outlay=0.0, total_cost_at_target=0.0, cost_pct_of_gross=0.0,
+            entry_costs=zero,
+            stop_costs=zero,
+            target_costs=zero,
+            premium_outlay=0.0,
+            total_cost_at_target=0.0,
+            cost_pct_of_gross=0.0,
             warnings=["qty is zero — not sizeable within the risk budget"],
         )
 
@@ -317,12 +352,24 @@ def compute_economics(
         warnings.append(f"costs consume {cost_pct:.0%} of gross profit at target")
 
     return TradeEconomics(
-        qty=qty, lots=lots, lot_size=lot_size, entry_eff=entry_eff,
-        stop_level=stop_level, target_level=target_level,
-        stop_exit_eff=stop_exit_eff, target_exit_eff=target_exit_eff,
-        r_per_unit=stop_distance, net_risk=net_risk, net_reward=net_reward,
-        rr_net=rr_net, breakeven=breakeven,
-        entry_costs=entry_costs, stop_costs=stop_costs, target_costs=target_costs,
-        premium_outlay=entry_eff * qty, total_cost_at_target=total_cost_at_target,
-        cost_pct_of_gross=cost_pct, warnings=warnings,
+        qty=qty,
+        lots=lots,
+        lot_size=lot_size,
+        entry_eff=entry_eff,
+        stop_level=stop_level,
+        target_level=target_level,
+        stop_exit_eff=stop_exit_eff,
+        target_exit_eff=target_exit_eff,
+        r_per_unit=stop_distance,
+        net_risk=net_risk,
+        net_reward=net_reward,
+        rr_net=rr_net,
+        breakeven=breakeven,
+        entry_costs=entry_costs,
+        stop_costs=stop_costs,
+        target_costs=target_costs,
+        premium_outlay=entry_eff * qty,
+        total_cost_at_target=total_cost_at_target,
+        cost_pct_of_gross=cost_pct,
+        warnings=warnings,
     )

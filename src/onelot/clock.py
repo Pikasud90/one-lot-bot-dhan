@@ -160,8 +160,9 @@ def bar_close_time(bar_open: dt.datetime, interval_min: int) -> dt.datetime:
     return bar_open + dt.timedelta(minutes=interval_min)
 
 
-def is_bar_closed(bar_open: dt.datetime, interval_min: int, ts: dt.datetime,
-                  settle_delay_sec: float = 0.0) -> bool:
+def is_bar_closed(
+    bar_open: dt.datetime, interval_min: int, ts: dt.datetime, settle_delay_sec: float = 0.0
+) -> bool:
     """INVARIANT I2 helper. A bar is usable only once it has fully closed
     (plus a settle delay for late prints). Reading the forming bar is the
     repainting bug that makes every backtest a lie (v1 defect C4).
@@ -169,7 +170,9 @@ def is_bar_closed(bar_open: dt.datetime, interval_min: int, ts: dt.datetime,
     return ts >= bar_close_time(bar_open, interval_min) + dt.timedelta(seconds=settle_delay_sec)
 
 
-def assert_clock_sane(tolerance_sec: float, reference: dt.datetime | None = None) -> tuple[bool, str]:
+def assert_clock_sane(
+    tolerance_sec: float, reference: dt.datetime | None = None
+) -> tuple[bool, str]:
     """Sanity-check the host clock. Returns (ok, message); never raises.
 
     Without a network time source we can only check that the machine's

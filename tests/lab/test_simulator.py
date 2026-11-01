@@ -35,8 +35,17 @@ def frame(ohlc, start="2026-09-01 09:15", freq="5min"):
     return df
 
 
-P = {"stop_atr_min": 0.1, "stop_atr_max": 10, "min_risk_pct": 0.0, "target_r": 2.0, "trail_atr_mult": 0.0,
-         "cooldown_bars": 0, "max_trades_per_day": 5, "entry_start": "09:15", "entry_end": "15:00"}
+P = {
+    "stop_atr_min": 0.1,
+    "stop_atr_max": 10,
+    "min_risk_pct": 0.0,
+    "target_r": 2.0,
+    "trail_atr_mult": 0.0,
+    "cooldown_bars": 0,
+    "max_trades_per_day": 5,
+    "entry_start": "09:15",
+    "entry_end": "15:00",
+}
 
 
 def flat(n, px=100.0):
@@ -85,9 +94,15 @@ def test_fine_path_resolves_target_first():
     df = frame(bars)
     df.loc[df.index[2], ["long_entry", "long_stop"]] = [True, 99.0]
     amb = df.index[4]
-    fine = pd.DataFrame({"open": [100, 101, 102.5, 101, 99], "high": [101, 102.5, 103, 101.5, 99.5],
-                         "low": [99.9, 100.8, 102, 100, 98.5], "close": [101, 102.4, 102.6, 100.2, 99]},
-                        index=pd.date_range(amb, periods=5, freq="1min"))
+    fine = pd.DataFrame(
+        {
+            "open": [100, 101, 102.5, 101, 99],
+            "high": [101, 102.5, 103, 101.5, 99.5],
+            "low": [99.9, 100.8, 102, 100, 98.5],
+            "close": [101, 102.4, 102.6, 100.2, 99],
+        },
+        index=pd.date_range(amb, periods=5, freq="1min"),
+    )
     t = simulate(df, StrategyParams(**P), "X", "s", slippage_pct=0.0, fine=fine)
     assert t[0].exit_reason == "target"
 
@@ -122,8 +137,16 @@ def test_signal_on_last_bar_of_day_is_dropped():
 
 
 def test_trailing_stop_ratchets_and_exits():
-    bars = flat(3) + [[100, 100.1, 99.9, 100], [100, 102.2, 100, 102], [102, 104.2, 102, 104],
-                      [104, 104.1, 102.4, 102.5]] + flat(2, 102.5)
+    bars = (
+        flat(3)
+        + [
+            [100, 100.1, 99.9, 100],
+            [100, 102.2, 100, 102],
+            [102, 104.2, 102, 104],
+            [104, 104.1, 102.4, 102.5],
+        ]
+        + flat(2, 102.5)
+    )
     df = frame(bars)
     df.loc[df.index[2], ["long_entry", "long_stop"]] = [True, 99.0]
     p = StrategyParams(**{**P, "target_r": 0.0, "trail_atr_mult": 1.5, "trail_activate_r": 1.0})
@@ -141,7 +164,11 @@ def test_min_risk_floor_widens_stop():
 
 
 def test_partial_then_breakeven():
-    bars = flat(3) + [[100, 100.1, 99.9, 100], [100, 101.2, 100.5, 101], [101, 101.1, 99.9, 100]] + flat(2, 100)
+    bars = (
+        flat(3)
+        + [[100, 100.1, 99.9, 100], [100, 101.2, 100.5, 101], [101, 101.1, 99.9, 100]]
+        + flat(2, 100)
+    )
     df = frame(bars)
     df.loc[df.index[2], ["long_entry", "long_stop"]] = [True, 99.0]
     p = StrategyParams(**{**P, "target_r": 3.0, "partial_r": 1.0, "partial_frac": 0.5})
@@ -154,21 +181,30 @@ def test_partial_then_breakeven():
 
 # ── execution models (one unit) ───────────────────────────────────────────
 
+
 @pytest.fixture(scope="module")
 def cost_cfg(project_root):
     return CostConfig.load(project_root / "config" / "costs.yaml")
 
 
 def _one_trade(px_entry=100.0, px_exit=103.0, stop=99.0, side=1):
-    bars = flat(3, px_entry) + [[px_entry, px_entry + 0.1, px_entry - 0.1, px_entry],
-                                 [px_entry, max(px_entry, px_exit) + 0.5, min(px_entry, px_exit) - 0.5, px_exit]] + flat(3, px_exit)
+    bars = (
+        flat(3, px_entry)
+        + [
+            [px_entry, px_entry + 0.1, px_entry - 0.1, px_entry],
+            [px_entry, max(px_entry, px_exit) + 0.5, min(px_entry, px_exit) - 0.5, px_exit],
+        ]
+        + flat(3, px_exit)
+    )
     df = frame(bars)
     if side == 1:
         df.loc[df.index[2], ["long_entry", "long_stop"]] = [True, stop]
     else:
         df.loc[df.index[2], ["short_entry", "short_stop"]] = [True, stop]
     # atr is 1.0 in these frames, so lift the ATR/percent caps that would skip a wide stop
-    p = StrategyParams(**{**P, "target_r": 0.0, "max_bars": 2, "stop_atr_max": 1e9, "max_risk_pct": 100.0})
+    p = StrategyParams(
+        **{**P, "target_r": 0.0, "max_bars": 2, "stop_atr_max": 1e9, "max_risk_pct": 100.0}
+    )
     trades = simulate(df, p, "X", "s", slippage_pct=0.0)
     assert len(trades) == 1
     return trades[0]
@@ -184,7 +220,9 @@ def test_stock_is_one_share(cost_cfg):
 
 
 def test_futures_is_one_lot_and_short_profits_on_fall(cost_cfg):
-    spec = InstrumentSpec("BANKNIFTY_FUT", "BN fut", "FUTURES", "BANKNIFTY", 35, 0.05, "index_futures")
+    spec = InstrumentSpec(
+        "BANKNIFTY_FUT", "BN fut", "FUTURES", "BANKNIFTY", 35, 0.05, "index_futures"
+    )
     t = _one_trade(px_entry=100.0, px_exit=97.0, stop=101.0, side=-1)
     row = execute_trade(t, spec, CostModel(cost_cfg.product("index_futures")), BacktestCfg(), 0.0)
     assert row["qty"] == 35 and row["side"] == "SHORT"
@@ -193,16 +231,27 @@ def test_futures_is_one_lot_and_short_profits_on_fall(cost_cfg):
 
 
 def test_currency_lot_and_price_per(cost_cfg):
-    spec = InstrumentSpec("JPYINR", "JPY/INR", "CURRENCY", "JPYINR", 100000, 0.0025, "currency_futures",
-                          price_per=100)
+    spec = InstrumentSpec(
+        "JPYINR", "JPY/INR", "CURRENCY", "JPYINR", 100000, 0.0025, "currency_futures", price_per=100
+    )
     t = _one_trade(px_entry=56.0, px_exit=56.5, stop=55.7)
-    row = execute_trade(t, spec, CostModel(cost_cfg.product("currency_futures")), BacktestCfg(), 0.0)
+    row = execute_trade(
+        t, spec, CostModel(cost_cfg.product("currency_futures")), BacktestCfg(), 0.0
+    )
     assert row["gross_pnl"] == pytest.approx((t.avg_exit - 56.0) * 100000 / 100, abs=0.05)
 
 
 def test_option_buy_ce_on_long_and_pe_on_short(cost_cfg):
-    spec = InstrumentSpec("BANKNIFTY_OPT", "BN opt", "OPTIONS", "BANKNIFTY", 35, 0.05, "index_options",
-                          strike_step=100)
+    spec = InstrumentSpec(
+        "BANKNIFTY_OPT",
+        "BN opt",
+        "OPTIONS",
+        "BANKNIFTY",
+        35,
+        0.05,
+        "index_options",
+        strike_step=100,
+    )
     bt = BacktestCfg(option_iv_source="constant", option_iv_constant=0.15)
     pricer = OptionPricer(bt, None)
     t = _one_trade(px_entry=50000.0, px_exit=50400.0, stop=49800.0)
@@ -218,7 +267,9 @@ def test_option_buy_ce_on_long_and_pe_on_short(cost_cfg):
 
 
 def test_option_loss_bounded_by_premium_and_stop_in_rupees(cost_cfg):
-    spec = InstrumentSpec("NIFTY_OPT", "N opt", "OPTIONS", "NIFTY", 75, 0.05, "index_options", strike_step=50)
+    spec = InstrumentSpec(
+        "NIFTY_OPT", "N opt", "OPTIONS", "NIFTY", 75, 0.05, "index_options", strike_step=50
+    )
     bt = BacktestCfg(option_iv_source="constant", option_iv_constant=0.12)
     pricer = OptionPricer(bt, None)
     t = _one_trade(px_entry=25000.0, px_exit=24850.0, stop=24900.0)
@@ -237,7 +288,9 @@ def test_monthly_expiry_and_strike_grid():
 
 
 def test_thirty_percent_rule_math():
-    df = pd.DataFrame({"net_pnl": [3000, -1000, -1000, -1000, 3000, -1000, -1000, 3000, -1000, -1000]})
+    df = pd.DataFrame(
+        {"net_pnl": [3000, -1000, -1000, -1000, 3000, -1000, -1000, 3000, -1000, -1000]}
+    )
     r = thirty_percent_rule(df)
     assert r["payoff"] == pytest.approx(3.0)
     assert r["breakeven_win_rate"] == pytest.approx(25.0)

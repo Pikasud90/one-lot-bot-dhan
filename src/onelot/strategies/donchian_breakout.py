@@ -20,14 +20,19 @@ from .regime import NEUTRAL, TREND, VOLATILE
 
 
 class DonchianParams(StrategyParams):
-    entry_len: int = Field(20, description="Breakout channel length", json_schema_extra=opt(10, 55, 5))
+    entry_len: int = Field(
+        20, description="Breakout channel length", json_schema_extra=opt(10, 55, 5)
+    )
     exit_len: int = Field(10, description="Exit channel length", json_schema_extra=opt(5, 20, 5))
     adx_min: float = Field(15, description="Minimum ADX(14)", json_schema_extra=opt(10, 30, 5))
     stop_atr_max: float = Field(3.0, description="Cap the initial stop at this many ATR")
     stop_buffer_atr: float = Field(0.1, description="Stop buffer beyond the channel, in ATR")
-    target_r: float = Field(0.0, description="Target in R (0 = ride the channel)",
-                            json_schema_extra=opt(0.0, 4.0, 0.5))
-    trail_atr_mult: float = Field(2.5, description="ATR trail", json_schema_extra=opt(0.0, 4.0, 0.5))
+    target_r: float = Field(
+        0.0, description="Target in R (0 = ride the channel)", json_schema_extra=opt(0.0, 4.0, 0.5)
+    )
+    trail_atr_mult: float = Field(
+        2.5, description="ATR trail", json_schema_extra=opt(0.0, 4.0, 0.5)
+    )
     trail_activate_r: float = Field(1.0, description="Trail after this many R")
     cooldown_bars: int = Field(2, description="Bars to wait after an exit")
     min_risk_pct: float = Field(0.1, description="Friction floor")
@@ -76,6 +81,8 @@ class DonchianBreakout(Strategy):
         return [f"Closed below the {self.p.entry_len}-bar low {row['dc_lower']:.2f}"], []
 
     def implies(self, side: str) -> str:
-        return ("Range expansion to new highs; trend followers ride it until the exit channel breaks."
-                if side == "long" else
-                "Range expansion to new lows; trend followers ride it until the exit channel breaks.")
+        return (
+            "Range expansion to new highs; trend followers ride it until the exit channel breaks."
+            if side == "long"
+            else "Range expansion to new lows; trend followers ride it until the exit channel breaks."
+        )

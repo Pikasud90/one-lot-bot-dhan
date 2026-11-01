@@ -18,14 +18,19 @@ from onelot.strategy.sizer import size_position
 LOT = 35
 
 
-def _size(cfg, cost_model, premium=870.0, atr=80.0, delta=0.65, capital=0.0,
-          **risk_over):
+def _size(cfg, cost_model, premium=870.0, atr=80.0, delta=0.65, capital=0.0, **risk_over):
     risk = cfg.risk.model_copy(update=risk_over) if risk_over else cfg.risk
     q = Quote(bid=premium - 2, ask=premium + 2, ltp=premium)
     return size_position(
-        quote=q, stop_distance=1.5 * atr * delta, rr_target_gross=2.5,
-        lot_size=LOT, risk_cfg=risk, cost_model=cost_model,
-        exec_cfg=cfg.execution_assumptions, capital=capital)
+        quote=q,
+        stop_distance=1.5 * atr * delta,
+        rr_target_gross=2.5,
+        lot_size=LOT,
+        risk_cfg=risk,
+        cost_model=cost_model,
+        exec_cfg=cfg.execution_assumptions,
+        capital=capital,
+    )
 
 
 class TestAlwaysOneLot:
@@ -72,17 +77,29 @@ class TestNothingIsRejectedOnCost:
 
     def test_the_only_rejection_left_is_a_missing_market(self, cfg, cost_model):
         q = Quote(bid=0.0, ask=870.0)
-        r = size_position(quote=q, stop_distance=78.0, rr_target_gross=2.5,
-                          lot_size=LOT, risk_cfg=cfg.risk, cost_model=cost_model,
-                          exec_cfg=cfg.execution_assumptions)
+        r = size_position(
+            quote=q,
+            stop_distance=78.0,
+            rr_target_gross=2.5,
+            lot_size=LOT,
+            risk_cfg=cfg.risk,
+            cost_model=cost_model,
+            exec_cfg=cfg.execution_assumptions,
+        )
         assert not r.is_tradeable
         assert "two-sided market" in r.rejected_reason
 
     def test_a_crossed_book_is_rejected(self, cfg, cost_model):
         q = Quote(bid=880.0, ask=870.0)
-        r = size_position(quote=q, stop_distance=78.0, rr_target_gross=2.5,
-                          lot_size=LOT, risk_cfg=cfg.risk, cost_model=cost_model,
-                          exec_cfg=cfg.execution_assumptions)
+        r = size_position(
+            quote=q,
+            stop_distance=78.0,
+            rr_target_gross=2.5,
+            lot_size=LOT,
+            risk_cfg=cfg.risk,
+            cost_model=cost_model,
+            exec_cfg=cfg.execution_assumptions,
+        )
         assert not r.is_tradeable
 
 
@@ -102,8 +119,7 @@ class TestRiskIsAnOutput:
         b = _size(cfg, cost_model, delta=0.70).economics.net_risk
         assert b > a * 1.7
 
-    def test_concentration_is_reported_only_when_capital_is_declared(self, cfg,
-                                                                     cost_model):
+    def test_concentration_is_reported_only_when_capital_is_declared(self, cfg, cost_model):
         assert _size(cfg, cost_model, capital=0.0).concentration_pct is None
         pct = _size(cfg, cost_model, capital=50_000.0).concentration_pct
         assert pct is not None and pct > 0.5
@@ -130,12 +146,12 @@ class TestAbsoluteRupeeLimits:
         with pytest.raises(ValueError, match="lots_per_trade"):
             RiskCfg(lots_per_trade=0)
 
-    def test_shipped_limits_are_a_whole_number_of_typical_losses(self, cfg,
-                                                                 cost_model):
+    def test_shipped_limits_are_a_whole_number_of_typical_losses(self, cfg, cost_model):
         """Sanity: the daily limit should allow at least one normal loss, or
         the system halts before it can ever trade."""
         typical = _size(cfg, cost_model, atr=80.0).economics.net_risk
         assert cfg.risk.daily_loss_limit_inr >= typical, (
             f"daily limit Rs {cfg.risk.daily_loss_limit_inr:,.0f} is below a "
-            f"single typical loss of Rs {typical:,.0f}")
+            f"single typical loss of Rs {typical:,.0f}"
+        )
         assert cfg.risk.max_drawdown_inr >= typical * 2

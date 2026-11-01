@@ -44,12 +44,13 @@ class DedupWindow:
 
 
 class Notifier:
-    def __init__(self, cfg, dashboard: DashboardChannel | None = None,
-                 dedup_seconds: float = 20.0, repo=None):
+    def __init__(
+        self, cfg, dashboard: DashboardChannel | None = None, dedup_seconds: float = 20.0, repo=None
+    ):
         self.cfg = cfg
         self.repo = repo
         self.dashboard = dashboard or DashboardChannel()
-        self.channels: list = [self.dashboard]     # always first, always works
+        self.channels: list = [self.dashboard]  # always first, always works
         self.stats: dict[str, ChannelStats] = {self.dashboard.name: ChannelStats()}
         self._lock = threading.Lock()
         self._dedup = DedupWindow(dedup_seconds)
@@ -64,14 +65,20 @@ class Notifier:
                 why = getattr(ch, "last_error", None) if ch else "unsupported platform"
                 log.warning(
                     "OS toast channel UNAVAILABLE (%s). The dashboard channel still "
-                    "works — keep the dashboard open, or you will miss alerts.", why)
+                    "works — keep the dashboard open, or you will miss alerts.",
+                    why,
+                )
 
         if cfg.notify.telegram:
-            log.warning("notify.telegram is enabled in config but is not implemented "
-                        "in this build; ignoring.")
+            log.warning(
+                "notify.telegram is enabled in config but is not implemented "
+                "in this build; ignoring."
+            )
         if cfg.notify.webhook:
-            log.warning("notify.webhook is enabled in config but is not implemented "
-                        "in this build; ignoring.")
+            log.warning(
+                "notify.webhook is enabled in config but is not implemented "
+                "in this build; ignoring."
+            )
 
     # ── sending ───────────────────────────────────────────────────────────
     def send(self, n: Notification, dedup_key: str | None = None) -> dict[str, bool]:
@@ -102,9 +109,13 @@ class Notifier:
 
         if self.repo is not None:
             try:
-                self.repo.event(now, n.level.value, "notification", n.title,
-                                {"delivered": results, "body": n.body,
-                                 "signal_id": n.signal_id})
+                self.repo.event(
+                    now,
+                    n.level.value,
+                    "notification",
+                    n.title,
+                    {"delivered": results, "body": n.body, "signal_id": n.signal_id},
+                )
             except Exception:
                 log.debug("could not persist notification event", exc_info=True)
 
@@ -114,56 +125,73 @@ class Notifier:
 
     # ── convenience constructors ──────────────────────────────────────────
     def signal(self, sig) -> dict[str, bool]:
-        return self.send(Notification(
-            title=(f"BUY {sig.underlying} {sig.strike:g} {sig.opt_type} "
-                   f"x{sig.lots} @ ~{sig.economics.entry_eff:.2f}"),
-            body=sig.alert_text(), level=NotificationLevel.SIGNAL,
-            signal_id=sig.signal_id, ttl_seconds=int(
-                (sig.expires_at - sig.created_at).total_seconds()),
-            payload=sig.as_dict()),
-            dedup_key=f"signal:{sig.signal_id}")
+        return self.send(
+            Notification(
+                title=(
+                    f"BUY {sig.underlying} {sig.strike:g} {sig.opt_type} "
+                    f"x{sig.lots} @ ~{sig.economics.entry_eff:.2f}"
+                ),
+                body=sig.alert_text(),
+                level=NotificationLevel.SIGNAL,
+                signal_id=sig.signal_id,
+                ttl_seconds=int((sig.expires_at - sig.created_at).total_seconds()),
+                payload=sig.as_dict(),
+            ),
+            dedup_key=f"signal:{sig.signal_id}",
+        )
 
     def exit_alert(self, position, decision) -> dict[str, bool]:
-        return self.send(Notification(
-            title=f"EXIT {position.strike:g} {position.opt_type} — "
-                  f"{decision.reason.value if decision.reason else 'MANUAL'}",
-            body=decision.message, level=NotificationLevel.EXIT,
-            position_id=position.position_id,
-            payload=decision.as_dict()),
+        return self.send(
+            Notification(
+                title=f"EXIT {position.strike:g} {position.opt_type} — "
+                f"{decision.reason.value if decision.reason else 'MANUAL'}",
+                body=decision.message,
+                level=NotificationLevel.EXIT,
+                position_id=position.position_id,
+                payload=decision.as_dict(),
+            ),
             # Re-alert every 30s while an exit is outstanding: an EXIT you miss
             # is worse than one you see twice.
             dedup_key=f"exit:{position.position_id}:"
-                      f"{decision.reason.value if decision.reason else 'x'}")
+            f"{decision.reason.value if decision.reason else 'x'}",
+        )
 
     def warning(self, title: str, body: str, dedup_key: str | None = None):
-        return self.send(Notification(title=title, body=body,
-                                      level=NotificationLevel.WARNING),
-                         dedup_key=dedup_key)
+        return self.send(
+            Notification(title=title, body=body, level=NotificationLevel.WARNING),
+            dedup_key=dedup_key,
+        )
 
     def critical(self, title: str, body: str, dedup_key: str | None = None):
-        return self.send(Notification(title=title, body=body,
-                                      level=NotificationLevel.CRITICAL),
-                         dedup_key=dedup_key)
+        return self.send(
+            Notification(title=title, body=body, level=NotificationLevel.CRITICAL),
+            dedup_key=dedup_key,
+        )
 
     def info(self, title: str, body: str = "", dedup_key: str | None = None):
-        return self.send(Notification(title=title, body=body,
-                                      level=NotificationLevel.INFO),
-                         dedup_key=dedup_key)
+        return self.send(
+            Notification(title=title, body=body, level=NotificationLevel.INFO), dedup_key=dedup_key
+        )
 
     # ── introspection ─────────────────────────────────────────────────────
     def status(self) -> dict:
         return {
             "channels": [
-                {"name": ch.name, "available": bool(getattr(ch, "available", True)),
-                 "sent": self.stats[ch.name].sent,
-                 "failed": self.stats[ch.name].failed,
-                 "last_error": self.stats[ch.name].last_error,
-                 "last_sent_at": (self.stats[ch.name].last_sent_at.isoformat()
-                                  if self.stats[ch.name].last_sent_at else None)}
+                {
+                    "name": ch.name,
+                    "available": bool(getattr(ch, "available", True)),
+                    "sent": self.stats[ch.name].sent,
+                    "failed": self.stats[ch.name].failed,
+                    "last_error": self.stats[ch.name].last_error,
+                    "last_sent_at": (
+                        self.stats[ch.name].last_sent_at.isoformat()
+                        if self.stats[ch.name].last_sent_at
+                        else None
+                    ),
+                }
                 for ch in self.channels
             ],
-            "os_toast_available": any(
-                ch.name.endswith("toast") for ch in self.channels),
+            "os_toast_available": any(ch.name.endswith("toast") for ch in self.channels),
         }
 
     def self_test(self) -> dict:
@@ -171,9 +199,9 @@ class Notifier:
         broken toast is discovered before the first real signal, not during it."""
         n = Notification(
             title="OneLot notification self-test",
-            body="If you can see this, alerts are working.\n"
-                 "This is a test — no action required.",
-            level=NotificationLevel.INFO)
+            body="If you can see this, alerts are working.\nThis is a test — no action required.",
+            level=NotificationLevel.INFO,
+        )
         results = self.send(n)
         log.info("Notification self-test: %s", results)
         return results

@@ -31,11 +31,24 @@ class TestNoOrderPlacement:
 
     # Dhan/broker write APIs and their common aliases.
     FORBIDDEN_CALLS = [
-        "place_order", "placeorder", "modify_order", "modifyorder",
-        "cancel_order", "cancelorder", "place_slice_order", "placesliceorder",
-        "convert_position", "convertposition", "exit_position", "exitposition",
-        "square_off", "squareoff_position", "place_forever", "edit_forever",
-        "cancel_forever", "kill_switch_order",
+        "place_order",
+        "placeorder",
+        "modify_order",
+        "modifyorder",
+        "cancel_order",
+        "cancelorder",
+        "place_slice_order",
+        "placesliceorder",
+        "convert_position",
+        "convertposition",
+        "exit_position",
+        "exitposition",
+        "square_off",
+        "squareoff_position",
+        "place_forever",
+        "edit_forever",
+        "cancel_forever",
+        "kill_switch_order",
     ]
 
     def test_no_forbidden_call_appears_in_source(self):
@@ -59,27 +72,31 @@ class TestNoOrderPlacement:
                     offenders.append(f"{f.relative_to(SRC)}: {bad}")
         assert not offenders, (
             "ORDER-PLACEMENT CODE DETECTED — this system must never be able to "
-            "trade:\n  " + "\n  ".join(offenders))
+            "trade:\n  " + "\n  ".join(offenders)
+        )
 
     def test_broker_protocol_exposes_no_write_method(self):
         from onelot.broker.base import BrokerAdapter
+
         methods = {m for m in dir(BrokerAdapter) if not m.startswith("_")}
         for bad in self.FORBIDDEN_CALLS:
-            assert not any(bad in m.lower() for m in methods), \
-                f"BrokerAdapter exposes {bad}"
+            assert not any(bad in m.lower() for m in methods), f"BrokerAdapter exposes {bad}"
 
     def test_dhan_adapter_exposes_no_write_method(self):
         from onelot.broker.dhan import DhanAdapter
+
         methods = {m for m in dir(DhanAdapter) if not m.startswith("_")}
         for bad in self.FORBIDDEN_CALLS:
-            assert not any(bad in m.lower() for m in methods), \
-                f"DhanAdapter exposes {bad}"
+            assert not any(bad in m.lower() for m in methods), f"DhanAdapter exposes {bad}"
 
     def test_no_post_to_an_order_endpoint(self):
         """Even hand-rolled HTTP must not reach an orders endpoint."""
         pattern = re.compile(r"[\"'](/v2)?/orders?\b", re.I)
-        offenders = [str(f.relative_to(SRC)) for f in python_files()
-                     if pattern.search(f.read_text(encoding="utf-8"))]
+        offenders = [
+            str(f.relative_to(SRC))
+            for f in python_files()
+            if pattern.search(f.read_text(encoding="utf-8"))
+        ]
         assert not offenders, f"order endpoint referenced in: {offenders}"
 
 
@@ -89,8 +106,7 @@ class TestSecretSafety:
     def test_a_known_token_never_appears_in_log_output(self):
         from onelot.logging_setup import get_redactor, setup_logging
 
-        fake = ("eyJhbGciOiJIUzI1NiJ9.eyJkaGFuQ2xpZW50SWQiOiIxMTAwMTIzNDU2In0"
-                ".QQQQQQQQQQQQQQQQQQQQ")
+        fake = "eyJhbGciOiJIUzI1NiJ9.eyJkaGFuQ2xpZW50SWQiOiIxMTAwMTIzNDU2In0.QQQQQQQQQQQQQQQQQQQQ"
         buf = io.StringIO()
         setup_logging(level="INFO", secrets=[fake])
         h = logging.StreamHandler(buf)
@@ -111,6 +127,7 @@ class TestSecretSafety:
 
     def test_secrets_repr_does_not_leak(self):
         from onelot.config import Secrets
+
         s = Secrets("CLIENT123456", "supersecrettoken12345", "apitoken12345")
         assert "supersecrettoken" not in repr(s)
         assert "supersecrettoken" not in str(s)
@@ -119,7 +136,7 @@ class TestSecretSafety:
         jwt = re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.")
         offenders = []
         for f in python_files():
-            if f.name in ("logging_setup.py",):     # contains the detector itself
+            if f.name in ("logging_setup.py",):  # contains the detector itself
                 continue
             if jwt.search(f.read_text(encoding="utf-8")):
                 offenders.append(str(f.relative_to(SRC)))
@@ -155,12 +172,14 @@ class TestDefaults:
 
     def test_non_loopback_bind_requires_explicit_opt_in(self):
         from onelot.config import ApiCfg
+
         with pytest.raises(ValueError, match="loopback"):
             ApiCfg(host="0.0.0.0")
-        ApiCfg(host="0.0.0.0", allow_non_loopback=True)   # explicit is allowed
+        ApiCfg(host="0.0.0.0", allow_non_loopback=True)  # explicit is allowed
 
     def test_chain_poll_cannot_breach_the_broker_limit(self):
         from onelot.config import DataCfg
+
         with pytest.raises(ValueError, match="RL001"):
             DataCfg(chain_poll_interval_sec=2.0)
 
@@ -175,6 +194,7 @@ class TestNoLookAheadInStorage:
         import inspect
 
         from onelot.store.repo import Repo
+
         sig = inspect.signature(Repo.get_candles)
         assert sig.parameters["closed_only"].default is True
 
@@ -205,7 +225,8 @@ class TestLogFormatStrings:
                     offenders.append(f"{f.relative_to(SRC)}:{i}: {stripped[:90]}")
         assert not offenders, (
             "printf-style formatting has no comma-grouping flag; these log "
-            "calls raise ValueError at runtime:\n  " + "\n  ".join(offenders))
+            "calls raise ValueError at runtime:\n  " + "\n  ".join(offenders)
+        )
 
     def test_the_specific_bad_format_really_does_raise(self):
         """Guards the guard: if this ever stops raising, the check above is moot."""
@@ -226,15 +247,26 @@ class TestLogFormatStrings:
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
                     continue
-                if node.func.attr not in ("debug", "info", "warning", "error",
-                                          "exception", "critical"):
+                if node.func.attr not in (
+                    "debug",
+                    "info",
+                    "warning",
+                    "error",
+                    "exception",
+                    "critical",
+                ):
                     continue
                 # Only real loggers. `notifier.warning(title, body)` shares the
                 # method name but is not %-formatted, and matching it would
                 # make this check cry wolf.
                 recv = node.func.value
-                recv_name = (recv.id if isinstance(recv, ast.Name)
-                             else recv.attr if isinstance(recv, ast.Attribute) else "")
+                recv_name = (
+                    recv.id
+                    if isinstance(recv, ast.Name)
+                    else recv.attr
+                    if isinstance(recv, ast.Attribute)
+                    else ""
+                )
                 if recv_name not in ("log", "logger", "logging", "LOG", "_log"):
                     continue
                 if not node.args or not isinstance(node.args[0], ast.Constant):
@@ -247,5 +279,6 @@ class TestLogFormatStrings:
                 if n_conv != n_args:
                     offenders.append(
                         f"{f.relative_to(SRC)}:{node.lineno}: {n_conv} placeholders "
-                        f"but {n_args} args -- {fmt[:60]!r}")
+                        f"but {n_args} args -- {fmt[:60]!r}"
+                    )
         assert not offenders, "malformed logging calls:\n  " + "\n  ".join(offenders)

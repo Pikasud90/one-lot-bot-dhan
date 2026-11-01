@@ -7,17 +7,29 @@ import pandas as pd
 import pytest
 
 
-def make_intraday(days: int = 5, seed: int = 7, start: str = "2026-09-01", drift: float = 0.0,
-                  vol: float = 0.0015, freq_min: int = 5, base: float = 1000.0,
-                  with_volume: bool = True) -> pd.DataFrame:
+def make_intraday(
+    days: int = 5,
+    seed: int = 7,
+    start: str = "2026-09-01",
+    drift: float = 0.0,
+    vol: float = 0.0015,
+    freq_min: int = 5,
+    base: float = 1000.0,
+    with_volume: bool = True,
+) -> pd.DataFrame:
     """Synthetic NSE-session OHLCV bars (09:15-15:30 IST) as a random walk."""
     rng = np.random.default_rng(seed)
     idx = []
     day = pd.Timestamp(start, tz="Asia/Kolkata")
     while len({d.date() for d in idx}) < days:
         if day.weekday() < 5:
-            idx.extend(pd.date_range(day + pd.Timedelta(hours=9, minutes=15), periods=375 // freq_min,
-                                     freq=f"{freq_min}min"))
+            idx.extend(
+                pd.date_range(
+                    day + pd.Timedelta(hours=9, minutes=15),
+                    periods=375 // freq_min,
+                    freq=f"{freq_min}min",
+                )
+            )
         day += pd.Timedelta(days=1)
     n = len(idx)
     rets = rng.normal(drift, vol, n)
@@ -27,8 +39,10 @@ def make_intraday(days: int = 5, seed: int = 7, start: str = "2026-09-01", drift
     high = np.maximum(open_, close) + spread
     low = np.minimum(open_, close) - spread
     volume = rng.integers(10_000, 50_000, n).astype(float) if with_volume else np.zeros(n)
-    return pd.DataFrame({"open": open_, "high": high, "low": low, "close": close, "volume": volume},
-                        index=pd.DatetimeIndex(idx, name="ts"))
+    return pd.DataFrame(
+        {"open": open_, "high": high, "low": low, "close": close, "volume": volume},
+        index=pd.DatetimeIndex(idx, name="ts"),
+    )
 
 
 @pytest.fixture

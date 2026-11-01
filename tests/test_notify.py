@@ -32,8 +32,7 @@ class SilentlyFailingChannel:
 
 @pytest.fixture()
 def notifier(cfg):
-    quiet = cfg.model_copy(update={
-        "notify": cfg.notify.model_copy(update={"os_toast": False})})
+    quiet = cfg.model_copy(update={"notify": cfg.notify.model_copy(update={"os_toast": False})})
     return Notifier(quiet, dedup_seconds=0.0)
 
 
@@ -106,8 +105,7 @@ class TestDeduplication:
 
     def test_signal_dedup_uses_the_signal_id(self, cfg):
         """A re-sent signal alert must not double-notify, but a NEW signal must."""
-        quiet = cfg.model_copy(update={
-            "notify": cfg.notify.model_copy(update={"os_toast": False})})
+        quiet = cfg.model_copy(update={"notify": cfg.notify.model_copy(update={"os_toast": False})})
         n = Notifier(quiet, dedup_seconds=60.0)
         assert n.send(Notification("a", "b"), dedup_key="signal:S1")
         assert not n.send(Notification("a", "b"), dedup_key="signal:S1")
@@ -137,8 +135,7 @@ class TestAppleScriptEscaping:
         assert _escape_applescript("a\\b") == "a\\\\b"
 
     def test_a_real_alert_body_survives_escaping(self):
-        body = ('BUY BANKNIFTY 54000 CE x2\nEntry ~318.45 "ask 318.00"\n'
-                'Target 392.00 | Stop 289.00')
+        body = 'BUY BANKNIFTY 54000 CE x2\nEntry ~318.45 "ask 318.00"\nTarget 392.00 | Stop 289.00'
         out = _escape_applescript(body)
         assert "\n" not in out and out.count('\\"') == 2
 
@@ -160,4 +157,5 @@ class TestSelfTest:
 
     def test_status_is_serialisable(self, notifier):
         import json
+
         json.dumps(notifier.status())

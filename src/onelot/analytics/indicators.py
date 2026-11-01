@@ -30,7 +30,7 @@ def sma(values: ArrayLike, period: int) -> np.ndarray:
     if period <= 0 or len(v) < period:
         return out
     c = np.cumsum(np.insert(v, 0, 0.0))
-    out[period - 1:] = (c[period:] - c[:-period]) / period
+    out[period - 1 :] = (c[period:] - c[:-period]) / period
     return out
 
 
@@ -105,8 +105,9 @@ def atr(high: ArrayLike, low: ArrayLike, close: ArrayLike, period: int = 14) -> 
     return _wilder_smooth(true_range(high, low, close), period)
 
 
-def adx(high: ArrayLike, low: ArrayLike, close: ArrayLike,
-        period: int = 14) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def adx(
+    high: ArrayLike, low: ArrayLike, close: ArrayLike, period: int = 14
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Wilder's ADX. Returns (adx, plus_di, minus_di).
 
     ADX is defined only after roughly 2*period bars: `period` to smooth DM/TR
@@ -162,8 +163,7 @@ def is_rising(series: ArrayLike, lookback: int = 3) -> bool:
     return bool(valid[-1] > valid[-1 - lookback])
 
 
-def vwap(high: ArrayLike, low: ArrayLike, close: ArrayLike,
-         volume: ArrayLike) -> np.ndarray:
+def vwap(high: ArrayLike, low: ArrayLike, close: ArrayLike, volume: ArrayLike) -> np.ndarray:
     """Session-cumulative VWAP over typical price.
 
     *** v1 defect B3 ***

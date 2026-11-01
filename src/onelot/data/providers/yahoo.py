@@ -19,7 +19,15 @@ from .base import BAR_COLUMNS, empty_bars
 
 log = get_logger("data.yahoo")
 
-_INTERVAL = {"1m": "1m", "2m": "2m", "5m": "5m", "15m": "15m", "30m": "30m", "60m": "60m", "1d": "1d"}
+_INTERVAL = {
+    "1m": "1m",
+    "2m": "2m",
+    "5m": "5m",
+    "15m": "15m",
+    "30m": "30m",
+    "60m": "60m",
+    "1d": "1d",
+}
 _MAX_DAYS_BACK = {"1m": 29, "2m": 59, "5m": 59, "15m": 59, "30m": 59, "60m": 729, "1d": None}
 _CHUNK_DAYS = {"1m": 7, "2m": 59, "5m": 59, "15m": 59, "30m": 59, "60m": 365, "1d": 3650}
 
@@ -37,8 +45,15 @@ class YahooProvider:
         back = _MAX_DAYS_BACK.get(resolution)
         return None if back is None else today - dt.timedelta(days=back)
 
-    def history(self, series_key: str, symbol: str | None, resolution: str, start: dt.date,
-                end: dt.date, session: tuple[dt.time, dt.time] | None = None) -> pd.DataFrame:
+    def history(
+        self,
+        series_key: str,
+        symbol: str | None,
+        resolution: str,
+        start: dt.date,
+        end: dt.date,
+        session: tuple[dt.time, dt.time] | None = None,
+    ) -> pd.DataFrame:
         import yfinance as yf
 
         if resolution not in _INTERVAL:
@@ -60,13 +75,20 @@ class YahooProvider:
             df = pd.DataFrame()
             for attempt in range(3):
                 try:
-                    df = tk.history(start=cur.isoformat(),
-                                    end=(chunk_end + dt.timedelta(days=1)).isoformat(),
-                                    interval=_INTERVAL[resolution], auto_adjust=False,
-                                    actions=False, prepost=False, raise_errors=False)
+                    df = tk.history(
+                        start=cur.isoformat(),
+                        end=(chunk_end + dt.timedelta(days=1)).isoformat(),
+                        interval=_INTERVAL[resolution],
+                        auto_adjust=False,
+                        actions=False,
+                        prepost=False,
+                        raise_errors=False,
+                    )
                     break
                 except Exception as exc:  # noqa: BLE001
-                    log.warning("yahoo %s %s attempt %d failed: %s", ticker, resolution, attempt + 1, exc)
+                    log.warning(
+                        "yahoo %s %s attempt %d failed: %s", ticker, resolution, attempt + 1, exc
+                    )
                     time.sleep(2 * (attempt + 1))
                     df = pd.DataFrame()
             if df is not None and not df.empty:

@@ -39,10 +39,17 @@ def normalise(values: pd.Series) -> pd.Series:
     return v.clip(-1.0, 1.0)
 
 
-def load_scores(engine: Engine, scope: str = "MARKET", symbol: str | None = None,
-                source: str | None = None) -> pd.Series:
-    q = select(sentiment_scores.c.ts, sentiment_scores.c.score).where(sentiment_scores.c.scope == scope.upper())
-    q = q.where(sentiment_scores.c.symbol == symbol.upper()) if symbol else q.where(sentiment_scores.c.symbol.is_(None))
+def load_scores(
+    engine: Engine, scope: str = "MARKET", symbol: str | None = None, source: str | None = None
+) -> pd.Series:
+    q = select(sentiment_scores.c.ts, sentiment_scores.c.score).where(
+        sentiment_scores.c.scope == scope.upper()
+    )
+    q = (
+        q.where(sentiment_scores.c.symbol == symbol.upper())
+        if symbol
+        else q.where(sentiment_scores.c.symbol.is_(None))
+    )
     if source:
         q = q.where(sentiment_scores.c.source == source)
     with engine.connect() as conn:
@@ -60,15 +67,21 @@ def _aware(ts: dt.datetime) -> pd.Timestamp:
     return (t.tz_localize("UTC") if t.tzinfo is None else t).tz_convert(IST)
 
 
-def bias_at(scores: pd.Series, index: pd.DatetimeIndex, bar_minutes: int, threshold: float = 0.2,
-            max_age_days: float = 5.0) -> np.ndarray:
+def bias_at(
+    scores: pd.Series,
+    index: pd.DatetimeIndex,
+    bar_minutes: int,
+    threshold: float = 0.2,
+    max_age_days: float = 5.0,
+) -> np.ndarray:
     """-1 / 0 / +1 per bar from the latest score at or before each bar's CLOSE."""
     if scores.empty or len(index) == 0:
         return np.zeros(len(index), dtype=int)
     closes = pd.DataFrame({"t": index + pd.Timedelta(minutes=bar_minutes)})
     sc = pd.DataFrame({"t": scores.index, "score": scores.to_numpy()})
-    merged = pd.merge_asof(closes, sc, on="t", direction="backward",
-                           tolerance=pd.Timedelta(days=max_age_days))
+    merged = pd.merge_asof(
+        closes, sc, on="t", direction="backward", tolerance=pd.Timedelta(days=max_age_days)
+    )
     v = merged["score"].to_numpy(dtype=float)
     out = np.zeros(len(index), dtype=int)
     out[v >= threshold] = 1

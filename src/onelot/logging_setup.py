@@ -22,8 +22,10 @@ _REDACTION = "***REDACTED***"
 # Token-shaped strings: long opaque runs, and JWTs (Dhan access tokens are JWTs).
 _PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}"),  # JWT
-    re.compile(r"(?i)\b(access[_-]?token|auth[_-]?token|api[_-]?key|bearer|password|secret)"
-               r"\b\s*[:=]\s*[\"']?([A-Za-z0-9_\-\.]{8,})[\"']?"),
+    re.compile(
+        r"(?i)\b(access[_-]?token|auth[_-]?token|api[_-]?key|bearer|password|secret)"
+        r"\b\s*[:=]\s*[\"']?([A-Za-z0-9_\-\.]{8,})[\"']?"
+    ),
 ]
 
 
@@ -114,16 +116,26 @@ def setup_logging(
         d = Path(log_dir)
         d.mkdir(parents=True, exist_ok=True)
         fh = logging.handlers.RotatingFileHandler(
-            d / f"{component}.log", maxBytes=max_bytes,
-            backupCount=backup_count, encoding="utf-8",
+            d / f"{component}.log",
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+            encoding="utf-8",
         )
         fh.setFormatter(fmt)
         fh.addFilter(_redactor)
         root.addHandler(fh)
 
     # Third-party noise floors
-    for noisy in ("urllib3", "websockets", "httpx", "httpcore", "asyncio", "matplotlib",
-                  "yfinance", "peewee"):
+    for noisy in (
+        "urllib3",
+        "websockets",
+        "httpx",
+        "httpcore",
+        "asyncio",
+        "matplotlib",
+        "yfinance",
+        "peewee",
+    ):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     return logging.getLogger("onelot")

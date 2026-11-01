@@ -45,7 +45,7 @@ class BacktestConfig:
     params: dict = field(default_factory=dict)
     timeframe: str = "5m"
     start: str | None = None  # ISO date (inclusive)
-    end: str | None = None    # ISO date (inclusive)
+    end: str | None = None  # ISO date (inclusive)
     slippage_pct: float = 0.03
     cost_multiplier: float = 1.0
     use_fine_path: bool = True
@@ -67,9 +67,13 @@ class BacktestConfig:
     @classmethod
     def from_settings(cls, strategy: str, instrument_key: str, **kw) -> BacktestConfig:
         s = current_settings().backtest
-        base = {"slippage_pct": s.slippage_pct, "use_fine_path": s.use_fine_path,
-                    "warmup_sessions": s.warmup_sessions, "reference_capital": s.reference_capital_inr,
-                    "timeframe": s.default_timeframe}
+        base = {
+            "slippage_pct": s.slippage_pct,
+            "use_fine_path": s.use_fine_path,
+            "warmup_sessions": s.warmup_sessions,
+            "reference_capital": s.reference_capital_inr,
+            "timeframe": s.default_timeframe,
+        }
         base.update(kw)
         return cls(strategy=strategy, instrument_key=instrument_key, **base)
 
@@ -84,7 +88,7 @@ class BacktestResult:
     signal_counts: dict
     candidates: int
     days: pd.DatetimeIndex
-    bars: pd.DataFrame | None = None   # the underlying bars (for the chart)
+    bars: pd.DataFrame | None = None  # the underlying bars (for the chart)
     features: pd.DataFrame | None = None
 
     def chart_payload(self, max_bars: int = 6000) -> dict:
@@ -92,19 +96,27 @@ class BacktestResult:
         out: dict = {"candles": [], "trades": []}
         if self.bars is not None and not self.bars.empty:
             b = self.bars.iloc[-max_bars:]
-            out["candles"] = [[int(ts.timestamp()), float(o), float(h), float(l), float(c)]
-                              for ts, o, h, l, c in zip(b.index, b["open"], b["high"], b["low"], b["close"],
-                                                        strict=True)]
+            out["candles"] = [
+                [int(ts.timestamp()), float(o), float(h), float(l), float(c)]
+                for ts, o, h, l, c in zip(
+                    b.index, b["open"], b["high"], b["low"], b["close"], strict=True
+                )
+            ]
         if not self.trades.empty:
             for r in self.trades.to_dict("records"):
                 d = r.get("detail") or {}
-                out["trades"].append({
-                    "entry_ts": int(pd.Timestamp(r["entry_ts"]).timestamp()),
-                    "exit_ts": int(pd.Timestamp(r["exit_ts"]).timestamp()),
-                    "side": r["side"], "entry": d.get("underlying_entry", r["entry_price"]),
-                    "exit": d.get("underlying_exit", r["exit_price"]), "net_pnl": r["net_pnl"],
-                    "r": r["r_multiple"], "reason": r["exit_reason"],
-                })
+                out["trades"].append(
+                    {
+                        "entry_ts": int(pd.Timestamp(r["entry_ts"]).timestamp()),
+                        "exit_ts": int(pd.Timestamp(r["exit_ts"]).timestamp()),
+                        "side": r["side"],
+                        "entry": d.get("underlying_entry", r["entry_price"]),
+                        "exit": d.get("underlying_exit", r["exit_price"]),
+                        "net_pnl": r["net_pnl"],
+                        "r": r["r_multiple"],
+                        "reason": r["exit_reason"],
+                    }
+                )
         return out
 
 
@@ -138,19 +150,26 @@ class DataCache:
         try:
             return self.instruments[instrument_key.upper()]
         except KeyError as exc:
-            raise KeyError(f"unknown instrument {instrument_key!r}; see config/universe.yaml") from exc
+            raise KeyError(
+                f"unknown instrument {instrument_key!r}; see config/universe.yaml"
+            ) from exc
 
 
-def _window(df: pd.DataFrame, start: dt.date | None, end: dt.date | None,
-            warmup_sessions: int) -> tuple[pd.DataFrame, pd.Timestamp | None]:
+def _window(
+    df: pd.DataFrame, start: dt.date | None, end: dt.date | None, warmup_sessions: int
+) -> tuple[pd.DataFrame, pd.Timestamp | None]:
     if df.empty:
         return df, None
     days = pd.DatetimeIndex(sorted(set(df.index.normalize())))
-    start_day = days[min(warmup_sessions, len(days) - 1)] if start is None else pd.Timestamp(start, tz=IST)
+    start_day = (
+        days[min(warmup_sessions, len(days) - 1)] if start is None else pd.Timestamp(start, tz=IST)
+    )
     pos = days.searchsorted(start_day)
     warm_day = days[max(0, pos - warmup_sessions)]
     end_ts = pd.Timestamp(end, tz=IST) + pd.Timedelta(days=1) if end else None
-    sl = df.loc[warm_day:] if end_ts is None else df.loc[warm_day: end_ts - pd.Timedelta(seconds=1)]
+    sl = (
+        df.loc[warm_day:] if end_ts is None else df.loc[warm_day : end_ts - pd.Timedelta(seconds=1)]
+    )
     return sl, start_day
 
 
@@ -176,13 +195,19 @@ def generate_for_instrument(cfg: BacktestConfig, cache: DataCache, strategy=None
         return spec, strategy, None, None, start_day
     mkt_key = cache.market_symbol()
     market = cache.bars(mkt_key, cfg.timeframe) if mkt_key != spec.series_key else pd.DataFrame()
-    ctx = Context(symbol=spec.series_key, daily=cache.bars(spec.series_key, "1d"),
-                  market=market if not market.empty else None,
-                  extras={"fcache": cache.features,
-                          "fkey": (spec.series_key, cfg.timeframe, win.index[0], win.index[-1]),
-                          "market_daily": cache.bars(mkt_key, "1d"),
-                          "has_volume": bool(cache.series[spec.series_key].has_volume)
-                          if spec.series_key in cache.series else True})
+    ctx = Context(
+        symbol=spec.series_key,
+        daily=cache.bars(spec.series_key, "1d"),
+        market=market if not market.empty else None,
+        extras={
+            "fcache": cache.features,
+            "fkey": (spec.series_key, cfg.timeframe, win.index[0], win.index[-1]),
+            "market_daily": cache.bars(mkt_key, "1d"),
+            "has_volume": bool(cache.series[spec.series_key].has_volume)
+            if spec.series_key in cache.series
+            else True,
+        },
+    )
     f = strategy.generate(win, ctx)
     fine = None
     if cfg.use_fine_path and cfg.timeframe != "1m":
@@ -191,14 +216,17 @@ def generate_for_instrument(cfg: BacktestConfig, cache: DataCache, strategy=None
                 break
             fine_all = cache.bars(spec.series_key, res)
             if not fine_all.empty:
-                fine = fine_all.loc[win.index[0]: win.index[-1] + pd.Timedelta(minutes=60)]
+                fine = fine_all.loc[win.index[0] : win.index[-1] + pd.Timedelta(minutes=60)]
                 break
     return spec, strategy, f, fine, start_day
 
 
-def run_backtest(cfg: BacktestConfig, cache: DataCache | None = None,
-                 progress: Callable[[float, str], None] | None = None,
-                 keep_bars: bool = False) -> BacktestResult:
+def run_backtest(
+    cfg: BacktestConfig,
+    cache: DataCache | None = None,
+    progress: Callable[[float, str], None] | None = None,
+    keep_bars: bool = False,
+) -> BacktestResult:
     cache = cache or DataCache()
     settings = current_settings()
     spec, strategy, f, fine, start_day = generate_for_instrument(cfg, cache)
@@ -213,8 +241,13 @@ def run_backtest(cfg: BacktestConfig, cache: DataCache | None = None,
         from .sentiment import apply_gate, bias_at, load_scores
 
         scores = load_scores(cache.engine, cfg.sentiment_scope, cfg.sentiment_symbol)
-        bias = bias_at(scores, f.index, minutes_of(cfg.timeframe) if cfg.timeframe != "1d" else 375,
-                       cfg.sentiment_threshold, cfg.sentiment_max_age_days)
+        bias = bias_at(
+            scores,
+            f.index,
+            minutes_of(cfg.timeframe) if cfg.timeframe != "1d" else 375,
+            cfg.sentiment_threshold,
+            cfg.sentiment_max_age_days,
+        )
         f = apply_gate(f, bias, cfg.sentiment_mode)
         counts["sentiment_scores_used"] = int(len(scores))
         counts["sentiment_blocked_long"] = int(f["blk_sentiment_long"].sum())
@@ -226,16 +259,23 @@ def run_backtest(cfg: BacktestConfig, cache: DataCache | None = None,
         counts["signals_long"] = int(test["long_entry"].sum())
         counts["signals_short"] = int(test["short_entry"].sum())
         days = pd.DatetimeIndex(sorted(set(test.index.normalize())))
-        candidates = simulate(f, strategy.p, spec.series_key, cfg.strategy, cfg.slippage_pct, fine, start_day)
+        candidates = simulate(
+            f, strategy.p, spec.series_key, cfg.strategy, cfg.slippage_pct, fine, start_day
+        )
     if progress:
         progress(0.6, f"{spec.key}: execution")
 
-    cost_cfg = CostConfig.load(settings.project_root / "config" / "costs.yaml").product(spec.product)
+    cost_cfg = CostConfig.load(settings.project_root / "config" / "costs.yaml").product(
+        spec.product
+    )
     costs = CostModel(cost_cfg)
     if cfg.cost_multiplier != 1.0:
         costs = _ScaledCosts(costs, cfg.cost_multiplier)
     pricer = OptionPricer(settings.backtest, cache.vix()) if spec.is_option else None
-    rows = [execute_trade(t, spec, costs, settings.backtest, cfg.slippage_pct, pricer) for t in candidates]
+    rows = [
+        execute_trade(t, spec, costs, settings.backtest, cfg.slippage_pct, pricer)
+        for t in candidates
+    ]
     trades = pd.DataFrame(rows)
     daily = equity_from_trades(trades, cfg.reference_capital)
     equity = daily_equity_on_calendar(daily, days, cfg.reference_capital) if len(days) else daily
@@ -250,9 +290,18 @@ def run_backtest(cfg: BacktestConfig, cache: DataCache | None = None,
     metrics["costs_unverified"] = not cost_cfg.verified_against_contract_note
     if progress:
         progress(1.0, "done")
-    return BacktestResult(cfg, spec, trades, equity, metrics, counts, len(candidates), days,
-                          bars=(test[["open", "high", "low", "close"]] if keep_bars and test is not None else None),
-                          features=(test if keep_bars else None))
+    return BacktestResult(
+        cfg,
+        spec,
+        trades,
+        equity,
+        metrics,
+        counts,
+        len(candidates),
+        days,
+        bars=(test[["open", "high", "low", "close"]] if keep_bars and test is not None else None),
+        features=(test if keep_bars else None),
+    )
 
 
 class _ScaledCosts:
@@ -271,21 +320,38 @@ def summarize(res: BacktestResult) -> str:
     c = res.config
     lo = res.days.min().date() if len(res.days) else "-"
     hi = res.days.max().date() if len(res.days) else "-"
-    lines = [f"Backtest {c.strategy} on {res.instrument.key} ({res.instrument.category}, "
-             f"unit={m.get('unit')}) | {c.timeframe} | {lo} .. {hi}"]
-    for k, label in (("trades", "Trades"), ("win_rate", "Win rate %"), ("profit_factor", "Profit factor"),
-                     ("expectancy_r", "Expectancy (R)"), ("expectancy", "Expectancy (Rs)"),
-                     ("net_pnl", "Net P&L (Rs)"), ("costs", "Costs (Rs)"), ("max_drawdown_inr", "Max DD (Rs)"),
-                     ("sharpe", "Sharpe"), ("payoff", "Payoff"), ("max_consec_losses", "Max consec losses")):
+    lines = [
+        f"Backtest {c.strategy} on {res.instrument.key} ({res.instrument.category}, "
+        f"unit={m.get('unit')}) | {c.timeframe} | {lo} .. {hi}"
+    ]
+    for k, label in (
+        ("trades", "Trades"),
+        ("win_rate", "Win rate %"),
+        ("profit_factor", "Profit factor"),
+        ("expectancy_r", "Expectancy (R)"),
+        ("expectancy", "Expectancy (Rs)"),
+        ("net_pnl", "Net P&L (Rs)"),
+        ("costs", "Costs (Rs)"),
+        ("max_drawdown_inr", "Max DD (Rs)"),
+        ("sharpe", "Sharpe"),
+        ("payoff", "Payoff"),
+        ("max_consec_losses", "Max consec losses"),
+    ):
         v = m.get(k)
-        lines.append(f"  {label:<20} {v if v is None else (round(v, 3) if isinstance(v, float) else v)}")
-    lines.append(f"  setups L/S {res.signal_counts['setups_long']}/{res.signal_counts['setups_short']} -> "
-                 f"signals {res.signal_counts['signals_long']}/{res.signal_counts['signals_short']} -> "
-                 f"trades {m.get('trades', 0)}")
+        lines.append(
+            f"  {label:<20} {v if v is None else (round(v, 3) if isinstance(v, float) else v)}"
+        )
+    lines.append(
+        f"  setups L/S {res.signal_counts['setups_long']}/{res.signal_counts['setups_short']} -> "
+        f"signals {res.signal_counts['signals_long']}/{res.signal_counts['signals_short']} -> "
+        f"trades {m.get('trades', 0)}"
+    )
     tp = m.get("thirty_pct_rule") or {}
     if tp.get("payoff") is not None:
-        lines.append(f"  30% rule: payoff {tp['payoff']} (need {tp['payoff_needed_for_30pct']}), "
-                     f"PF at 30% WR = {tp['pf_at_30pct_win_rate']} -> {tp['verdict']}")
+        lines.append(
+            f"  30% rule: payoff {tp['payoff']} (need {tp['payoff_needed_for_30pct']}), "
+            f"PF at 30% WR = {tp['pf_at_30pct_win_rate']} -> {tp['verdict']}"
+        )
     return "\n".join(lines)
 
 

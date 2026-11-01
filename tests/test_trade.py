@@ -33,24 +33,41 @@ def repo(db_url):
 
 @pytest.fixture()
 def sm(repo, rich_cfg, cost_model):
-    g = RiskGovernor(rich_cfg.risk, rich_cfg.account.capital_inr, "PAPER",
-                     "2026-08-20", repo)
+    g = RiskGovernor(rich_cfg.risk, rich_cfg.account.capital_inr, "PAPER", "2026-08-20", repo)
     return TradeStateMachine(repo, cost_model, rich_cfg, g)
 
 
-def make_signal_row(repo, sid="SIG1", entry=310.0, stop=285.0, target=375.0,
-                    created=NOW, ttl=75):
-    repo.insert_signal({
-        "signal_id": sid, "created_at": created,
-        "expires_at": created + dt.timedelta(seconds=ttl), "direction": "CE",
-        "underlying": "BANKNIFTY", "expiry": "2026-08-31", "strike": 54000.0,
-        "opt_type": "CE", "security_id": "S1", "quote_bid": 308.0,
-        "quote_ask": 310.0, "quote_ltp": 309.0, "entry_eff": entry,
-        "stop_level": stop, "target_level": target, "breakeven": 313.0,
-        "lots": 2, "qty": 70, "lot_size": 35, "net_risk": 1800.0,
-        "net_reward": 4400.0, "rr_net": 2.44, "delta": 0.65, "iv": 0.14,
-        "theta_per_hour": -0.5, "status": "PENDING",
-    })
+def make_signal_row(repo, sid="SIG1", entry=310.0, stop=285.0, target=375.0, created=NOW, ttl=75):
+    repo.insert_signal(
+        {
+            "signal_id": sid,
+            "created_at": created,
+            "expires_at": created + dt.timedelta(seconds=ttl),
+            "direction": "CE",
+            "underlying": "BANKNIFTY",
+            "expiry": "2026-08-31",
+            "strike": 54000.0,
+            "opt_type": "CE",
+            "security_id": "S1",
+            "quote_bid": 308.0,
+            "quote_ask": 310.0,
+            "quote_ltp": 309.0,
+            "entry_eff": entry,
+            "stop_level": stop,
+            "target_level": target,
+            "breakeven": 313.0,
+            "lots": 2,
+            "qty": 70,
+            "lot_size": 35,
+            "net_risk": 1800.0,
+            "net_reward": 4400.0,
+            "rr_net": 2.44,
+            "delta": 0.65,
+            "iv": 0.14,
+            "theta_per_hour": -0.5,
+            "status": "PENDING",
+        }
+    )
     return sid
 
 
@@ -67,8 +84,10 @@ class TestIdempotentAcknowledgement:
 
     def test_two_clients_racing_produce_one_position(self, sm, repo):
         make_signal_row(repo)
-        results = [sm.acknowledge("SIG1", "TAKE", src, now=NOW)
-                   for src in ("dashboard", "telegram", "webhook")]
+        results = [
+            sm.acknowledge("SIG1", "TAKE", src, now=NOW)
+            for src in ("dashboard", "telegram", "webhook")
+        ]
         assert sum(r.accepted for r in results) == 1
         assert len(sm.open_positions) == 1
 
@@ -133,19 +152,17 @@ class TestFillPrice:
 class TestCrashRecovery:
     """*** v1 defect D5 *** — a restart lost the position entirely."""
 
-    def test_open_position_is_recovered_after_a_restart(self, db_url, rich_cfg,
-                                                        cost_model):
+    def test_open_position_is_recovered_after_a_restart(self, db_url, rich_cfg, cost_model):
         db = init_database(db_url)
         repo = Repo(db)
         g = RiskGovernor(rich_cfg.risk, 1_000_000.0, "PAPER", "2026-08-20", repo)
         sm = TradeStateMachine(repo, cost_model, rich_cfg, g)
         make_signal_row(repo)
         pos = sm.acknowledge("SIG1", "TAKE", fill_price=312.0, now=NOW).position
-        sm.update_trail(pos.position_id, trail_stop=300.0, trail_active=True,
-                        high_water=330.0)
+        sm.update_trail(pos.position_id, trail_stop=300.0, trail_active=True, high_water=330.0)
         db.dispose()
 
-        db2 = init_database(db_url)              # engine restarts
+        db2 = init_database(db_url)  # engine restarts
         repo2 = Repo(db2)
         g2 = RiskGovernor(rich_cfg.risk, 1_000_000.0, "PAPER", "2026-08-20", repo2)
         sm2 = TradeStateMachine(repo2, cost_model, rich_cfg, g2)
@@ -171,12 +188,12 @@ class TestExitAndJournal:
     def test_exit_writes_a_net_of_cost_journal_entry(self, sm, repo, cost_model):
         make_signal_row(repo)
         p = sm.acknowledge("SIG1", "TAKE", fill_price=310.0, now=NOW).position
-        entry = sm.confirm_exit(p.position_id, 340.0, ExitReason.TARGET,
-                                NOW + dt.timedelta(minutes=25))
+        entry = sm.confirm_exit(
+            p.position_id, 340.0, ExitReason.TARGET, NOW + dt.timedelta(minutes=25)
+        )
         assert entry["gross_pnl"] == pytest.approx(30.0 * 70)
         assert entry["total_cost"] > 0
-        assert entry["net_pnl"] == pytest.approx(
-            entry["gross_pnl"] - entry["total_cost"])
+        assert entry["net_pnl"] == pytest.approx(entry["gross_pnl"] - entry["total_cost"])
         assert entry["net_pnl"] < entry["gross_pnl"]
         assert entry["r_multiple"] == pytest.approx(30.0 / 25.0, abs=1e-3)
         assert entry["hold_minutes"] == pytest.approx(25.0)
@@ -204,23 +221,44 @@ class TestExitAndJournal:
 
 # ─────────────────────────── Guardian ─────────────────────────────────────
 
+
 def bars(n=60, start=54000.0, step=20.0, seed=3):
     rng = np.random.default_rng(seed)
     c = start + np.cumsum(np.full(n, step) + rng.normal(0, 6, n))
     return c + 25, c - 25, c
 
 
-def guardian_inputs(bid, ask, *, now=NOW, with_futures=True, window=None,
-                    regime=None, degraded=False, n=60, step=20.0):
+def guardian_inputs(
+    bid,
+    ask,
+    *,
+    now=NOW,
+    with_futures=True,
+    window=None,
+    regime=None,
+    degraded=False,
+    n=60,
+    step=20.0,
+):
     h, l_, c = bars(n=n, step=step)
-    kw = {"now": now, "quote": Quote(bid=bid, ask=ask, ltp=(bid + ask) / 2),
-          "index_high": h, "index_low": l_, "index_close": c,
-          "session_window": window, "regime_direction": regime,
-          "data_degraded": degraded}
+    kw = {
+        "now": now,
+        "quote": Quote(bid=bid, ask=ask, ltp=(bid + ask) / 2),
+        "index_high": h,
+        "index_low": l_,
+        "index_close": c,
+        "session_window": window,
+        "regime_direction": regime,
+        "data_degraded": degraded,
+    }
     if with_futures:
         rng = np.random.default_rng(9)
-        kw.update(futures_high=h + 40, futures_low=l_ + 40, futures_close=c + 40,
-                  futures_volume=rng.uniform(4000, 9000, len(c)))
+        kw.update(
+            futures_high=h + 40,
+            futures_low=l_ + 40,
+            futures_close=c + 40,
+            futures_volume=rng.uniform(4000, 9000, len(c)),
+        )
     return GuardianInputs(**kw)
 
 
@@ -288,42 +326,41 @@ class TestGuardianTimeAndSession:
         d = guardian.evaluate(position, guardian_inputs(bid=312.0, ask=314.0, now=later))
         assert d.is_exit and d.reason is ExitReason.TIME_STOP
 
-    def test_time_stop_does_not_fire_on_a_winning_trade(self, guardian, position,
-                                                        rich_cfg):
+    def test_time_stop_does_not_fire_on_a_winning_trade(self, guardian, position, rich_cfg):
         later = NOW + dt.timedelta(minutes=rich_cfg.strategy.exits.time_stop_minutes + 1)
         d = guardian.evaluate(position, guardian_inputs(bid=345.0, ask=347.0, now=later))
         assert not d.is_exit or d.reason is not ExitReason.TIME_STOP
 
     def test_mandatory_squareoff_overrides_everything(self, guardian, position, cfg):
         """v1 defect A3: v1 never said 'close the position before expiry'."""
-        win = SessionClock(cfg.session, TradingCalendar({}, verified=True)) \
-            .window_for(dt.date(2026, 8, 20))
+        win = SessionClock(cfg.session, TradingCalendar({}, verified=True)).window_for(
+            dt.date(2026, 8, 20)
+        )
         at = dt.datetime(2026, 8, 20, 15, 20, tzinfo=IST)
-        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0,
-                                                        now=at, window=win))
+        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0, now=at, window=win))
         assert d.is_exit and d.reason is ExitReason.EOD_SQUAREOFF
         assert "SQUARE-OFF" in d.message
 
     def test_eod_advisory_warns_before_it_forces(self, guardian, position, cfg):
-        win = SessionClock(cfg.session, TradingCalendar({}, verified=True)) \
-            .window_for(dt.date(2026, 8, 20))
+        win = SessionClock(cfg.session, TradingCalendar({}, verified=True)).window_for(
+            dt.date(2026, 8, 20)
+        )
         at = dt.datetime(2026, 8, 20, 15, 12, tzinfo=IST)
         # Open the position recently: a 4-hour-old position would (correctly)
         # trip the time stop first, which outranks an advisory.
         position.opened_at = dt.datetime(2026, 8, 20, 15, 5, tzinfo=IST)
-        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0,
-                                                        now=at, window=win))
+        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0, now=at, window=win))
         assert d.action == "WARN" and not d.is_exit
 
     def test_real_exits_outrank_the_eod_advisory(self, guardian, position, cfg):
         """Priority order matters: a breached stop must not be downgraded to a
         'plan your exit' warning just because it is late in the session."""
-        win = SessionClock(cfg.session, TradingCalendar({}, verified=True)) \
-            .window_for(dt.date(2026, 8, 20))
+        win = SessionClock(cfg.session, TradingCalendar({}, verified=True)).window_for(
+            dt.date(2026, 8, 20)
+        )
         at = dt.datetime(2026, 8, 20, 15, 12, tzinfo=IST)
         position.opened_at = dt.datetime(2026, 8, 20, 15, 5, tzinfo=IST)
-        d = guardian.evaluate(position, guardian_inputs(bid=280.0, ask=284.0,
-                                                        now=at, window=win))
+        d = guardian.evaluate(position, guardian_inputs(bid=280.0, ask=284.0, now=at, window=win))
         assert d.is_exit and d.reason is ExitReason.HARD_SL
 
     def test_regime_flip_exits(self, guardian, position):
@@ -331,8 +368,7 @@ class TestGuardianTimeAndSession:
         # broken code, because it repeated the code's own domain confusion --
         # a REGIME label is BULL/BEAR/CHOP, never an option side. The regime
         # that opposes a long CALL is BEAR.
-        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0,
-                                                        regime="BEAR"))
+        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0, regime="BEAR"))
         assert d.is_exit and d.reason is ExitReason.REGIME_FLIP
 
 
@@ -340,8 +376,7 @@ class TestGuardianVolumeDependence:
     """*** v1 defect B3 *** — the index has no volume."""
 
     def test_vwap_is_unavailable_without_futures(self, guardian, position):
-        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0,
-                                                        with_futures=False))
+        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0, with_futures=False))
         assert d.details["vwap"] is None
         assert "futures" in d.details["vwap_note"]
 
@@ -351,26 +386,27 @@ class TestGuardianVolumeDependence:
         assert "vwap_supports" in d.details
 
     def test_divergence_is_skipped_without_futures_volume(self, guardian, position):
-        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0,
-                                                        with_futures=False))
+        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0, with_futures=False))
         assert "no futures volume" in d.details["divergence"]
         assert d.reason is not ExitReason.DIVERGENCE
 
     def test_hold_confidence_is_reported(self, guardian, position):
         d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0))
-        assert d.hold_confidence in (HoldConfidence.HIGH, HoldConfidence.MEDIUM,
-                                     HoldConfidence.LOW, HoldConfidence.UNKNOWN)
+        assert d.hold_confidence in (
+            HoldConfidence.HIGH,
+            HoldConfidence.MEDIUM,
+            HoldConfidence.LOW,
+            HoldConfidence.UNKNOWN,
+        )
 
     def test_hold_confidence_never_forces_an_exit(self, guardian, position):
         """Advisory means advisory. Only stops close positions."""
-        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0,
-                                                        step=-20.0))
+        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0, step=-20.0))
         if d.hold_confidence == HoldConfidence.LOW:
             assert not d.is_exit
 
     def test_degraded_data_warns_but_keeps_managing(self, guardian, position):
-        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0,
-                                                        degraded=True))
+        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0, degraded=True))
         assert d.action == "WARN" and not d.is_exit
 
 
@@ -401,8 +437,7 @@ class TestJournalMetrics:
         make_signal_row(repo, sid=sid, entry=entry, stop=entry - 25, target=entry + 62)
         p = sm.acknowledge(sid, "TAKE", fill_price=entry, now=NOW).position
         assert p is not None, "acknowledge was refused — check the risk governor"
-        out = sm.confirm_exit(p.position_id, exit_px, reason,
-                              NOW + dt.timedelta(minutes=20))
+        out = sm.confirm_exit(p.position_id, exit_px, reason, NOW + dt.timedelta(minutes=20))
         # These cases exercise the JOURNAL, not the governor: reset the
         # per-day counters so the shipped 1-trade-per-day cap does not stop
         # the second trade in a two-trade scenario.
@@ -448,40 +483,39 @@ class TestRegimeFlipTypeSafety:
     """
 
     def test_matching_regime_does_not_exit_a_call(self, guardian, position):
-        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0,
-                                                        regime="BULL"))
+        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0, regime="BULL"))
         assert d.reason is not ExitReason.REGIME_FLIP
         assert not d.is_exit
 
     def test_opposite_regime_exits_a_call(self, guardian, position):
-        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0,
-                                                        regime="BEAR"))
+        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0, regime="BEAR"))
         assert d.is_exit and d.reason is ExitReason.REGIME_FLIP
 
     def test_chop_is_not_a_reversal(self, guardian, position):
         """CHOP weakens conviction; it does not mean the trade is wrong."""
-        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0,
-                                                        regime="CHOP"))
+        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0, regime="CHOP"))
         assert d.reason is not ExitReason.REGIME_FLIP
 
     def test_unknown_regime_is_not_a_reversal(self, guardian, position):
-        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0,
-                                                        regime="UNKNOWN"))
+        d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0, regime="UNKNOWN"))
         assert d.reason is not ExitReason.REGIME_FLIP
 
     def test_a_put_is_only_flipped_by_a_bull_regime(self, guardian, position):
         position.direction = "PE"
-        assert guardian.evaluate(
-            position, guardian_inputs(bid=330.0, ask=332.0, regime="BEAR")
-        ).reason is not ExitReason.REGIME_FLIP
-        assert guardian.evaluate(
-            position, guardian_inputs(bid=330.0, ask=332.0, regime="BULL")
-        ).reason is ExitReason.REGIME_FLIP
+        assert (
+            guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0, regime="BEAR")).reason
+            is not ExitReason.REGIME_FLIP
+        )
+        assert (
+            guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0, regime="BULL")).reason
+            is ExitReason.REGIME_FLIP
+        )
 
     def test_no_position_exits_instantly_on_a_matching_regime(self, guardian, position):
         """The headline symptom: a 1-minute average hold."""
         for minutes in (0, 1, 2, 5):
             at = NOW + dt.timedelta(minutes=minutes)
-            d = guardian.evaluate(position, guardian_inputs(bid=330.0, ask=332.0,
-                                                            now=at, regime="BULL"))
+            d = guardian.evaluate(
+                position, guardian_inputs(bid=330.0, ask=332.0, now=at, regime="BULL")
+            )
             assert not d.is_exit, f"exited after {minutes} min: {d.reason}"

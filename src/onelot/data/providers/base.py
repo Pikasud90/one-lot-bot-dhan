@@ -19,7 +19,9 @@ class HistoryProvider(Protocol):
         """Earliest date this provider can serve at `resolution` (None = unlimited)."""
         ...
 
-    def history(self, symbol: str, alt_symbol: str | None, resolution: str, start: dt.date, end: dt.date) -> pd.DataFrame:
+    def history(
+        self, symbol: str, alt_symbol: str | None, resolution: str, start: dt.date, end: dt.date
+    ) -> pd.DataFrame:
         """Bars for [start, end] inclusive. `symbol` is the Fyers symbol, `alt_symbol` the provider's own."""
         ...
 

@@ -29,17 +29,20 @@ class SizingResult:
     qty: int
     economics: TradeEconomics
     rejected_reason: str | None = None
-    concentration_pct: float | None = None      # of declared capital, if any
+    concentration_pct: float | None = None  # of declared capital, if any
 
     @property
     def is_tradeable(self) -> bool:
         return self.lots >= 1 and self.rejected_reason is None
 
     def as_dict(self) -> dict:
-        return {"lots": self.lots, "qty": self.qty,
-                "rejected_reason": self.rejected_reason,
-                "concentration_pct": self.concentration_pct,
-                "economics": self.economics.as_dict()}
+        return {
+            "lots": self.lots,
+            "qty": self.qty,
+            "rejected_reason": self.rejected_reason,
+            "concentration_pct": self.concentration_pct,
+            "economics": self.economics.as_dict(),
+        }
 
 
 def size_position(
@@ -62,14 +65,18 @@ def size_position(
     """
     lots = risk_cfg.lots_per_trade
     econ = compute_economics(
-        quote=quote, stop_distance=stop_distance, rr_target_gross=rr_target_gross,
-        lots=lots, lot_size=lot_size, cost_model=cost_model,
-        exec_cfg=exec_cfg, tick=tick,
+        quote=quote,
+        stop_distance=stop_distance,
+        rr_target_gross=rr_target_gross,
+        lots=lots,
+        lot_size=lot_size,
+        cost_model=cost_model,
+        exec_cfg=exec_cfg,
+        tick=tick,
     )
 
     if not quote.is_valid:
-        return SizingResult(0, 0, econ,
-                            "no two-sided market (zero or crossed bid/ask)")
+        return SizingResult(0, 0, econ, "no two-sided market (zero or crossed bid/ask)")
 
     concentration = (econ.premium_outlay / capital) if capital > 0 else None
     return SizingResult(lots, econ.qty, econ, None, concentration)

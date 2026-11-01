@@ -102,6 +102,7 @@ class TestRsi:
         d = np.diff(v)
         g = np.where(d > 0, d, 0.0)
         ls = np.where(d < 0, -d, 0.0)
+
         def _r(gain, loss):
             if loss == 0.0:
                 return 100.0 if gain > 0 else 50.0
@@ -167,7 +168,7 @@ class TestVwapIndexVolumeBug:
     def test_index_series_returns_nan_not_a_plausible_number(self):
         c = _trend(75)
         h, l_, _ = _ohlc(c)
-        zero_volume = np.zeros(len(c))          # exactly what an index feed returns
+        zero_volume = np.zeros(len(c))  # exactly what an index feed returns
         out = vwap(h, l_, c, zero_volume)
         assert np.all(np.isnan(out)), (
             "VWAP on a zero-volume index series must be NaN so the gate blocks. "

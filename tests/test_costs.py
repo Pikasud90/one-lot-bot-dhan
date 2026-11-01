@@ -23,7 +23,7 @@ from onelot.costs import (
     round_to_tick,
 )
 
-QTY = 70          # 2 lots x 35
+QTY = 70  # 2 lots x 35
 BUY_PREMIUM = 300.0
 SELL_PREMIUM = 400.0
 
@@ -54,9 +54,7 @@ class TestLegBreakdown:
     def test_gst_excludes_stt_and_stamp_duty(self, cost_model: CostModel, cost_cfg):
         """A classic real-world error: GST is on services, not on taxes."""
         s = cost_model.leg(SELL_PREMIUM, QTY, "sell")
-        expected = cost_cfg.taxes.gst_pct * (
-            s.brokerage + s.exchange_txn + s.sebi_fee + s.ipft
-        )
+        expected = cost_cfg.taxes.gst_pct * (s.brokerage + s.exchange_txn + s.sebi_fee + s.ipft)
         assert s.gst == pytest.approx(expected)
         assert s.gst < cost_cfg.taxes.gst_pct * (expected / cost_cfg.taxes.gst_pct + s.stt)
 
@@ -163,9 +161,13 @@ class TestEconomics:
     def _econ(self, cost_model, cfg, lots=3, stop=40.0):
         return compute_economics(
             quote=Quote(bid=299.0, ask=301.0, ltp=300.0),
-            stop_distance=stop, rr_target_gross=cfg.strategy.exits.rr_target_gross,
-            lots=lots, lot_size=35, cost_model=cost_model,
-            exec_cfg=cfg.execution_assumptions, tick=0.05,
+            stop_distance=stop,
+            rr_target_gross=cfg.strategy.exits.rr_target_gross,
+            lots=lots,
+            lot_size=35,
+            cost_model=cost_model,
+            exec_cfg=cfg.execution_assumptions,
+            tick=0.05,
         )
 
     def test_net_rr_is_below_gross_rr(self, cost_model, cfg):
@@ -199,9 +201,14 @@ class TestEconomics:
 
     def test_tiny_target_is_flagged_as_unwinnable(self, cost_model, cfg):
         e = compute_economics(
-            quote=Quote(bid=299.0, ask=301.0), stop_distance=0.05,
-            rr_target_gross=1.0, lots=1, lot_size=35, cost_model=cost_model,
-            exec_cfg=cfg.execution_assumptions, tick=0.05,
+            quote=Quote(bid=299.0, ask=301.0),
+            stop_distance=0.05,
+            rr_target_gross=1.0,
+            lots=1,
+            lot_size=35,
+            cost_model=cost_model,
+            exec_cfg=cfg.execution_assumptions,
+            tick=0.05,
         )
         assert e.net_reward <= 0 or e.warnings
 

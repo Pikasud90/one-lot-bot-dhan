@@ -37,8 +37,8 @@ class ReplayConfig:
     trend_strength: float = 0.006
     total_history: int = 300
     ivp_mode: str = "degraded"
-    capital: float | None = None      # informational only
-    take_every_signal: bool = True      # simulate a perfectly obedient human
+    capital: float | None = None  # informational only
+    take_every_signal: bool = True  # simulate a perfectly obedient human
     step_seconds: int = 60
 
 
@@ -66,13 +66,13 @@ class ReplayResult:
             f"  trades closed         {self.trades}",
         ]
         if m.get("trades"):
+
             def _n(v, fmt="{:>12,.0f}"):
                 return "n/a".rjust(12) if v is None else fmt.format(v)
 
             lines += [
                 "-" * 68,
-                f"  win rate              {m['win_rate']:.1%}"
-                f"   ({m['wins']}W / {m['losses']}L)",
+                f"  win rate              {m['win_rate']:.1%}   ({m['wins']}W / {m['losses']}L)",
                 f"  NET P&L               Rs {_n(m['net_pnl'])}",
                 f"  gross P&L             Rs {_n(m['gross_pnl'])}",
                 f"  total costs           Rs {_n(m['total_costs'])}"
@@ -82,11 +82,16 @@ class ReplayResult:
                 f"  avg R on winners      {m.get('avg_r_win'):+.2f}",
                 f"  avg R on losers       {m.get('avg_r_loss'):+.2f}",
                 f"  profit factor         {m.get('profit_factor')}",
-                (f"  Sharpe (annualised)   {m.get('sharpe')}"
-                 if m.get("sharpe") is not None
-                 else f"  Sharpe                {m.get('sharpe_note')}"),
-                (f"  Sortino (annualised)  {m.get('sortino')}"
-                 if m.get("sortino") is not None else "  Sortino               n/a"),
+                (
+                    f"  Sharpe (annualised)   {m.get('sharpe')}"
+                    if m.get("sharpe") is not None
+                    else f"  Sharpe                {m.get('sharpe_note')}"
+                ),
+                (
+                    f"  Sortino (annualised)  {m.get('sortino')}"
+                    if m.get("sortino") is not None
+                    else "  Sortino               n/a"
+                ),
                 f"  SQN                   {m.get('sqn')}",
                 "-" * 68,
                 f"  best trade            Rs {_n(m['best'])}",
@@ -95,24 +100,30 @@ class ReplayResult:
                 f"  worst day             Rs {_n(m.get('worst_day'))}",
                 f"  peak equity           Rs {_n(m.get('peak_equity'))}",
                 f"  max drawdown          Rs {_n(m['max_drawdown'])}"
-                + (f"   ({m['max_drawdown_pct_of_peak']:.0%} of peak)"
-                   if m.get("max_drawdown_pct_of_peak") else ""),
+                + (
+                    f"   ({m['max_drawdown_pct_of_peak']:.0%} of peak)"
+                    if m.get("max_drawdown_pct_of_peak")
+                    else ""
+                ),
                 f"  avg hold              {m['avg_hold_minutes']:.0f} min"
                 f"   over {m.get('trading_days')} trading days",
                 "-" * 68,
                 "  exits by reason:",
             ]
-            for k, v in sorted(m.get("by_exit_reason", {}).items(),
-                               key=lambda kv: -kv[1]["count"]):
-                lines.append(f"    {k:<16} n={v['count']:<4} "
-                             f"net Rs {v['net_pnl']:>10,.0f}  win {v['win_rate']:.0%}")
+            for k, v in sorted(m.get("by_exit_reason", {}).items(), key=lambda kv: -kv[1]["count"]):
+                lines.append(
+                    f"    {k:<16} n={v['count']:<4} "
+                    f"net Rs {v['net_pnl']:>10,.0f}  win {v['win_rate']:.0%}"
+                )
         else:
             lines.append("  (no trades closed)")
         if self.gate_histogram:
             lines += ["-" * 68, "  top gate rejections:"]
             for g in self.gate_histogram[:8]:
-                lines.append(f"    {g['gate']:<26} rejected {g['rejections']:<5} "
-                             f"pass rate {g['pass_rate']:.0%}")
+                lines.append(
+                    f"    {g['gate']:<26} rejected {g['rejections']:<5} "
+                    f"pass rate {g['pass_rate']:.0%}"
+                )
         lines.append("=" * 68)
         return "\n".join(lines)
 
@@ -120,21 +131,22 @@ class ReplayResult:
 class ReplayRunner:
     """Drives the real engine components over a synthetic or recorded tape."""
 
-    def __init__(self, app_cfg: AppConfig, replay_cfg: ReplayConfig,
-                 db_url: str = "sqlite:///:memory:"):
-        cap = (replay_cfg.capital if replay_cfg.capital is not None
-               else app_cfg.account.capital_inr)
-        self.cfg = app_cfg.model_copy(update={
-            "account": app_cfg.account.model_copy(update={"capital_inr": cap})})
+    def __init__(
+        self, app_cfg: AppConfig, replay_cfg: ReplayConfig, db_url: str = "sqlite:///:memory:"
+    ):
+        cap = replay_cfg.capital if replay_cfg.capital is not None else app_cfg.account.capital_inr
+        self.cfg = app_cfg.model_copy(
+            update={"account": app_cfg.account.model_copy(update={"capital_inr": cap})}
+        )
         self.rc = replay_cfg
         self.cost_model = CostModel(
-            CostConfig.load(self.cfg.project_root / "config" / "costs.yaml"))
+            CostConfig.load(self.cfg.project_root / "config" / "costs.yaml")
+        )
         self.calendar = TradingCalendar({}, verified=True)
         self.session_clock = SessionClock(self.cfg.session, self.calendar)
         self.alpha = AlphaEngine(self.cfg, self.cost_model)
         self.guardian = Guardian(self.cfg, self.cost_model)
-        self.fills = PaperFillModel(self.cfg.execution_assumptions,
-                                    self.cfg.instrument.tick_size)
+        self.fills = PaperFillModel(self.cfg.execution_assumptions, self.cfg.instrument.tick_size)
         self.ivp_engine = IVPercentileEngine(replay_cfg.ivp_mode, 252, 60)
 
         self.db = init_database(db_url)
@@ -143,17 +155,21 @@ class ReplayRunner:
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            self.market = SyntheticMarket(SyntheticConfig(
-                seed=replay_cfg.seed, sessions=replay_cfg.total_history,
-                drift_per_session=replay_cfg.drift_per_session,
-                trend_strength=replay_cfg.trend_strength))
+            self.market = SyntheticMarket(
+                SyntheticConfig(
+                    seed=replay_cfg.seed,
+                    sessions=replay_cfg.total_history,
+                    drift_per_session=replay_cfg.drift_per_session,
+                    trend_strength=replay_cfg.trend_strength,
+                )
+            )
         daily = self.market.daily_bars("index")
         self.daily_dates = [b.ts.date() for b in daily]
         self.daily_closes = np.array([b.close for b in daily])
         self.regime_model: RegimeModel | None = None
 
     def run(self) -> ReplayResult:
-        sessions = self.market.session_dates[-self.rc.sessions:]
+        sessions = self.market.session_dates[-self.rc.sessions :]
         bars = signals = trades = 0
         per_session: list[int] = []
         exit_reasons: dict[str, int] = {}
@@ -168,48 +184,60 @@ class ReplayRunner:
                 exit_reasons[k] = exit_reasons.get(k, 0) + v
 
         return ReplayResult(
-            sessions=len(sessions), bars_evaluated=bars, signals=signals,
-            trades=trades, metrics=self.journal.metrics(self.cfg.mode),
-            gate_histogram=self.repo.gate_rejection_histogram(
-                dt.datetime(2000, 1, 1, tzinfo=IST)),
-            signals_per_session=per_session, exit_reasons=exit_reasons)
+            sessions=len(sessions),
+            bars_evaluated=bars,
+            signals=signals,
+            trades=trades,
+            metrics=self.journal.metrics(self.cfg.mode),
+            gate_histogram=self.repo.gate_rejection_histogram(dt.datetime(2000, 1, 1, tzinfo=IST)),
+            signals_per_session=per_session,
+            exit_reasons=exit_reasons,
+        )
 
     def _run_session(self, day: dt.date) -> tuple[int, int, int, dict]:
-        broker = MockBroker(self.market,
-                            now=dt.datetime.combine(day, dt.time(9, 15), tzinfo=IST))
+        broker = MockBroker(self.market, now=dt.datetime.combine(day, dt.time(9, 15), tzinfo=IST))
         window = self.session_clock.window_for(day)
 
-        idx = CandleSeries("INDEX", self.cfg.data.bar_interval_min,
-                           window.open_at, has_volume=False)
-        fut = CandleSeries("FUTURES", self.cfg.data.bar_interval_min,
-                           window.open_at, has_volume=True)
+        idx = CandleSeries(
+            "INDEX", self.cfg.data.bar_interval_min, window.open_at, has_volume=False
+        )
+        fut = CandleSeries(
+            "FUTURES", self.cfg.data.bar_interval_min, window.open_at, has_volume=True
+        )
         for d in [x for x in self.market.session_dates if x < day][-8:]:
-            idx.seed_from_history(self.market.bars(d, self.cfg.data.bar_interval_min,
-                                                   "index"))
-            fut.seed_from_history(self.market.bars(d, self.cfg.data.bar_interval_min,
-                                                   "futures"))
+            idx.seed_from_history(self.market.bars(d, self.cfg.data.bar_interval_min, "index"))
+            fut.seed_from_history(self.market.bars(d, self.cfg.data.bar_interval_min, "futures"))
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             regime, self.regime_model = compute_for_date(
-                self.daily_dates, self.daily_closes, day, model=self.regime_model,
-                engine=self.cfg.strategy.regime.engine)
+                self.daily_dates,
+                self.daily_closes,
+                day,
+                model=self.regime_model,
+                engine=self.cfg.strategy.regime.engine,
+            )
 
-        iv_hist = [self.market.atm_iv(dt.datetime.combine(d, dt.time(12, 0), tzinfo=IST))
-                   for d in self.market.session_dates if d < day]
+        iv_hist = [
+            self.market.atm_iv(dt.datetime.combine(d, dt.time(12, 0), tzinfo=IST))
+            for d in self.market.session_dates
+            if d < day
+        ]
 
-        chain = ChainCache(broker, self.cfg.instrument.underlying_symbol,
-                           broker.expiry_date.isoformat(),
-                           forward_price_fn=lambda: self.market.futures_price(broker.now()))
+        chain = ChainCache(
+            broker,
+            self.cfg.instrument.underlying_symbol,
+            broker.expiry_date.isoformat(),
+            forward_price_fn=lambda: self.market.futures_price(broker.now()),
+        )
 
-        governor = RiskGovernor(self.cfg.risk, self.cfg.account.capital_inr,
-                                self.cfg.mode, day.isoformat(), self.repo)
+        governor = RiskGovernor(
+            self.cfg.risk, self.cfg.account.capital_inr, self.cfg.mode, day.isoformat(), self.repo
+        )
         state = TradeStateMachine(self.repo, self.cost_model, self.cfg, governor)
 
-        idx_c = next(c for c in broker.instruments("BANKNIFTY")
-                     if c.instrument_type == "INDEX")
-        fut_c = next(c for c in broker.instruments("BANKNIFTY")
-                     if c.instrument_type == "FUTIDX")
+        idx_c = next(c for c in broker.instruments("BANKNIFTY") if c.instrument_type == "INDEX")
+        fut_c = next(c for c in broker.instruments("BANKNIFTY") if c.instrument_type == "FUTIDX")
 
         n_sig = n_trade = n_bars = 0
         reasons: dict[str, int] = {}
@@ -232,25 +260,39 @@ class ReplayRunner:
 
             # ── manage any open position on every step ────────────────────
             for pos in list(state.open_positions.values()):
-                n_trade += self._manage(pos, broker, chain, idx, fut, state,
-                                        window, regime, t, reasons)
+                n_trade += self._manage(
+                    pos, broker, chain, idx, fut, state, window, regime, t, reasons
+                )
 
             if closed:
                 chain.poll_once(broker.expiry_dt, t)
                 a = idx.arrays()
                 ivp = self.ivp_engine.compute(iv_hist, chain.atm_iv())
                 allowed, why = governor.may_open(t)
-                out = self.alpha.evaluate(EvaluationContext(
-                    now=t, bar_ts=closed[-1].ts, session_window=window,
-                    health_may_signal=True, health_reasons=[],
-                    index_high=a["high"], index_low=a["low"], index_close=a["close"],
-                    chain_rows=chain.snapshot.rows if chain.snapshot else [],
-                    chain_age_sec=chain.age_seconds(t), regime=regime, ivp=ivp,
-                    expiry=broker.expiry_date.isoformat(), lot_size=35,
-                    risk_allowed=allowed, risk_reason=why,
-                    risk_state=governor.state.value,
-                    open_positions=len(state.open_positions),
-                    last_signal_at=last_signal_at, recent_signal_keys=set(recent_keys)))
+                out = self.alpha.evaluate(
+                    EvaluationContext(
+                        now=t,
+                        bar_ts=closed[-1].ts,
+                        session_window=window,
+                        health_may_signal=True,
+                        health_reasons=[],
+                        index_high=a["high"],
+                        index_low=a["low"],
+                        index_close=a["close"],
+                        chain_rows=chain.snapshot.rows if chain.snapshot else [],
+                        chain_age_sec=chain.age_seconds(t),
+                        regime=regime,
+                        ivp=ivp,
+                        expiry=broker.expiry_date.isoformat(),
+                        lot_size=35,
+                        risk_allowed=allowed,
+                        risk_reason=why,
+                        risk_state=governor.state.value,
+                        open_positions=len(state.open_positions),
+                        last_signal_at=last_signal_at,
+                        recent_signal_keys=set(recent_keys),
+                    )
+                )
                 n_bars += 1
                 self.repo.record_gates(out.eval_id, t, None, out.all_gate_dicts())
 
@@ -262,8 +304,7 @@ class ReplayRunner:
                     if self.rc.take_every_signal:
                         fill = self.fills.entry(out.signal.quote)
                         if fill:
-                            state.acknowledge(out.signal.signal_id, "TAKE", "replay",
-                                              fill.price, t)
+                            state.acknowledge(out.signal.signal_id, "TAKE", "replay", fill.price, t)
             t += dt.timedelta(seconds=self.rc.step_seconds)
 
         # Force-close anything still open at the bell — same rule as live.
@@ -272,8 +313,9 @@ class ReplayRunner:
             if q:
                 f = self.fills.exit(q)
                 if f:
-                    state.confirm_exit(pos.position_id, f.price,
-                                       ExitReason.EOD_SQUAREOFF, window.close_at)
+                    state.confirm_exit(
+                        pos.position_id, f.price, ExitReason.EOD_SQUAREOFF, window.close_at
+                    )
                     n_trade += 1
                     reasons["EOD_SQUAREOFF"] = reasons.get("EOD_SQUAREOFF", 0) + 1
         return n_sig, n_trade, n_bars, reasons
@@ -287,26 +329,37 @@ class ReplayRunner:
                 return Quote(bid=r.bid or 0.0, ask=r.ask or 0.0, ltp=r.ltp or 0.0)
         return None
 
-    def _manage(self, pos, broker, chain, idx, fut, state, window, regime, t,
-                reasons) -> int:
+    def _manage(self, pos, broker, chain, idx, fut, state, window, regime, t, reasons) -> int:
         chain.poll_once(broker.expiry_dt, t)
         q = self._option_quote(chain, pos)
         if q is None or not q.is_valid:
             return 0
         a = idx.arrays()
         fa = fut.session_arrays(t.date())
-        decision = self.guardian.evaluate(pos, GuardianInputs(
-            now=t, quote=q,
-            index_high=a["high"], index_low=a["low"], index_close=a["close"],
-            futures_high=fa["high"], futures_low=fa["low"],
-            futures_close=fa["close"], futures_volume=fa["volume"],
-            session_window=window,
-            regime_direction=regime.regime.value if regime else None))
+        decision = self.guardian.evaluate(
+            pos,
+            GuardianInputs(
+                now=t,
+                quote=q,
+                index_high=a["high"],
+                index_low=a["low"],
+                index_close=a["close"],
+                futures_high=fa["high"],
+                futures_low=fa["low"],
+                futures_close=fa["close"],
+                futures_volume=fa["volume"],
+                session_window=window,
+                regime_direction=regime.regime.value if regime else None,
+            ),
+        )
 
         if decision.trail_stop is not None:
-            state.update_trail(pos.position_id, decision.trail_stop,
-                               decision.trail_active,
-                               decision.high_water or pos.entry_price)
+            state.update_trail(
+                pos.position_id,
+                decision.trail_stop,
+                decision.trail_active,
+                decision.high_water or pos.entry_price,
+            )
         if not decision.is_exit:
             return 0
 

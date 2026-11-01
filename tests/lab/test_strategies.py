@@ -17,8 +17,16 @@ def test_every_strategy_generates_valid_signals(name):
     market = make_intraday(days=12, seed=9, vol=0.001, base=22000).assign(volume=0.0)
     strat = get_strategy(name, {"timeframe": "5m"})
     f = strat.generate(df, Context(symbol="X", market=market))
-    for col in ("long_entry", "short_entry", "long_stop", "short_stop", "long_score", "short_score",
-                "long_exit", "short_exit"):
+    for col in (
+        "long_entry",
+        "short_entry",
+        "long_stop",
+        "short_stop",
+        "long_score",
+        "short_score",
+        "long_exit",
+        "short_exit",
+    ):
         assert col in f.columns, col
     assert f["long_entry"].dtype == bool and f["short_entry"].dtype == bool
     le = f[f["long_entry"]]
@@ -47,14 +55,18 @@ def test_signals_do_not_depend_on_future_bars(name):
     assert (a == b).all(), f"{name} uses future data"
 
 
-@pytest.mark.parametrize("name", ["ema_cross", "supertrend_vol", "donchian_breakout", "intraday_momentum"])
+@pytest.mark.parametrize(
+    "name", ["ema_cross", "supertrend_vol", "donchian_breakout", "intraday_momentum"]
+)
 def test_volume_free_series_still_signals(name):
     """Indices and FX have no volume: volume filters must be neutral, not always-false."""
     df = make_intraday(days=15, seed=11, drift=0.0004, vol=0.0025, with_volume=False)
     strat = get_strategy(name, {"timeframe": "5m"})
     f = strat.generate(df)
     assert f["rvol"].isna().all()
-    assert (f["setup_long"] | f["setup_short"]).sum() > 0, f"{name} produced no setups without volume"
+    assert (f["setup_long"] | f["setup_short"]).sum() > 0, (
+        f"{name} produced no setups without volume"
+    )
 
 
 def test_param_space_and_docs():
@@ -68,7 +80,9 @@ def test_param_space_and_docs():
 
 def test_ema_cross_fires_once_per_cross():
     df = make_intraday(days=20, seed=21, drift=0.0005, vol=0.002)
-    strat = get_strategy("ema_cross", {"timeframe": "5m", "adx_min": 0, "rsi_margin": 0, "confirm_atr": 0})
+    strat = get_strategy(
+        "ema_cross", {"timeframe": "5m", "adx_min": 0, "rsi_margin": 0, "confirm_atr": 0}
+    )
     f = strat.generate(df)
     above = f["ema_fast"] > f["ema_slow"]
     crosses = int((above & ~above.shift(1, fill_value=False)).sum())

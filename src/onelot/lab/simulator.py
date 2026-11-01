@@ -143,7 +143,7 @@ def simulate(
     partial_done = False
     pending = None  # (side, signal_i, stop, score)
     pending_exit: str | None = None
-    last_exit_i = -10**9
+    last_exit_i = -(10**9)
     per_day: dict[int, int] = {}
 
     def close_leg(i: int, price: float, frac: float, reason: str) -> None:
@@ -170,15 +170,28 @@ def simulate(
                 if not np.isnan(a) and risk > 0:
                     st = sig_stop
                     max_risk = min(p.stop_atr_max * a, p.max_risk_pct / 100 * fill)
-                    floor = max(p.stop_atr_min * a, p.min_risk_pct / 100 * fill,
-                                p.stop_datr_min * d_atr[si] if not np.isnan(d_atr[si]) else 0.0)
+                    floor = max(
+                        p.stop_atr_min * a,
+                        p.min_risk_pct / 100 * fill,
+                        p.stop_datr_min * d_atr[si] if not np.isnan(d_atr[si]) else 0.0,
+                    )
                     if risk < floor:
                         risk = floor
                         st = fill - side * risk
                     if risk <= max(max_risk, floor if p.min_risk_pct > 0 else 0):
-                        pos = SimTrade(symbol, strategy, side, idx[si], idx[i], float(fill), float(st), float(risk),
-                                       float(fill + side * p.target_r * risk) if p.target_r > 0 else None,
-                                       float(score) if not np.isnan(score) else 0.0, float(a))
+                        pos = SimTrade(
+                            symbol,
+                            strategy,
+                            side,
+                            idx[si],
+                            idx[i],
+                            float(fill),
+                            float(st),
+                            float(risk),
+                            float(fill + side * p.target_r * risk) if p.target_r > 0 else None,
+                            float(score) if not np.isnan(score) else 0.0,
+                            float(a),
+                        )
                         remaining, stop, target = 1.0, st, pos.target
                         partial_px = fill + side * p.partial_r * risk if p.partial_r > 0 else None
                         partial_done = False
@@ -193,8 +206,12 @@ def simulate(
                 fav = (h[i] - pos.entry_price) if side == 1 else (pos.entry_price - l[i])
                 adv = (pos.entry_price - l[i]) if side == 1 else (h[i] - pos.entry_price)
                 stop_dist = (pos.entry_price - stop) * side
-                pos.mae = max(pos.mae, min(adv, max(stop_dist, 0.0)) if adv >= stop_dist > 0 else adv)
-                pos.mfe = max(pos.mfe, fav if target is None else min(fav, abs(target - pos.entry_price)))
+                pos.mae = max(
+                    pos.mae, min(adv, max(stop_dist, 0.0)) if adv >= stop_dist > 0 else adv
+                )
+                pos.mfe = max(
+                    pos.mfe, fav if target is None else min(fav, abs(target - pos.entry_price))
+                )
             if pending_exit is not None or tmin[i] >= sq_min:
                 reason = pending_exit or "square_off"
                 close_leg(i, o[i] * (1 - slip * side), remaining, reason)
@@ -209,7 +226,9 @@ def simulate(
                         fav_levels.append(("partial", partial_px))
                     if target is not None:
                         fav_levels.append(("target", target))
-                    fav_hit = [(k, v) for k, v in fav_levels if ((h[i] >= v) if side == 1 else (l[i] <= v))]
+                    fav_hit = [
+                        (k, v) for k, v in fav_levels if ((h[i] >= v) if side == 1 else (l[i] <= v))
+                    ]
                     stop_first = hit_stop
                     if hit_stop and fav_hit:
                         first = resolver.first_hit(idx[i], side, stop, fav_hit[0][1])
@@ -220,22 +239,41 @@ def simulate(
                         for kind, lvl in fav_hit:
                             if pos is None:
                                 break
-                            px = lvl if (o[i] - lvl) * side < 0 else o[i]  # gap beyond the level fills at open
+                            px = (
+                                lvl if (o[i] - lvl) * side < 0 else o[i]
+                            )  # gap beyond the level fills at open
                             if kind == "partial":
                                 close_leg(i, px, min(p.partial_frac, remaining), "partial")
                                 partial_done = True
                                 if pos is not None and p.breakeven_after_partial:
-                                    stop = max(stop, pos.entry_price) if side == 1 else min(stop, pos.entry_price)
+                                    stop = (
+                                        max(stop, pos.entry_price)
+                                        if side == 1
+                                        else min(stop, pos.entry_price)
+                                    )
                             else:
                                 close_leg(i, px, remaining, "target")
                         # after a partial, the stop may still be hit later in the same bar
-                        if pos is not None and partial_done and fav_hit and fav_hit[0][0] == "partial":
-                            if ((l[i] <= stop) if side == 1 else (h[i] >= stop)) and stop != pos.stop_initial:
-                                close_leg(i, stop * (1 - slip * side), remaining, _stop_reason(pos, stop))
+                        if (
+                            pos is not None
+                            and partial_done
+                            and fav_hit
+                            and fav_hit[0][0] == "partial"
+                        ):
+                            if (
+                                (l[i] <= stop) if side == 1 else (h[i] >= stop)
+                            ) and stop != pos.stop_initial:
+                                close_leg(
+                                    i, stop * (1 - slip * side), remaining, _stop_reason(pos, stop)
+                                )
             if pos is not None:
                 side = pos.side
                 # trailing stop (effective from next bar)
-                if p.trail_atr_mult > 0 and not np.isnan(atr_tr[i]) and pos.mfe >= p.trail_activate_r * pos.risk_ps:
+                if (
+                    p.trail_atr_mult > 0
+                    and not np.isnan(atr_tr[i])
+                    and pos.mfe >= p.trail_activate_r * pos.risk_ps
+                ):
                     cand = c[i] - side * p.trail_atr_mult * atr_tr[i]
                     stop = max(stop, cand) if side == 1 else min(stop, cand)
                 if (side == 1 and lx[i]) or (side == -1 and sx[i]):
@@ -246,8 +284,18 @@ def simulate(
                     close_leg(i, c[i] * (1 - slip * side), remaining, "eod")
 
         # ---------------------------------------------------------------- 3) new signal -> pending entry
-        if pos is None and pending is None and i >= start_i and i + 1 < n and dkey[i + 1] == dkey[i]:
-            if (le[i] or se[i]) and (i - last_exit_i) > p.cooldown_bars and per_day.get(dkey[i], 0) < p.max_trades_per_day:
+        if (
+            pos is None
+            and pending is None
+            and i >= start_i
+            and i + 1 < n
+            and dkey[i + 1] == dkey[i]
+        ):
+            if (
+                (le[i] or se[i])
+                and (i - last_exit_i) > p.cooldown_bars
+                and per_day.get(dkey[i], 0) < p.max_trades_per_day
+            ):
                 if le[i] and se[i]:
                     side = 1 if (np.nan_to_num(lsc[i]) >= np.nan_to_num(ssc[i])) else -1
                 else:

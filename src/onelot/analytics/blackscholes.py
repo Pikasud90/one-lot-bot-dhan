@@ -50,8 +50,9 @@ def _d1_d2(f: float, k: float, t: float, sigma: float) -> tuple[float, float]:
     return d1, d1 - v
 
 
-def price(f: float, k: float, t: float, sigma: float, r: float = 0.0,
-          opt: OptionType = "CE") -> float:
+def price(
+    f: float, k: float, t: float, sigma: float, r: float = 0.0, opt: OptionType = "CE"
+) -> float:
     """Black-76 fair value. Degrades to intrinsic at expiry rather than dividing by zero."""
     if f <= 0 or k <= 0:
         return 0.0
@@ -86,15 +87,19 @@ class Greeks:
 
     def as_dict(self) -> dict[str, float]:
         return {
-            "delta": round(self.delta, 5), "gamma": round(self.gamma, 7),
-            "vega": round(self.vega, 4), "theta": round(self.theta, 4),
+            "delta": round(self.delta, 5),
+            "gamma": round(self.gamma, 7),
+            "vega": round(self.vega, 4),
+            "theta": round(self.theta, 4),
             "theta_per_hour": round(self.theta_per_hour, 4),
-            "iv": round(self.iv, 5), "price": round(self.price, 4),
+            "iv": round(self.iv, 5),
+            "price": round(self.price, 4),
         }
 
 
-def greeks(f: float, k: float, t: float, sigma: float, r: float = 0.0,
-           opt: OptionType = "CE") -> Greeks:
+def greeks(
+    f: float, k: float, t: float, sigma: float, r: float = 0.0, opt: OptionType = "CE"
+) -> Greeks:
     """Analytic Black-76 greeks."""
     if f <= 0 or k <= 0 or t <= _MIN_T or sigma <= _MIN_SIGMA:
         intrinsic_delta = 0.0
@@ -103,8 +108,9 @@ def greeks(f: float, k: float, t: float, sigma: float, r: float = 0.0,
                 intrinsic_delta = 1.0 if f > k else 0.0
             else:
                 intrinsic_delta = -1.0 if f < k else 0.0
-        return Greeks(intrinsic_delta, 0.0, 0.0, 0.0, 0.0, max(sigma, 0.0),
-                      price(f, k, t, sigma, r, opt))
+        return Greeks(
+            intrinsic_delta, 0.0, 0.0, 0.0, 0.0, max(sigma, 0.0), price(f, k, t, sigma, r, opt)
+        )
 
     disc = math.exp(-r * t)
     sqrt_t = math.sqrt(t)
@@ -127,17 +133,26 @@ def greeks(f: float, k: float, t: float, sigma: float, r: float = 0.0,
     return Greeks(
         delta=delta,
         gamma=gamma,
-        vega=vega_per_unit_sigma / 100.0,     # per 1 vol point
-        theta=theta_per_year / 365.0,          # per calendar day
+        vega=vega_per_unit_sigma / 100.0,  # per 1 vol point
+        theta=theta_per_year / 365.0,  # per calendar day
         theta_per_hour=theta_per_year / (365.0 * 24.0),
         iv=sigma,
         price=px,
     )
 
 
-def implied_vol(market_price: float, f: float, k: float, t: float, r: float = 0.0,
-                opt: OptionType = "CE", lo: float = 1e-4, hi: float = 5.0,
-                tol: float = 1e-7, max_iter: int = 200) -> float:
+def implied_vol(
+    market_price: float,
+    f: float,
+    k: float,
+    t: float,
+    r: float = 0.0,
+    opt: OptionType = "CE",
+    lo: float = 1e-4,
+    hi: float = 5.0,
+    tol: float = 1e-7,
+    max_iter: int = 200,
+) -> float:
     """Implied volatility by bracketed bisection.
 
     Bisection over Newton deliberately: option vega vanishes for deep ITM/OTM
@@ -159,7 +174,7 @@ def implied_vol(market_price: float, f: float, k: float, t: float, r: float = 0.
     if market_price <= p_lo:
         return lo
     if market_price >= p_hi:
-        return float("nan")   # beyond 500% vol: the quote is not believable
+        return float("nan")  # beyond 500% vol: the quote is not believable
 
     for _ in range(max_iter):
         mid = 0.5 * (lo + hi)
@@ -173,8 +188,9 @@ def implied_vol(market_price: float, f: float, k: float, t: float, r: float = 0.
     return 0.5 * (lo + hi)
 
 
-def implied_forward(call_price: float, put_price: float, k: float, t: float,
-                    r: float = 0.0) -> float:
+def implied_forward(
+    call_price: float, put_price: float, k: float, t: float, r: float = 0.0
+) -> float:
     """Forward implied by put-call parity: F = K + e^{rT}(C - P).
 
     A useful cross-check on the futures quote, and a fallback when the futures
@@ -183,8 +199,9 @@ def implied_forward(call_price: float, put_price: float, k: float, t: float,
     return k + math.exp(r * t) * (call_price - put_price)
 
 
-def greeks_from_quote(market_price: float, f: float, k: float, t: float,
-                      r: float = 0.0, opt: OptionType = "CE") -> Greeks | None:
+def greeks_from_quote(
+    market_price: float, f: float, k: float, t: float, r: float = 0.0, opt: OptionType = "CE"
+) -> Greeks | None:
     """Solve IV from a traded price, then return the full greek set."""
     iv = implied_vol(market_price, f, k, t, r, opt)
     if math.isnan(iv):
@@ -192,8 +209,9 @@ def greeks_from_quote(market_price: float, f: float, k: float, t: float,
     return greeks(f, k, t, iv, r, opt)
 
 
-def cross_check_delta(broker_delta: float | None, local: Greeks | None,
-                      tolerance: float) -> tuple[bool, str]:
+def cross_check_delta(
+    broker_delta: float | None, local: Greeks | None, tolerance: float
+) -> tuple[bool, str]:
     """Validate a broker-supplied delta against our own (v1 defect A9).
 
     Returns (trustworthy, reason). A missing broker greek is fine — we use the
@@ -206,6 +224,8 @@ def cross_check_delta(broker_delta: float | None, local: Greeks | None,
         return True, "broker delta absent; using local"
     diff = abs(abs(broker_delta) - abs(local.delta))
     if diff > tolerance:
-        return False, (f"broker delta {broker_delta:+.4f} vs local {local.delta:+.4f} "
-                       f"differ by {diff:.4f} > {tolerance}")
+        return False, (
+            f"broker delta {broker_delta:+.4f} vs local {local.delta:+.4f} "
+            f"differ by {diff:.4f} > {tolerance}"
+        )
     return True, f"agree within {diff:.4f}"

@@ -36,27 +36,32 @@ def main() -> int:
         print("       python -m onelot --mock")
         return 1
 
-    print("\n[credentials]  present (client-id ends ..."
-          f"{secrets.client_id[-4:]}, token redacted)")
+    print(f"\n[credentials]  present (client-id ends ...{secrets.client_id[-4:]}, token redacted)")
 
     from .broker.dhan import DhanAdapter
+
     adapter = DhanAdapter(secrets.client_id, secrets.access_token, RateLimiter())
-    result = adapter.preflight(cfg.instrument.index_security_id,
-                               cfg.instrument.exchange_segment_index)
+    result = adapter.preflight(
+        cfg.instrument.index_security_id, cfg.instrument.exchange_segment_index
+    )
 
     print("\n[endpoints]")
     for name, r in result["checks"].items():
         mark = "OK  " if r["ok"] else "FAIL"
-        print(f"   {mark}  {name}"
-              + ("" if r["ok"] else f"   -> {r.get('error')}: {r.get('detail','')[:150]}"))
+        print(
+            f"   {mark}  {name}"
+            + ("" if r["ok"] else f"   -> {r.get('error')}: {r.get('detail', '')[:150]}")
+        )
 
     if result["notes"]:
         print("\n[notes]")
         for n in dict.fromkeys(result["notes"]):
             print(f"   - {n}")
 
-    print("\n[verdict]  " + ("READY" if result["ok"] and not problems
-                             else "NOT READY — fix the items above"))
+    print(
+        "\n[verdict]  "
+        + ("READY" if result["ok"] and not problems else "NOT READY — fix the items above")
+    )
     print("\nFull result:\n" + json.dumps(result, indent=2, default=str))
     adapter.close()
     return 0 if (result["ok"] and not problems) else 1

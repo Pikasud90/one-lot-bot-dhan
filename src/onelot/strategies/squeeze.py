@@ -19,14 +19,32 @@ from .regime import NEUTRAL, RANGE, TREND, VOLATILE
 class SqueezeParams(StrategyParams):
     bb_len: int = Field(20, description="Bollinger length", json_schema_extra=opt(14, 30, 2))
     bb_k: float = Field(2.0, description="Bollinger std-dev multiplier")
-    kc_mult: float = Field(1.5, description="Keltner ATR multiplier", json_schema_extra=opt(1.0, 2.0, 0.25))
-    min_squeeze_bars: int = Field(6, description="Minimum bars in squeeze before a release counts", json_schema_extra=opt(3, 15, 2))
-    release_window: int = Field(3, description="Breakout must come within this many bars of the release", json_schema_extra=opt(1, 6, 1))
-    dc_len: int = Field(20, description="Donchian breakout length", json_schema_extra=opt(10, 30, 5))
+    kc_mult: float = Field(
+        1.5, description="Keltner ATR multiplier", json_schema_extra=opt(1.0, 2.0, 0.25)
+    )
+    min_squeeze_bars: int = Field(
+        6,
+        description="Minimum bars in squeeze before a release counts",
+        json_schema_extra=opt(3, 15, 2),
+    )
+    release_window: int = Field(
+        3,
+        description="Breakout must come within this many bars of the release",
+        json_schema_extra=opt(1, 6, 1),
+    )
+    dc_len: int = Field(
+        20, description="Donchian breakout length", json_schema_extra=opt(10, 30, 5)
+    )
     mom_len: int = Field(12, description="Momentum length", json_schema_extra=opt(8, 20, 2))
-    rvol_min: float = Field(1.1, description="Minimum relative volume", json_schema_extra=opt(0.8, 2.0, 0.2))
-    stop_buffer_atr: float = Field(0.1, description="Stop beyond the squeeze range by this many ATR")
-    regime_filter: bool = Field(False, description="Only trade in the regimes this strategy is designed for")
+    rvol_min: float = Field(
+        1.1, description="Minimum relative volume", json_schema_extra=opt(0.8, 2.0, 0.2)
+    )
+    stop_buffer_atr: float = Field(
+        0.1, description="Stop beyond the squeeze range by this many ATR"
+    )
+    regime_filter: bool = Field(
+        False, description="Only trade in the regimes this strategy is designed for"
+    )
 
 
 class SqueezeBreakout(Strategy):
@@ -44,16 +62,38 @@ class SqueezeBreakout(Strategy):
         sq = (bb["bb_upper"] < kc["kc_upper"]) & (bb["bb_lower"] > kc["kc_lower"])
         run = sq.astype(int).groupby((~sq).cumsum().to_numpy()).cumsum()
         released_len = run.shift(1).where(sq.shift(1, fill_value=False) & ~sq, 0).fillna(0)
-        recent_release = released_len.rolling(p.release_window, min_periods=1).max() >= p.min_squeeze_bars
+        recent_release = (
+            released_len.rolling(p.release_window, min_periods=1).max() >= p.min_squeeze_bars
+        )
         dc = ind.donchian(h, l, p.dc_len, exclude_current=True)
-        mid = ((h.rolling(p.mom_len).max() + l.rolling(p.mom_len).min()) / 2 + ind.sma(c, p.mom_len)) / 2
+        mid = (
+            (h.rolling(p.mom_len).max() + l.rolling(p.mom_len).min()) / 2 + ind.sma(c, p.mom_len)
+        ) / 2
         mom = ind.linreg_slope(c - mid, p.mom_len)
         vol_ok = f["rvol"] >= p.rvol_min
-        long_entry = recent_release & (c > dc["dc_upper"]) & (mom > 0) & (mom > mom.shift(1)) & (c > f["vwap"]) & vol_ok
-        short_entry = recent_release & (c < dc["dc_lower"]) & (mom < 0) & (mom < mom.shift(1)) & (c < f["vwap"]) & vol_ok
+        long_entry = (
+            recent_release
+            & (c > dc["dc_upper"])
+            & (mom > 0)
+            & (mom > mom.shift(1))
+            & (c > f["vwap"])
+            & vol_ok
+        )
+        short_entry = (
+            recent_release
+            & (c < dc["dc_lower"])
+            & (mom < 0)
+            & (mom < mom.shift(1))
+            & (c < f["vwap"])
+            & vol_ok
+        )
         # one signal per release
-        long_entry = long_entry & ~long_entry.shift(1, fill_value=False).rolling(p.release_window, min_periods=1).max().astype(bool)
-        short_entry = short_entry & ~short_entry.shift(1, fill_value=False).rolling(p.release_window, min_periods=1).max().astype(bool)
+        long_entry = long_entry & ~long_entry.shift(1, fill_value=False).rolling(
+            p.release_window, min_periods=1
+        ).max().astype(bool)
+        short_entry = short_entry & ~short_entry.shift(1, fill_value=False).rolling(
+            p.release_window, min_periods=1
+        ).max().astype(bool)
         look = p.min_squeeze_bars + p.release_window
         buf = p.stop_buffer_atr * f["atr"]
         out = pd.DataFrame(index=f.index)
@@ -69,7 +109,9 @@ class SqueezeBreakout(Strategy):
         out["pl_momentum_long"] = (mom_n * 5).clip(0, 1)
         out["pl_momentum_short"] = (-mom_n * 5).clip(0, 1)
         # for a squeeze, *low* prior volatility is good: reward a low ATR percentile
-        out["pl_volatility_long"] = out["pl_volatility_short"] = 0.5 * vol_pillar(f["atr_pct"]) + 0.5 * (1 - f["atr_pct"].fillna(50) / 100)
+        out["pl_volatility_long"] = out["pl_volatility_short"] = 0.5 * vol_pillar(
+            f["atr_pct"]
+        ) + 0.5 * (1 - f["atr_pct"].fillna(50) / 100)
         out["pl_volume_long"] = out["pl_volume_short"] = volume_pillar(f["rvol"])
         out["long_score"] = np.nan
         out["short_score"] = np.nan
@@ -77,10 +119,17 @@ class SqueezeBreakout(Strategy):
 
     def _reasons(self, f, i, side):
         word = "upside" if side == "long" else "downside"
-        return ([f"Volatility squeeze (Bollinger inside Keltner) of {self.p.min_squeeze_bars}+ bars just released",
-                 f"{self.p.dc_len}-bar Donchian {word} breakout with momentum agreeing"], [])
+        return (
+            [
+                f"Volatility squeeze (Bollinger inside Keltner) of {self.p.min_squeeze_bars}+ bars just released",
+                f"{self.p.dc_len}-bar Donchian {word} breakout with momentum agreeing",
+            ],
+            [],
+        )
 
     def implies(self, side: str) -> str:
-        return ("Compression resolved upward; expansion moves after squeezes tend to travel 1-2x the squeeze range."
-                if side == "long" else
-                "Compression resolved downward; expansion moves after squeezes tend to travel 1-2x the squeeze range.")
+        return (
+            "Compression resolved upward; expansion moves after squeezes tend to travel 1-2x the squeeze range."
+            if side == "long"
+            else "Compression resolved downward; expansion moves after squeezes tend to travel 1-2x the squeeze range."
+        )

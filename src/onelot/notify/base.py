@@ -11,15 +11,18 @@ from typing import Protocol
 
 class NotificationLevel(str, Enum):
     INFO = "INFO"
-    SIGNAL = "SIGNAL"        # a tradeable signal — the highest-value alert
+    SIGNAL = "SIGNAL"  # a tradeable signal — the highest-value alert
     WARNING = "WARNING"
-    EXIT = "EXIT"            # close a position NOW
-    CRITICAL = "CRITICAL"    # halt, token expired, feed dead
+    EXIT = "EXIT"  # close a position NOW
+    CRITICAL = "CRITICAL"  # halt, token expired, feed dead
 
     @property
     def is_urgent(self) -> bool:
-        return self in (NotificationLevel.SIGNAL, NotificationLevel.EXIT,
-                        NotificationLevel.CRITICAL)
+        return self in (
+            NotificationLevel.SIGNAL,
+            NotificationLevel.EXIT,
+            NotificationLevel.CRITICAL,
+        )
 
 
 @dataclass
@@ -37,11 +40,15 @@ class Notification:
 
     def as_dict(self) -> dict:
         return {
-            "notification_id": self.notification_id, "title": self.title,
-            "body": self.body, "level": self.level.value,
+            "notification_id": self.notification_id,
+            "title": self.title,
+            "body": self.body,
+            "level": self.level.value,
             "created_at": self.created_at.isoformat() if self.created_at else None,
-            "signal_id": self.signal_id, "position_id": self.position_id,
-            "ttl_seconds": self.ttl_seconds, "sound": self.sound,
+            "signal_id": self.signal_id,
+            "position_id": self.position_id,
+            "ttl_seconds": self.ttl_seconds,
+            "sound": self.sound,
             "payload": dict(self.payload),
         }
 

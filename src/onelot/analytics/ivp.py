@@ -30,14 +30,14 @@ Mode = Literal["strict", "degraded", "off"]
 
 @dataclass(frozen=True)
 class IVPResult:
-    percentile: float          # 0-100, NaN if undefined
-    iv_rank: float             # (cur - min) / (max - min) * 100
+    percentile: float  # 0-100, NaN if undefined
+    iv_rank: float  # (cur - min) / (max - min) * 100
     current_iv: float
     n_observations: int
     required_observations: int
     sufficient: bool
     mode: Mode
-    usable: bool               # may this value gate a signal at all?
+    usable: bool  # may this value gate a signal at all?
     note: str
 
     def gate_passes(self, max_percentile: float) -> tuple[bool, str]:
@@ -57,14 +57,15 @@ class IVPResult:
             "current_iv": round(self.current_iv, 5),
             "n_observations": self.n_observations,
             "required_observations": self.required_observations,
-            "sufficient": self.sufficient, "mode": self.mode,
-            "usable": self.usable, "note": self.note,
+            "sufficient": self.sufficient,
+            "mode": self.mode,
+            "usable": self.usable,
+            "note": self.note,
         }
 
 
 class IVPercentileEngine:
-    def __init__(self, mode: Mode = "strict", lookback_days: int = 252,
-                 min_history_days: int = 60):
+    def __init__(self, mode: Mode = "strict", lookback_days: int = 252, min_history_days: int = 60):
         self.mode = mode
         self.lookback_days = lookback_days
         self.min_history_days = min_history_days
@@ -72,43 +73,92 @@ class IVPercentileEngine:
     def compute(self, history: list[float] | np.ndarray, current_iv: float) -> IVPResult:
         h = np.asarray([x for x in np.asarray(history, dtype=float) if not np.isnan(x)])
         if self.lookback_days and len(h) > self.lookback_days:
-            h = h[-self.lookback_days:]
+            h = h[-self.lookback_days :]
         n = len(h)
         sufficient = n >= self.min_history_days
 
         if np.isnan(current_iv) or current_iv <= 0:
-            return IVPResult(float("nan"), float("nan"), current_iv, n,
-                             self.min_history_days, sufficient, self.mode, False,
-                             "current ATM IV unavailable")
+            return IVPResult(
+                float("nan"),
+                float("nan"),
+                current_iv,
+                n,
+                self.min_history_days,
+                sufficient,
+                self.mode,
+                False,
+                "current ATM IV unavailable",
+            )
 
         if self.mode == "off":
-            return IVPResult(float("nan"), float("nan"), current_iv, n,
-                             self.min_history_days, sufficient, self.mode, True,
-                             "IVP gate disabled")
+            return IVPResult(
+                float("nan"),
+                float("nan"),
+                current_iv,
+                n,
+                self.min_history_days,
+                sufficient,
+                self.mode,
+                True,
+                "IVP gate disabled",
+            )
 
         if n == 0:
-            return IVPResult(float("nan"), float("nan"), current_iv, 0,
-                             self.min_history_days, False, self.mode, False,
-                             "no ATM IV history recorded yet")
+            return IVPResult(
+                float("nan"),
+                float("nan"),
+                current_iv,
+                0,
+                self.min_history_days,
+                False,
+                self.mode,
+                False,
+                "no ATM IV history recorded yet",
+            )
 
         pct = percentile_rank(h, current_iv)
         lo, hi = float(np.min(h)), float(np.max(h))
         rank = 100.0 * (current_iv - lo) / (hi - lo) if hi > lo else float("nan")
 
         if sufficient:
-            return IVPResult(pct, rank, current_iv, n, self.min_history_days, True,
-                             self.mode, True, f"{n} sessions of ATM IV history")
+            return IVPResult(
+                pct,
+                rank,
+                current_iv,
+                n,
+                self.min_history_days,
+                True,
+                self.mode,
+                True,
+                f"{n} sessions of ATM IV history",
+            )
 
         if self.mode == "strict":
-            return IVPResult(pct, rank, current_iv, n, self.min_history_days, False,
-                             self.mode, False,
-                             f"only {n}/{self.min_history_days} sessions of IV history — "
-                             f"IVP is not yet meaningful (mode=strict blocks signals)")
+            return IVPResult(
+                pct,
+                rank,
+                current_iv,
+                n,
+                self.min_history_days,
+                False,
+                self.mode,
+                False,
+                f"only {n}/{self.min_history_days} sessions of IV history — "
+                f"IVP is not yet meaningful (mode=strict blocks signals)",
+            )
 
-        return IVPResult(pct, rank, current_iv, n, self.min_history_days, False,
-                         self.mode, True,
-                         f"DEGRADED: IVP over only {n}/{self.min_history_days} sessions — "
-                         f"treat this number with suspicion")
+        return IVPResult(
+            pct,
+            rank,
+            current_iv,
+            n,
+            self.min_history_days,
+            False,
+            self.mode,
+            True,
+            f"DEGRADED: IVP over only {n}/{self.min_history_days} sessions — "
+            f"treat this number with suspicion",
+        )
 
 
 def atm_iv_from_chain(rows: list[dict], spot_or_future: float) -> float:
@@ -123,9 +173,12 @@ def atm_iv_from_chain(rows: list[dict], spot_or_future: float) -> float:
         return float("nan")
     atm = min(strikes, key=lambda s: abs(s - spot_or_future))
     ivs = [
-        float(r["iv"]) for r in rows
-        if r.get("strike") is not None and float(r["strike"]) == atm
-        and r.get("iv") is not None and float(r["iv"]) > 0
+        float(r["iv"])
+        for r in rows
+        if r.get("strike") is not None
+        and float(r["strike"]) == atm
+        and r.get("iv") is not None
+        and float(r["iv"]) > 0
     ]
     return float(np.mean(ivs)) if ivs else float("nan")
 

@@ -22,12 +22,22 @@ from .vwap_pullback import VWAPPullback
 # Order = how they appear in the Lab's dropdown: the operator's theses first,
 # then the established setups, then the research-backed anomalies.
 REGISTRY: dict[str, type[Strategy]] = {
-    cls.name: cls for cls in (
-        EMACross, SupertrendVol,                                   # operator theses
-        SupertrendADX, OpeningRangeBreakout, VWAPPullback,         # classic intraday setups
-        SqueezeBreakout, DonchianBreakout, MeanReversion,          # volatility / trend / reversion
-        IntradayMomentum, GapFade,                                 # documented anomalies
-        CPRBreakout, NR7Breakout, EMAPullback, TurtleSoup,         # classic books, re-implemented
+    cls.name: cls
+    for cls in (
+        EMACross,
+        SupertrendVol,  # operator theses
+        SupertrendADX,
+        OpeningRangeBreakout,
+        VWAPPullback,  # classic intraday setups
+        SqueezeBreakout,
+        DonchianBreakout,
+        MeanReversion,  # volatility / trend / reversion
+        IntradayMomentum,
+        GapFade,  # documented anomalies
+        CPRBreakout,
+        NR7Breakout,
+        EMAPullback,
+        TurtleSoup,  # classic books, re-implemented
     )
 }
 
@@ -54,10 +64,30 @@ SUITABLE: dict[str, tuple[str, ...]] = {
 INDICATORS: dict[str, tuple[str, ...]] = {
     "ema_cross": ("EMA fast/slow", "ADX(14)", "RSI(14)", "ATR(14)", "relative volume"),
     "supertrend_vol": ("Supertrend", "RSI(14)", "ADX(14)", "relative volume", "ATR(14)"),
-    "supertrend_adx": ("Supertrend", "ADX/DI(14)", "MACD", "session VWAP", "ATR(14)", "relative volume"),
+    "supertrend_adx": (
+        "Supertrend",
+        "ADX/DI(14)",
+        "MACD",
+        "session VWAP",
+        "ATR(14)",
+        "relative volume",
+    ),
     "orb": ("opening range", "session VWAP", "daily ATR", "relative volume", "RSI(14)"),
-    "vwap_pullback": ("session VWAP", "EMA20/50", "RSI(7)", "ADX(14)", "ATR(14)", "relative volume"),
-    "squeeze": ("Bollinger(20)", "Keltner", "Donchian", "linear-regression momentum", "relative volume"),
+    "vwap_pullback": (
+        "session VWAP",
+        "EMA20/50",
+        "RSI(7)",
+        "ADX(14)",
+        "ATR(14)",
+        "relative volume",
+    ),
+    "squeeze": (
+        "Bollinger(20)",
+        "Keltner",
+        "Donchian",
+        "linear-regression momentum",
+        "relative volume",
+    ),
     "donchian_breakout": ("Donchian N/M", "ADX(14)", "ATR(14)"),
     "mean_reversion": ("RSI(2)", "EMA20/50", "ATR(14)"),
     "intraday_momentum": ("opening-window return", "ATR(14)"),
@@ -82,7 +112,16 @@ def get_strategy(name: str, params: dict | None = None) -> Strategy:
 
 
 def list_strategies() -> list[dict]:
-    return [{"name": c.name, "label": c.label, "description": c.description, "regimes": list(c.regimes),
-             "suitable_for": list(SUITABLE.get(c.name, ())), "indicators": list(INDICATORS.get(c.name, ())),
-             "params": c.param_docs(), "space": {k: list(v) for k, v in c.param_space().items()}}
-            for c in REGISTRY.values()]
+    return [
+        {
+            "name": c.name,
+            "label": c.label,
+            "description": c.description,
+            "regimes": list(c.regimes),
+            "suitable_for": list(SUITABLE.get(c.name, ())),
+            "indicators": list(INDICATORS.get(c.name, ())),
+            "params": c.param_docs(),
+            "space": {k: list(v) for k, v in c.param_space().items()},
+        }
+        for c in REGISTRY.values()
+    ]

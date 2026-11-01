@@ -123,27 +123,44 @@ class Signal:
             "signal_id": self.signal_id,
             "created_at": self.created_at.isoformat(),
             "expires_at": self.expires_at.isoformat(),
-            "direction": self.direction, "underlying": self.underlying,
-            "expiry": self.expiry, "strike": self.strike, "opt_type": self.opt_type,
+            "direction": self.direction,
+            "underlying": self.underlying,
+            "expiry": self.expiry,
+            "strike": self.strike,
+            "opt_type": self.opt_type,
             "security_id": self.security_id,
-            "quote": {"bid": self.quote.bid, "ask": self.quote.ask,
-                      "ltp": self.quote.ltp, "spread": round(self.quote.spread, 2)},
-            "entry_eff": e.entry_eff, "stop_level": e.stop_level,
-            "target_level": e.target_level, "breakeven": e.breakeven,
-            "lots": self.lots, "qty": self.qty, "lot_size": self.lot_size,
-            "net_risk": round(e.net_risk, 2), "net_reward": round(e.net_reward, 2),
+            "quote": {
+                "bid": self.quote.bid,
+                "ask": self.quote.ask,
+                "ltp": self.quote.ltp,
+                "spread": round(self.quote.spread, 2),
+            },
+            "entry_eff": e.entry_eff,
+            "stop_level": e.stop_level,
+            "target_level": e.target_level,
+            "breakeven": e.breakeven,
+            "lots": self.lots,
+            "qty": self.qty,
+            "lot_size": self.lot_size,
+            "net_risk": round(e.net_risk, 2),
+            "net_reward": round(e.net_reward, 2),
             "rr_net": round(e.rr_net, 3),
             "premium_outlay": round(e.premium_outlay, 2),
-            "delta": round(self.delta, 4), "iv": self.iv,
+            "delta": round(self.delta, 4),
+            "iv": self.iv,
             "theta_per_hour": self.theta_per_hour,
-            "regime": self.regime.as_dict(), "ivp": self.ivp.as_dict(),
+            "regime": self.regime.as_dict(),
+            "ivp": self.ivp.as_dict(),
             "chop": self.chop.as_dict() if self.chop else None,
-            "rsi": round(self.rsi_value, 2), "ema": round(self.ema_value, 2),
+            "rsi": round(self.rsi_value, 2),
+            "ema": round(self.ema_value, 2),
             "atr": round(self.atr_value, 2),
             "warnings": list(self.warnings),
-            "cost_detail": {"entry": e.entry_costs.as_dict(),
-                            "target_exit": e.target_costs.as_dict(),
-                            "cost_pct_of_gross": round(e.cost_pct_of_gross, 4)},
+            "cost_detail": {
+                "entry": e.entry_costs.as_dict(),
+                "target_exit": e.target_costs.as_dict(),
+                "cost_pct_of_gross": round(e.cost_pct_of_gross, 4),
+            },
         }
 
     def alert_text(self) -> str:
@@ -205,7 +222,9 @@ class AlphaEngine:
             from .lab_source import LabDirectionSource
 
             self.lab = LabDirectionSource(cfg.strategy.live, cfg.data.bar_interval_min)
-            log.info("Live direction source: Lab strategy %s @ %s", self.lab.name, self.lab.timeframe)
+            log.info(
+                "Live direction source: Lab strategy %s @ %s", self.lab.name, self.lab.timeframe
+            )
 
     # ── global, direction-independent gates ───────────────────────────────
     def _global_gates(self, ctx: EvaluationContext) -> list[G.GateResult]:
@@ -221,10 +240,16 @@ class AlphaEngine:
         ]
 
     # ── per-direction evaluation ──────────────────────────────────────────
-    def _evaluate_direction(self, ctx: EvaluationContext, direction: str,
-                            chop: IntradayChopResult,
-                            ema_val: float, rsi_val: float,
-                            atr_val: float, lab=None) -> DirectionEvaluation:
+    def _evaluate_direction(
+        self,
+        ctx: EvaluationContext,
+        direction: str,
+        chop: IntradayChopResult,
+        ema_val: float,
+        rsi_val: float,
+        atr_val: float,
+        lab=None,
+    ) -> DirectionEvaluation:
         s = self.cfg.strategy
         rep = G.GateReport(direction=direction)
         ev = DirectionEvaluation(direction=direction, report=rep)
@@ -239,8 +264,14 @@ class AlphaEngine:
             # stays as the extreme-volatility guard, and IVP below as the
             # premium-richness guard.
             fired = lab.fired(direction)
-            rep.add(G.GateResult("lab_strategy", fired, f"{lab.strategy}@{lab.timeframe}",
-                                 "" if fired else (lab.reason or "strategy did not fire this side")))
+            rep.add(
+                G.GateResult(
+                    "lab_strategy",
+                    fired,
+                    f"{lab.strategy}@{lab.timeframe}",
+                    "" if fired else (lab.reason or "strategy did not fire this side"),
+                )
+            )
         else:
             rep.add(G.gate_trend(close, ema_val, direction))
             rep.add(G.gate_momentum(rsi_val, direction, s.momentum.ce_band, s.momentum.pe_band))
@@ -250,9 +281,14 @@ class AlphaEngine:
         # complete even when an earlier gate already failed.
         sel = select_contract(ctx.chain_rows, direction, s.contract, ctx.lot_size)
         ev.selection = sel
-        rep.add(G.GateResult("contract", sel.ok,
-                             sel.chosen and f"{sel.chosen.strike:g}{sel.chosen.opt_type}" or "",
-                             sel.reason))
+        rep.add(
+            G.GateResult(
+                "contract",
+                sel.ok,
+                sel.chosen and f"{sel.chosen.strike:g}{sel.chosen.opt_type}" or "",
+                sel.reason,
+            )
+        )
         if not sel.ok or sel.quote is None:
             return ev
 
@@ -260,16 +296,24 @@ class AlphaEngine:
         ev.contract = row
         premium = sel.quote.mid
 
-        rep.add(G.gate_theta(row.theta / 24.0 if row.theta is not None else None,
-                             premium, s.theta.expected_hold_hours,
-                             s.theta.max_theta_burn_pct))
+        rep.add(
+            G.gate_theta(
+                row.theta / 24.0 if row.theta is not None else None,
+                premium,
+                s.theta.expected_hold_hours,
+                s.theta.max_theta_burn_pct,
+            )
+        )
 
         # Stop distance in PREMIUM points: index ATR scaled by the contract's
         # delta. This is where v1's ATR-in-index-points and premium-denominated
         # stop had to be reconciled explicitly.
         if np.isnan(atr_val) or atr_val <= 0 or row.delta is None:
-            rep.add(G.GateResult("net_rr", False, "n/a",
-                                 "ATR or delta unavailable — cannot compute a stop"))
+            rep.add(
+                G.GateResult(
+                    "net_rr", False, "n/a", "ATR or delta unavailable — cannot compute a stop"
+                )
+            )
             return ev
         stop_distance = s.exits.sl_atr_mult * atr_val * abs(row.delta)
         if lab is not None and lab.fired(direction) and lab.stop_points(direction):
@@ -280,9 +324,12 @@ class AlphaEngine:
             stop_distance = min(max(structural, stop_distance * 0.5), stop_distance * 2.0)
 
         sizing = size_position(
-            quote=sel.quote, stop_distance=stop_distance,
-            rr_target_gross=s.exits.rr_target_gross, lot_size=ctx.lot_size,
-            risk_cfg=self.cfg.risk, cost_model=self.cost_model,
+            quote=sel.quote,
+            stop_distance=stop_distance,
+            rr_target_gross=s.exits.rr_target_gross,
+            lot_size=ctx.lot_size,
+            risk_cfg=self.cfg.risk,
+            cost_model=self.cost_model,
             exec_cfg=self.cfg.execution_assumptions,
             tick=self.cfg.instrument.tick_size,
             capital=self.cfg.account.capital_inr,
@@ -290,11 +337,11 @@ class AlphaEngine:
         ev.sizing = sizing
         ev.economics = sizing.economics
 
-        rep.add(G.gate_net_rr(sizing.economics.rr_net, s.exits.rr_net_min,
-                              sizing.economics.warnings))
+        rep.add(
+            G.gate_net_rr(sizing.economics.rr_net, s.exits.rr_net_min, sizing.economics.warnings)
+        )
         rep.add(G.gate_market(sizing.lots, sizing.rejected_reason))
-        rep.add(G.gate_dedup(ctx.recent_signal_keys,
-                             f"{ctx.expiry}_{row.strike:g}_{row.opt_type}"))
+        rep.add(G.gate_dedup(ctx.recent_signal_keys, f"{ctx.expiry}_{row.strike:g}_{row.opt_type}"))
         return ev
 
     # ── main entry point ──────────────────────────────────────────────────
@@ -313,17 +360,21 @@ class AlphaEngine:
         atr_val = float(atr_arr[-1]) if n else float("nan")
 
         chop = intraday_chop_filter(
-            ctx.index_high, ctx.index_low, ctx.index_close,
+            ctx.index_high,
+            ctx.index_low,
+            ctx.index_close,
             adx_min=s.intraday_chop.adx_min,
             atr_pct_min=s.intraday_chop.atr_percentile_min,
             atr_pct_max=s.intraday_chop.atr_percentile_max,
-            adx_period=s.guardian.adx_period, atr_period=s.exits.atr_period,
+            adx_period=s.guardian.adx_period,
+            atr_period=s.exits.atr_period,
         )
 
         lab = None
         if self.lab is not None and ctx.index_ts is not None and ctx.index_open is not None:
-            lab = self.lab.evaluate(ctx.index_ts, ctx.index_open, ctx.index_high,
-                                    ctx.index_low, ctx.index_close)
+            lab = self.lab.evaluate(
+                ctx.index_ts, ctx.index_open, ctx.index_high, ctx.index_low, ctx.index_close
+            )
 
         evaluations = [
             self._evaluate_direction(ctx, d, chop, ema_val, rsi_val, atr_val, lab)
@@ -331,30 +382,48 @@ class AlphaEngine:
         ]
 
         if blocking:
-            return EvaluationOutcome(eval_id, ctx.bar_ts, ctx.now, None, evaluations,
-                                     global_gates, blocking[0].gate)
+            return EvaluationOutcome(
+                eval_id, ctx.bar_ts, ctx.now, None, evaluations, global_gates, blocking[0].gate
+            )
 
         winners = [e for e in evaluations if e.passed]
         if not winners:
-            return EvaluationOutcome(eval_id, ctx.bar_ts, ctx.now, None, evaluations,
-                                     global_gates, None)
+            return EvaluationOutcome(
+                eval_id, ctx.bar_ts, ctx.now, None, evaluations, global_gates, None
+            )
 
         winners.sort(key=lambda e: -(e.economics.rr_net if e.economics else 0.0))
         signal = self._build_signal(ctx, winners[0], chop, rsi_val, ema_val, atr_val)
-        log.info("SIGNAL %s %s %g %s  lots=%d  rr_net=%.2f  net_risk=Rs%.0f",
-                 signal.signal_id, signal.direction, signal.strike, signal.opt_type,
-                 signal.lots, signal.economics.rr_net, signal.economics.net_risk)
-        return EvaluationOutcome(eval_id, ctx.bar_ts, ctx.now, signal, evaluations,
-                                 global_gates, None)
+        log.info(
+            "SIGNAL %s %s %g %s  lots=%d  rr_net=%.2f  net_risk=Rs%.0f",
+            signal.signal_id,
+            signal.direction,
+            signal.strike,
+            signal.opt_type,
+            signal.lots,
+            signal.economics.rr_net,
+            signal.economics.net_risk,
+        )
+        return EvaluationOutcome(
+            eval_id, ctx.bar_ts, ctx.now, signal, evaluations, global_gates, None
+        )
 
-    def _build_signal(self, ctx: EvaluationContext, ev: DirectionEvaluation,
-                      chop, rsi_val: float, ema_val: float,
-                      atr_val: float) -> Signal:
+    def _build_signal(
+        self,
+        ctx: EvaluationContext,
+        ev: DirectionEvaluation,
+        chop,
+        rsi_val: float,
+        ema_val: float,
+        atr_val: float,
+    ) -> Signal:
         s = self.cfg.strategy
         warnings: list[str] = list(ev.economics.warnings)
         if ctx.ivp.mode == "degraded" and not ctx.ivp.sufficient:
-            warnings.append(f"IV percentile is DEGRADED ({ctx.ivp.n_observations}/"
-                            f"{ctx.ivp.required_observations} sessions)")
+            warnings.append(
+                f"IV percentile is DEGRADED ({ctx.ivp.n_observations}/"
+                f"{ctx.ivp.required_observations} sessions)"
+            )
         if ev.contract.greek_source == "local":
             warnings.append("greeks computed locally — broker did not supply them")
 
@@ -367,7 +436,8 @@ class AlphaEngine:
                 warnings.append(
                     f"CONCENTRATION: this one lot is Rs "
                     f"{ev.economics.premium_outlay:,.0f} of premium — "
-                    f"{share:.0%} of your capital in a single option")
+                    f"{share:.0%} of your capital in a single option"
+                )
 
         return Signal(
             signal_id=uuid.uuid4().hex[:16],
@@ -381,11 +451,17 @@ class AlphaEngine:
             security_id=ev.contract.security_id,
             quote=ev.selection.quote,
             economics=ev.economics,
-            lots=ev.sizing.lots, qty=ev.sizing.qty, lot_size=ctx.lot_size,
-            delta=ev.contract.delta, iv=ev.contract.iv,
-            theta_per_hour=(ev.contract.theta / 24.0
-                            if ev.contract.theta is not None else None),
-            regime=ctx.regime, ivp=ctx.ivp, chop=chop,
-            rsi_value=rsi_val, ema_value=ema_val, atr_value=atr_val,
+            lots=ev.sizing.lots,
+            qty=ev.sizing.qty,
+            lot_size=ctx.lot_size,
+            delta=ev.contract.delta,
+            iv=ev.contract.iv,
+            theta_per_hour=(ev.contract.theta / 24.0 if ev.contract.theta is not None else None),
+            regime=ctx.regime,
+            ivp=ctx.ivp,
+            chop=chop,
+            rsi_value=rsi_val,
+            ema_value=ema_val,
+            atr_value=atr_val,
             warnings=warnings,
         )

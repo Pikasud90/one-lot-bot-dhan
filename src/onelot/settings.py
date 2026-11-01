@@ -26,8 +26,9 @@ def current_settings() -> AppConfig:
     return AppConfig.load(_override["config_path"], project_root=_override["project_root"])
 
 
-def reload_settings(config_path: str | Path | None = None,
-                    project_root: Path | None = None) -> AppConfig:
+def reload_settings(
+    config_path: str | Path | None = None, project_root: Path | None = None
+) -> AppConfig:
     _override["config_path"] = config_path
     _override["project_root"] = project_root
     current_settings.cache_clear()

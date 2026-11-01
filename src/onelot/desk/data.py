@@ -31,8 +31,9 @@ class BarSource(Protocol):
     delayed: bool
     resolution: str
 
-    def fetch(self, specs: dict[str, SeriesSpec], days: int,
-              since: dict[str, pd.Timestamp] | None = None) -> dict[str, pd.DataFrame]: ...
+    def fetch(
+        self, specs: dict[str, SeriesSpec], days: int, since: dict[str, pd.Timestamp] | None = None
+    ) -> dict[str, pd.DataFrame]: ...
 
 
 def _session_bounds(spec: SeriesSpec) -> tuple[dt.time, dt.time]:
@@ -59,7 +60,7 @@ def _clean(df: pd.DataFrame, spec: SeriesSpec, res_min: int) -> pd.DataFrame:
     t = df.index.time
     df = df[(t >= lo) & (t < hi)]
     now = pd.Timestamp.now(tz=IST)
-    df = df[df.index + pd.Timedelta(minutes=res_min) <= now]        # closed bars only
+    df = df[df.index + pd.Timedelta(minutes=res_min) <= now]  # closed bars only
     df = df[~df.index.duplicated(keep="last")].sort_index()
     df.index.name = "ts"
     return df.astype("float64")
@@ -74,8 +75,9 @@ class YahooBars:
         self.resolution = interval
         self.last_error: str | None = None
 
-    def fetch(self, specs: dict[str, SeriesSpec], days: int,
-              since: dict[str, pd.Timestamp] | None = None) -> dict[str, pd.DataFrame]:
+    def fetch(
+        self, specs: dict[str, SeriesSpec], days: int, since: dict[str, pd.Timestamp] | None = None
+    ) -> dict[str, pd.DataFrame]:
         import yfinance as yf
 
         tickers = {s.yahoo: k for k, s in specs.items() if s.yahoo}
@@ -85,8 +87,16 @@ class YahooBars:
         period = f"{min(max(days, 1), 59)}d"
         out: dict[str, pd.DataFrame] = {}
         try:
-            raw = yf.download(list(tickers), period=period, interval=self.resolution, group_by="ticker",
-                              progress=False, threads=True, auto_adjust=False, prepost=False)
+            raw = yf.download(
+                list(tickers),
+                period=period,
+                interval=self.resolution,
+                group_by="ticker",
+                progress=False,
+                threads=True,
+                auto_adjust=False,
+                prepost=False,
+            )
         except Exception as exc:  # noqa: BLE001
             self.last_error = f"{type(exc).__name__}: {exc}"
             log.warning("yahoo desk fetch failed: %s", self.last_error)
@@ -117,8 +127,9 @@ class DhanBars:
     def can_serve(self, spec: SeriesSpec) -> bool:
         return bool(spec.dhan_security_id) and spec.kind in ("INDEX", "STOCK")
 
-    def fetch(self, specs: dict[str, SeriesSpec], days: int,
-              since: dict[str, pd.Timestamp] | None = None) -> dict[str, pd.DataFrame]:
+    def fetch(
+        self, specs: dict[str, SeriesSpec], days: int, since: dict[str, pd.Timestamp] | None = None
+    ) -> dict[str, pd.DataFrame]:
         out: dict[str, pd.DataFrame] = {}
         now = dt.datetime.now(IST)
         errors = []
@@ -126,8 +137,13 @@ class DhanBars:
             if not self.can_serve(spec):
                 continue
             start_ts = (since or {}).get(key)
-            start = (start_ts.to_pydatetime() - dt.timedelta(minutes=5)) if start_ts is not None \
-                else (now - dt.timedelta(days=days)).replace(hour=9, minute=0, second=0, microsecond=0)
+            start = (
+                (start_ts.to_pydatetime() - dt.timedelta(minutes=5))
+                if start_ts is not None
+                else (now - dt.timedelta(days=days)).replace(
+                    hour=9, minute=0, second=0, microsecond=0
+                )
+            )
             try:
                 contract = self.provider.contract_for(spec)
                 bars = self.adapter.historical_intraday(contract, 1, start, now)
@@ -135,8 +151,19 @@ class DhanBars:
                 errors.append(f"{key}: {type(exc).__name__}: {str(exc)[:80]}")
                 continue
             if bars:
-                df = pd.DataFrame([{"ts": b.ts, "open": b.open, "high": b.high, "low": b.low, "close": b.close,
-                                    "volume": b.volume or 0.0} for b in bars]).set_index("ts")
+                df = pd.DataFrame(
+                    [
+                        {
+                            "ts": b.ts,
+                            "open": b.open,
+                            "high": b.high,
+                            "low": b.low,
+                            "close": b.close,
+                            "volume": b.volume or 0.0,
+                        }
+                        for b in bars
+                    ]
+                ).set_index("ts")
                 out[key] = _clean(df, spec, 1)
             time.sleep(self.pause_s)
         self.last_error = "; ".join(errors)[:300] if errors else None
@@ -157,12 +184,17 @@ class CompositeBars:
         self.last_error: str | None = None
         self.served_by: dict[str, str] = {}
 
-    def fetch(self, specs: dict[str, SeriesSpec], days: int,
-              since: dict[str, pd.Timestamp] | None = None) -> dict[str, pd.DataFrame]:
+    def fetch(
+        self, specs: dict[str, SeriesSpec], days: int, since: dict[str, pd.Timestamp] | None = None
+    ) -> dict[str, pd.DataFrame]:
         out: dict[str, pd.DataFrame] = {}
         rest = dict(specs)
         if self.primary is not None:
-            servable = {k: s for k, s in specs.items() if getattr(self.primary, "can_serve", lambda _s: True)(s)}
+            servable = {
+                k: s
+                for k, s in specs.items()
+                if getattr(self.primary, "can_serve", lambda _s: True)(s)
+            }
             got = self.primary.fetch(servable, days, since)
             for k, df in got.items():
                 if not df.empty:
@@ -174,11 +206,11 @@ class CompositeBars:
             for k, df in got.items():
                 out[k] = df
                 self.served_by[k] = self.fallback.name
-        errs = [e for e in (getattr(self.primary, "last_error", None), self.fallback.last_error) if e]
+        errs = [
+            e for e in (getattr(self.primary, "last_error", None), self.fallback.last_error) if e
+        ]
         self.last_error = "; ".join(errs) if errs else None
         return out
-
-
 
 
 class DhanLiveBars:
@@ -217,7 +249,9 @@ class DhanLiveBars:
                 continue
             contracts.append(c)
             self._id_to_key[str(c.security_id)] = key
-            self._series[key] = CandleSeries(key, 1, session_open, has_volume=bool(spec.has_volume), max_bars=3000)
+            self._series[key] = CandleSeries(
+                key, 1, session_open, has_volume=bool(spec.has_volume), max_bars=3000
+            )
             self._closed[key] = []
         if feed is not None and contracts:
             feed.add_tick_listener(self._on_tick)
@@ -232,8 +266,14 @@ class DhanLiveBars:
         if key is None or q.ltp is None:
             return
         with self._lock:
-            self.quotes[key] = {"ltp": float(q.ltp), "bid": q.bid, "ask": q.ask, "volume": q.volume,
-                                "ts": q.ts.isoformat() if q.ts else None, "source": q.source}
+            self.quotes[key] = {
+                "ltp": float(q.ltp),
+                "bid": q.bid,
+                "ask": q.ask,
+                "volume": q.volume,
+                "ts": q.ts.isoformat() if q.ts else None,
+                "source": q.source,
+            }
             series = self._series.get(key)
             if series is not None:
                 for b in series.on_tick(q.ts, q.ltp, q.volume):
@@ -245,10 +285,11 @@ class DhanLiveBars:
         except Exception:  # noqa: BLE001
             return False
 
-    def fetch(self, specs: dict[str, SeriesSpec], days: int,
-              since: dict[str, pd.Timestamp] | None = None) -> dict[str, pd.DataFrame]:
+    def fetch(
+        self, specs: dict[str, SeriesSpec], days: int, since: dict[str, pd.Timestamp] | None = None
+    ) -> dict[str, pd.DataFrame]:
         now = dt.datetime.now(IST)
-        out = self.rest.fetch(specs, days, since)          # history + self-heal (closed bars only)
+        out = self.rest.fetch(specs, days, since)  # history + self-heal (closed bars only)
         self.last_error = self.rest.last_error
         with self._lock:
             for key, series in self._series.items():
@@ -259,21 +300,33 @@ class DhanLiveBars:
                 closed, self._closed[key] = self._closed[key], []
                 if not closed:
                     continue
-                df = pd.DataFrame([{"ts": b.ts, "open": b.open, "high": b.high, "low": b.low, "close": b.close,
-                                    "volume": b.volume or 0.0} for b in closed]).set_index("ts")
+                df = pd.DataFrame(
+                    [
+                        {
+                            "ts": b.ts,
+                            "open": b.open,
+                            "high": b.high,
+                            "low": b.low,
+                            "close": b.close,
+                            "volume": b.volume or 0.0,
+                        }
+                        for b in closed
+                    ]
+                ).set_index("ts")
                 df = _clean(df, specs[key], 1)
                 if df.empty:
                     continue
                 if key in out and not out[key].empty:
-                    merged = pd.concat([df, out[key]])                 # REST last -> wins on duplicates
+                    merged = pd.concat([df, out[key]])  # REST last -> wins on duplicates
                     out[key] = merged[~merged.index.duplicated(keep="last")].sort_index()
                 else:
                     out[key] = df
         return out
 
 
-def build_source(mode: str, adapter, data_api_active: bool, feed=None,
-                 specs: dict[str, SeriesSpec] | None = None) -> CompositeBars:
+def build_source(
+    mode: str, adapter, data_api_active: bool, feed=None, specs: dict[str, SeriesSpec] | None = None
+) -> CompositeBars:
     yahoo = YahooBars()
     if mode == "yahoo" or adapter is None or (mode == "auto" and not data_api_active):
         return CompositeBars(None, yahoo)

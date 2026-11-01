@@ -48,7 +48,9 @@ class RiskSnapshot:
 
     def as_dict(self) -> dict:
         return {
-            "trade_date": self.trade_date, "mode": self.mode, "state": self.state.value,
+            "trade_date": self.trade_date,
+            "mode": self.mode,
+            "state": self.state.value,
             "realized_pnl": round(self.realized_pnl, 2),
             "cumulative_pnl": round(self.cumulative_pnl, 2),
             "drawdown": round(self.drawdown, 2),
@@ -65,8 +67,7 @@ class RiskSnapshot:
 
 
 class RiskGovernor:
-    def __init__(self, cfg: RiskCfg, capital: float, mode: str, trade_date: str,
-                 repo=None):
+    def __init__(self, cfg: RiskCfg, capital: float, mode: str, trade_date: str, repo=None):
         self.cfg = cfg
         self.capital = capital
         self.mode = mode
@@ -107,8 +108,7 @@ class RiskGovernor:
                 self.state = RiskState.HALTED
                 self.halt_reason = row.get("halt_reason")
                 self.halted_at = row.get("halted_at")
-                log.warning("Restored today's HALT (%s): %s",
-                            self.trade_date, self.halt_reason)
+                log.warning("Restored today's HALT (%s): %s", self.trade_date, self.halt_reason)
 
         # A halt from any previous session still binds.
         g = self.repo.get_risk_state(self.GLOBAL_KEY, self.mode)
@@ -118,9 +118,9 @@ class RiskGovernor:
             self.halted_at = g.get("halted_at")
             self.manual_halt = bool(g.get("manual_halt"))
             self.consecutive_losses = max(
-                self.consecutive_losses, int(g.get("consecutive_losses") or 0))
-            log.warning("Restored a STANDING halt that outlives the session: %s",
-                        self.halt_reason)
+                self.consecutive_losses, int(g.get("consecutive_losses") or 0)
+            )
+            log.warning("Restored a STANDING halt that outlives the session: %s", self.halt_reason)
 
     def _load_equity_curve(self) -> None:
         """Rebuild the cumulative equity curve from the journal.
@@ -152,7 +152,9 @@ class RiskGovernor:
             self.halt(
                 f"CUMULATIVE DRAWDOWN LIMIT: Rs {self.drawdown:,.0f} from peak "
                 f"(limit Rs {self.max_drawdown_limit:,.0f}). Stop trading and "
-                "review the strategy before resetting.", now)
+                "review the strategy before resetting.",
+                now,
+            )
             return True
         return False
 
@@ -160,24 +162,35 @@ class RiskGovernor:
         if self.repo is None:
             return
         stamp = now or dt.datetime.now(dt.timezone.utc)
-        self.repo.save_risk_state({
-            "trade_date": self.trade_date, "mode": self.mode,
-            "realized_pnl": self.realized_pnl, "trades_taken": self.trades_taken,
-            "consecutive_losses": self.consecutive_losses,
-            "halted": self.state is RiskState.HALTED,
-            "halt_reason": self.halt_reason, "halted_at": self.halted_at,
-            "manual_halt": self.manual_halt, "updated_at": stamp,
-        })
+        self.repo.save_risk_state(
+            {
+                "trade_date": self.trade_date,
+                "mode": self.mode,
+                "realized_pnl": self.realized_pnl,
+                "trades_taken": self.trades_taken,
+                "consecutive_losses": self.consecutive_losses,
+                "halted": self.state is RiskState.HALTED,
+                "halt_reason": self.halt_reason,
+                "halted_at": self.halted_at,
+                "manual_halt": self.manual_halt,
+                "updated_at": stamp,
+            }
+        )
         # Mirror standing halts to the global key so tomorrow still sees them.
-        self.repo.save_risk_state({
-            "trade_date": self.GLOBAL_KEY, "mode": self.mode,
-            "realized_pnl": self.cumulative_pnl, "trades_taken": 0,
-            "consecutive_losses": self.consecutive_losses,
-            "halted": self._standing_halt,
-            "halt_reason": self.halt_reason if self._standing_halt else None,
-            "halted_at": self.halted_at if self._standing_halt else None,
-            "manual_halt": self.manual_halt, "updated_at": stamp,
-        })
+        self.repo.save_risk_state(
+            {
+                "trade_date": self.GLOBAL_KEY,
+                "mode": self.mode,
+                "realized_pnl": self.cumulative_pnl,
+                "trades_taken": 0,
+                "consecutive_losses": self.consecutive_losses,
+                "halted": self._standing_halt,
+                "halt_reason": self.halt_reason if self._standing_halt else None,
+                "halted_at": self.halted_at if self._standing_halt else None,
+                "manual_halt": self.manual_halt,
+                "updated_at": stamp,
+            }
+        )
 
     # ── limits ────────────────────────────────────────────────────────────
     @property
@@ -205,27 +218,36 @@ class RiskGovernor:
             return False, f"{kind}: {self.halt_reason or 'no reason recorded'}"
 
         if self.realized_pnl <= -self.daily_loss_limit:
-            self.halt(f"daily loss limit reached: Rs {self.realized_pnl:,.0f} "
-                      f"vs limit Rs {-self.daily_loss_limit:,.0f}", now,
-                      standing=False)
+            self.halt(
+                f"daily loss limit reached: Rs {self.realized_pnl:,.0f} "
+                f"vs limit Rs {-self.daily_loss_limit:,.0f}",
+                now,
+                standing=False,
+            )
             return False, self.halt_reason or ""
 
         if self.trades_taken >= self.cfg.max_trades_per_day:
-            return False, (f"daily trade cap reached "
-                           f"({self.trades_taken}/{self.cfg.max_trades_per_day})")
+            return False, (
+                f"daily trade cap reached ({self.trades_taken}/{self.cfg.max_trades_per_day})"
+            )
 
         if self.consecutive_losses >= self.cfg.max_consecutive_losses:
-            self.halt(f"{self.consecutive_losses} consecutive losses "
-                      f"(limit {self.cfg.max_consecutive_losses}) — "
-                      "stop trading and review", now)
+            self.halt(
+                f"{self.consecutive_losses} consecutive losses "
+                f"(limit {self.cfg.max_consecutive_losses}) — "
+                "stop trading and review",
+                now,
+            )
             return False, self.halt_reason or ""
 
         if self._check_drawdown(now):
             return False, self.halt_reason or ""
 
         if self.open_positions >= self.cfg.max_open_positions:
-            return False, (f"already at max concurrent positions "
-                           f"({self.open_positions}/{self.cfg.max_open_positions})")
+            return False, (
+                f"already at max concurrent positions "
+                f"({self.open_positions}/{self.cfg.max_open_positions})"
+            )
 
         return True, "ok"
 
@@ -249,14 +271,20 @@ class RiskGovernor:
         if self._check_drawdown(now):
             pass
         elif self.realized_pnl <= -self.daily_loss_limit:
-            self.halt(f"daily loss limit breached: Rs {self.realized_pnl:,.0f}", now,
-                      standing=False)
+            self.halt(
+                f"daily loss limit breached: Rs {self.realized_pnl:,.0f}", now, standing=False
+            )
         elif self.consecutive_losses >= self.cfg.max_consecutive_losses:
             self.halt(f"{self.consecutive_losses} consecutive losses", now)
         self._save(now)
 
-    def halt(self, reason: str, now: dt.datetime | None = None,
-             manual: bool = False, standing: bool = True) -> None:
+    def halt(
+        self,
+        reason: str,
+        now: dt.datetime | None = None,
+        manual: bool = False,
+        standing: bool = True,
+    ) -> None:
         """Stop trading.
 
         `standing=True` means the halt outlives the session — cumulative
@@ -271,14 +299,18 @@ class RiskGovernor:
         self.halted_at = now or dt.datetime.now(dt.timezone.utc)
         self.manual_halt = manual
         self._standing_halt = standing
-        log.error("RISK HALT (%s%s): %s", "manual" if manual else "automatic",
-                  ", standing" if standing else ", today only", reason)
+        log.error(
+            "RISK HALT (%s%s): %s",
+            "manual" if manual else "automatic",
+            ", standing" if standing else ", today only",
+            reason,
+        )
         self._save(now)
 
     def manual_panic_halt(self, now: dt.datetime | None = None) -> None:
         """The big red button. Standing by definition — a panic halt that
         evaporated overnight would be worse than no button at all."""
-        self.state = RiskState.ACTIVE          # so halt() does not early-return
+        self.state = RiskState.ACTIVE  # so halt() does not early-return
         self.halt("manual panic halt by operator", now, manual=True, standing=True)
 
     def reset_halt(self, now: dt.datetime | None = None) -> None:
@@ -299,12 +331,19 @@ class RiskGovernor:
 
     def snapshot(self) -> RiskSnapshot:
         return RiskSnapshot(
-            trade_date=self.trade_date, mode=self.mode, state=self.state,
-            realized_pnl=self.realized_pnl, cumulative_pnl=self.cumulative_pnl,
-            drawdown=self.drawdown, peak_equity=self.peak_equity,
+            trade_date=self.trade_date,
+            mode=self.mode,
+            state=self.state,
+            realized_pnl=self.realized_pnl,
+            cumulative_pnl=self.cumulative_pnl,
+            drawdown=self.drawdown,
+            peak_equity=self.peak_equity,
             trades_taken=self.trades_taken,
             consecutive_losses=self.consecutive_losses,
-            open_positions=self.open_positions, halt_reason=self.halt_reason,
-            halted_at=self.halted_at, manual_halt=self.manual_halt,
-            standing_halt=self._standing_halt, limits=self.limits_dict(),
+            open_positions=self.open_positions,
+            halt_reason=self.halt_reason,
+            halted_at=self.halted_at,
+            manual_halt=self.manual_halt,
+            standing_halt=self._standing_halt,
+            limits=self.limits_dict(),
         )

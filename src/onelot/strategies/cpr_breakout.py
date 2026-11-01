@@ -25,28 +25,54 @@ from .regime import NEUTRAL, TREND, VOLATILE
 
 
 class CPRParams(StrategyParams):
-    cpr_width_max_pct: float = Field(0.5, description="Trade only when (TC-BC)/P is at most this % (narrow CPR = trend day)",
-                                     json_schema_extra=opt(0.2, 1.0, 0.1))
-    buffer_atr: float = Field(0.1, description="Close must clear the range edge by this many ATR(14)",
-                              json_schema_extra=opt(0.0, 0.3, 0.05))
+    cpr_width_max_pct: float = Field(
+        0.5,
+        description="Trade only when (TC-BC)/P is at most this % (narrow CPR = trend day)",
+        json_schema_extra=opt(0.2, 1.0, 0.1),
+    )
+    buffer_atr: float = Field(
+        0.1,
+        description="Close must clear the range edge by this many ATR(14)",
+        json_schema_extra=opt(0.0, 0.3, 0.05),
+    )
     adx_min: float = Field(15, description="Minimum ADX(14)", json_schema_extra=opt(10, 25, 5))
-    rvol_min: float = Field(1.0, description="Minimum relative volume (ignored when the series has none)",
-                            json_schema_extra=opt(0.8, 1.5, 0.1))
-    stop_mode: Literal["cpr", "atr"] = Field("cpr", description="Stop at the far side of the CPR, or close -/+ stop_atr x ATR")
-    stop_atr: float = Field(1.0, description="ATR stop distance when stop_mode = atr", json_schema_extra=opt(0.5, 2.0, 0.25))
+    rvol_min: float = Field(
+        1.0,
+        description="Minimum relative volume (ignored when the series has none)",
+        json_schema_extra=opt(0.8, 1.5, 0.1),
+    )
+    stop_mode: Literal["cpr", "atr"] = Field(
+        "cpr", description="Stop at the far side of the CPR, or close -/+ stop_atr x ATR"
+    )
+    stop_atr: float = Field(
+        1.0,
+        description="ATR stop distance when stop_mode = atr",
+        json_schema_extra=opt(0.5, 2.0, 0.25),
+    )
     one_per_day: bool = Field(True, description="Only the first breakout of the session per side")
-    stop_atr_max: float = Field(4.0, description="Skip setups whose initial risk exceeds this many ATR(14)",
-                                json_schema_extra=opt(2.0, 6.0, 0.5))
-    target_r: float = Field(2.5, description="Profit target in R", json_schema_extra=opt(0.0, 4.0, 0.5))
-    trail_atr_mult: float = Field(2.0, description="Trailing stop k x ATR (0 = off)", json_schema_extra=opt(0.0, 3.0, 0.5))
-    max_trades_per_day: int = Field(2, description="Per symbol per day", json_schema_extra=opt(1, 3, 1))
+    stop_atr_max: float = Field(
+        4.0,
+        description="Skip setups whose initial risk exceeds this many ATR(14)",
+        json_schema_extra=opt(2.0, 6.0, 0.5),
+    )
+    target_r: float = Field(
+        2.5, description="Profit target in R", json_schema_extra=opt(0.0, 4.0, 0.5)
+    )
+    trail_atr_mult: float = Field(
+        2.0, description="Trailing stop k x ATR (0 = off)", json_schema_extra=opt(0.0, 3.0, 0.5)
+    )
+    max_trades_per_day: int = Field(
+        2, description="Per symbol per day", json_schema_extra=opt(1, 3, 1)
+    )
 
 
 class CPRBreakout(Strategy):
     name = "cpr_breakout"
     label = "CPR Breakout"
-    description = ("Narrow prior-day Central Pivot Range + decisive close beyond it with ADX and volume "
-                   "agreement; stop on the far side of the range.")
+    description = (
+        "Narrow prior-day Central Pivot Range + decisive close beyond it with ADX and volume "
+        "agreement; stop on the far side of the range."
+    )
     regimes = (TREND, NEUTRAL, VOLATILE)
     Params = CPRParams
 
@@ -59,7 +85,7 @@ class CPRBreakout(Strategy):
         tc = 2.0 * pivot - bc
         top, bot = np.maximum(tc, bc), np.minimum(tc, bc)
         top, bot = pd.Series(top, index=f.index), pd.Series(bot, index=f.index)
-        width_pct = ((top - bot) / pivot * 100.0)
+        width_pct = (top - bot) / pivot * 100.0
         narrow = width_pct <= p.cpr_width_max_pct
         trend_ok = f["adx"] >= p.adx_min
         vol_ok = (f["rvol"] >= p.rvol_min) | f["rvol"].isna()
@@ -69,7 +95,10 @@ class CPRBreakout(Strategy):
         long_raw = cross_up & narrow & trend_ok & vol_ok & ~f["new_day"]
         short_raw = cross_dn & narrow & trend_ok & vol_ok & ~f["new_day"]
         if p.one_per_day:
-            long_raw, short_raw = first_in_day(long_raw.fillna(False)), first_in_day(short_raw.fillna(False))
+            long_raw, short_raw = (
+                first_in_day(long_raw.fillna(False)),
+                first_in_day(short_raw.fillna(False)),
+            )
         out = pd.DataFrame(index=f.index)
         out["long_entry"], out["short_entry"] = long_raw.fillna(False), short_raw.fillna(False)
         if p.stop_mode == "cpr":
@@ -91,11 +120,16 @@ class CPRBreakout(Strategy):
     def _reasons(self, f, i, side):
         row = f.iloc[i]
         edge = "top" if side == "long" else "bottom"
-        return [f"Narrow CPR ({row['cpr_width_pct']:.2f}% of price) - trend-day setup",
-                f"Close broke the CPR {edge} ({row['cpr_bot']:.2f}-{row['cpr_top']:.2f}) with ADX {row['adx']:.0f}"], []
+        return [
+            f"Narrow CPR ({row['cpr_width_pct']:.2f}% of price) - trend-day setup",
+            f"Close broke the CPR {edge} ({row['cpr_bot']:.2f}-{row['cpr_top']:.2f}) with ADX {row['adx']:.0f}",
+        ], []
 
     def implies(self, side: str) -> str:
-        return ("A narrow pivot range breaking upward usually means the session trends; "
-                "the far side of the range is the invalidation." if side == "long" else
-                "A narrow pivot range breaking downward usually means the session trends; "
-                "the far side of the range is the invalidation.")
+        return (
+            "A narrow pivot range breaking upward usually means the session trends; "
+            "the far side of the range is the invalidation."
+            if side == "long"
+            else "A narrow pivot range breaking downward usually means the session trends; "
+            "the far side of the range is the invalidation."
+        )

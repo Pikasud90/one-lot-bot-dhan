@@ -20,7 +20,7 @@ from .base import empty_bars
 log = get_logger("data.dhan")
 
 _INTRADAY = {"1m": 1, "5m": 5, "15m": 15, "25m": 25, "60m": 60}
-_MAX_WINDOW_DAYS = 85           # the documented cap is 90; keep a margin
+_MAX_WINDOW_DAYS = 85  # the documented cap is 90; keep a margin
 _HISTORY_YEARS = 5
 
 
@@ -43,13 +43,24 @@ class DhanHistoryProvider:
         sid = spec.dhan_security_id
         if not sid:
             raise ValueError(f"{spec.key}: no Dhan security id in universe.yaml")
-        return Contract(security_id=str(sid), exchange_segment=spec.dhan_segment,
-                        symbol=spec.key, underlying=spec.key,
-                        instrument_type=spec.dhan_instrument)
+        return Contract(
+            security_id=str(sid),
+            exchange_segment=spec.dhan_segment,
+            symbol=spec.key,
+            underlying=spec.key,
+            instrument_type=spec.dhan_instrument,
+        )
 
-    def history(self, series_key: str, symbol: str | None, resolution: str, start: dt.date,
-                end: dt.date, session: tuple[dt.time, dt.time] | None = None,
-                spec=None) -> pd.DataFrame:
+    def history(
+        self,
+        series_key: str,
+        symbol: str | None,
+        resolution: str,
+        start: dt.date,
+        end: dt.date,
+        session: tuple[dt.time, dt.time] | None = None,
+        spec=None,
+    ) -> pd.DataFrame:
         if spec is None:
             raise ValueError("DhanHistoryProvider.history needs the SeriesSpec (spec=...)")
         c = self.contract_for(spec)
@@ -85,9 +96,14 @@ def _frame(bars, daily: bool) -> pd.DataFrame:
     idx = pd.DatetimeIndex([b.ts for b in bars]).tz_convert(IST)
     if daily:
         idx = idx.normalize() + pd.Timedelta(hours=9, minutes=15)
-    df = pd.DataFrame({
-        "open": [b.open for b in bars], "high": [b.high for b in bars],
-        "low": [b.low for b in bars], "close": [b.close for b in bars],
-        "volume": [b.volume if b.volume is not None else 0.0 for b in bars],
-    }, index=idx)
+    df = pd.DataFrame(
+        {
+            "open": [b.open for b in bars],
+            "high": [b.high for b in bars],
+            "low": [b.low for b in bars],
+            "close": [b.close for b in bars],
+            "volume": [b.volume if b.volume is not None else 0.0 for b in bars],
+        },
+        index=idx,
+    )
     return df.astype("float64")

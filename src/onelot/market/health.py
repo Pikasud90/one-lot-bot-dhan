@@ -29,9 +29,9 @@ log = logging.getLogger(__name__)
 
 
 class HealthState(str, Enum):
-    HEALTHY = "HEALTHY"      # everything nominal — signals permitted
-    DEGRADED = "DEGRADED"    # usable for managing positions, NOT for new ones
-    DEAD = "DEAD"            # no usable data at all
+    HEALTHY = "HEALTHY"  # everything nominal — signals permitted
+    DEGRADED = "DEGRADED"  # usable for managing positions, NOT for new ones
+    DEAD = "DEAD"  # no usable data at all
 
     @property
     def may_signal(self) -> bool:
@@ -53,19 +53,25 @@ class HealthReport:
         return self.state.may_signal
 
     def as_dict(self) -> dict:
-        return {"state": self.state.value, "reasons": list(self.reasons),
-                "may_signal": self.may_signal,
-                "may_manage_positions": self.state.may_manage_positions,
-                "details": dict(self.details)}
+        return {
+            "state": self.state.value,
+            "reasons": list(self.reasons),
+            "may_signal": self.may_signal,
+            "may_manage_positions": self.state.may_manage_positions,
+            "details": dict(self.details),
+        }
 
 
 class HealthMonitor:
     """Aggregates every condition that should stop the engine taking new risk."""
 
-    def __init__(self, socket_dead_after_sec: float = 12.0,
-                 quote_stale_after_sec: float = 20.0,
-                 chain_stale_after_sec: float = 15.0,
-                 token_warn_hours: float = 4.0):
+    def __init__(
+        self,
+        socket_dead_after_sec: float = 12.0,
+        quote_stale_after_sec: float = 20.0,
+        chain_stale_after_sec: float = 15.0,
+        token_warn_hours: float = 4.0,
+    ):
         self.socket_dead_after_sec = socket_dead_after_sec
         self.quote_stale_after_sec = quote_stale_after_sec
         self.chain_stale_after_sec = chain_stale_after_sec
@@ -127,7 +133,7 @@ class HealthMonitor:
 
         # Data freshness — a SEPARATE, slower signal. Silence is not death.
         stale: list[str] = []
-        for sid in (critical_ids or list(self.last_quote_at)):
+        for sid in critical_ids or list(self.last_quote_at):
             last = self.last_quote_at.get(str(sid))
             if last is None:
                 stale.append(f"{sid}:never")
@@ -140,7 +146,7 @@ class HealthMonitor:
         details["stale_quotes"] = stale
 
         if self.market_open and critical_ids and len(stale) >= len(critical_ids):
-            dead = True        # after the bell silence is normal: DEGRADED ("market is closed"), not DEAD
+            dead = True  # after the bell silence is normal: DEGRADED ("market is closed"), not DEAD
             reasons.append("no fresh data for any critical instrument")
 
         # Option chain freshness — sizing off a stale chain is sizing off fiction.
@@ -176,8 +182,9 @@ class HealthMonitor:
 
         if self.consecutive_api_errors >= 5:
             dead = True
-            reasons.append(f"{self.consecutive_api_errors} consecutive API errors: "
-                           f"{self.last_error}")
+            reasons.append(
+                f"{self.consecutive_api_errors} consecutive API errors: {self.last_error}"
+            )
         details["consecutive_api_errors"] = self.consecutive_api_errors
 
         if dead:
@@ -188,8 +195,12 @@ class HealthMonitor:
             state = HealthState.HEALTHY
 
         if state is not self._previous:
-            log.warning("Health %s -> %s: %s", self._previous.value if self._previous else "INIT",
-                        state.value, "; ".join(reasons) or "nominal")
+            log.warning(
+                "Health %s -> %s: %s",
+                self._previous.value if self._previous else "INIT",
+                state.value,
+                "; ".join(reasons) or "nominal",
+            )
             self._previous = state
 
         return HealthReport(state=state, reasons=reasons, details=details)

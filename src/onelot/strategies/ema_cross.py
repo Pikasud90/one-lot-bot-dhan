@@ -31,35 +31,58 @@ class EMACrossParams(StrategyParams):
     timeframe: str = Field("12m", description="Signal timeframe (the thesis was formed on 12m)")
     fast: int = Field(9, description="Fast EMA", json_schema_extra=opt(5, 21, 1))
     slow: int = Field(21, description="Slow EMA", json_schema_extra=opt(13, 55, 1))
-    adx_min: float = Field(20, description="Minimum ADX(14) for a trending market",
-                           json_schema_extra=opt(15, 30, 5))
-    slope_bars: int = Field(3, description="Slow EMA must have risen/fallen over this many bars",
-                            json_schema_extra=opt(1, 6, 1))
-    rsi_margin: float = Field(3.0, description="RSI(14) must be beyond 50 by this much in the trade direction",
-                              json_schema_extra=opt(0, 10, 1))
-    confirm_atr: float = Field(0.15, description="Close must clear the slow EMA by this many ATR",
-                               json_schema_extra=opt(0.0, 0.5, 0.05))
-    rvol_min: float = Field(1.0, description="Minimum relative volume (ignored when the series has none)",
-                            json_schema_extra=opt(0.5, 1.5, 0.25))
-    swing_bars: int = Field(6, description="Swing look-back for the structural stop",
-                            json_schema_extra=opt(3, 12, 1))
+    adx_min: float = Field(
+        20, description="Minimum ADX(14) for a trending market", json_schema_extra=opt(15, 30, 5)
+    )
+    slope_bars: int = Field(
+        3,
+        description="Slow EMA must have risen/fallen over this many bars",
+        json_schema_extra=opt(1, 6, 1),
+    )
+    rsi_margin: float = Field(
+        3.0,
+        description="RSI(14) must be beyond 50 by this much in the trade direction",
+        json_schema_extra=opt(0, 10, 1),
+    )
+    confirm_atr: float = Field(
+        0.15,
+        description="Close must clear the slow EMA by this many ATR",
+        json_schema_extra=opt(0.0, 0.5, 0.05),
+    )
+    rvol_min: float = Field(
+        1.0,
+        description="Minimum relative volume (ignored when the series has none)",
+        json_schema_extra=opt(0.5, 1.5, 0.25),
+    )
+    swing_bars: int = Field(
+        6, description="Swing look-back for the structural stop", json_schema_extra=opt(3, 12, 1)
+    )
     stop_buffer_atr: float = Field(0.2, description="Stop buffer beyond the structure, in ATR")
-    stop_atr_max: float = Field(4.0, description="Skip setups whose structural stop exceeds this many ATR")
+    stop_atr_max: float = Field(
+        4.0, description="Skip setups whose structural stop exceeds this many ATR"
+    )
     exit_on_cross: bool = Field(True, description="Exit on the opposite EMA cross")
-    target_r: float = Field(3.0, description="Profit target in R (0 = ride with the trail)",
-                            json_schema_extra=opt(0.0, 4.0, 0.5))
-    trail_atr_mult: float = Field(2.0, description="Trailing stop distance k x ATR(n)",
-                                  json_schema_extra=opt(0.0, 3.0, 0.5))
-    trail_activate_r: float = Field(1.5, description="Trail only after this many R",
-                                    json_schema_extra=opt(0.5, 2.5, 0.5))
+    target_r: float = Field(
+        3.0,
+        description="Profit target in R (0 = ride with the trail)",
+        json_schema_extra=opt(0.0, 4.0, 0.5),
+    )
+    trail_atr_mult: float = Field(
+        2.0, description="Trailing stop distance k x ATR(n)", json_schema_extra=opt(0.0, 3.0, 0.5)
+    )
+    trail_activate_r: float = Field(
+        1.5, description="Trail only after this many R", json_schema_extra=opt(0.5, 2.5, 0.5)
+    )
     min_risk_pct: float = Field(0.15, description="Friction floor on the initial risk, % of price")
 
 
 class EMACross(Strategy):
     name = "ema_cross"
     label = "EMA Cross (trend + momentum + volume)"
-    description = ("Fast/slow EMA cross taken only in a trending market with RSI and relative volume "
-                   "agreeing; one entry per cross, structural stop, exit on the opposite cross.")
+    description = (
+        "Fast/slow EMA cross taken only in a trending market with RSI and relative volume "
+        "agreeing; one entry per cross, structural stop, exit on the opposite cross."
+    )
     regimes = (TREND, NEUTRAL, VOLATILE)
     Params = EMACrossParams
 
@@ -74,10 +97,22 @@ class EMACross(Strategy):
         adx_ok = f["adx"] >= p.adx_min
         rv = f["rvol"]
         vol_ok = (rv >= p.rvol_min) | rv.isna()
-        long_c = (above & adx_ok & (slope > 0) & (f["rsi"] >= 50 + p.rsi_margin)
-                  & (c >= es + p.confirm_atr * atr) & vol_ok)
-        short_c = (~above & adx_ok & (slope < 0) & (f["rsi"] <= 50 - p.rsi_margin)
-                   & (c <= es - p.confirm_atr * atr) & vol_ok)
+        long_c = (
+            above
+            & adx_ok
+            & (slope > 0)
+            & (f["rsi"] >= 50 + p.rsi_margin)
+            & (c >= es + p.confirm_atr * atr)
+            & vol_ok
+        )
+        short_c = (
+            ~above
+            & adx_ok
+            & (slope < 0)
+            & (f["rsi"] <= 50 - p.rsi_margin)
+            & (c <= es - p.confirm_atr * atr)
+            & vol_ok
+        )
         long_entry = first_since(long_c, cross_up)
         short_entry = first_since(short_c, cross_dn)
 
@@ -94,8 +129,12 @@ class EMACross(Strategy):
         sep = ((ef - es) / atr).fillna(0)
         out["pl_price_long"] = (sep / 1.0).clip(0, 1)
         out["pl_price_short"] = (-sep / 1.0).clip(0, 1)
-        out["pl_momentum_long"] = 0.5 * ((f["adx"] - 15) / 20).clip(0, 1) + 0.5 * ((f["rsi"] - 50) / 20).clip(0, 1)
-        out["pl_momentum_short"] = 0.5 * ((f["adx"] - 15) / 20).clip(0, 1) + 0.5 * ((50 - f["rsi"]) / 20).clip(0, 1)
+        out["pl_momentum_long"] = 0.5 * ((f["adx"] - 15) / 20).clip(0, 1) + 0.5 * (
+            (f["rsi"] - 50) / 20
+        ).clip(0, 1)
+        out["pl_momentum_short"] = 0.5 * ((f["adx"] - 15) / 20).clip(0, 1) + 0.5 * (
+            (50 - f["rsi"]) / 20
+        ).clip(0, 1)
         out["pl_volatility_long"] = out["pl_volatility_short"] = vol_pillar(f["atr_pct"])
         out["pl_volume_long"] = out["pl_volume_short"] = volume_pillar(rv)
         out["long_score"] = np.nan
@@ -105,10 +144,17 @@ class EMACross(Strategy):
     def _reasons(self, f, i, side):
         row = f.iloc[i]
         word = "above" if side == "long" else "below"
-        return ([f"EMA{self.p.fast} crossed {word} EMA{self.p.slow} ({row['ema_fast']:.2f} vs {row['ema_slow']:.2f})",
-                 f"ADX {row['adx']:.0f} (trending), RSI {row['rsi']:.0f}"], [])
+        return (
+            [
+                f"EMA{self.p.fast} crossed {word} EMA{self.p.slow} ({row['ema_fast']:.2f} vs {row['ema_slow']:.2f})",
+                f"ADX {row['adx']:.0f} (trending), RSI {row['rsi']:.0f}",
+            ],
+            [],
+        )
 
     def implies(self, side: str) -> str:
-        return ("Fresh momentum leg with the trend; stay while price holds above the slow EMA."
-                if side == "long" else
-                "Fresh momentum leg with the downtrend; stay while price holds below the slow EMA.")
+        return (
+            "Fresh momentum leg with the trend; stay while price holds above the slow EMA."
+            if side == "long"
+            else "Fresh momentum leg with the downtrend; stay while price holds below the slow EMA."
+        )

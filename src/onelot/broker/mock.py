@@ -38,7 +38,7 @@ from .base import (
 
 log = logging.getLogger(__name__)
 
-MINUTES_PER_SESSION = 375          # 09:15 -> 15:30
+MINUTES_PER_SESSION = 375  # 09:15 -> 15:30
 SESSION_OPEN = dt.time(9, 15)
 
 
@@ -47,12 +47,12 @@ class SyntheticConfig:
     seed: int = 7
     sessions: int = 90
     start_price: float = 54_000.0
-    daily_vol: float = 0.011           # ~1.1% daily sigma
+    daily_vol: float = 0.011  # ~1.1% daily sigma
     drift_per_session: float = 0.0
     futures_basis_bps: float = 8.0
     base_iv: float = 0.14
     iv_daily_vol: float = 0.05
-    iv_mean_reversion: float = 0.12   # OU pull toward base_iv per session
+    iv_mean_reversion: float = 0.12  # OU pull toward base_iv per session
     smile_curvature: float = 0.55
     strike_step: float = 100.0
     strikes_each_side: int = 22
@@ -61,7 +61,7 @@ class SyntheticConfig:
     # Values above ~0.05 compound into absurd paths over a long history; the
     # sanity guard in SyntheticMarket._build will reject them outright.
     trend_strength: float = 0.0
-    end_date: dt.date | None = None   # None => today (see _build)
+    end_date: dt.date | None = None  # None => today (see _build)
 
 
 class SyntheticMarket:
@@ -135,9 +135,10 @@ class SyntheticMarket:
 
             # Futures volume: real, U-shaped across the session. THE INDEX HAS NONE.
             t = np.linspace(0, 1, len(fut))
-            shape = 1.6 - 2.4 * t + 2.6 * t ** 2
+            shape = 1.6 - 2.4 * t + 2.6 * t**2
             self.fut_volume[day] = np.maximum(
-                200.0, 9_000.0 * shape * self.rng.uniform(0.7, 1.3, len(fut)))
+                200.0, 9_000.0 * shape * self.rng.uniform(0.7, 1.3, len(fut))
+            )
 
             # Implied volatility is strongly MEAN-REVERTING in reality. A pure
             # random walk (the obvious first implementation) spends long
@@ -146,8 +147,11 @@ class SyntheticMarket:
             # gate actually blocks. Ornstein-Uhlenbeck in log space instead.
             prev = self.session_iv.get(self.session_dates[i - 1], c.base_iv) if i else c.base_iv
             log_prev, log_mean = math.log(prev), math.log(c.base_iv)
-            log_next = (log_prev + c.iv_mean_reversion * (log_mean - log_prev)
-                        + self.rng.normal(0.0, c.iv_daily_vol))
+            log_next = (
+                log_prev
+                + c.iv_mean_reversion * (log_mean - log_prev)
+                + self.rng.normal(0.0, c.iv_daily_vol)
+            )
             self.session_iv[day] = float(np.clip(math.exp(log_next), 0.07, 0.45))
 
     # ── access ────────────────────────────────────────────────────────────
@@ -188,15 +192,20 @@ class SyntheticMarket:
         open_at = dt.datetime.combine(day, SESSION_OPEN, tzinfo=IST)
         out: list[Bar] = []
         for start in range(0, MINUTES_PER_SESSION, interval_min):
-            seg = prices[start:start + interval_min + 1]
+            seg = prices[start : start + interval_min + 1]
             if len(seg) < 2:
                 continue
-            v = float(np.sum(vols[start:start + interval_min])) if vols is not None else None
-            out.append(Bar(
-                ts=open_at + dt.timedelta(minutes=start),
-                open=float(seg[0]), high=float(np.max(seg)),
-                low=float(np.min(seg)), close=float(seg[-1]), volume=v,
-            ))
+            v = float(np.sum(vols[start : start + interval_min])) if vols is not None else None
+            out.append(
+                Bar(
+                    ts=open_at + dt.timedelta(minutes=start),
+                    open=float(seg[0]),
+                    high=float(np.max(seg)),
+                    low=float(np.min(seg)),
+                    close=float(seg[-1]),
+                    volume=v,
+                )
+            )
         return out
 
     def daily_bars(self, series: str = "index") -> list[Bar]:
@@ -204,18 +213,23 @@ class SyntheticMarket:
         for day in self.session_dates:
             p = self.index_minutes[day] if series == "index" else self.fut_minutes[day]
             v = float(np.sum(self.fut_volume[day])) if series != "index" else None
-            out.append(Bar(
-                ts=dt.datetime.combine(day, SESSION_OPEN, tzinfo=IST),
-                open=float(p[0]), high=float(np.max(p)), low=float(np.min(p)),
-                close=float(p[-1]), volume=v))
+            out.append(
+                Bar(
+                    ts=dt.datetime.combine(day, SESSION_OPEN, tzinfo=IST),
+                    open=float(p[0]),
+                    high=float(np.max(p)),
+                    low=float(np.min(p)),
+                    close=float(p[-1]),
+                    volume=v,
+                )
+            )
         return out
 
     # ── option chain ──────────────────────────────────────────────────────
     def _iv_for_strike(self, strike: float, fut: float, base_iv: float) -> float:
         """A simple, realistic smile: IV rises as you move away from the money."""
         m = math.log(strike / fut) if fut > 0 else 0.0
-        return float(np.clip(base_iv * (1.0 + self.cfg.smile_curvature * m * m * 40.0),
-                             0.05, 0.90))
+        return float(np.clip(base_iv * (1.0 + self.cfg.smile_curvature * m * m * 40.0), 0.05, 0.90))
 
     def _spread_for(self, price: float, strike: float, fut: float) -> float:
         """Spread model: wider in rupees for expensive ITM strikes, wider in
@@ -225,8 +239,9 @@ class SyntheticMarket:
         base = 0.25 + 0.006 * price + 60.0 * dist * max(price, 1.0) * 0.002
         return max(0.05, round(base / 0.05) * 0.05)
 
-    def option_chain(self, ts: dt.datetime, expiry: dt.datetime,
-                     with_greeks: bool = True) -> tuple[float, list[ChainRow]]:
+    def option_chain(
+        self, ts: dt.datetime, expiry: dt.datetime, with_greeks: bool = True
+    ) -> tuple[float, list[ChainRow]]:
         c = self.cfg
         fut = self.futures_price(ts)
         base_iv = self.atm_iv(ts)
@@ -249,21 +264,26 @@ class SyntheticMarket:
                 bid = max(0.05, round((fair - spread / 2) / 0.05) * 0.05)
                 ask = round((bid + spread) / 0.05) * 0.05
                 g = bs_greeks(fut, k, t, iv, 0.0, opt) if with_greeks else None
-                rows.append(ChainRow(
-                    strike=float(k), opt_type=opt,
-                    security_id=f"MOCK{int(k)}{opt}",
-                    ltp=round((bid + ask) / 2, 2), bid=round(bid, 2), ask=round(ask, 2),
-                    bid_qty=int(max(1, 40 * liq) * c.lot_size),
-                    ask_qty=int(max(1, 40 * liq) * c.lot_size),
-                    volume=float(int(90_000 * liq + 120)),
-                    oi=float(int(700_000 * liq + 6_000)),
-                    iv=round(iv, 4),
-                    delta=round(g.delta, 4) if g else None,
-                    gamma=round(g.gamma, 6) if g else None,
-                    theta=round(g.theta, 4) if g else None,
-                    vega=round(g.vega, 4) if g else None,
-                    greek_source="broker" if with_greeks else "absent",
-                ))
+                rows.append(
+                    ChainRow(
+                        strike=float(k),
+                        opt_type=opt,
+                        security_id=f"MOCK{int(k)}{opt}",
+                        ltp=round((bid + ask) / 2, 2),
+                        bid=round(bid, 2),
+                        ask=round(ask, 2),
+                        bid_qty=int(max(1, 40 * liq) * c.lot_size),
+                        ask_qty=int(max(1, 40 * liq) * c.lot_size),
+                        volume=float(int(90_000 * liq + 120)),
+                        oi=float(int(700_000 * liq + 6_000)),
+                        iv=round(iv, 4),
+                        delta=round(g.delta, 4) if g else None,
+                        gamma=round(g.gamma, 6) if g else None,
+                        theta=round(g.theta, 4) if g else None,
+                        vega=round(g.vega, 4) if g else None,
+                        greek_source="broker" if with_greeks else "absent",
+                    )
+                )
         return fut, rows
 
 
@@ -272,7 +292,7 @@ class Faults:
     """Failure injection. Every one of these is a real production condition."""
 
     omit_greeks: bool = False
-    corrupt_delta: float | None = None      # additive error on broker delta
+    corrupt_delta: float | None = None  # additive error on broker delta
     chain_staleness_sec: float = 0.0
     rate_limit_every_n: int = 0
     token_expired: bool = False
@@ -286,17 +306,21 @@ class MockBroker:
 
     name = "mock"
 
-    def __init__(self, market: SyntheticMarket | None = None,
-                 now: dt.datetime | None = None,
-                 expiry: dt.date | None = None,
-                 faults: Faults | None = None,
-                 underlying: str = "BANKNIFTY",
-                 realtime: bool = False,
-                 tick_interval_sec: float = 1.0):
+    def __init__(
+        self,
+        market: SyntheticMarket | None = None,
+        now: dt.datetime | None = None,
+        expiry: dt.date | None = None,
+        faults: Faults | None = None,
+        underlying: str = "BANKNIFTY",
+        realtime: bool = False,
+        tick_interval_sec: float = 1.0,
+    ):
         self.market = market or SyntheticMarket()
         self.underlying = underlying
         self._now = now or dt.datetime.combine(
-            self.market.session_dates[-1], dt.time(10, 0), tzinfo=IST)
+            self.market.session_dates[-1], dt.time(10, 0), tzinfo=IST
+        )
         self.expiry_date = expiry or self._default_expiry()
         self.faults = faults or Faults()
         self._call_counts: dict[str, int] = {}
@@ -367,8 +391,12 @@ class MockBroker:
 
     # ── BrokerAdapter ─────────────────────────────────────────────────────
     def preflight(self) -> dict:
-        return {"ok": not self.faults.token_expired, "broker": "mock",
-                "data_api": True, "notes": ["synthetic market — no credentials required"]}
+        return {
+            "ok": not self.faults.token_expired,
+            "broker": "mock",
+            "data_api": True,
+            "notes": ["synthetic market — no credentials required"],
+        }
 
     def expiry_list(self, underlying: str) -> list[str]:
         self._guard("reference")
@@ -389,28 +417,45 @@ class MockBroker:
         self._guard("reference")
         _, rows = self.market.option_chain(self._now, self.expiry_dt, with_greeks=False)
         out = [
-            Contract(security_id="MOCKIDX", exchange_segment="IDX_I",
-                     symbol=underlying, underlying=underlying, instrument_type="INDEX"),
-            Contract(security_id="MOCKFUT", exchange_segment="NSE_FNO",
-                     symbol=f"{underlying}FUT", underlying=underlying,
-                     instrument_type="FUTIDX", expiry=self.expiry_date.isoformat(),
-                     lot_size=self.market.cfg.lot_size),
+            Contract(
+                security_id="MOCKIDX",
+                exchange_segment="IDX_I",
+                symbol=underlying,
+                underlying=underlying,
+                instrument_type="INDEX",
+            ),
+            Contract(
+                security_id="MOCKFUT",
+                exchange_segment="NSE_FNO",
+                symbol=f"{underlying}FUT",
+                underlying=underlying,
+                instrument_type="FUTIDX",
+                expiry=self.expiry_date.isoformat(),
+                lot_size=self.market.cfg.lot_size,
+            ),
         ]
         for r in rows:
-            out.append(Contract(
-                security_id=r.security_id or "", exchange_segment="NSE_FNO",
-                symbol=f"{underlying}{r.strike:g}{r.opt_type}", underlying=underlying,
-                instrument_type="OPTIDX", expiry=self.expiry_date.isoformat(),
-                strike=r.strike, opt_type=r.opt_type,
-                lot_size=self.market.cfg.lot_size, tick_size=0.05))
+            out.append(
+                Contract(
+                    security_id=r.security_id or "",
+                    exchange_segment="NSE_FNO",
+                    symbol=f"{underlying}{r.strike:g}{r.opt_type}",
+                    underlying=underlying,
+                    instrument_type="OPTIDX",
+                    expiry=self.expiry_date.isoformat(),
+                    strike=r.strike,
+                    opt_type=r.opt_type,
+                    lot_size=self.market.cfg.lot_size,
+                    tick_size=0.05,
+                )
+            )
         return out
 
     def option_chain(self, underlying: str, expiry: str) -> ChainSnapshot:
         self._guard("option_chain")
         f = self.faults
         ts_now = self.now()
-        _, rows = self.market.option_chain(
-            ts_now, self.expiry_dt, with_greeks=not f.omit_greeks)
+        _, rows = self.market.option_chain(ts_now, self.expiry_dt, with_greeks=not f.omit_greeks)
         if f.corrupt_delta is not None:
             for r in rows:
                 if r.delta is not None:
@@ -421,11 +466,15 @@ class MockBroker:
                     r.bid = 0.0
         # In realtime mode the snapshot must carry a WALL-CLOCK timestamp, or
         # the engine's freshness check sees it as a day stale.
-        stamp = (dt.datetime.now(IST) if self.realtime else ts_now)
+        stamp = dt.datetime.now(IST) if self.realtime else ts_now
         stamp -= dt.timedelta(seconds=f.chain_staleness_sec)
-        return ChainSnapshot(ts=stamp, underlying=underlying, expiry=expiry,
-                             underlying_price=self.market.futures_price(ts_now),
-                             rows=rows)
+        return ChainSnapshot(
+            ts=stamp,
+            underlying=underlying,
+            expiry=expiry,
+            underlying_price=self.market.futures_price(ts_now),
+            rows=rows,
+        )
 
     def quote(self, contracts: list[Contract]) -> dict[str, QuoteSnapshot]:
         self._guard("quote")
@@ -441,41 +490,54 @@ class MockBroker:
             if c.instrument_type == "INDEX":
                 p = self.market.index_price(ts_now)
                 out[c.security_id] = QuoteSnapshot(
-                    c.security_id, stamp, ltp=p, bid=None, ask=None,
-                    volume=None, source="rest")   # index: no book, NO VOLUME
+                    c.security_id, stamp, ltp=p, bid=None, ask=None, volume=None, source="rest"
+                )  # index: no book, NO VOLUME
             elif c.instrument_type == "FUTIDX":
                 p = self.market.futures_price(ts_now)
                 out[c.security_id] = QuoteSnapshot(
-                    c.security_id, stamp, ltp=p, bid=round(p - 1.5, 2),
+                    c.security_id,
+                    stamp,
+                    ltp=p,
+                    bid=round(p - 1.5, 2),
                     ask=round(p + 1.5, 2),
-                    volume=float(self.market.fut_volume[ts_now.date()][
-                        self.market._minute_index(ts_now) - 1])
-                    if self.market.has_session(ts_now.date()) else 0.0,
-                    source="rest")
+                    volume=float(
+                        self.market.fut_volume[ts_now.date()][self.market._minute_index(ts_now) - 1]
+                    )
+                    if self.market.has_session(ts_now.date())
+                    else 0.0,
+                    source="rest",
+                )
             else:
                 r = by_id.get(c.security_id)
                 if r:
                     out[c.security_id] = QuoteSnapshot(
-                        c.security_id, stamp, ltp=r.ltp, bid=r.bid, ask=r.ask,
-                        bid_qty=r.bid_qty, ask_qty=r.ask_qty, volume=r.volume,
-                        oi=r.oi, source="rest")
+                        c.security_id,
+                        stamp,
+                        ltp=r.ltp,
+                        bid=r.bid,
+                        ask=r.ask,
+                        bid_qty=r.bid_qty,
+                        ask_qty=r.ask_qty,
+                        volume=r.volume,
+                        oi=r.oi,
+                        source="rest",
+                    )
         return out
 
-    def historical_daily(self, contract: Contract, start: dt.date,
-                         end: dt.date) -> list[Bar]:
+    def historical_daily(self, contract: Contract, start: dt.date, end: dt.date) -> list[Bar]:
         self._guard("historical")
         series = "index" if contract.instrument_type == "INDEX" else "futures"
         return [b for b in self.market.daily_bars(series) if start <= b.ts.date() <= end]
 
-    def historical_intraday(self, contract: Contract, interval_min: int,
-                            start: dt.datetime, end: dt.datetime) -> list[Bar]:
+    def historical_intraday(
+        self, contract: Contract, interval_min: int, start: dt.datetime, end: dt.datetime
+    ) -> list[Bar]:
         self._guard("historical")
         series = "index" if contract.instrument_type == "INDEX" else "futures"
         out: list[Bar] = []
         d = start.date()
         while d <= end.date():
-            out.extend(b for b in self.market.bars(d, interval_min, series)
-                       if start <= b.ts <= end)
+            out.extend(b for b in self.market.bars(d, interval_min, series) if start <= b.ts <= end)
             d += dt.timedelta(days=1)
         return out
 
@@ -487,7 +549,8 @@ class MockBroker:
         self._stream_stop.clear()
         if self.realtime:
             self._stream_thread = threading.Thread(
-                target=self._realtime_loop, name="mock-feed", daemon=True)
+                target=self._realtime_loop, name="mock-feed", daemon=True
+            )
             self._stream_thread.start()
 
     def _realtime_loop(self) -> None:

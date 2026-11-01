@@ -54,14 +54,25 @@ class BackfillResult:
     errors: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
-        return {"provider": self.provider, "rows": self.rows, "items": self.items, "errors": self.errors}
+        return {
+            "provider": self.provider,
+            "rows": self.rows,
+            "items": self.items,
+            "errors": self.errors,
+        }
 
 
-def backfill(engine: Engine, provider=None, series_keys: list[str] | None = None,
-             resolutions: list[str] | None = None, start: dt.date | None = None,
-             end: dt.date | None = None, full: bool = False,
-             progress: Callable[[float, str], None] | None = None,
-             stop_flag: Callable[[], bool] | None = None) -> BackfillResult:
+def backfill(
+    engine: Engine,
+    provider=None,
+    series_keys: list[str] | None = None,
+    resolutions: list[str] | None = None,
+    start: dt.date | None = None,
+    end: dt.date | None = None,
+    full: bool = False,
+    progress: Callable[[float, str], None] | None = None,
+    stop_flag: Callable[[], bool] | None = None,
+) -> BackfillResult:
     provider = provider or choose_provider()
     series, _ = load_specs()
     specs: list[SeriesSpec] = list(series.values())
@@ -95,15 +106,18 @@ def backfill(engine: Engine, provider=None, series_keys: list[str] | None = None
             sess = spec.session_times
             session = (parse_hhmm(sess["open"]), parse_hhmm(sess["close"]))
             if provider.name == "dhan":
-                df = provider.history(spec.key, spec.dhan_security_id, res, frm, end, session=session, spec=spec)
+                df = provider.history(
+                    spec.key, spec.dhan_security_id, res, frm, end, session=session, spec=spec
+                )
             else:
                 if not spec.yahoo:
                     continue
                 df = provider.history(spec.key, spec.yahoo, res, frm, end, session=session)
             n = save_bars(engine, spec.key, res, df, provider.name)
             result.rows += n
-            result.items.append({"series": spec.key, "resolution": res, "from": str(frm),
-                                 "to": str(end), "rows": n})
+            result.items.append(
+                {"series": spec.key, "resolution": res, "from": str(frm), "to": str(end), "rows": n}
+            )
             log.info("backfill %-12s %-4s %s..%s rows=%d", spec.key, res, frm, end, n)
         except Exception as exc:  # noqa: BLE001
             msg = f"{label}: {exc}"
@@ -132,11 +146,19 @@ def quality_report(engine: Engine, resolution: str = "5m") -> pd.DataFrame:
         daily_close = df["close"].groupby(df.index.date).last()
         daily_open = df["open"].groupby(df.index.date).first()
         gaps = (daily_open / daily_close.shift(1) - 1).abs()
-        rows.append({
-            "series": spec.key, "first": str(df.index[0])[:16], "last": str(df.index[-1])[:16],
-            "days": int(len(by_day)), "bars": int(len(df)), "short_days": short_days,
-            "zero_volume_bars": int((df["volume"] <= 0).sum()) if spec.has_volume else None,
-            "max_gap_pct": round(float(gaps.max() * 100), 2) if len(gaps) > 1 else 0.0,
-            "suspect_corporate_action": bool((gaps > 0.18).any()) if spec.kind == "STOCK" else False,
-        })
+        rows.append(
+            {
+                "series": spec.key,
+                "first": str(df.index[0])[:16],
+                "last": str(df.index[-1])[:16],
+                "days": int(len(by_day)),
+                "bars": int(len(df)),
+                "short_days": short_days,
+                "zero_volume_bars": int((df["volume"] <= 0).sum()) if spec.has_volume else None,
+                "max_gap_pct": round(float(gaps.max() * 100), 2) if len(gaps) > 1 else 0.0,
+                "suspect_corporate_action": bool((gaps > 0.18).any())
+                if spec.kind == "STOCK"
+                else False,
+            }
+        )
     return pd.DataFrame(rows)

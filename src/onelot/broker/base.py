@@ -34,10 +34,10 @@ class Contract:
     exchange_segment: str
     symbol: str
     underlying: str
-    instrument_type: str            # OPTIDX | FUTIDX | INDEX
-    expiry: str | None = None       # ISO date
+    instrument_type: str  # OPTIDX | FUTIDX | INDEX
+    expiry: str | None = None  # ISO date
     strike: float | None = None
-    opt_type: str | None = None     # CE | PE
+    opt_type: str | None = None  # CE | PE
     lot_size: int | None = None
     tick_size: float = 0.05
 
@@ -76,12 +76,22 @@ class ChainRow:
 
     def as_dict(self) -> dict:
         return {
-            "strike": self.strike, "opt_type": self.opt_type,
-            "security_id": self.security_id, "ltp": self.ltp,
-            "bid": self.bid, "ask": self.ask, "bid_qty": self.bid_qty,
-            "ask_qty": self.ask_qty, "volume": self.volume, "oi": self.oi,
-            "iv": self.iv, "delta": self.delta, "gamma": self.gamma,
-            "theta": self.theta, "vega": self.vega, "greek_source": self.greek_source,
+            "strike": self.strike,
+            "opt_type": self.opt_type,
+            "security_id": self.security_id,
+            "ltp": self.ltp,
+            "bid": self.bid,
+            "ask": self.ask,
+            "bid_qty": self.bid_qty,
+            "ask_qty": self.ask_qty,
+            "volume": self.volume,
+            "oi": self.oi,
+            "iv": self.iv,
+            "delta": self.delta,
+            "gamma": self.gamma,
+            "theta": self.theta,
+            "vega": self.vega,
+            "greek_source": self.greek_source,
         }
 
 
@@ -114,7 +124,7 @@ class QuoteSnapshot:
     ask_qty: int | None = None
     volume: float | None = None
     oi: float | None = None
-    source: str = "ws"              # ws | rest
+    source: str = "ws"  # ws | rest
 
     def age_seconds(self, now: dt.datetime) -> float:
         return (now - self.ts).total_seconds()
@@ -150,10 +160,10 @@ class BrokerAdapter(Protocol):
     def expiry_list(self, underlying: str) -> list[str]: ...
     def option_chain(self, underlying: str, expiry: str) -> ChainSnapshot: ...
     def quote(self, contracts: list[Contract]) -> dict[str, QuoteSnapshot]: ...
-    def historical_daily(self, contract: Contract, start: dt.date,
-                         end: dt.date) -> list[Bar]: ...
-    def historical_intraday(self, contract: Contract, interval_min: int,
-                            start: dt.datetime, end: dt.datetime) -> list[Bar]: ...
+    def historical_daily(self, contract: Contract, start: dt.date, end: dt.date) -> list[Bar]: ...
+    def historical_intraday(
+        self, contract: Contract, interval_min: int, start: dt.datetime, end: dt.datetime
+    ) -> list[Bar]: ...
     def start_stream(self, contracts: list[Contract], on_tick: TickCallback) -> None: ...
     def update_subscription(self, contracts: list[Contract]) -> None: ...
     def stop_stream(self) -> None: ...

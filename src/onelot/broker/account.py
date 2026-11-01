@@ -59,8 +59,14 @@ def _split_error(raw: str | None) -> tuple[str | None, str | None]:
 
 
 class AccountService:
-    def __init__(self, engine: Engine, adapter=None, stale_after: dt.timedelta = dt.timedelta(hours=12),
-                 ledger_days: int = 30, trades_days: int = 30) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        adapter=None,
+        stale_after: dt.timedelta = dt.timedelta(hours=12),
+        ledger_days: int = 30,
+        trades_days: int = 30,
+    ) -> None:
         self.engine = engine
         self.adapter = adapter
         self.stale_after = stale_after
@@ -71,7 +77,11 @@ class AccountService:
     # ── storage ───────────────────────────────────────────────────────────
     def _read(self, key: str) -> dict | None:
         with self.engine.connect() as conn:
-            row = conn.execute(select(account_cache).where(account_cache.c.key == key)).mappings().first()
+            row = (
+                conn.execute(select(account_cache).where(account_cache.c.key == key))
+                .mappings()
+                .first()
+            )
         return dict(row) if row else None
 
     def _write(self, key: str, payload: Any, error: str | None) -> None:
@@ -81,13 +91,29 @@ class AccountService:
         operator still needs to see yesterday's ledger, clearly marked.)"""
         now = now_ist()
         if error is None:
-            upsert(self.engine, account_cache,
-                   [{"key": key, "fetched_at": now, "payload": payload, "error": None}], ["key"])
+            upsert(
+                self.engine,
+                account_cache,
+                [{"key": key, "fetched_at": now, "payload": payload, "error": None}],
+                ["key"],
+            )
             return
         prev = self._read(key) or {}
-        upsert(self.engine, account_cache,
-               [{"key": key, "fetched_at": prev.get("fetched_at") if prev.get("payload") is not None else None,
-                 "payload": prev.get("payload"), "error": f"{now.isoformat()}|{error}"}], ["key"])
+        upsert(
+            self.engine,
+            account_cache,
+            [
+                {
+                    "key": key,
+                    "fetched_at": prev.get("fetched_at")
+                    if prev.get("payload") is not None
+                    else None,
+                    "payload": prev.get("payload"),
+                    "error": f"{now.isoformat()}|{error}",
+                }
+            ],
+            ["key"],
+        )
 
     # ── fetch ─────────────────────────────────────────────────────────────
     def _fetch(self, key: str) -> Any:
@@ -136,8 +162,12 @@ class AccountService:
         automatic refresh, because that is the only moment the account changes."""
         if self.adapter is None:
             return
-        threading.Thread(target=self.refresh, args=(("funds", "positions", "trades"),),
-                         name="account-refresh", daemon=True).start()
+        threading.Thread(
+            target=self.refresh,
+            args=(("funds", "positions", "trades"),),
+            name="account-refresh",
+            daemon=True,
+        ).start()
 
     # ── reads (cached) ────────────────────────────────────────────────────
     def snapshot(self, refresh: bool = False) -> dict:
@@ -145,11 +175,16 @@ class AccountService:
             self.refresh()
         out: dict[str, Any] = {"configured": self.adapter is not None, "panels": {}}
         oldest: dt.datetime | None = None
-        last_err: tuple[str, str, str] | None = None   # (error_at, key, message)
+        last_err: tuple[str, str, str] | None = None  # (error_at, key, message)
         for k in KEYS:
             row = self._read(k)
             if row is None:
-                out["panels"][k] = {"data": None, "fetched_at": None, "error": None, "error_at": None}
+                out["panels"][k] = {
+                    "data": None,
+                    "fetched_at": None,
+                    "error": None,
+                    "error_at": None,
+                }
                 continue
             fa = row.get("fetched_at")
             if fa is not None and fa.tzinfo is None:
@@ -160,16 +195,26 @@ class AccountService:
             err, err_at = _split_error(row.get("error"))
             if err and (last_err is None or (err_at or "") > last_err[0]):
                 last_err = (err_at or "", k, err)
-            out["panels"][k] = {"data": row.get("payload"), "fetched_at": fa.isoformat() if fa else None,
-                                "error": err, "error_at": err_at}
+            out["panels"][k] = {
+                "data": row.get("payload"),
+                "fetched_at": fa.isoformat() if fa else None,
+                "error": err,
+                "error_at": err_at,
+            }
         out["fetched_at"] = oldest.isoformat() if oldest else None
         out["stale"] = bool(oldest and (now_ist() - oldest) > self.stale_after)
-        out["last_error"] = ({"at": last_err[0] or None, "panel": last_err[1], "message": last_err[2]}
-                             if last_err else None)
-        out["token_expired"] = any((p.get("error") or "").startswith("TOKEN_EXPIRED")
-                                   for p in out["panels"].values())
-        out["offline"] = any("ConnectError" in (p.get("error") or "") or "network error" in (p.get("error") or "")
-                             for p in out["panels"].values())
+        out["last_error"] = (
+            {"at": last_err[0] or None, "panel": last_err[1], "message": last_err[2]}
+            if last_err
+            else None
+        )
+        out["token_expired"] = any(
+            (p.get("error") or "").startswith("TOKEN_EXPIRED") for p in out["panels"].values()
+        )
+        out["offline"] = any(
+            "ConnectError" in (p.get("error") or "") or "network error" in (p.get("error") or "")
+            for p in out["panels"].values()
+        )
         out["summary"] = self._summary(out["panels"])
         return out
 
@@ -183,13 +228,23 @@ class AccountService:
         open_pos = [p for p in positions if isinstance(p, dict) and int(_f(p.get("netQty"))) != 0]
         realised = sum(_f(p.get("realizedProfit")) for p in positions if isinstance(p, dict))
         unreal = sum(_f(p.get("unrealizedProfit")) for p in positions if isinstance(p, dict))
-        hold_rows = [h for h in holdings if isinstance(h, dict)] if isinstance(holdings, list) else []
+        hold_rows = (
+            [h for h in holdings if isinstance(h, dict)] if isinstance(holdings, list) else []
+        )
         invested = sum(_f(h.get("avgCostPrice")) * _f(h.get("totalQty")) for h in hold_rows)
         # Dhan's holdings carry lastTradedPrice (as of the last fetch): mark the
         # book without touching the paid Data API.
         priced = [h for h in hold_rows if _f(h.get("lastTradedPrice")) > 0]
-        value = sum(_f(h.get("lastTradedPrice")) * _f(h.get("totalQty")) for h in priced) if priced else None
-        priced_cost = sum(_f(h.get("avgCostPrice")) * _f(h.get("totalQty")) for h in priced) if priced else None
+        value = (
+            sum(_f(h.get("lastTradedPrice")) * _f(h.get("totalQty")) for h in priced)
+            if priced
+            else None
+        )
+        priced_cost = (
+            sum(_f(h.get("avgCostPrice")) * _f(h.get("totalQty")) for h in priced)
+            if priced
+            else None
+        )
         holdings_pnl = (value - priced_cost) if value is not None else None
         # Dhan returns the ledger NEWEST first; never trust the list order --
         # take the row with the latest voucher date (ties: first seen).

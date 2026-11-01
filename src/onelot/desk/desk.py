@@ -49,13 +49,26 @@ def _iso(v: dt.datetime | None) -> str | None:
 def _aware(v: dt.datetime | None) -> dt.datetime | None:
     if v is None:
         return None
-    return v.replace(tzinfo=dt.timezone.utc).astimezone(IST) if v.tzinfo is None else v.astimezone(IST)
+    return (
+        v.replace(tzinfo=dt.timezone.utc).astimezone(IST) if v.tzinfo is None else v.astimezone(IST)
+    )
 
 
 class Desk:
-    def __init__(self, engine: Engine, cfg_app, notifier, governor, session_clock, repo=None,
-                 adapter_getter=None, data_api_active=None, desk_cfg: DeskConfig | None = None,
-                 feed_getter=None, calendar=None) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        cfg_app,
+        notifier,
+        governor,
+        session_clock,
+        repo=None,
+        adapter_getter=None,
+        data_api_active=None,
+        desk_cfg: DeskConfig | None = None,
+        feed_getter=None,
+        calendar=None,
+    ) -> None:
         self.engine = engine
         self.app_cfg = cfg_app
         self.notifier = notifier
@@ -70,22 +83,36 @@ class Desk:
         self.series, self.instruments = load_specs()
         self.trackers: dict[str, InstrumentTracker] = {}
         self._build_trackers()
-        self.source: CompositeBars = build_source(self.cfg.source, self._adapter_getter(),
-                                                  bool(self._data_api_active()), self._feed_getter(), self._all_specs())
+        self.source: CompositeBars = build_source(
+            self.cfg.source,
+            self._adapter_getter(),
+            bool(self._data_api_active()),
+            self._feed_getter(),
+            self._all_specs(),
+        )
         self.fine_minutes = int(self.source.resolution[:-1])
         for t in self.trackers.values():
             t.fine_minutes = self.fine_minutes
         self.context_bars: dict[str, pd.DataFrame] = {}
         self.context_manual: dict[str, dict] = {}
-        self.signals: dict[str, dict] = {}        # pending, by id
-        self.positions: dict[str, dict] = {}      # open, by id
-        self.archive: list[dict] = []             # recent signals (any status) with outcomes, newest first
+        self.signals: dict[str, dict] = {}  # pending, by id
+        self.positions: dict[str, dict] = {}  # open, by id
+        self.archive: list[dict] = []  # recent signals (any status) with outcomes, newest first
         self.scoreboard: dict[str, dict] = {}
         self._chain_cache: dict[str, tuple[dt.datetime, Any]] = {}
         self._board_cache: tuple[dt.datetime | None, dict] = (None, {})
         self.version = 0
-        self._snapshot: dict = {"updated_at": None, "indices": [], "stocks": [], "context": [], "positions": [],
-                                "signals": [], "source": {"name": self.source.name}, "booting": True, "version": 0}
+        self._snapshot: dict = {
+            "updated_at": None,
+            "indices": [],
+            "stocks": [],
+            "context": [],
+            "positions": [],
+            "signals": [],
+            "source": {"name": self.source.name},
+            "booting": True,
+            "version": 0,
+        }
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -95,6 +122,7 @@ class Desk:
         self.polls = 0
         self._recover()
         from .pulse import MarketPulse
+
         self.pulse = MarketPulse(engine, self, self._adapter_getter, self._data_api_active)
 
     # ── setup ─────────────────────────────────────────────────────────────
@@ -131,16 +159,33 @@ class Desk:
         now = now_ist()
         since = now - dt.timedelta(days=self.cfg.audit_days)
         with self.engine.connect() as conn:
-            rows = conn.execute(select(desk_positions).where(desk_positions.c.status == "OPEN")).mappings().all()
-            sigs = conn.execute(select(desk_signals).where(desk_signals.c.created_at >= since)
-                                .order_by(desk_signals.c.created_at.desc())).mappings().all()
+            rows = (
+                conn.execute(select(desk_positions).where(desk_positions.c.status == "OPEN"))
+                .mappings()
+                .all()
+            )
+            sigs = (
+                conn.execute(
+                    select(desk_signals)
+                    .where(desk_signals.c.created_at >= since)
+                    .order_by(desk_signals.c.created_at.desc())
+                )
+                .mappings()
+                .all()
+            )
         for r in rows:
             p = dict(r["payload"] or {})
             p.update({"id": r["id"], "opened_at": _iso(_aware(r["opened_at"]))})
             self.positions[r["id"]] = p
         for r in sigs:
             p = dict(r["payload"] or {})
-            p.update({"id": r["id"], "status": r["status"], "resolved_at": _iso(_aware(r["resolved_at"]))})
+            p.update(
+                {
+                    "id": r["id"],
+                    "status": r["status"],
+                    "resolved_at": _iso(_aware(r["resolved_at"])),
+                }
+            )
             exp = _aware(r["expires_at"])
             if r["status"] == "PENDING":
                 if exp and exp < now:
@@ -169,7 +214,9 @@ class Desk:
                 log.exception("desk poll failed")
             now = now_ist()
             window = self.session_clock.current_window(now)
-            near = window is not None and (window.open_at - dt.timedelta(minutes=20)) <= now <= (window.close_at + dt.timedelta(minutes=5))
+            near = window is not None and (window.open_at - dt.timedelta(minutes=20)) <= now <= (
+                window.close_at + dt.timedelta(minutes=5)
+            )
             wait = self.cfg.poll_seconds if near else 300
             self._wake.wait(wait)
             self._wake.clear()
@@ -217,15 +264,22 @@ class Desk:
             log.exception("pulse failed")
 
     def _maybe_switch_source(self) -> None:
-        want_dhan = self.cfg.source == "dhan" or (self.cfg.source == "auto" and bool(self._data_api_active()))
+        want_dhan = self.cfg.source == "dhan" or (
+            self.cfg.source == "auto" and bool(self._data_api_active())
+        )
         has_dhan = self.source.primary is not None
         adapter = self._adapter_getter()
         feed = self._feed_getter()
-        feed_live = feed is not None and getattr(feed, "broker", None) is not None and \
-            type(feed.broker).__name__ == "DhanAdapter"
+        feed_live = (
+            feed is not None
+            and getattr(feed, "broker", None) is not None
+            and type(feed.broker).__name__ == "DhanAdapter"
+        )
         have_ws = has_dhan and getattr(self.source.primary, "name", "") == "dhan-ws"
         if want_dhan and adapter is not None and (not has_dhan or (feed_live and not have_ws)):
-            self.source = build_source("dhan", adapter, True, feed if feed_live else None, self._all_specs())
+            self.source = build_source(
+                "dhan", adapter, True, feed if feed_live else None, self._all_specs()
+            )
             self._reset_bars()
             log.info("desk: switched to %s bars", self.source.name)
         elif has_dhan and (not want_dhan or adapter is None):
@@ -261,9 +315,10 @@ class Desk:
         if at is None or (now - at) > dt.timedelta(minutes=10):
             try:
                 from ..lab.sweep import leaderboard
+
                 rows = leaderboard(self.engine, min_trades=1, limit=5000)
                 board = {}
-                for r in rows:                      # prefer walk-forward (OOS) rows
+                for r in rows:  # prefer walk-forward (OOS) rows
                     key = (r["strategy"], r["instrument"], r["timeframe"])
                     if key not in board or (r["oos"] and not board[key]["oos"]):
                         board[key] = r
@@ -273,15 +328,20 @@ class Desk:
         return board.get((strategy, instrument, timeframe))
 
     # ── signals ───────────────────────────────────────────────────────────
-    def _raise_signal(self, t: InstrumentTracker, slot: StrategySlot, v: Verdict, now: dt.datetime) -> None:
+    def _raise_signal(
+        self, t: InstrumentTracker, slot: StrategySlot, v: Verdict, now: dt.datetime
+    ) -> None:
         if any(s["instrument_key"] == t.instrument.key for s in self.signals.values()):
-            return                                              # one pending alert per instrument
+            return  # one pending alert per instrument
         if any(p["instrument_key"] == t.instrument.key for p in self.positions.values()):
-            return                                              # already holding it
+            return  # already holding it
         allowed, why = self.governor.may_open(now)
         per_symbol_cap = int(getattr(slot.strategy.p, "max_trades_per_day", 2) or 2)
         if t.trades_today >= per_symbol_cap:
-            allowed, why = False, f"{t.cfg.key}: {t.trades_today} trade(s) today (cap {per_symbol_cap})"
+            allowed, why = (
+                False,
+                f"{t.cfg.key}: {t.trades_today} trade(s) today (cap {per_symbol_cap})",
+            )
         try:
             eco = self._economics(t, slot, v, now)
         except Exception as exc:  # noqa: BLE001
@@ -292,66 +352,137 @@ class Desk:
         horizon = "intraday" if t.cfg.kind == "INDEX" else self.cfg.stock_horizon
         sid = uuid.uuid4().hex[:12]
         expires = now + dt.timedelta(minutes=self.cfg.signal_valid_minutes)
-        text = alert_text(t.series.label, t.series.key, eco, slot.cfg.name, slot.cfg.timeframe, v.bar_ts,
-                          exit_time if horizon == "intraday" else "n/a (swing: hold while the strategy holds)", v.reasons)
+        text = alert_text(
+            t.series.label,
+            t.series.key,
+            eco,
+            slot.cfg.name,
+            slot.cfg.timeframe,
+            v.bar_ts,
+            exit_time if horizon == "intraday" else "n/a (swing: hold while the strategy holds)",
+            v.reasons,
+        )
         regime_now = (slot.last_features or {}).get("regime")
         regime_ok = (regime_now in getattr(slot.strategy, "regimes", ())) if regime_now else None
-        conf = confidence(v.strength, self._backtest_evidence(slot.cfg.name, t.instrument.key, slot.cfg.timeframe),
-                          self.scoreboard.get(slot.cfg.name), regime_ok)
+        conf = confidence(
+            v.strength,
+            self._backtest_evidence(slot.cfg.name, t.instrument.key, slot.cfg.timeframe),
+            self.scoreboard.get(slot.cfg.name),
+            regime_ok,
+        )
         src = self.source.served_by.get(t.cfg.key, self.source.name)
         delayed = bool(self.source.delayed) and src == "yahoo"
         sig = {
-            "id": sid, "created_at": _iso(now), "expires_at": _iso(expires), "instrument_key": t.instrument.key,
-            "series_key": t.series.key, "label": t.series.label, "kind": t.cfg.kind, "side": eco.side,
-            "direction": v.direction, "strategy": slot.cfg.name, "strategy_label": slot.label,
-            "timeframe": slot.cfg.timeframe, "bar_ts": _iso(v.bar_ts), "strength": v.strength,
-            "confidence": conf, "horizon": horizon,
-            "data": {"source": src, "resolution": f"{self.fine_minutes}m", "delayed": delayed,
-                     "delay_note": "Yahoo bars run ~15 minutes behind the exchange" if delayed else "live exchange feed",
-                     "bar_age_sec": t.bar_age_sec(now)},
-            "reasons": v.reasons, "economics": eco.as_dict(), "text": text, "status": "PENDING",
-            "risk_allowed": allowed, "risk_reason": why, "outcome": None,
-            "manage": {"target_r": float(getattr(slot.strategy.p, "target_r", 0) or 0),
-                       "trail_atr_mult": float(getattr(slot.strategy.p, "trail_atr_mult", 0) or 0),
-                       "trail_activate_r": float(getattr(slot.strategy.p, "trail_activate_r", 1.0) or 1.0),
-                       "max_bars": int(getattr(slot.strategy.p, "max_bars", 0) or 0),
-                       "exit_time": exit_time, "atr": (slot.last_features or {}).get("atr"),
-                       "tf_min": slot.tf_min, "horizon": horizon},
+            "id": sid,
+            "created_at": _iso(now),
+            "expires_at": _iso(expires),
+            "instrument_key": t.instrument.key,
+            "series_key": t.series.key,
+            "label": t.series.label,
+            "kind": t.cfg.kind,
+            "side": eco.side,
+            "direction": v.direction,
+            "strategy": slot.cfg.name,
+            "strategy_label": slot.label,
+            "timeframe": slot.cfg.timeframe,
+            "bar_ts": _iso(v.bar_ts),
+            "strength": v.strength,
+            "confidence": conf,
+            "horizon": horizon,
+            "data": {
+                "source": src,
+                "resolution": f"{self.fine_minutes}m",
+                "delayed": delayed,
+                "delay_note": "Yahoo bars run ~15 minutes behind the exchange"
+                if delayed
+                else "live exchange feed",
+                "bar_age_sec": t.bar_age_sec(now),
+            },
+            "reasons": v.reasons,
+            "economics": eco.as_dict(),
+            "text": text,
+            "status": "PENDING",
+            "risk_allowed": allowed,
+            "risk_reason": why,
+            "outcome": None,
+            "manage": {
+                "target_r": float(getattr(slot.strategy.p, "target_r", 0) or 0),
+                "trail_atr_mult": float(getattr(slot.strategy.p, "trail_atr_mult", 0) or 0),
+                "trail_activate_r": float(getattr(slot.strategy.p, "trail_activate_r", 1.0) or 1.0),
+                "max_bars": int(getattr(slot.strategy.p, "max_bars", 0) or 0),
+                "exit_time": exit_time,
+                "atr": (slot.last_features or {}).get("atr"),
+                "tf_min": slot.tf_min,
+                "horizon": horizon,
+            },
         }
         slot.signals_today += 1
         self.signals[sid] = sig
         self.archive.insert(0, sig)
         with self.engine.begin() as conn:
-            conn.execute(desk_signals.insert().values(
-                id=sid, created_at=now, expires_at=expires, instrument_key=t.instrument.key, series_key=t.series.key,
-                kind=t.cfg.kind, side=eco.side, strategy=slot.cfg.name, timeframe=slot.cfg.timeframe,
-                bar_ts=v.bar_ts, status="PENDING", payload=sig))
-        title = f"{eco.side.replace('_', ' ')} {t.series.label}" + (f" {eco.option['strike']:g} {eco.option['opt_type']}" if eco.option else "") \
-            + (f" · {eco.unit_label} @ ~₹{eco.entry_price:,.2f}" if eco.kind == "STOCK" else f" · ~₹{eco.outlay:,.0f} outlay") \
+            conn.execute(
+                desk_signals.insert().values(
+                    id=sid,
+                    created_at=now,
+                    expires_at=expires,
+                    instrument_key=t.instrument.key,
+                    series_key=t.series.key,
+                    kind=t.cfg.kind,
+                    side=eco.side,
+                    strategy=slot.cfg.name,
+                    timeframe=slot.cfg.timeframe,
+                    bar_ts=v.bar_ts,
+                    status="PENDING",
+                    payload=sig,
+                )
+            )
+        title = (
+            f"{eco.side.replace('_', ' ')} {t.series.label}"
+            + (f" {eco.option['strike']:g} {eco.option['opt_type']}" if eco.option else "")
+            + (
+                f" · {eco.unit_label} @ ~₹{eco.entry_price:,.2f}"
+                if eco.kind == "STOCK"
+                else f" · ~₹{eco.outlay:,.0f} outlay"
+            )
             + f" · {slot.cfg.name} {slot.cfg.timeframe} · conf {conf['score']:.0f}"
+        )
         if not allowed:
             title = f"[BLOCKED by risk] {title}"
-        self.notifier.send(Notification(title=title, body=text + ("" if allowed else f"\nRisk governor: {why}"),
-                                        level=NotificationLevel.SIGNAL, signal_id=sid,
-                                        ttl_seconds=self.cfg.signal_valid_minutes * 60, payload=sig),
-                           dedup_key=f"desk:{sid}")
+        self.notifier.send(
+            Notification(
+                title=title,
+                body=text + ("" if allowed else f"\nRisk governor: {why}"),
+                level=NotificationLevel.SIGNAL,
+                signal_id=sid,
+                ttl_seconds=self.cfg.signal_valid_minutes * 60,
+                payload=sig,
+            ),
+            dedup_key=f"desk:{sid}",
+        )
         self.version += 1
 
-    def _economics(self, t: InstrumentTracker, slot: StrategySlot, v: Verdict, now: dt.datetime) -> Economics:
+    def _economics(
+        self, t: InstrumentTracker, slot: StrategySlot, v: Verdict, now: dt.datetime
+    ) -> Economics:
         target_r = float(getattr(slot.strategy.p, "target_r", 0) or 0)
         if t.cfg.kind == "STOCK":
-            return stock_economics(t.instrument, v.direction, float(v.close), float(v.stop), target_r)
+            return stock_economics(
+                t.instrument, v.direction, float(v.close), float(v.stop), target_r
+            )
         chain = self._live_chain(t, now)
         if chain is not None:
             try:
-                eco = index_option_economics_from_chain(t.instrument, v.direction, float(v.close), float(v.stop),
-                                                        target_r, chain, now)
+                eco = index_option_economics_from_chain(
+                    t.instrument, v.direction, float(v.close), float(v.stop), target_r, chain, now
+                )
                 if eco is not None:
                     return eco
             except Exception:  # noqa: BLE001
                 log.exception("chain economics failed; using the synthetic model")
         vix = self._context_last("INDIAVIX")
-        return index_option_economics(t.instrument, v.direction, float(v.close), float(v.stop), target_r, now, vix)
+        return index_option_economics(
+            t.instrument, v.direction, float(v.close), float(v.stop), target_r, now, vix
+        )
 
     def _live_chain(self, t: InstrumentTracker, now: dt.datetime):
         """Nearest-expiry option chain for an index, cached 60 s (1 request / 3 s limit)."""
@@ -384,8 +515,11 @@ class Desk:
 
     def _resolve_signal_db(self, sid: str, status: str) -> None:
         with self.engine.begin() as conn:
-            conn.execute(update(desk_signals).where(desk_signals.c.id == sid)
-                         .values(status=status, resolved_at=now_ist()))
+            conn.execute(
+                update(desk_signals)
+                .where(desk_signals.c.id == sid)
+                .values(status=status, resolved_at=now_ist())
+            )
 
     def _resolve_signal(self, sid: str, status: str, note: str | None = None) -> None:
         s = self.signals.pop(sid, None)
@@ -402,11 +536,16 @@ class Desk:
                 pass
         self.version += 1
 
-    def acknowledge(self, sid: str, action: str, fill_price: float | None = None, source: str = "dashboard") -> dict:
+    def acknowledge(
+        self, sid: str, action: str, fill_price: float | None = None, source: str = "dashboard"
+    ) -> dict:
         with self._lock:
             s = self.signals.get(sid)
             if s is None:
-                return {"accepted": False, "message": "signal not pending (expired or already resolved)"}
+                return {
+                    "accepted": False,
+                    "message": "signal not pending (expired or already resolved)",
+                }
             act = action.upper()
             if act in ("SKIP", "SKIPPED"):
                 self._resolve_signal(sid, "SKIPPED")
@@ -419,31 +558,72 @@ class Desk:
             entry = float(fill_price) if fill_price else float(eco["entry_price"])
             pid = uuid.uuid4().hex[:12]
             pos = {
-                "id": pid, "signal_id": sid, "instrument_key": s["instrument_key"], "series_key": s["series_key"],
-                "label": s["label"], "kind": s["kind"], "side": s["side"], "direction": s["direction"],
-                "strategy": s["strategy"], "timeframe": s["timeframe"], "opened_at": _iso(now), "qty": int(eco["qty"]),
-                "entry_price": entry, "entry_underlying": float(eco["underlying_entry"]),
-                "stop_underlying": float(eco["underlying_stop"]), "target_underlying": eco.get("underlying_target"),
-                "initial_stop_underlying": float(eco["underlying_stop"]), "option": eco.get("option") or {},
-                "manage": s["manage"], "horizon": s.get("horizon", "intraday"), "trail_active": False, "bars_held": 0,
-                "sessions_held": 0, "last_underlying": float(eco["underlying_entry"]),
-                "unrealized": 0.0, "r_now": 0.0, "exit_advice": None, "hold_check": "monitoring", "status": "OPEN",
-                "source": source, "notes": list(eco.get("notes") or []), "confidence": s.get("confidence"),
+                "id": pid,
+                "signal_id": sid,
+                "instrument_key": s["instrument_key"],
+                "series_key": s["series_key"],
+                "label": s["label"],
+                "kind": s["kind"],
+                "side": s["side"],
+                "direction": s["direction"],
+                "strategy": s["strategy"],
+                "timeframe": s["timeframe"],
+                "opened_at": _iso(now),
+                "qty": int(eco["qty"]),
+                "entry_price": entry,
+                "entry_underlying": float(eco["underlying_entry"]),
+                "stop_underlying": float(eco["underlying_stop"]),
+                "target_underlying": eco.get("underlying_target"),
+                "initial_stop_underlying": float(eco["underlying_stop"]),
+                "option": eco.get("option") or {},
+                "manage": s["manage"],
+                "horizon": s.get("horizon", "intraday"),
+                "trail_active": False,
+                "bars_held": 0,
+                "sessions_held": 0,
+                "last_underlying": float(eco["underlying_entry"]),
+                "unrealized": 0.0,
+                "r_now": 0.0,
+                "exit_advice": None,
+                "hold_check": "monitoring",
+                "status": "OPEN",
+                "source": source,
+                "notes": list(eco.get("notes") or []),
+                "confidence": s.get("confidence"),
             }
             self.positions[pid] = pos
             if t is not None:
                 t.trades_today += 1
             self.governor.record_open(now)
             with self.engine.begin() as conn:
-                conn.execute(desk_positions.insert().values(
-                    id=pid, signal_id=sid, instrument_key=pos["instrument_key"], series_key=pos["series_key"],
-                    kind=pos["kind"], side=pos["side"], strategy=pos["strategy"], timeframe=pos["timeframe"],
-                    opened_at=now, status="OPEN", entry_price=entry, qty=pos["qty"], payload=pos))
+                conn.execute(
+                    desk_positions.insert().values(
+                        id=pid,
+                        signal_id=sid,
+                        instrument_key=pos["instrument_key"],
+                        series_key=pos["series_key"],
+                        kind=pos["kind"],
+                        side=pos["side"],
+                        strategy=pos["strategy"],
+                        timeframe=pos["timeframe"],
+                        opened_at=now,
+                        status="OPEN",
+                        entry_price=entry,
+                        qty=pos["qty"],
+                        payload=pos,
+                    )
+                )
             self._resolve_signal(sid, "TAKEN")
-            self.notifier.info(f"Monitoring {s['label']} {s['side'].replace('_', ' ')}",
-                               f"entry {entry:,.2f} · stop {pos['stop_underlying']:,.2f} (underlying) · {pos['horizon']} · re-checked every poll",
-                               dedup_key=f"desk:open:{pid}")
-            return {"accepted": True, "message": "position opened; the desk is monitoring it", "position_id": pid}
+            self.notifier.info(
+                f"Monitoring {s['label']} {s['side'].replace('_', ' ')}",
+                f"entry {entry:,.2f} · stop {pos['stop_underlying']:,.2f} (underlying) · {pos['horizon']} · re-checked every poll",
+                dedup_key=f"desk:open:{pid}",
+            )
+            return {
+                "accepted": True,
+                "message": "position opened; the desk is monitoring it",
+                "position_id": pid,
+            }
 
     # ── positions ─────────────────────────────────────────────────────────
     def _manage_positions(self, now: dt.datetime, window) -> None:
@@ -465,17 +645,39 @@ class Desk:
                 atr = m.get("atr") or t.regime.get("atr") or 0.0
                 if atr:
                     new_stop = last - sign * float(m["trail_atr_mult"]) * float(atr)
-                    if (sign > 0 and new_stop > p["stop_underlying"]) or (sign < 0 and new_stop < p["stop_underlying"]):
+                    if (sign > 0 and new_stop > p["stop_underlying"]) or (
+                        sign < 0 and new_stop < p["stop_underlying"]
+                    ):
                         p["stop_underlying"], p["trail_active"] = round(new_stop, 2), True
             opened = dt.datetime.fromisoformat(p["opened_at"])
-            p["bars_held"] = int(max(0, (now - opened).total_seconds() // 60) // max(1, int(m.get("tf_min", 5))))
-            p["sessions_held"] = len({d for d in t.bars.index.normalize().unique() if d.to_pydatetime() >= opened.replace(hour=0, minute=0)})
-            slot = next((s for s in t.slots if s.cfg.name == p["strategy"] and s.cfg.timeframe == p["timeframe"]), None)
+            p["bars_held"] = int(
+                max(0, (now - opened).total_seconds() // 60) // max(1, int(m.get("tf_min", 5)))
+            )
+            p["sessions_held"] = len(
+                {
+                    d
+                    for d in t.bars.index.normalize().unique()
+                    if d.to_pydatetime() >= opened.replace(hour=0, minute=0)
+                }
+            )
+            slot = next(
+                (
+                    s
+                    for s in t.slots
+                    if s.cfg.name == p["strategy"] and s.cfg.timeframe == p["timeframe"]
+                ),
+                None,
+            )
             strat_exit = slot.exit_advice(p["direction"]) if slot else None
             advice = None
-            if (sign > 0 and last <= p["stop_underlying"]) or (sign < 0 and last >= p["stop_underlying"]):
+            if (sign > 0 and last <= p["stop_underlying"]) or (
+                sign < 0 and last >= p["stop_underlying"]
+            ):
                 advice = "STOP" if not p["trail_active"] else "TRAIL_STOP"
-            elif p.get("target_underlying") and ((sign > 0 and last >= p["target_underlying"]) or (sign < 0 and last <= p["target_underlying"])):
+            elif p.get("target_underlying") and (
+                (sign > 0 and last >= p["target_underlying"])
+                or (sign < 0 and last <= p["target_underlying"])
+            ):
                 advice = "TARGET"
             elif strat_exit:
                 advice = strat_exit
@@ -483,22 +685,43 @@ class Desk:
                 hh, mm = (int(x) for x in str(m.get("exit_time", "15:15")).split(":"))
                 if now.time() >= dt.time(hh, mm):
                     advice = "SQUARE_OFF"
-            if advice is None and horizon == "intraday" and m.get("max_bars") and p["bars_held"] >= int(m["max_bars"]):
+            if (
+                advice is None
+                and horizon == "intraday"
+                and m.get("max_bars")
+                and p["bars_held"] >= int(m["max_bars"])
+            ):
                 advice = "TIME_STOP"
-            if advice is None and horizon == "swing" and p["sessions_held"] > int(self.cfg.swing_max_sessions):
+            if (
+                advice is None
+                and horizon == "swing"
+                and p["sessions_held"] > int(self.cfg.swing_max_sessions)
+            ):
                 advice = "TIME_STOP"
             p["exit_advice"] = advice
-            p["hold_check"] = (f"strategy {p['strategy']} {p['timeframe']}: " +
-                               ("still " + ("long" if sign > 0 else "short") + " — HOLD" if not strat_exit else strat_exit.replace("_", " ").lower()))
+            p["hold_check"] = f"strategy {p['strategy']} {p['timeframe']}: " + (
+                "still " + ("long" if sign > 0 else "short") + " — HOLD"
+                if not strat_exit
+                else strat_exit.replace("_", " ").lower()
+            )
             if advice:
-                self.notifier.send(Notification(
-                    title=f"EXIT {p['label']} — {advice.replace('_', ' ')}",
-                    body=(f"{p['side'].replace('_', ' ')} from {p['entry_price']:,.2f}; underlying now {last:,.2f} "
-                          f"({r_now:+.2f}R, est. {p['unrealized']:+,.0f}). Close it at the market and record the exit price."),
-                    level=NotificationLevel.EXIT, position_id=pid, payload={"advice": advice, "position": p}),
-                    dedup_key=f"desk:exit:{pid}:{advice}")
+                self.notifier.send(
+                    Notification(
+                        title=f"EXIT {p['label']} — {advice.replace('_', ' ')}",
+                        body=(
+                            f"{p['side'].replace('_', ' ')} from {p['entry_price']:,.2f}; underlying now {last:,.2f} "
+                            f"({r_now:+.2f}R, est. {p['unrealized']:+,.0f}). Close it at the market and record the exit price."
+                        ),
+                        level=NotificationLevel.EXIT,
+                        position_id=pid,
+                        payload={"advice": advice, "position": p},
+                    ),
+                    dedup_key=f"desk:exit:{pid}:{advice}",
+                )
             with self.engine.begin() as conn:
-                conn.execute(update(desk_positions).where(desk_positions.c.id == pid).values(payload=p))
+                conn.execute(
+                    update(desk_positions).where(desk_positions.c.id == pid).values(payload=p)
+                )
 
     def _unrealized(self, p: dict, last: float, now: dt.datetime) -> float:
         sign = 1 if p["direction"] == "long" else -1
@@ -517,11 +740,19 @@ class Desk:
             vix = self._context_last("INDIAVIX")
             ts = pd.Timestamp(when)
             ts = ts.tz_localize(IST) if ts.tzinfo is None else ts.tz_convert(IST)
-            pricer = OptionPricer(self.app_cfg.backtest, pd.Series([vix], index=[ts.normalize()]) if vix else None)
+            pricer = OptionPricer(
+                self.app_cfg.backtest, pd.Series([vix], index=[ts.normalize()]) if vix else None
+            )
             exp = o.get("expiry")
             if not exp:
                 return None
-            return pricer.premium(underlying, float(o["strike"]), ts, expiry_datetime(dt.date.fromisoformat(str(exp)[:10])), o["opt_type"])
+            return pricer.premium(
+                underlying,
+                float(o["strike"]),
+                ts,
+                expiry_datetime(dt.date.fromisoformat(str(exp)[:10])),
+                o["opt_type"],
+            )
         except Exception:  # noqa: BLE001
             return None
 
@@ -535,22 +766,48 @@ class Desk:
             inst = self.instruments.get(p["instrument_key"])
             sign = 1 if p["direction"] == "long" else -1
             qty = int(p["qty"])
-            gross = sign * (float(exit_price) - float(p["entry_price"])) * qty if p["kind"] == "STOCK" \
+            gross = (
+                sign * (float(exit_price) - float(p["entry_price"])) * qty
+                if p["kind"] == "STOCK"
                 else (float(exit_price) - float(p["entry_price"])) * qty
+            )
             costs = 0.0
             if inst is not None:
                 from .economics import _costs_for
+
                 try:
-                    costs = _costs_for(inst).round_trip_cost(float(p["entry_price"]), float(exit_price), qty)
+                    costs = _costs_for(inst).round_trip_cost(
+                        float(p["entry_price"]), float(exit_price), qty
+                    )
                 except Exception:  # noqa: BLE001
                     costs = 0.0
             net = gross - costs
-            p.update({"status": "CLOSED", "closed_at": _iso(now), "exit_price": float(exit_price), "gross_pnl": round(gross, 2),
-                      "costs": round(costs, 2), "net_pnl": round(net, 2), "exit_reason": reason})
+            p.update(
+                {
+                    "status": "CLOSED",
+                    "closed_at": _iso(now),
+                    "exit_price": float(exit_price),
+                    "gross_pnl": round(gross, 2),
+                    "costs": round(costs, 2),
+                    "net_pnl": round(net, 2),
+                    "exit_reason": reason,
+                }
+            )
             with self.engine.begin() as conn:
-                conn.execute(update(desk_positions).where(desk_positions.c.id == pid).values(
-                    status="CLOSED", closed_at=now, exit_price=float(exit_price), gross_pnl=gross, costs=costs,
-                    net_pnl=net, exit_reason=reason, payload=p))
+                conn.execute(
+                    update(desk_positions)
+                    .where(desk_positions.c.id == pid)
+                    .values(
+                        status="CLOSED",
+                        closed_at=now,
+                        exit_price=float(exit_price),
+                        gross_pnl=gross,
+                        costs=costs,
+                        net_pnl=net,
+                        exit_reason=reason,
+                        payload=p,
+                    )
+                )
             self.governor.record_close(net, now)
             if t is not None:
                 t.pnl_today += net
@@ -558,35 +815,77 @@ class Desk:
             for r in self.archive:
                 if r["id"] == p.get("signal_id"):
                     r["status"] = "CLOSED"
-                    r["trade"] = {"net_pnl": round(net, 2), "exit_price": float(exit_price), "reason": reason}
-            self.notifier.info(f"Closed {p['label']}: {net:+,.0f} net", f"{reason} at {exit_price:,.2f}; costs {costs:,.0f}",
-                               dedup_key=f"desk:close:{pid}")
+                    r["trade"] = {
+                        "net_pnl": round(net, 2),
+                        "exit_price": float(exit_price),
+                        "reason": reason,
+                    }
+            self.notifier.info(
+                f"Closed {p['label']}: {net:+,.0f} net",
+                f"{reason} at {exit_price:,.2f}; costs {costs:,.0f}",
+                dedup_key=f"desk:close:{pid}",
+            )
             self.version += 1
-            return {"closed": True, "net_pnl": round(net, 2), "gross_pnl": round(gross, 2), "costs": round(costs, 2)}
+            return {
+                "closed": True,
+                "net_pnl": round(net, 2),
+                "gross_pnl": round(gross, 2),
+                "costs": round(costs, 2),
+            }
 
     def journal(self, limit: int = 200) -> list[dict]:
         with self.engine.connect() as conn:
-            rows = conn.execute(select(desk_positions).where(desk_positions.c.status == "CLOSED")
-                                .order_by(desk_positions.c.closed_at.desc()).limit(limit)).mappings().all()
+            rows = (
+                conn.execute(
+                    select(desk_positions)
+                    .where(desk_positions.c.status == "CLOSED")
+                    .order_by(desk_positions.c.closed_at.desc())
+                    .limit(limit)
+                )
+                .mappings()
+                .all()
+            )
         out = []
         for r in rows:
-            d = {k: r[k] for k in ("id", "instrument_key", "series_key", "kind", "side", "strategy", "timeframe",
-                                   "entry_price", "exit_price", "qty", "gross_pnl", "costs", "net_pnl", "exit_reason")}
-            d["opened_at"], d["closed_at"] = _iso(_aware(r["opened_at"])), _iso(_aware(r["closed_at"]))
+            d = {
+                k: r[k]
+                for k in (
+                    "id",
+                    "instrument_key",
+                    "series_key",
+                    "kind",
+                    "side",
+                    "strategy",
+                    "timeframe",
+                    "entry_price",
+                    "exit_price",
+                    "qty",
+                    "gross_pnl",
+                    "costs",
+                    "net_pnl",
+                    "exit_reason",
+                )
+            }
+            d["opened_at"], d["closed_at"] = (
+                _iso(_aware(r["opened_at"])),
+                _iso(_aware(r["closed_at"])),
+            )
             out.append(d)
         return out
 
     # ── audit of archived alerts ──────────────────────────────────────────
     def _audit_archive(self, now: dt.datetime) -> None:
         cutoff = now - dt.timedelta(days=self.cfg.audit_days)
-        self.archive = [s for s in self.archive if dt.datetime.fromisoformat(s["created_at"]) >= cutoff]
+        self.archive = [
+            s for s in self.archive if dt.datetime.fromisoformat(s["created_at"]) >= cutoff
+        ]
         changed = []
         for s in self.archive:
             if s["status"] == "PENDING":
                 continue
             prev = s.get("outcome") or {}
             if prev.get("outcome") in ("TARGET", "STOP", "SQUARE_OFF") and s["status"] != "TAKEN":
-                continue                                        # final; nothing to recompute
+                continue  # final; nothing to recompute
             t = self.trackers.get(s["series_key"])
             if t is None or t.bars.empty:
                 continue
@@ -595,20 +894,33 @@ class Desk:
                 o = s["economics"]["option"]
                 premium_fn = lambda u, ts, o=o: self._premium_at(o, u, ts)  # noqa: E731
             exit_time = (s.get("manage") or {}).get("exit_time", "15:15")
-            s["outcome"] = audit_signal(s, t.bars, now, self.fine_minutes, s.get("horizon", "intraday") == "intraday",
-                                        exit_time, premium_fn)
+            s["outcome"] = audit_signal(
+                s,
+                t.bars,
+                now,
+                self.fine_minutes,
+                s.get("horizon", "intraday") == "intraday",
+                exit_time,
+                premium_fn,
+            )
             changed.append(s)
         if changed:
             with self.engine.begin() as conn:
                 for s in changed:
-                    conn.execute(update(desk_signals).where(desk_signals.c.id == s["id"]).values(payload=s))
+                    conn.execute(
+                        update(desk_signals).where(desk_signals.c.id == s["id"]).values(payload=s)
+                    )
         self.scoreboard = strategy_scoreboard(self.archive)
 
     def signals_view(self, days: int = 7) -> dict:
         cutoff = now_ist() - dt.timedelta(days=days)
         rows = [s for s in self.archive if dt.datetime.fromisoformat(s["created_at"]) >= cutoff]
-        return {"signals": rows, "scoreboard": self.scoreboard, "days": days,
-                "pending": [s["id"] for s in self.signals.values()]}
+        return {
+            "signals": rows,
+            "scoreboard": self.scoreboard,
+            "days": days,
+            "pending": [s["id"] for s in self.signals.values()],
+        }
 
     def bars_view(self, key: str, timeframe: str | None = None, n: int = 300) -> dict:
         t = self.trackers.get(key.upper())
@@ -616,8 +928,12 @@ class Desk:
             return {"key": key, "bars": [], "markers": []}
         tf = timeframe or f"{self.fine_minutes}m"
         df = t.bars_for(tf, n)
-        bars = [[int(ts.timestamp()), float(o), float(h), float(l), float(c), float(v)]
-                for ts, o, h, l, c, v in zip(df.index, df["open"], df["high"], df["low"], df["close"], df["volume"], strict=True)]
+        bars = [
+            [int(ts.timestamp()), float(o), float(h), float(l), float(c), float(v)]
+            for ts, o, h, l, c, v in zip(
+                df.index, df["open"], df["high"], df["low"], df["close"], df["volume"], strict=True
+            )
+        ]
         first = df.index[0] if not df.empty else None
         markers = []
         for s in self.archive:
@@ -626,16 +942,37 @@ class Desk:
             bt = pd.Timestamp(s["bar_ts"])
             if first is not None and bt < first:
                 continue
-            markers.append({"ts": int(bt.timestamp()), "side": s["direction"], "strategy": s["strategy"], "status": s["status"],
-                            "entry": (s.get("economics") or {}).get("underlying_entry"),
-                            "outcome": (s.get("outcome") or {}).get("outcome")})
-        return {"key": t.cfg.key, "label": t.series.label, "timeframe": tf, "bars": bars, "markers": markers,
-                "source": self.source.served_by.get(t.cfg.key, self.source.name), "live": t.live_quote}
+            markers.append(
+                {
+                    "ts": int(bt.timestamp()),
+                    "side": s["direction"],
+                    "strategy": s["strategy"],
+                    "status": s["status"],
+                    "entry": (s.get("economics") or {}).get("underlying_entry"),
+                    "outcome": (s.get("outcome") or {}).get("outcome"),
+                }
+            )
+        return {
+            "key": t.cfg.key,
+            "label": t.series.label,
+            "timeframe": tf,
+            "bars": bars,
+            "markers": markers,
+            "source": self.source.served_by.get(t.cfg.key, self.source.name),
+            "live": t.live_quote,
+        }
 
     # ── context strip ─────────────────────────────────────────────────────
-    def set_context(self, key: str, last: float, change_pct: float | None = None, note: str | None = None) -> dict:
+    def set_context(
+        self, key: str, last: float, change_pct: float | None = None, note: str | None = None
+    ) -> dict:
         key = key.upper()
-        self.context_manual[key] = {"last": float(last), "change_pct": change_pct, "note": note, "as_of": _iso(now_ist())}
+        self.context_manual[key] = {
+            "last": float(last),
+            "change_pct": change_pct,
+            "note": note,
+            "as_of": _iso(now_ist()),
+        }
         self._wake.set()
         return self.context_manual[key]
 
@@ -653,8 +990,17 @@ class Desk:
         rows = []
         quotes = getattr(self.source.primary, "quotes", None) or {}
         for c in self.cfg.context:
-            row: dict[str, Any] = {"key": c.key, "label": c.label, "manual": c.manual, "note": c.note, "last": None,
-                                   "change_pct": None, "prev_close": None, "as_of": None, "source": None}
+            row: dict[str, Any] = {
+                "key": c.key,
+                "label": c.label,
+                "manual": c.manual,
+                "note": c.note,
+                "last": None,
+                "change_pct": None,
+                "prev_close": None,
+                "as_of": None,
+                "source": None,
+            }
             df = self.context_bars.get(c.key)
             if df is None and c.key in self.trackers:
                 df = self.trackers[c.key].bars
@@ -673,8 +1019,15 @@ class Desk:
                 row["change_pct"] = (row["last"] / row["prev_close"] - 1) * 100
             m = self.context_manual.get(c.key)
             if m:
-                row.update({"last": m["last"], "change_pct": m.get("change_pct"), "as_of": m.get("as_of"),
-                            "source": "manual", "note": m.get("note") or c.note})
+                row.update(
+                    {
+                        "last": m["last"],
+                        "change_pct": m.get("change_pct"),
+                        "as_of": m.get("as_of"),
+                        "source": "manual",
+                        "note": m.get("note") or c.note,
+                    }
+                )
             rows.append(row)
         return rows
 
@@ -682,47 +1035,100 @@ class Desk:
     def _rebuild_snapshot(self, now: dt.datetime, window) -> None:
         delayed = bool(self.source.delayed)
         market_open = bool(window and window.is_open(now))
-        trackers = [t.as_dict(now, self.source.served_by.get(t.cfg.key, self.source.name), delayed, market_open)
-                    for t in self.trackers.values()]
+        trackers = [
+            t.as_dict(
+                now, self.source.served_by.get(t.cfg.key, self.source.name), delayed, market_open
+            )
+            for t in self.trackers.values()
+        ]
         pending = {s["instrument_key"]: s for s in self.signals.values()}
         open_by = {p["instrument_key"]: p for p in self.positions.values()}
         halted = self.governor.state.value == "HALTED"
         for d in trackers:
             d["signal"] = pending.get(d["tracked"])
             d["position"] = open_by.get(d["tracked"])
-            d["state"] = ("HOLD" if d["position"] else "BUY" if (d["signal"] and d["signal"]["direction"] == "long")
-                          else "SELL" if d["signal"] else ("HALTED" if halted else "TRACKING"))
-            d["recent"] = [{k: r.get(k) for k in ("id", "created_at", "instrument_key", "label", "side", "strategy", "timeframe", "status", "strength")}
-                           | {"outcome": (r.get("outcome") or {}).get("outcome"), "r_now": (r.get("outcome") or {}).get("r_now")}
-                           for r in self.archive if r["instrument_key"] == d["tracked"]][:5]
+            d["state"] = (
+                "HOLD"
+                if d["position"]
+                else "BUY"
+                if (d["signal"] and d["signal"]["direction"] == "long")
+                else "SELL"
+                if d["signal"]
+                else ("HALTED" if halted else "TRACKING")
+            )
+            d["recent"] = [
+                {
+                    k: r.get(k)
+                    for k in (
+                        "id",
+                        "created_at",
+                        "instrument_key",
+                        "label",
+                        "side",
+                        "strategy",
+                        "timeframe",
+                        "status",
+                        "strength",
+                    )
+                }
+                | {
+                    "outcome": (r.get("outcome") or {}).get("outcome"),
+                    "r_now": (r.get("outcome") or {}).get("r_now"),
+                }
+                for r in self.archive
+                if r["instrument_key"] == d["tracked"]
+            ][:5]
         risk = self.governor.snapshot().as_dict()
         socket = None
         if self.source.primary is not None and hasattr(self.source.primary, "socket_alive"):
-            socket = {"alive": self.source.primary.socket_alive(), "subscribed": getattr(self.source.primary, "subscribed", 0)}
+            socket = {
+                "alive": self.source.primary.socket_alive(),
+                "subscribed": getattr(self.source.primary, "subscribed", 0),
+            }
         self.version += 1
         self._snapshot = {
-            "updated_at": _iso(now), "booting": False, "version": self.version,
-            "source": {"name": self.source.name, "delayed": delayed, "resolution": self.source.resolution,
-                       "last_fetch_at": _iso(self.last_fetch_at), "last_error": self.last_error,
-                       "poll_seconds": self.cfg.poll_seconds, "polls": self.polls,
-                       "data_api_active": bool(self._data_api_active()), "socket": socket},
-            "session": {"trading_day": window is not None, "open": market_open,
-                        "entries_allowed": bool(window and window.entries_allowed(now)),
-                        "open_at": _iso(window.open_at) if window else None,
-                        "close_at": _iso(window.close_at) if window else None,
-                        "squareoff_at": window.mandatory_squareoff_at.strftime("%H:%M") if window else None,
-                        "holiday": (self.calendar.holiday_name(now.date()) if self.calendar else None)},
+            "updated_at": _iso(now),
+            "booting": False,
+            "version": self.version,
+            "source": {
+                "name": self.source.name,
+                "delayed": delayed,
+                "resolution": self.source.resolution,
+                "last_fetch_at": _iso(self.last_fetch_at),
+                "last_error": self.last_error,
+                "poll_seconds": self.cfg.poll_seconds,
+                "polls": self.polls,
+                "data_api_active": bool(self._data_api_active()),
+                "socket": socket,
+            },
+            "session": {
+                "trading_day": window is not None,
+                "open": market_open,
+                "entries_allowed": bool(window and window.entries_allowed(now)),
+                "open_at": _iso(window.open_at) if window else None,
+                "close_at": _iso(window.close_at) if window else None,
+                "squareoff_at": window.mandatory_squareoff_at.strftime("%H:%M") if window else None,
+                "holiday": (self.calendar.holiday_name(now.date()) if self.calendar else None),
+            },
             "context": self._context_rows(),
             "positions": list(self.positions.values()),
             "signals": list(self.signals.values()),
             "indices": [d for d in trackers if d["kind"] == "INDEX"],
             "stocks": [d for d in trackers if d["kind"] == "STOCK"],
-            "risk": risk, "scoreboard": self.scoreboard,
-            "counts": {"instruments": len(trackers), "strategies": sum(len(t.slots) for t in self.trackers.values()),
-                       "pending": len(self.signals), "hold": len(self.positions),
-                       "signals_today": sum(s.signals_today for t in self.trackers.values() for s in t.slots),
-                       "archived": len(self.archive)},
-            "config_path": self.cfg.path, "stock_horizon": self.cfg.stock_horizon,
+            "risk": risk,
+            "scoreboard": self.scoreboard,
+            "counts": {
+                "instruments": len(trackers),
+                "strategies": sum(len(t.slots) for t in self.trackers.values()),
+                "pending": len(self.signals),
+                "hold": len(self.positions),
+                "signals_today": sum(
+                    s.signals_today for t in self.trackers.values() for s in t.slots
+                ),
+                "archived": len(self.archive),
+            },
+            "config_path": self.cfg.path,
+            "stock_horizon": self.cfg.stock_horizon,
         }
 
     def snapshot(self) -> dict:

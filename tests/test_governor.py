@@ -73,8 +73,9 @@ class TestSwitches:
     def test_max_open_positions(self, cfg):
         """The shipped config allows 1 trade/day, which would bind first, so
         raise the trade cap to isolate the concurrency switch."""
-        g = gov(cfg, max_trades_per_day=5, daily_loss_limit_inr=500_000.0,
-                max_drawdown_inr=900_000.0)
+        g = gov(
+            cfg, max_trades_per_day=5, daily_loss_limit_inr=500_000.0, max_drawdown_inr=900_000.0
+        )
         g.record_open()
         ok, why = g.may_open()
         assert not ok and "max concurrent positions" in why
@@ -98,7 +99,7 @@ class TestHaltStickiness:
         g1.record_close(-(daily_limit(cfg) + 1_000.0))
         assert g1.state is RiskState.HALTED
 
-        g2 = gov(cfg, repo)                # simulate the engine restarting
+        g2 = gov(cfg, repo)  # simulate the engine restarting
         assert g2.state is RiskState.HALTED
         assert not g2.may_open()[0]
         assert "daily loss" in (g2.halt_reason or "")
@@ -149,21 +150,34 @@ class TestCumulativeDrawdown:
     def _lose(self, g, repo, amount, n, start_day=1):
         """Record `n` losing trades of `amount` on separate days."""
         from onelot.clock import now_ist
+
         for i in range(n):
-            repo.insert_journal({
-                "trade_id": f"T{start_day + i}", "position_id": f"P{start_day + i}",
-                "trade_date": f"2026-08-{start_day + i:02d}",
-                "closed_at": now_ist() + dt.timedelta(days=i),
-                "direction": "CE", "strike": 54000.0, "opt_type": "CE",
-                "lots": 1, "qty": 35, "entry_price": 300.0, "exit_price": 280.0,
-                "gross_pnl": -amount, "total_cost": 0.0, "net_pnl": -amount,
-                "r_multiple": -1.0, "exit_reason": "HARD_SL", "hold_minutes": 20.0,
-                "mode": "PAPER",
-            })
+            repo.insert_journal(
+                {
+                    "trade_id": f"T{start_day + i}",
+                    "position_id": f"P{start_day + i}",
+                    "trade_date": f"2026-08-{start_day + i:02d}",
+                    "closed_at": now_ist() + dt.timedelta(days=i),
+                    "direction": "CE",
+                    "strike": 54000.0,
+                    "opt_type": "CE",
+                    "lots": 1,
+                    "qty": 35,
+                    "entry_price": 300.0,
+                    "exit_price": 280.0,
+                    "gross_pnl": -amount,
+                    "total_cost": 0.0,
+                    "net_pnl": -amount,
+                    "r_multiple": -1.0,
+                    "exit_reason": "HARD_SL",
+                    "hold_minutes": 20.0,
+                    "mode": "PAPER",
+                }
+            )
 
     def test_drawdown_limit_halts_across_sessions(self, cfg, repo):
         """The exact scenario the daily limit cannot see."""
-        each = (dd_limit(cfg) / 5.0) * 1.2            # 5 days, 20% past the limit
+        each = (dd_limit(cfg) / 5.0) * 1.2  # 5 days, 20% past the limit
         self._lose(None, repo, each, 5)
         g = gov(cfg, repo)
         assert g.drawdown == pytest.approx(each * 5)
@@ -172,7 +186,7 @@ class TestCumulativeDrawdown:
         assert not ok and "CUMULATIVE DRAWDOWN" in why
 
     def test_within_the_limit_still_trades(self, cfg, repo):
-        self._lose(None, repo, (dd_limit(cfg) / 5.0) * 0.5, 5)   # half the limit
+        self._lose(None, repo, (dd_limit(cfg) / 5.0) * 0.5, 5)  # half the limit
         g = gov(cfg, repo)
         assert g.may_open()[0]
 
@@ -180,15 +194,31 @@ class TestCumulativeDrawdown:
         """Profit first, then a drawdown from that higher peak. Uses absolute
         figures deliberately: the point is the arithmetic of peak-to-trough."""
         from onelot.clock import now_ist
-        peak = dd_limit(cfg) * 5          # a big win first
-        dip = dd_limit(cfg) * 0.5          # then a dip well inside the limit
-        repo.insert_journal({
-            "trade_id": "W1", "position_id": "PW1", "trade_date": "2026-08-01",
-            "closed_at": now_ist(), "direction": "CE", "strike": 1.0,
-            "opt_type": "CE", "lots": 1, "qty": 35, "entry_price": 1.0,
-            "exit_price": 2.0, "gross_pnl": peak, "total_cost": 0.0,
-            "net_pnl": peak, "r_multiple": 2.0, "exit_reason": "TARGET",
-            "hold_minutes": 20.0, "mode": "PAPER"})
+
+        peak = dd_limit(cfg) * 5  # a big win first
+        dip = dd_limit(cfg) * 0.5  # then a dip well inside the limit
+        repo.insert_journal(
+            {
+                "trade_id": "W1",
+                "position_id": "PW1",
+                "trade_date": "2026-08-01",
+                "closed_at": now_ist(),
+                "direction": "CE",
+                "strike": 1.0,
+                "opt_type": "CE",
+                "lots": 1,
+                "qty": 35,
+                "entry_price": 1.0,
+                "exit_price": 2.0,
+                "gross_pnl": peak,
+                "total_cost": 0.0,
+                "net_pnl": peak,
+                "r_multiple": 2.0,
+                "exit_reason": "TARGET",
+                "hold_minutes": 20.0,
+                "mode": "PAPER",
+            }
+        )
         self._lose(None, repo, dip / 3.0, 3, start_day=2)
         g = gov(cfg, repo)
         assert g.peak_equity == pytest.approx(peak)
@@ -217,15 +247,17 @@ class TestCumulativeDrawdown:
         assert g.drawdown == pytest.approx(0.0)
         g.record_close(-100.0)
         assert g.drawdown == pytest.approx(100.0), (
-            "drawdown after a reset is measured from the NEW peak")
+            "drawdown after a reset is measured from the NEW peak"
+        )
 
     def test_drawdown_halt_survives_a_restart(self, cfg, repo):
         self._lose(None, repo, (dd_limit(cfg) / 5.0) * 1.2, 5)
-        gov(cfg, repo).may_open()          # trips the halt and persists it
+        gov(cfg, repo).may_open()  # trips the halt and persists it
         assert not gov(cfg, repo).may_open()[0]
 
     def test_config_rejects_a_drawdown_limit_below_the_daily_limit(self):
         from onelot.config import RiskCfg
+
         with pytest.raises(ValueError, match="max_drawdown_pct"):
             RiskCfg(daily_loss_limit_pct=0.03, max_drawdown_pct=0.01)
 
@@ -249,7 +281,7 @@ class TestStandingHaltsOutliveTheSession:
         g1.record_close(-(dd_limit(cfg) + 500.0))
         assert g1.state is RiskState.HALTED
 
-        g2 = self._gov_on(cfg, repo, "2026-08-21")      # a NEW trading day
+        g2 = self._gov_on(cfg, repo, "2026-08-21")  # a NEW trading day
         assert g2.state is RiskState.HALTED, "the halt cleared overnight"
         assert not g2.may_open()[0]
         assert "DRAWDOWN" in (g2.halt_reason or "").upper()

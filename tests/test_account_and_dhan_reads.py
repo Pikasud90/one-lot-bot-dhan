@@ -22,25 +22,73 @@ from onelot.store import init_database
 def make_adapter(handler) -> DhanAdapter:
     a = DhanAdapter("1100001234", "eyJ" + "x" * 40, RateLimiter())
     a._client.close()
-    a._client = httpx.Client(base_url=API_BASE, transport=httpx.MockTransport(handler),
-                             headers={"access-token": "t", "client-id": "c"})
+    a._client = httpx.Client(
+        base_url=API_BASE,
+        transport=httpx.MockTransport(handler),
+        headers={"access-token": "t", "client-id": "c"},
+    )
     return a
 
 
-PROFILE = {"dhanClientId": "1100001234", "tokenValidity": "28/10/2026 15:37", "activeSegment": "Equity, Derivative",
-           "ddpi": "Active", "mtf": "Deactive", "dataPlan": "Deactive", "dataValidity": None}
-FUNDS = {"dhanClientId": "1100001234", "availabelBalance": 98765.5, "sodLimit": 100000, "collateralAmount": 0,
-         "receiveableAmount": 0, "utilizedAmount": 1234.5, "blockedPayoutAmount": 0, "withdrawableBalance": 97000}
+PROFILE = {
+    "dhanClientId": "1100001234",
+    "tokenValidity": "28/10/2026 15:37",
+    "activeSegment": "Equity, Derivative",
+    "ddpi": "Active",
+    "mtf": "Deactive",
+    "dataPlan": "Deactive",
+    "dataValidity": None,
+}
+FUNDS = {
+    "dhanClientId": "1100001234",
+    "availabelBalance": 98765.5,
+    "sodLimit": 100000,
+    "collateralAmount": 0,
+    "receiveableAmount": 0,
+    "utilizedAmount": 1234.5,
+    "blockedPayoutAmount": 0,
+    "withdrawableBalance": 97000,
+}
 # Dhan returns the ledger NEWEST first, with every number as a string.
-LEDGER = [{"narration": "Brokerage", "voucherdate": "Oct 02, 2026", "debit": "23.6", "credit": "0.00", "runbal": "99976.4"},
-          {"narration": "Opening", "voucherdate": "Oct 01, 2026", "debit": "0.00", "credit": "100000", "runbal": "100000"}]
+LEDGER = [
+    {
+        "narration": "Brokerage",
+        "voucherdate": "Oct 02, 2026",
+        "debit": "23.6",
+        "credit": "0.00",
+        "runbal": "99976.4",
+    },
+    {
+        "narration": "Opening",
+        "voucherdate": "Oct 01, 2026",
+        "debit": "0.00",
+        "credit": "100000",
+        "runbal": "100000",
+    },
+]
 # The two 401 bodies a FREE-plan token gets from Data-API endpoints (captured live, 2026-10-27).
 NO_DATA_806 = {"data": {"806": "Data APIs not Subscribed"}, "status": "failed"}
-NO_DATA_902 = {"errorType": "Invalid_Access", "errorCode": "DH-902",
-               "errorMessage": "This API requires a Data APIs Plan. Current plan: Free Plan"}
-TRADES_P0 = [{"orderId": "1", "tradingSymbol": "SBIN", "transactionType": "BUY", "tradedQuantity": 1, "tradedPrice": 800.0,
-              "brokerageCharges": 0.24, "stt": 0, "exchangeTransactionCharges": 0.02, "sebiTax": 0.0, "stampDuty": 0.02,
-              "serviceTax": 0.05, "exchangeTime": "2026-10-20 10:15:00"}]
+NO_DATA_902 = {
+    "errorType": "Invalid_Access",
+    "errorCode": "DH-902",
+    "errorMessage": "This API requires a Data APIs Plan. Current plan: Free Plan",
+}
+TRADES_P0 = [
+    {
+        "orderId": "1",
+        "tradingSymbol": "SBIN",
+        "transactionType": "BUY",
+        "tradedQuantity": 1,
+        "tradedPrice": 800.0,
+        "brokerageCharges": 0.24,
+        "stt": 0,
+        "exchangeTransactionCharges": 0.02,
+        "sebiTax": 0.0,
+        "stampDuty": 0.02,
+        "serviceTax": 0.05,
+        "exchangeTime": "2026-10-20 10:15:00",
+    }
+]
 
 
 def good_handler(request: httpx.Request) -> httpx.Response:
@@ -50,12 +98,36 @@ def good_handler(request: httpx.Request) -> httpx.Response:
     if p.endswith("/fundlimit"):
         return httpx.Response(200, json=FUNDS)
     if p.endswith("/holdings"):
-        return httpx.Response(200, json=[{"tradingSymbol": "SBIN", "exchange": "ALL", "totalQty": "2", "availableQty": "1",
-                                          "avgCostPrice": "780.0", "lastTradedPrice": "800.0", "securityId": "3045"}])
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "tradingSymbol": "SBIN",
+                    "exchange": "ALL",
+                    "totalQty": "2",
+                    "availableQty": "1",
+                    "avgCostPrice": "780.0",
+                    "lastTradedPrice": "800.0",
+                    "securityId": "3045",
+                }
+            ],
+        )
     if p.endswith("/positions"):
-        return httpx.Response(200, json=[{"tradingSymbol": "BANKNIFTY-Oct2026-50000-CE", "netQty": 35, "buyAvg": 500,
-                                          "sellAvg": 0, "realizedProfit": 0, "unrealizedProfit": 1750, "productType": "INTRADAY",
-                                          "exchangeSegment": "NSE_FNO"}])
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "tradingSymbol": "BANKNIFTY-Oct2026-50000-CE",
+                    "netQty": 35,
+                    "buyAvg": 500,
+                    "sellAvg": 0,
+                    "realizedProfit": 0,
+                    "unrealizedProfit": 1750,
+                    "productType": "INTRADAY",
+                    "exchangeSegment": "NSE_FNO",
+                }
+            ],
+        )
     if p.endswith("/ledger"):
         assert request.url.params["from-date"] < request.url.params["to-date"]
         return httpx.Response(200, json=LEDGER)
@@ -91,18 +163,34 @@ class TestFreeTierReads:
         assert set(seen) == {"GET"}
 
     def test_token_rejection_maps_to_token_expired(self):
-        a = make_adapter(lambda r: httpx.Response(401, json={"errorCode": "DH-901", "errorMessage": "Invalid token"}))
+        a = make_adapter(
+            lambda r: httpx.Response(
+                401, json={"errorCode": "DH-901", "errorMessage": "Invalid token"}
+            )
+        )
         with pytest.raises(TokenExpiredError):
             a.profile()
-        a2 = make_adapter(lambda r: httpx.Response(200, json={"errorCode": "DH-901", "errorMessage": "token expired"}))
+        a2 = make_adapter(
+            lambda r: httpx.Response(
+                200, json={"errorCode": "DH-901", "errorMessage": "token expired"}
+            )
+        )
         with pytest.raises(TokenExpiredError):
             a2.fund_limits()
 
     def test_data_api_missing_maps_to_entitlement_error(self):
-        a = make_adapter(lambda r: httpx.Response(200, json={"errorCode": "DH-902", "errorMessage": "Data APIs not subscribed"}))
+        a = make_adapter(
+            lambda r: httpx.Response(
+                200, json={"errorCode": "DH-902", "errorMessage": "Data APIs not subscribed"}
+            )
+        )
         with pytest.raises(DataEntitlementError):
             a.expiry_list_raw(25, "IDX_I")
-        a2 = make_adapter(lambda r: httpx.Response(200, json={"errorCode": "806", "errorMessage": "Data APIs not subscribed"}))
+        a2 = make_adapter(
+            lambda r: httpx.Response(
+                200, json={"errorCode": "806", "errorMessage": "Data APIs not subscribed"}
+            )
+        )
         with pytest.raises(DataEntitlementError):
             a2.historical_daily(_index_contract(), dt.date(2026, 10, 1), dt.date(2026, 10, 10))
 
@@ -142,7 +230,12 @@ class TestFreeTierReads:
     @pytest.mark.parametrize("body", [NO_DATA_806, NO_DATA_902])
     def test_preflight_separates_trading_from_data_tier(self, body):
         def h(req):
-            if req.url.path.endswith(("/profile", "/fundlimit", "/holdings", "/positions", "/ledger")) or "/trades/" in req.url.path:
+            if (
+                req.url.path.endswith(
+                    ("/profile", "/fundlimit", "/holdings", "/positions", "/ledger")
+                )
+                or "/trades/" in req.url.path
+            ):
                 return good_handler(req)
             return httpx.Response(401, json=body)  # exactly what the free plan gets
 
@@ -162,8 +255,14 @@ class TestFreeTierReads:
 
 def _index_contract():
     from onelot.broker.base import Contract
-    return Contract(security_id="25", exchange_segment="IDX_I", symbol="BANKNIFTY", underlying="BANKNIFTY",
-                    instrument_type="INDEX")
+
+    return Contract(
+        security_id="25",
+        exchange_segment="IDX_I",
+        symbol="BANKNIFTY",
+        underlying="BANKNIFTY",
+        instrument_type="INDEX",
+    )
 
 
 class TestAccountService:
@@ -191,7 +290,9 @@ class TestAccountService:
         assert s["holdings_value"] == 1600.0 and s["holdings_pnl"] == pytest.approx(40.0)
         assert s["ledger_running_balance"] == 99976.4  # newest voucher, not last row
         assert s["ledger_last_date"] == "2026-10-02"
-        assert s["ledger_debits"] == pytest.approx(23.6) and s["ledger_credits"] == pytest.approx(100000)
+        assert s["ledger_debits"] == pytest.approx(23.6) and s["ledger_credits"] == pytest.approx(
+            100000
+        )
         assert s["data_plan"] == "Deactive" and s["client_id_suffix"] == "1234"
         assert snap["stale"] is False
 
@@ -215,7 +316,9 @@ class TestAccountService:
     def test_errors_are_cached_per_panel(self, engine):
         def h(req):
             if req.url.path.endswith("/ledger"):
-                return httpx.Response(200, json={"errorCode": "DH-905", "errorMessage": "bad dates"})
+                return httpx.Response(
+                    200, json={"errorCode": "DH-905", "errorMessage": "bad dates"}
+                )
             return good_handler(req)
 
         svc = AccountService(engine, adapter=make_adapter(h))
@@ -233,11 +336,13 @@ class TestAccountService:
         before = svc.snapshot()
         assert before["summary"]["available_balance"] == 98765.5 and before["last_error"] is None
 
-        svc.adapter = make_adapter(lambda r: httpx.Response(401, json={"errorCode": "DH-901", "errorMessage": "expired"}))
+        svc.adapter = make_adapter(
+            lambda r: httpx.Response(401, json={"errorCode": "DH-901", "errorMessage": "expired"})
+        )
         res = svc.refresh()
         assert all(v["error"] == "TOKEN_EXPIRED" for v in res.values())
         after = svc.snapshot()
-        assert after["summary"]["available_balance"] == 98765.5          # data preserved
+        assert after["summary"]["available_balance"] == 98765.5  # data preserved
         assert after["panels"]["funds"]["data"]["availabelBalance"] == 98765.5
         assert after["panels"]["funds"]["fetched_at"] == before["panels"]["funds"]["fetched_at"]
         assert after["panels"]["funds"]["error"].startswith("TOKEN_EXPIRED")
@@ -246,16 +351,26 @@ class TestAccountService:
 
         def offline(_r):
             raise httpx.ConnectError("no route to host")
+
         svc.adapter = make_adapter(offline)
         svc.refresh()
         snap = svc.snapshot()
         assert snap["offline"] is True and snap["summary"]["holdings_count"] == 1
 
     def test_summary_tolerates_strings_and_missing_fields(self):
-        panels = {"funds": {"data": {"availabelBalance": "12.5"}}, "positions": {"data": [{"netQty": "0"}, {"netQty": "-35", "unrealizedProfit": "-10"}]},
-                  "holdings": {"data": []}, "profile": {"data": {}}, "ledger": {"data": "not-a-list"}}
+        panels = {
+            "funds": {"data": {"availabelBalance": "12.5"}},
+            "positions": {"data": [{"netQty": "0"}, {"netQty": "-35", "unrealizedProfit": "-10"}]},
+            "holdings": {"data": []},
+            "profile": {"data": {}},
+            "ledger": {"data": "not-a-list"},
+        }
         s = AccountService._summary(panels)
-        assert s["available_balance"] == 12.5 and s["open_positions"] == 1 and s["positions_unrealized"] == -10
+        assert (
+            s["available_balance"] == 12.5
+            and s["open_positions"] == 1
+            and s["positions_unrealized"] == -10
+        )
         assert s["holdings_value"] is None and s["ledger_running_balance"] is None
 
     def test_ledger_order_does_not_matter(self):
@@ -272,25 +387,92 @@ class TestAccountService:
 
 # ── scrip master: both layouts, real rows captured 2026-10-30 ──────────────────────────────
 DETAILED_ROWS = [
-    {"EXCH_ID": "NSE", "SEGMENT": "I", "SECURITY_ID": "25", "INSTRUMENT": "INDEX", "UNDERLYING_SECURITY_ID": "25",
-     "UNDERLYING_SYMBOL": "BANKNIFTY", "SYMBOL_NAME": "BANKNIFTY", "INSTRUMENT_TYPE": "INDEX", "LOT_SIZE": "1.0",
-     "SM_EXPIRY_DATE": "0001-01-01", "STRIKE_PRICE": "", "OPTION_TYPE": "XX", "TICK_SIZE": "0.0500"},
-    {"EXCH_ID": "NSE", "SEGMENT": "D", "SECURITY_ID": "61466", "INSTRUMENT": "FUTIDX", "UNDERLYING_SECURITY_ID": "26009",
-     "UNDERLYING_SYMBOL": "BANKNIFTY", "SYMBOL_NAME": "BANKNIFTY-Nov2026-FUT", "INSTRUMENT_TYPE": "FUT", "LOT_SIZE": "30.0",
-     "SM_EXPIRY_DATE": "2026-11-23", "STRIKE_PRICE": "-0.01000", "OPTION_TYPE": "XX", "TICK_SIZE": "20.0000"},
-    {"EXCH_ID": "NSE", "SEGMENT": "D", "SECURITY_ID": "35000", "INSTRUMENT": "OPTIDX", "UNDERLYING_SECURITY_ID": "26009",
-     "UNDERLYING_SYMBOL": "BANKNIFTY", "SYMBOL_NAME": "BANKNIFTY-Nov2026-69400-CE", "INSTRUMENT_TYPE": "OP", "LOT_SIZE": "30.0",
-     "SM_EXPIRY_DATE": "2026-11-23", "STRIKE_PRICE": "69400.00000", "OPTION_TYPE": "CE", "TICK_SIZE": "5.0000"},
-    {"EXCH_ID": "NSE", "SEGMENT": "D", "SECURITY_ID": "99001", "INSTRUMENT": "OPTIDX", "UNDERLYING_SECURITY_ID": "26037",
-     "UNDERLYING_SYMBOL": "FINNIFTY", "SYMBOL_NAME": "FINNIFTY-Nov2026-25000-PE", "INSTRUMENT_TYPE": "OP", "LOT_SIZE": "60.0",
-     "SM_EXPIRY_DATE": "2026-11-23", "STRIKE_PRICE": "25000.00000", "OPTION_TYPE": "PE", "TICK_SIZE": "5.0000"},
-    {"EXCH_ID": "NSE", "SEGMENT": "E", "SECURITY_ID": "2885", "INSTRUMENT": "EQUITY", "UNDERLYING_SYMBOL": "RELIANCE",
-     "SYMBOL_NAME": "RELIANCE INDUSTRIES LTD", "INSTRUMENT_TYPE": "ES", "LOT_SIZE": "1.0", "SM_EXPIRY_DATE": "", "TICK_SIZE": "10.0"},
+    {
+        "EXCH_ID": "NSE",
+        "SEGMENT": "I",
+        "SECURITY_ID": "25",
+        "INSTRUMENT": "INDEX",
+        "UNDERLYING_SECURITY_ID": "25",
+        "UNDERLYING_SYMBOL": "BANKNIFTY",
+        "SYMBOL_NAME": "BANKNIFTY",
+        "INSTRUMENT_TYPE": "INDEX",
+        "LOT_SIZE": "1.0",
+        "SM_EXPIRY_DATE": "0001-01-01",
+        "STRIKE_PRICE": "",
+        "OPTION_TYPE": "XX",
+        "TICK_SIZE": "0.0500",
+    },
+    {
+        "EXCH_ID": "NSE",
+        "SEGMENT": "D",
+        "SECURITY_ID": "61466",
+        "INSTRUMENT": "FUTIDX",
+        "UNDERLYING_SECURITY_ID": "26009",
+        "UNDERLYING_SYMBOL": "BANKNIFTY",
+        "SYMBOL_NAME": "BANKNIFTY-Nov2026-FUT",
+        "INSTRUMENT_TYPE": "FUT",
+        "LOT_SIZE": "30.0",
+        "SM_EXPIRY_DATE": "2026-11-23",
+        "STRIKE_PRICE": "-0.01000",
+        "OPTION_TYPE": "XX",
+        "TICK_SIZE": "20.0000",
+    },
+    {
+        "EXCH_ID": "NSE",
+        "SEGMENT": "D",
+        "SECURITY_ID": "35000",
+        "INSTRUMENT": "OPTIDX",
+        "UNDERLYING_SECURITY_ID": "26009",
+        "UNDERLYING_SYMBOL": "BANKNIFTY",
+        "SYMBOL_NAME": "BANKNIFTY-Nov2026-69400-CE",
+        "INSTRUMENT_TYPE": "OP",
+        "LOT_SIZE": "30.0",
+        "SM_EXPIRY_DATE": "2026-11-23",
+        "STRIKE_PRICE": "69400.00000",
+        "OPTION_TYPE": "CE",
+        "TICK_SIZE": "5.0000",
+    },
+    {
+        "EXCH_ID": "NSE",
+        "SEGMENT": "D",
+        "SECURITY_ID": "99001",
+        "INSTRUMENT": "OPTIDX",
+        "UNDERLYING_SECURITY_ID": "26037",
+        "UNDERLYING_SYMBOL": "FINNIFTY",
+        "SYMBOL_NAME": "FINNIFTY-Nov2026-25000-PE",
+        "INSTRUMENT_TYPE": "OP",
+        "LOT_SIZE": "60.0",
+        "SM_EXPIRY_DATE": "2026-11-23",
+        "STRIKE_PRICE": "25000.00000",
+        "OPTION_TYPE": "PE",
+        "TICK_SIZE": "5.0000",
+    },
+    {
+        "EXCH_ID": "NSE",
+        "SEGMENT": "E",
+        "SECURITY_ID": "2885",
+        "INSTRUMENT": "EQUITY",
+        "UNDERLYING_SYMBOL": "RELIANCE",
+        "SYMBOL_NAME": "RELIANCE INDUSTRIES LTD",
+        "INSTRUMENT_TYPE": "ES",
+        "LOT_SIZE": "1.0",
+        "SM_EXPIRY_DATE": "",
+        "TICK_SIZE": "10.0",
+    },
 ]
 COMPACT_ROWS = [
-    {"SEM_EXM_EXCH_ID": "NSE", "SEM_SEGMENT": "D", "SEM_SMST_SECURITY_ID": "61466", "SEM_INSTRUMENT_NAME": "FUTIDX",
-     "SEM_TRADING_SYMBOL": "BANKNIFTY-Nov2026-FUT", "SEM_LOT_UNITS": "30.0", "SEM_EXPIRY_DATE": "2026-11-23 14:30:00",
-     "SEM_STRIKE_PRICE": "-0.01000", "SEM_OPTION_TYPE": "XX", "SEM_TICK_SIZE": "20.0000"},
+    {
+        "SEM_EXM_EXCH_ID": "NSE",
+        "SEM_SEGMENT": "D",
+        "SEM_SMST_SECURITY_ID": "61466",
+        "SEM_INSTRUMENT_NAME": "FUTIDX",
+        "SEM_TRADING_SYMBOL": "BANKNIFTY-Nov2026-FUT",
+        "SEM_LOT_UNITS": "30.0",
+        "SEM_EXPIRY_DATE": "2026-11-23 14:30:00",
+        "SEM_STRIKE_PRICE": "-0.01000",
+        "SEM_OPTION_TYPE": "XX",
+        "SEM_TICK_SIZE": "20.0000",
+    },
 ]
 
 
@@ -304,14 +486,16 @@ class TestScripMaster:
     def test_detailed_layout_resolves_index_future_and_options(self):
         cs = self._adapter(DETAILED_ROWS).instruments("BANKNIFTY", force=True)
         kinds = {c.instrument_type for c in cs}
-        assert kinds == {"INDEX", "FUTIDX", "OPTIDX"}                     # derivatives were invisible before
+        assert kinds == {"INDEX", "FUTIDX", "OPTIDX"}  # derivatives were invisible before
         idx = next(c for c in cs if c.instrument_type == "INDEX")
         assert idx.exchange_segment == "IDX_I" and idx.security_id == "25" and idx.expiry is None
         fut = next(c for c in cs if c.instrument_type == "FUTIDX")
-        assert fut.lot_size == 30 and fut.expiry == "2026-11-23" and fut.exchange_segment == "NSE_FNO"
+        assert (
+            fut.lot_size == 30 and fut.expiry == "2026-11-23" and fut.exchange_segment == "NSE_FNO"
+        )
         opt = next(c for c in cs if c.instrument_type == "OPTIDX")
         assert opt.opt_type == "CE" and opt.strike == 69400.0 and opt.lot_size == 30
-        assert all(c.underlying == "BANKNIFTY" for c in cs)               # FINNIFTY row excluded
+        assert all(c.underlying == "BANKNIFTY" for c in cs)  # FINNIFTY row excluded
 
     def test_underlying_prefix_does_not_leak_between_indices(self):
         cs = self._adapter(DETAILED_ROWS).instruments("FINNIFTY", force=True)
@@ -320,7 +504,12 @@ class TestScripMaster:
 
     def test_compact_layout_still_works(self):
         cs = self._adapter(COMPACT_ROWS).instruments("BANKNIFTY", force=True)
-        assert len(cs) == 1 and cs[0].lot_size == 30 and cs[0].expiry == "2026-11-23" and cs[0].exchange_segment == "NSE_FNO"
+        assert (
+            len(cs) == 1
+            and cs[0].lot_size == 30
+            and cs[0].expiry == "2026-11-23"
+            and cs[0].exchange_segment == "NSE_FNO"
+        )
 
     def test_segment_enum_and_lookup(self):
         from onelot.broker.dhan import scrip_fields

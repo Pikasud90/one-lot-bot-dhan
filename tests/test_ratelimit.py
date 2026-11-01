@@ -69,6 +69,7 @@ class TestOptionChainLimit:
 
     def test_config_rejects_a_too_fast_poll_interval(self, cfg):
         from onelot.config import DataCfg
+
         with pytest.raises(ValueError, match="RL001"):
             DataCfg(chain_poll_interval_sec=1.0)
 
@@ -78,7 +79,8 @@ class TestSharedQuota:
         """THE v1 failure: poller + failover + warm-up all hitting at once."""
         rl = RateLimiter(
             endpoints=(EndpointSpec("quote", rate_per_sec=5.0, capacity=2.0),),
-            global_rate=5.0, global_capacity=2.0,
+            global_rate=5.0,
+            global_capacity=2.0,
         )
         granted, lock = [], threading.Lock()
 
@@ -101,10 +103,10 @@ class TestSharedQuota:
     def test_global_ceiling_binds_across_endpoints(self):
         rl = RateLimiter(
             endpoints=(EndpointSpec("a", 100.0, 50.0), EndpointSpec("b", 100.0, 50.0)),
-            global_rate=1.0, global_capacity=2.0,
+            global_rate=1.0,
+            global_capacity=2.0,
         )
-        got = sum(1 for _ in range(10)
-                  if rl.acquire("a" if _ % 2 == 0 else "b", timeout=0.01))
+        got = sum(1 for _ in range(10) if rl.acquire("a" if _ % 2 == 0 else "b", timeout=0.01))
         assert got <= 3, "the global bucket must bind even when endpoints are generous"
 
 

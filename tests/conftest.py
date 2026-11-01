@@ -37,8 +37,9 @@ def cost_model(cost_cfg) -> CostModel:
 @pytest.fixture(scope="session")
 def rich_cfg(cfg):
     """Config with capital set, so sizing gates can actually pass."""
-    return cfg.model_copy(update={
-        "account": cfg.account.model_copy(update={"capital_inr": 1_000_000.0})})
+    return cfg.model_copy(
+        update={"account": cfg.account.model_copy(update={"capital_inr": 1_000_000.0})}
+    )
 
 
 @pytest.fixture()
@@ -59,8 +60,11 @@ def enriched_chain(mock_broker):
     """A polled, greek-validated chain snapshot."""
     from onelot.market.chain import ChainCache
 
-    c = ChainCache(mock_broker, "BANKNIFTY", mock_broker.expiry_date.isoformat(),
-                   forward_price_fn=lambda: mock_broker.market.futures_price(
-                       mock_broker.now()))
+    c = ChainCache(
+        mock_broker,
+        "BANKNIFTY",
+        mock_broker.expiry_date.isoformat(),
+        forward_price_fn=lambda: mock_broker.market.futures_price(mock_broker.now()),
+    )
     assert c.poll_once(mock_broker.expiry_dt, mock_broker.now())
     return c

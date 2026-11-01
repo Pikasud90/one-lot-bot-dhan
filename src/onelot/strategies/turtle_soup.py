@@ -19,25 +19,46 @@ from .regime import NEUTRAL, RANGE, VOLATILE
 
 
 class TSParams(StrategyParams):
-    lookback: int = Field(20, description="N-bar low/high that must be broken", json_schema_extra=opt(10, 40, 5))
-    min_prior_age: int = Field(4, description="The prior extreme must be at least this many bars old",
-                               json_schema_extra=opt(2, 8, 1))
-    min_break_atr: float = Field(0.1, description="New extreme must exceed the prior one by this many ATR(14)",
-                                 json_schema_extra=opt(0.0, 0.5, 0.05))
-    stop_buffer_atr: float = Field(0.1, description="Stop beyond the new extreme by this many ATR(14)",
-                                   json_schema_extra=opt(0.0, 0.3, 0.05))
-    target_r: float = Field(1.5, description="Profit target in R", json_schema_extra=opt(0.5, 3.0, 0.5))
-    trail_atr_mult: float = Field(0.0, description="Trailing stop k x ATR (0 = off)", json_schema_extra=opt(0.0, 2.0, 0.5))
+    lookback: int = Field(
+        20, description="N-bar low/high that must be broken", json_schema_extra=opt(10, 40, 5)
+    )
+    min_prior_age: int = Field(
+        4,
+        description="The prior extreme must be at least this many bars old",
+        json_schema_extra=opt(2, 8, 1),
+    )
+    min_break_atr: float = Field(
+        0.1,
+        description="New extreme must exceed the prior one by this many ATR(14)",
+        json_schema_extra=opt(0.0, 0.5, 0.05),
+    )
+    stop_buffer_atr: float = Field(
+        0.1,
+        description="Stop beyond the new extreme by this many ATR(14)",
+        json_schema_extra=opt(0.0, 0.3, 0.05),
+    )
+    target_r: float = Field(
+        1.5, description="Profit target in R", json_schema_extra=opt(0.5, 3.0, 0.5)
+    )
+    trail_atr_mult: float = Field(
+        0.0, description="Trailing stop k x ATR (0 = off)", json_schema_extra=opt(0.0, 2.0, 0.5)
+    )
     max_bars: int = Field(24, description="Time stop in bars", json_schema_extra=opt(6, 36, 6))
-    regime_filter: bool = Field(True, description="Only in range / neutral / volatile regimes (not strong trends)")
-    max_trades_per_day: int = Field(2, description="Per symbol per day", json_schema_extra=opt(1, 3, 1))
+    regime_filter: bool = Field(
+        True, description="Only in range / neutral / volatile regimes (not strong trends)"
+    )
+    max_trades_per_day: int = Field(
+        2, description="Per symbol per day", json_schema_extra=opt(1, 3, 1)
+    )
 
 
 class TurtleSoup(Strategy):
     name = "turtle_soup"
     label = "Turtle Soup (failed breakout)"
-    description = ("Fade a breakout that fails: a new N-bar extreme beyond an older one that closes back "
-                   "inside; stop beyond the extreme, small target, time stop.")
+    description = (
+        "Fade a breakout that fails: a new N-bar extreme beyond an older one that closes back "
+        "inside; stop beyond the extreme, small target, time stop."
+    )
     regimes = (RANGE, NEUTRAL, VOLATILE)
     Params = TSParams
 
@@ -75,12 +96,18 @@ class TurtleSoup(Strategy):
     def _reasons(self, f, i, side):
         row = f.iloc[i]
         if side == "long":
-            return [f"New {self.p.lookback}-bar low below {row['ts_prior_low']:.2f}, then a close back above it",
-                    "Breakdown traders are trapped; snap-back expected"], []
-        return [f"New {self.p.lookback}-bar high above {row['ts_prior_high']:.2f}, then a close back below it",
-                "Breakout traders are trapped; snap-back expected"], []
+            return [
+                f"New {self.p.lookback}-bar low below {row['ts_prior_low']:.2f}, then a close back above it",
+                "Breakdown traders are trapped; snap-back expected",
+            ], []
+        return [
+            f"New {self.p.lookback}-bar high above {row['ts_prior_high']:.2f}, then a close back below it",
+            "Breakout traders are trapped; snap-back expected",
+        ], []
 
     def implies(self, side: str) -> str:
-        return ("A failed breakdown; the trade is only right if price never revisits the new low."
-                if side == "long" else
-                "A failed breakout; the trade is only right if price never revisits the new high.")
+        return (
+            "A failed breakdown; the trade is only right if price never revisits the new low."
+            if side == "long"
+            else "A failed breakout; the trade is only right if price never revisits the new high."
+        )

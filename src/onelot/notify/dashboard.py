@@ -38,8 +38,11 @@ class DashboardChannel:
         """Everything newer than `seq`, plus the current sequence number.
         Lets the UI long-poll without replaying alerts it has already shown."""
         with self._lock:
-            out = [n.as_dict() for n in self._items
-                   if self._delivered_seq.get(n.notification_id, 0) > seq]
+            out = [
+                n.as_dict()
+                for n in self._items
+                if self._delivered_seq.get(n.notification_id, 0) > seq
+            ]
             return out[:limit], self._seq
 
     @property

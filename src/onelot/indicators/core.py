@@ -72,18 +72,34 @@ def bollinger(close: pd.Series, n: int = 20, k: float = 2.0) -> pd.DataFrame:
     upper, lower = mid + k * sd, mid - k * sd
     width = (upper - lower) / mid
     pct_b = (close - lower) / (upper - lower)
-    return pd.DataFrame({"bb_mid": mid, "bb_upper": upper, "bb_lower": lower, "bb_width": width, "bb_pctb": pct_b})
+    return pd.DataFrame(
+        {"bb_mid": mid, "bb_upper": upper, "bb_lower": lower, "bb_width": width, "bb_pctb": pct_b}
+    )
 
 
-def keltner(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 20, mult: float = 1.5, atr_n: int = 10) -> pd.DataFrame:
+def keltner(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    n: int = 20,
+    mult: float = 1.5,
+    atr_n: int = 10,
+) -> pd.DataFrame:
     mid = ema(close, n)
     a = atr(high, low, close, atr_n)
     return pd.DataFrame({"kc_mid": mid, "kc_upper": mid + mult * a, "kc_lower": mid - mult * a})
 
 
-def donchian(high: pd.Series, low: pd.Series, n: int = 20, exclude_current: bool = True) -> pd.DataFrame:
+def donchian(
+    high: pd.Series, low: pd.Series, n: int = 20, exclude_current: bool = True
+) -> pd.DataFrame:
     h, l = (high.shift(1), low.shift(1)) if exclude_current else (high, low)
-    return pd.DataFrame({"dc_upper": h.rolling(n, min_periods=n).max(), "dc_lower": l.rolling(n, min_periods=n).min()})
+    return pd.DataFrame(
+        {
+            "dc_upper": h.rolling(n, min_periods=n).max(),
+            "dc_lower": l.rolling(n, min_periods=n).min(),
+        }
+    )
 
 
 def choppiness(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Series:
@@ -139,7 +155,9 @@ def adx(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Da
     return pd.DataFrame({"adx": rma(dx, n), "plus_di": pdi, "minus_di": mdi})
 
 
-def supertrend(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 10, mult: float = 3.0) -> pd.DataFrame:
+def supertrend(
+    high: pd.Series, low: pd.Series, close: pd.Series, period: int = 10, mult: float = 3.0
+) -> pd.DataFrame:
     """Supertrend line and direction (+1 up / -1 down), standard final-band algorithm."""
     a = atr(high, low, close, period).to_numpy()
     h, l, c = high.to_numpy(float), low.to_numpy(float), close.to_numpy(float)
@@ -235,14 +253,16 @@ def swing_points(high: pd.Series, low: pd.Series, left: int = 3, right: int = 3)
     return pd.DataFrame({"pivot_high": ph, "pivot_low": pl})
 
 
-def bearish_divergence(price_high: pd.Series, osc: pd.Series, lookback: int = 20, left: int = 3, right: int = 2) -> pd.Series:
+def bearish_divergence(
+    price_high: pd.Series, osc: pd.Series, lookback: int = 20, left: int = 3, right: int = 2
+) -> pd.Series:
     """True on bars where the latest confirmed price pivot high is higher than the previous one
     within `lookback` bars while the oscillator made a lower high."""
     piv = swing_points(price_high, price_high, left, right)["pivot_high"]
     osc_at = osc.shift(right).where(piv.notna())
     out = np.zeros(len(price_high), dtype=bool)
     last_p = last_o = None
-    last_i = -10**9
+    last_i = -(10**9)
     for i, (p, o) in enumerate(zip(piv.to_numpy(), osc_at.to_numpy(), strict=True)):
         if not np.isnan(p):
             if last_p is not None and i - last_i <= lookback and p > last_p and o < last_o:
@@ -251,24 +271,34 @@ def bearish_divergence(price_high: pd.Series, osc: pd.Series, lookback: int = 20
     return pd.Series(out, index=price_high.index)
 
 
-def bullish_divergence(price_low: pd.Series, osc: pd.Series, lookback: int = 20, left: int = 3, right: int = 2) -> pd.Series:
+def bullish_divergence(
+    price_low: pd.Series, osc: pd.Series, lookback: int = 20, left: int = 3, right: int = 2
+) -> pd.Series:
     inv = bearish_divergence(-price_low, -osc, lookback, left, right)
     return inv
 
 
-def volume_divergence(close: pd.Series, volume: pd.Series, n: int = 20, factor: float = 0.7, bars: int = 3) -> pd.Series:
+def volume_divergence(
+    close: pd.Series, volume: pd.Series, n: int = 20, factor: float = 0.7, bars: int = 3
+) -> pd.Series:
     """New n-bar high made on volume below `factor` x its average for `bars` bars (fading push)."""
     new_high = close >= close.rolling(n, min_periods=n).max()
-    weak = (volume < factor * volume.rolling(n, min_periods=n).mean()).rolling(bars, min_periods=bars).sum() >= bars
+    weak = (volume < factor * volume.rolling(n, min_periods=n).mean()).rolling(
+        bars, min_periods=bars
+    ).sum() >= bars
     return new_high & weak
 
 
 # ----------------------------------------------------------------------------- daily context
-def daily_context(intraday: pd.DataFrame, daily: pd.DataFrame | None = None, atr_n: int = 14) -> pd.DataFrame:
+def daily_context(
+    intraday: pd.DataFrame, daily: pd.DataFrame | None = None, atr_n: int = 14
+) -> pd.DataFrame:
     """Map previous-session OHLC and daily ATR onto each intraday bar (no look-ahead)."""
     if daily is None or daily.empty:
         key = intraday.index.normalize()
-        daily = intraday.groupby(key).agg({"open": "first", "high": "max", "low": "min", "close": "last"})
+        daily = intraday.groupby(key).agg(
+            {"open": "first", "high": "max", "low": "min", "close": "last"}
+        )
     d = daily.copy()
     d.index = pd.DatetimeIndex(d.index).normalize()
     d["d_atr"] = atr(d["high"], d["low"], d["close"], atr_n)

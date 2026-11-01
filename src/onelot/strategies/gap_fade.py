@@ -25,27 +25,57 @@ from .base import Strategy, StrategyParams, opt, vol_pillar, volume_pillar
 
 
 class GapFadeParams(StrategyParams):
-    allow_long: bool = Field(False, description="Also buy relative gap-DOWNS (failed the 2022-26 holdout; off by default)")
+    allow_long: bool = Field(
+        False,
+        description="Also buy relative gap-DOWNS (failed the 2022-26 holdout; off by default)",
+    )
     allow_short: bool = Field(True, description="Short relative gap-ups (the validated side)")
     entry_start: str = Field("09:15", description="No new entries before (HH:MM)")
     entry_end: str = Field("09:45", description="Only act on the opening bars")
-    min_rel_gap: float = Field(0.75, description="Stock gap minus NIFTY gap, in % (>= for shorts, <= -x for longs)",
-                               json_schema_extra=opt(0.5, 1.5, 0.25))
-    min_gap: float = Field(0.3, description="Stock's own gap must also be at least this % in the trade's direction",
-                           json_schema_extra=opt(0.0, 1.0, 0.25))
+    min_rel_gap: float = Field(
+        0.75,
+        description="Stock gap minus NIFTY gap, in % (>= for shorts, <= -x for longs)",
+        json_schema_extra=opt(0.5, 1.5, 0.25),
+    )
+    min_gap: float = Field(
+        0.3,
+        description="Stock's own gap must also be at least this % in the trade's direction",
+        json_schema_extra=opt(0.0, 1.0, 0.25),
+    )
     max_gap: float = Field(4.0, description="Skip extreme gaps (news/results days) above this %")
-    confirm: str = Field("none", description="'none' | 'red_bar' (first bar closes against the gap) | 'below_vwap'")
-    entry_bar: int = Field(0, description="Decide at the close of this bar of the day (0 = first bar)",
-                           json_schema_extra=opt(0, 2, 1))
-    stop_datr: float = Field(0.75, description="Stop distance as a fraction of the prior day's ATR",
-                             json_schema_extra=opt(0.5, 1.5, 0.25))
-    target_r: float = Field(0.0, description="Profit target in R (0 = hold to square-off; the drift runs into the close)",
-                            json_schema_extra=opt(0.0, 3.0, 0.5))
-    trail_atr_mult: float = Field(0.0, description="Trailing stop distance k (0 = off)", json_schema_extra=opt(0.0, 3.0, 0.5))
-    min_risk_pct: float = Field(0.5, description="Friction floor: initial risk at least this % of price")
-    max_risk_pct: float = Field(3.0, description="Skip setups whose initial risk exceeds this % of price")
-    stop_atr_max: float = Field(50.0, description="Intraday-ATR cap disabled (stop is daily-ATR based)")
-    market_filter: bool = Field(False, description="Not used: the signal is already relative to NIFTY")
+    confirm: str = Field(
+        "none", description="'none' | 'red_bar' (first bar closes against the gap) | 'below_vwap'"
+    )
+    entry_bar: int = Field(
+        0,
+        description="Decide at the close of this bar of the day (0 = first bar)",
+        json_schema_extra=opt(0, 2, 1),
+    )
+    stop_datr: float = Field(
+        0.75,
+        description="Stop distance as a fraction of the prior day's ATR",
+        json_schema_extra=opt(0.5, 1.5, 0.25),
+    )
+    target_r: float = Field(
+        0.0,
+        description="Profit target in R (0 = hold to square-off; the drift runs into the close)",
+        json_schema_extra=opt(0.0, 3.0, 0.5),
+    )
+    trail_atr_mult: float = Field(
+        0.0, description="Trailing stop distance k (0 = off)", json_schema_extra=opt(0.0, 3.0, 0.5)
+    )
+    min_risk_pct: float = Field(
+        0.5, description="Friction floor: initial risk at least this % of price"
+    )
+    max_risk_pct: float = Field(
+        3.0, description="Skip setups whose initial risk exceeds this % of price"
+    )
+    stop_atr_max: float = Field(
+        50.0, description="Intraday-ATR cap disabled (stop is daily-ATR based)"
+    )
+    market_filter: bool = Field(
+        False, description="Not used: the signal is already relative to NIFTY"
+    )
     regime_filter: bool = Field(False, description="Not used")
     max_trades_per_day: int = Field(1, description="Per symbol per day")
 
@@ -53,8 +83,10 @@ class GapFadeParams(StrategyParams):
 class GapFade(Strategy):
     name = "gap_fade"
     label = "Relative Gap Fade"
-    description = ("Short stocks that open well above NIFTY's own gap and hold to the close - the intraday "
-                   "reversal of overnight optimism (validated on 2015-21 and an untouched 2022-26 holdout).")
+    description = (
+        "Short stocks that open well above NIFTY's own gap and hold to the close - the intraday "
+        "reversal of overnight optimism (validated on 2015-21 and an untouched 2022-26 holdout)."
+    )
     Params = GapFadeParams
 
     def raw_signals(self, f: pd.DataFrame) -> pd.DataFrame:
@@ -95,11 +127,19 @@ class GapFade(Strategy):
         row = f.iloc[i]
         g, r = row.get("gap_pct", np.nan), row.get("rel_gap_pct", np.nan)
         word = "above" if side == "short" else "below"
-        return ([f"Opened {g:+.2f}% vs yesterday's close; {r:+.2f}% {word} NIFTY's own gap",
-                 "Large relative gaps in these large caps have tended to fade into the close (2015-2026 study)"], [])
+        return (
+            [
+                f"Opened {g:+.2f}% vs yesterday's close; {r:+.2f}% {word} NIFTY's own gap",
+                "Large relative gaps in these large caps have tended to fade into the close (2015-2026 study)",
+            ],
+            [],
+        )
 
     def implies(self, side: str) -> str:
-        return ("Overnight enthusiasm has priced the stock well above the market; the session historically gives part "
-                "of it back. Hold to the square-off unless the stop is hit." if side == "short" else
-                "Overnight pessimism has priced the stock well below the market; historically part of it recovers "
-                "(weaker evidence since 2022).")
+        return (
+            "Overnight enthusiasm has priced the stock well above the market; the session historically gives part "
+            "of it back. Hold to the square-off unless the stop is hit."
+            if side == "short"
+            else "Overnight pessimism has priced the stock well below the market; historically part of it recovers "
+            "(weaker evidence since 2022)."
+        )

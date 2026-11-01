@@ -31,7 +31,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m onelot",
         description="One Lot Bot — signal-only, human-in-the-loop trade desk on Dhan. "
-                    "This program never places an order.")
+        "This program never places an order.",
+    )
     p.add_argument("--config", default=None, help="path to config.yaml")
     p.add_argument("--log-level", default=None)
     sub = p.add_subparsers(dest="cmd")
@@ -40,8 +41,11 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--mock", action="store_true", help="synthetic market (no credentials needed)")
     r.add_argument("--port", type=int, default=None, help="override the API port")
     r.add_argument("--host", default=None, help="override the bind host")
-    r.add_argument("--lan", action="store_true",
-                   help="bind on 0.0.0.0 so other devices on your network can open the app")
+    r.add_argument(
+        "--lan",
+        action="store_true",
+        help="bind on 0.0.0.0 so other devices on your network can open the app",
+    )
     r.add_argument("--no-api", action="store_true", help="run headless")
 
     b = sub.add_parser("backfill", help="download historical bars into the corpus")
@@ -53,7 +57,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     bt = sub.add_parser("backtest", help="run one backtest")
     bt.add_argument("--strategy", required=True)
-    bt.add_argument("--instrument", required=True, help="e.g. BANKNIFTY_OPT, NIFTY_FUT, RELIANCE, USDINR")
+    bt.add_argument(
+        "--instrument", required=True, help="e.g. BANKNIFTY_OPT, NIFTY_FUT, RELIANCE, USDINR"
+    )
     bt.add_argument("--timeframe", default=None)
     bt.add_argument("--start")
     bt.add_argument("--end")
@@ -67,9 +73,13 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--trials", type=int, default=30)
     rs.add_argument("--workers", type=int, default=None)
 
-    sw = sub.add_parser("sweep", help="brute-force every strategy x instrument x timeframe; saves every run")
+    sw = sub.add_parser(
+        "sweep", help="brute-force every strategy x instrument x timeframe; saves every run"
+    )
     sw.add_argument("--strategies", default="all", help="comma list or 'all'")
-    sw.add_argument("--instruments", default="focus", help="comma list or 'focus' (the desk watchlist)")
+    sw.add_argument(
+        "--instruments", default="focus", help="comma list or 'focus' (the desk watchlist)"
+    )
     sw.add_argument("--timeframes", default="5m,15m,30m,60m")
     sw.add_argument("--cost-x", type=float, default=1.0, help="cost stress multiplier")
     sw.add_argument("--top", type=int, default=25, help="rows of the leaderboard to print")
@@ -92,10 +102,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 # ── commands ──────────────────────────────────────────────────────────────
 
+
 def cmd_run(args, cfg: AppConfig, secrets: Secrets) -> int:
     if args.lan:
-        cfg = cfg.model_copy(update={"api": cfg.api.model_copy(
-            update={"host": "0.0.0.0", "allow_non_loopback": True})})
+        cfg = cfg.model_copy(
+            update={
+                "api": cfg.api.model_copy(update={"host": "0.0.0.0", "allow_non_loopback": True})
+            }
+        )
     host = args.host or cfg.api.host
     port = args.port or cfg.api.port
 
@@ -104,12 +118,16 @@ def cmd_run(args, cfg: AppConfig, secrets: Secrets) -> int:
     print("  SIGNAL-ONLY. This program places no orders. You execute manually.")
     print("=" * 72)
     print(f"  mode      : {cfg.mode}")
-    print(f"  broker    : {'MOCK (synthetic)' if args.mock or not secrets.has_broker_creds else 'Dhan'}"
-          + ("  + Dhan account reads" if secrets.has_broker_creds else ""))
+    print(
+        f"  broker    : {'MOCK (synthetic)' if args.mock or not secrets.has_broker_creds else 'Dhan'}"
+        + ("  + Dhan account reads" if secrets.has_broker_creds else "")
+    )
     print(f"  database  : {cfg.db_url_resolved.split('///')[-1]}")
     if not args.no_api:
-        print(f"  web app   : http://{'127.0.0.1' if host == '0.0.0.0' else host}:{port}/"
-              + ("   (also reachable on your LAN IP)" if host == "0.0.0.0" else ""))
+        print(
+            f"  web app   : http://{'127.0.0.1' if host == '0.0.0.0' else host}:{port}/"
+            + ("   (also reachable on your LAN IP)" if host == "0.0.0.0" else "")
+        )
     print("=" * 72)
 
     if cfg.mode == "LIVE":
@@ -154,8 +172,11 @@ def cmd_run(args, cfg: AppConfig, secrets: Secrets) -> int:
 
     app = create_app(engine, secrets.api_token)
     if host not in ("127.0.0.1", "localhost", "::1"):
-        log.warning("API is bound to %s — anyone who can reach this host can see your "
-                    "positions; mutations still need the API token.", host)
+        log.warning(
+            "API is bound to %s — anyone who can reach this host can see your "
+            "positions; mutations still need the API token.",
+            host,
+        )
 
     config = uvicorn.Config(app, host=host, port=port, log_level="warning", access_log=False)
     server = uvicorn.Server(config)
@@ -203,9 +224,15 @@ def cmd_backfill(args, cfg: AppConfig, secrets: Secrets) -> int:
             print(f"Dhan unavailable ({exc}); using Yahoo.")
             adapter = None
     provider = choose_provider(args.provider, adapter)
-    res = backfill(eng, provider, args.series, args.resolutions,
-                   start=dt.date.fromisoformat(args.start) if args.start else None, full=args.full,
-                   progress=lambda f, m: print(f"  {f * 100:5.1f}%  {m}"))
+    res = backfill(
+        eng,
+        provider,
+        args.series,
+        args.resolutions,
+        start=dt.date.fromisoformat(args.start) if args.start else None,
+        full=args.full,
+        progress=lambda f, m: print(f"  {f * 100:5.1f}%  {m}"),
+    )
     print(f"provider={res.provider} rows={res.rows} errors={len(res.errors)}")
     for e in res.errors:
         print("  ERROR", e)
@@ -217,9 +244,14 @@ def cmd_backtest(args, cfg: AppConfig, secrets: Secrets) -> int:
     from .lab.runner import BacktestConfig, run_backtest, summarize
 
     params = json.loads(args.params or "{}")
-    c = BacktestConfig.from_settings(args.strategy, args.instrument.upper(), params=params,
-                                     timeframe=args.timeframe or cfg.backtest.default_timeframe,
-                                     start=args.start, end=args.end)
+    c = BacktestConfig.from_settings(
+        args.strategy,
+        args.instrument.upper(),
+        params=params,
+        timeframe=args.timeframe or cfg.backtest.default_timeframe,
+        start=args.start,
+        end=args.end,
+    )
     res = run_backtest(c)
     print(summarize(res))
     if args.export:
@@ -232,25 +264,36 @@ def cmd_research(args, cfg: AppConfig, secrets: Secrets) -> int:
     from .lab.research import run_research
 
     tfs = [t.strip() for t in args.timeframes.split(",") if t.strip()]
-    results, path = run_research(args.strategies, tfs, [i.upper() for i in args.instruments],
-                                 trials=args.trials, workers=args.workers,
-                                 progress=lambda f, m: print(f"  {f * 100:5.1f}%  {m}"))
+    results, path = run_research(
+        args.strategies,
+        tfs,
+        [i.upper() for i in args.instruments],
+        trials=args.trials,
+        workers=args.workers,
+        progress=lambda f, m: print(f"  {f * 100:5.1f}%  {m}"),
+    )
     print(f"report: {path}")
     for r in results:
         o = r["oos"]
-        print(f"  {r['strategy']:<18} {r['instrument']:<14} {r['timeframe']:<4} {r['verdict']:<5} "
-              f"OOS trades={o.get('trades')} PF={o.get('profit_factor')} expR={o.get('expectancy_r')}")
+        print(
+            f"  {r['strategy']:<18} {r['instrument']:<14} {r['timeframe']:<4} {r['verdict']:<5} "
+            f"OOS trades={o.get('trades')} PF={o.get('profit_factor')} expR={o.get('expectancy_r')}"
+        )
     return 0
 
 
 def _print_board(rows: list[dict], top: int) -> None:
-    print(f"{'#':>4} {'strategy':<18} {'instrument':<15} {'tf':<4} {'kind':<5} {'trades':>6} {'win%':>6} "
-          f"{'PF':>6} {'expR':>7} {'net ₹':>10} {'maxDD ₹':>9} {'score':>7}")
+    print(
+        f"{'#':>4} {'strategy':<18} {'instrument':<15} {'tf':<4} {'kind':<5} {'trades':>6} {'win%':>6} "
+        f"{'PF':>6} {'expR':>7} {'net ₹':>10} {'maxDD ₹':>9} {'score':>7}"
+    )
     for r in rows[:top]:
-        print(f"{r['run_id']:>4} {r['strategy']:<18} {r['instrument']:<15} {r['timeframe']:<4} "
-              f"{'OOS' if r['oos'] else 'IS':<5} {r['trades'] or 0:>6} {(r['win_rate'] or 0):>6.1f} "
-              f"{(r['profit_factor'] or 0):>6.2f} {(r['expectancy_r'] or 0):>7.3f} {(r['net_pnl'] or 0):>10,.0f} "
-              f"{(r['max_drawdown_inr'] or 0):>9,.0f} {(r['score'] if r['score'] is not None else float('nan')):>7.2f}")
+        print(
+            f"{r['run_id']:>4} {r['strategy']:<18} {r['instrument']:<15} {r['timeframe']:<4} "
+            f"{'OOS' if r['oos'] else 'IS':<5} {r['trades'] or 0:>6} {(r['win_rate'] or 0):>6.1f} "
+            f"{(r['profit_factor'] or 0):>6.2f} {(r['expectancy_r'] or 0):>7.3f} {(r['net_pnl'] or 0):>10,.0f} "
+            f"{(r['max_drawdown_inr'] or 0):>9,.0f} {(r['score'] if r['score'] is not None else float('nan')):>7.2f}"
+        )
 
 
 def cmd_sweep(args, cfg: AppConfig, secrets: Secrets) -> int:
@@ -260,12 +303,22 @@ def cmd_sweep(args, cfg: AppConfig, secrets: Secrets) -> int:
     from .lab.jobs import JobRunner
     from .lab.sweep import leaderboard, plan, summarise
 
-    strategies = None if args.strategies == "all" else [s.strip() for s in args.strategies.split(",") if s.strip()]
-    instruments = None if args.instruments == "focus" else [i.strip().upper() for i in args.instruments.split(",") if i.strip()]
+    strategies = (
+        None
+        if args.strategies == "all"
+        else [s.strip() for s in args.strategies.split(",") if s.strip()]
+    )
+    instruments = (
+        None
+        if args.instruments == "focus"
+        else [i.strip().upper() for i in args.instruments.split(",") if i.strip()]
+    )
     tfs = [t.strip() for t in args.timeframes.split(",") if t.strip()]
     combos = plan(strategies, instruments, tfs)
-    print(f"sweep: {len(combos)} runs ({len({c['strategy'] for c in combos})} strategies x "
-          f"{len({c['instrument_key'] for c in combos})} instruments x {len(tfs)} timeframes)")
+    print(
+        f"sweep: {len(combos)} runs ({len({c['strategy'] for c in combos})} strategies x "
+        f"{len({c['instrument_key'] for c in combos})} instruments x {len(tfs)} timeframes)"
+    )
     eng = get_engine(cfg.db_url_resolved)
     jobs = JobRunner(eng, workers=1)
     rid = jobs.submit_sweep(combos, label="cli sweep", base={"cost_multiplier": args.cost_x})
@@ -291,10 +344,18 @@ def cmd_leaderboard(args, cfg: AppConfig, secrets: Secrets) -> int:
     from .data.db import get_engine
     from .lab.sweep import leaderboard, summarise
 
-    rows = leaderboard(get_engine(cfg.db_url_resolved), strategy=args.strategy, instrument=args.instrument,
-                       timeframe=args.timeframe, kind=args.kind, min_trades=args.min_trades)
+    rows = leaderboard(
+        get_engine(cfg.db_url_resolved),
+        strategy=args.strategy,
+        instrument=args.instrument,
+        timeframe=args.timeframe,
+        kind=args.kind,
+        min_trades=args.min_trades,
+    )
     s = summarise(rows)
-    print(f"{s['runs']} saved runs, {s['ranked']} ranked (>= {args.min_trades} trades), {s['positive']} positive")
+    print(
+        f"{s['runs']} saved runs, {s['ranked']} ranked (>= {args.min_trades} trades), {s['positive']} positive"
+    )
     _print_board(rows, args.top)
     return 0
 
@@ -307,7 +368,9 @@ def cmd_quality(args, cfg: AppConfig, secrets: Secrets) -> int:
     from .data.store import coverage_report
 
     eng = get_engine(cfg.db_url_resolved)
-    with pd.option_context("display.width", 200, "display.max_columns", 20, "display.max_rows", 500):
+    with pd.option_context(
+        "display.width", 200, "display.max_columns", 20, "display.max_rows", 500
+    ):
         print(coverage_report(eng))
         print()
         print(quality_report(eng, args.resolution))
@@ -329,7 +392,17 @@ def cmd_cost(args, cfg: AppConfig, secrets: Secrets) -> int:
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     # `python -m onelot --mock` keeps working: treat bare flags as `run`.
-    known = {"run", "backfill", "backtest", "research", "quality", "preflight", "cost", "-h", "--help"}
+    known = {
+        "run",
+        "backfill",
+        "backtest",
+        "research",
+        "quality",
+        "preflight",
+        "cost",
+        "-h",
+        "--help",
+    }
     if not argv or all(a.startswith("-") for a in argv) and not (set(argv) & known):
         argv = ["run", *argv]
     elif argv[0] not in known and argv[0].startswith("-") and len(argv) > 1 and argv[1] in known:
@@ -338,12 +411,25 @@ def main(argv: list[str] | None = None) -> int:
     cfg = AppConfig.load(args.config)
     secrets = Secrets.load(cfg.project_root)
     component = args.cmd or "run"
-    setup_logging(level=args.log_level or cfg.logging.level, log_dir=cfg.log_dir,
-                  max_bytes=cfg.logging.max_bytes, backup_count=cfg.logging.backup_count,
-                  secrets=secrets.secret_values(), component="engine" if component == "run" else component)
-    fn = {"run": cmd_run, "backfill": cmd_backfill, "backtest": cmd_backtest, "research": cmd_research,
-          "sweep": cmd_sweep, "leaderboard": cmd_leaderboard,
-          "quality": cmd_quality, "preflight": cmd_preflight, "cost": cmd_cost}[component]
+    setup_logging(
+        level=args.log_level or cfg.logging.level,
+        log_dir=cfg.log_dir,
+        max_bytes=cfg.logging.max_bytes,
+        backup_count=cfg.logging.backup_count,
+        secrets=secrets.secret_values(),
+        component="engine" if component == "run" else component,
+    )
+    fn = {
+        "run": cmd_run,
+        "backfill": cmd_backfill,
+        "backtest": cmd_backtest,
+        "research": cmd_research,
+        "sweep": cmd_sweep,
+        "leaderboard": cmd_leaderboard,
+        "quality": cmd_quality,
+        "preflight": cmd_preflight,
+        "cost": cmd_cost,
+    }[component]
     return int(fn(args, cfg, secrets) or 0)
 
 

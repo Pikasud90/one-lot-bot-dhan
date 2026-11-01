@@ -37,6 +37,8 @@ class PaperFillModel:
         bid_fill = effective_exit(quote.bid, self.exec_cfg, self.tick)
         if level is None:
             return Fill(bid_fill, "bid-slippage")
-        return Fill(min(bid_fill, effective_exit(level, self.exec_cfg, self.tick)),
-                    "worse of bid and level",
-                    "a gap through the stop does not fill at the stop")
+        return Fill(
+            min(bid_fill, effective_exit(level, self.exec_cfg, self.tick)),
+            "worse of bid and level",
+            "a gap through the stop does not fill at the stop",
+        )

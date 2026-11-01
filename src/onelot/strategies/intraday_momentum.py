@@ -31,14 +31,28 @@ from .regime import NEUTRAL, RANGE, TREND, VOLATILE
 class IMParams(StrategyParams):
     entry_start: str = Field("14:30", description="Earliest decision time")
     entry_end: str = Field("15:00", description="Latest decision time")
-    entry_time: str = Field("14:45", description="Decide at the bar that CLOSES at this time (HH:MM)")
-    open_window_min: int = Field(30, description="Opening window in minutes", json_schema_extra=opt(15, 60, 15))
-    require_prior_agree: bool = Field(False, description="Also require the half-hour before entry to agree")
-    min_open_move_atr: float = Field(0.5, description="Opening move must exceed this many ATR(14)",
-                                     json_schema_extra=opt(0.0, 1.5, 0.25))
-    stop_atr: float = Field(1.0, description="Stop distance in ATR(14)", json_schema_extra=opt(0.5, 2.0, 0.25))
-    target_r: float = Field(0.0, description="Target in R (0 = hold to square-off)",
-                            json_schema_extra=opt(0.0, 3.0, 0.5))
+    entry_time: str = Field(
+        "14:45", description="Decide at the bar that CLOSES at this time (HH:MM)"
+    )
+    open_window_min: int = Field(
+        30, description="Opening window in minutes", json_schema_extra=opt(15, 60, 15)
+    )
+    require_prior_agree: bool = Field(
+        False, description="Also require the half-hour before entry to agree"
+    )
+    min_open_move_atr: float = Field(
+        0.5,
+        description="Opening move must exceed this many ATR(14)",
+        json_schema_extra=opt(0.0, 1.5, 0.25),
+    )
+    stop_atr: float = Field(
+        1.0, description="Stop distance in ATR(14)", json_schema_extra=opt(0.5, 2.0, 0.25)
+    )
+    target_r: float = Field(
+        0.0,
+        description="Target in R (0 = hold to square-off)",
+        json_schema_extra=opt(0.0, 3.0, 0.5),
+    )
     trail_atr_mult: float = Field(0.0, description="Trail (0 = off)")
     max_trades_per_day: int = Field(1, description="One per day by construction")
     regime_filter: bool = Field(False, description="Not used")
@@ -49,8 +63,10 @@ class IMParams(StrategyParams):
 class IntradayMomentum(Strategy):
     name = "intraday_momentum"
     label = "Intraday momentum (first 30m -> last 30m)"
-    description = ("Trade the last half-hour in the direction of the first half-hour's move "
-                   "(Gao-Han-Li-Zhou 2018; international evidence Li 2020). Index-level effect.")
+    description = (
+        "Trade the last half-hour in the direction of the first half-hour's move "
+        "(Gao-Han-Li-Zhou 2018; international evidence Li 2020). Index-level effect."
+    )
     regimes = (TREND, NEUTRAL, RANGE, VOLATILE)
     Params = IMParams
 
@@ -58,12 +74,14 @@ class IntradayMomentum(Strategy):
         p: IMParams = self.p  # type: ignore[assignment]
         c = f["close"]
         key = ind.session_key(f.index)
-        tf_min = max(1, int(round((f.index[1] - f.index[0]).total_seconds() / 60))) if len(f) > 1 else 5
+        tf_min = (
+            max(1, int(round((f.index[1] - f.index[0]).total_seconds() / 60))) if len(f) > 1 else 5
+        )
         n_open = max(1, p.open_window_min // tf_min)
         day_open = f["open"].groupby(key).transform("first")
         # close of the opening window, carried forward through the session
         open_close = c.where(f["bar_no"] == n_open - 1).groupby(key).transform("max")
-        open_ret = (open_close - day_open)
+        open_ret = open_close - day_open
         atr = f["atr"]
         t = decision_times(f.index, p.timeframe)
         h, m = p.entry_time.split(":")
@@ -94,10 +112,17 @@ class IntradayMomentum(Strategy):
 
     def _reasons(self, f, i, side):
         row = f.iloc[i]
-        return ([f"Opening {self.p.open_window_min}-minute move {row['open_ret']:+.2f} points",
-                 "Late-session continuation of the opening move (intraday time-series momentum)"], [])
+        return (
+            [
+                f"Opening {self.p.open_window_min}-minute move {row['open_ret']:+.2f} points",
+                "Late-session continuation of the opening move (intraday time-series momentum)",
+            ],
+            [],
+        )
 
     def implies(self, side: str) -> str:
-        return ("The opening direction tends to reassert into the close; hold to the square-off."
-                if side == "long" else
-                "The opening sell-off tends to resume into the close; hold to the square-off.")
+        return (
+            "The opening direction tends to reassert into the close; hold to the square-off."
+            if side == "long"
+            else "The opening sell-off tends to resume into the close; hold to the square-off."
+        )

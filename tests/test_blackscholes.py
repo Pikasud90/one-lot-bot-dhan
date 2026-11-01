@@ -129,8 +129,12 @@ class TestImpliedVol:
         assert np.isnan(implied_vol(F * 2, F, 54_000.0, T, 0.0, "CE")), "above upper bound"
 
     def test_never_raises_on_garbage(self):
-        for args in [(-5.0, F, 54_000.0, T), (100.0, 0.0, 54_000.0, T),
-                     (100.0, F, 0.0, T), (100.0, F, 54_000.0, 0.0)]:
+        for args in [
+            (-5.0, F, 54_000.0, T),
+            (100.0, 0.0, 54_000.0, T),
+            (100.0, F, 0.0, T),
+            (100.0, F, 54_000.0, 0.0),
+        ]:
             assert np.isnan(implied_vol(*args)) or implied_vol(*args) >= 0
 
     def test_greeks_from_quote_end_to_end(self):

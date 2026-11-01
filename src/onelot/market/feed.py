@@ -50,11 +50,18 @@ class FeedContracts:
 
 
 class MarketFeed:
-    def __init__(self, broker, contracts: FeedContracts, limiter: RateLimiter,
-                 health: HealthMonitor, session_open: dt.datetime,
-                 interval_min: int = 5, settle_delay_sec: float = 2.0,
-                 rest_failover_interval_sec: float = 1.0,
-                 on_bar_closed=None):
+    def __init__(
+        self,
+        broker,
+        contracts: FeedContracts,
+        limiter: RateLimiter,
+        health: HealthMonitor,
+        session_open: dt.datetime,
+        interval_min: int = 5,
+        settle_delay_sec: float = 2.0,
+        rest_failover_interval_sec: float = 1.0,
+        on_bar_closed=None,
+    ):
         self.broker = broker
         self.contracts = contracts
         self.limiter = limiter
@@ -77,7 +84,7 @@ class MarketFeed:
         self._failover_thread: threading.Thread | None = None
         self._id_to_key: dict[str, str] = {}
         self._rebuild_id_map()
-        self._listeners: list = []          # extra tick consumers (the Live Desk)
+        self._listeners: list = []  # extra tick consumers (the Live Desk)
 
     def add_tick_listener(self, fn) -> None:
         with self._lock:
@@ -120,8 +127,7 @@ class MarketFeed:
             if contract is None:
                 continue
             try:
-                bars = self.broker.historical_intraday(
-                    contract, self.interval_min, start, end)
+                bars = self.broker.historical_intraday(contract, self.interval_min, start, end)
             except TokenExpiredError:
                 raise
             except Exception as exc:
@@ -131,8 +137,11 @@ class MarketFeed:
 
         required = self._required_bars()
         ok_idx, note_idx = self.index_series.warmup_status(required)
-        ok_fut, note_fut = (self.futures_series.warmup_status(required)
-                            if self.contracts.futures else (True, "no futures configured"))
+        ok_fut, note_fut = (
+            self.futures_series.warmup_status(required)
+            if self.contracts.futures
+            else (True, "no futures configured")
+        )
         ok = ok_idx and ok_fut
         note = f"index: {note_idx}; futures: {note_fut}"
         self.health.warmup_complete = ok
@@ -154,7 +163,8 @@ class MarketFeed:
             log.warning("Could not start market feed stream: %s", exc)
             self.health.note_socket(False, now_ist())
         self._failover_thread = threading.Thread(
-            target=self._failover_loop, name="rest-failover", daemon=True)
+            target=self._failover_loop, name="rest-failover", daemon=True
+        )
         self._failover_thread.start()
 
     def stop(self) -> None:
@@ -191,7 +201,7 @@ class MarketFeed:
             except Exception:
                 log.exception("tick listener failed")
         if key is None:
-            return                              # a desk instrument, not the engine's
+            return  # a desk instrument, not the engine's
         self.health.note_quote(q.security_id, q.ts)
         if q.ltp is None:
             return
@@ -236,8 +246,10 @@ class MarketFeed:
 
                 if self.health.should_failover_to_rest(now):
                     if not self.health.using_rest_failover:
-                        log.warning("WebSocket dead — engaging REST failover "
-                                    "(signals are suppressed while DEGRADED)")
+                        log.warning(
+                            "WebSocket dead — engaging REST failover "
+                            "(signals are suppressed while DEGRADED)"
+                        )
                     self.health.using_rest_failover = True
                     self._poll_rest_once()
                 elif self.health.using_rest_failover and alive:

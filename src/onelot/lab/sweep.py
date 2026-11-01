@@ -38,8 +38,12 @@ def focus_instruments() -> list[str]:
     return out
 
 
-def plan(strategies: list[str] | None, instruments: list[str] | None,
-         timeframes: list[str] | None, presets: bool = False) -> list[dict[str, Any]]:
+def plan(
+    strategies: list[str] | None,
+    instruments: list[str] | None,
+    timeframes: list[str] | None,
+    presets: bool = False,
+) -> list[dict[str, Any]]:
     strategies = strategies or list(REGISTRY)
     instruments = instruments or focus_instruments()
     timeframes = timeframes or FOCUS_TIMEFRAMES
@@ -47,14 +51,24 @@ def plan(strategies: list[str] | None, instruments: list[str] | None,
     if bad:
         raise ValueError(f"unknown strategies: {bad}")
     if not presets:
-        return [{"strategy": s, "instrument_key": i.upper(), "timeframe": tf}
-                for s, i, tf in itertools.product(strategies, instruments, timeframes)]
+        return [
+            {"strategy": s, "instrument_key": i.upper(), "timeframe": tf}
+            for s, i, tf in itertools.product(strategies, instruments, timeframes)
+        ]
     from .presets import presets_for
 
     out = []
     for s, i, tf in itertools.product(strategies, instruments, timeframes):
         for name, params in presets_for(s).items():
-            out.append({"strategy": s, "instrument_key": i.upper(), "timeframe": tf, "params": params, "preset": name})
+            out.append(
+                {
+                    "strategy": s,
+                    "instrument_key": i.upper(),
+                    "timeframe": tf,
+                    "params": params,
+                    "preset": name,
+                }
+            )
     return out
 
 
@@ -64,7 +78,9 @@ def matrix(engine: Engine, sweep_id: int | None = None, min_trades: int = 5) -> 
     Also marks, per (strategy, instrument), the best row by score and, per strategy, the
     best instrument. This is the operator's "which strategy, which instrument, which
     timeframe, which setting" table."""
-    rows = leaderboard(engine, sweep_id=sweep_id, min_trades=min_trades, limit=100000, latest_only=True)
+    rows = leaderboard(
+        engine, sweep_id=sweep_id, min_trades=min_trades, limit=100000, latest_only=True
+    )
     tree: dict[str, dict[str, list[dict]]] = {}
     for r in rows:
         preset = _preset_of(r)
@@ -74,17 +90,48 @@ def matrix(engine: Engine, sweep_id: int | None = None, min_trades: int = 5) -> 
     for strat, insts in tree.items():
         inst_rows = []
         for inst, lst in insts.items():
-            lst.sort(key=lambda x: ((x["win_rate"] or 0), (x["score"] if x["score"] is not None else -1e9)), reverse=True)
+            lst.sort(
+                key=lambda x: (
+                    (x["win_rate"] or 0),
+                    (x["score"] if x["score"] is not None else -1e9),
+                ),
+                reverse=True,
+            )
             ranked = [x for x in lst if x["score"] is not None]
             best = max(ranked, key=lambda x: x["score"]) if ranked else None
-            inst_rows.append({"instrument": inst, "category": lst[0]["category"], "rows": lst, "best": best,
-                              "best_win_rate": lst[0]["win_rate"] if lst else None})
-        inst_rows.sort(key=lambda x: (x["best"]["score"] if x["best"] else -1e9), reverse=True)
+            inst_rows.append(
+                {
+                    "instrument": inst,
+                    "category": lst[0]["category"],
+                    "rows": lst,
+                    "best": best,
+                    "best_win_rate": lst[0]["win_rate"] if lst else None,
+                }
+            )
+        inst_rows.sort(key=lambda x: x["best"]["score"] if x["best"] else -1e9, reverse=True)
         best_inst = inst_rows[0]["best"] if inst_rows and inst_rows[0]["best"] else None
-        out_strats.append({"strategy": strat, "instruments": inst_rows, "best": best_inst,
-                           "positive": sum(1 for ir in inst_rows for x in ir["rows"] if x["score"] is not None and x["score"] > 0 and (x["profit_factor"] or 0) >= 1.2)})
-    out_strats.sort(key=lambda x: (x["best"]["score"] if x["best"] else -1e9), reverse=True)
-    return {"strategies": out_strats, "runs": len(rows), "sweep_id": sweep_id, "min_trades": min_trades}
+        out_strats.append(
+            {
+                "strategy": strat,
+                "instruments": inst_rows,
+                "best": best_inst,
+                "positive": sum(
+                    1
+                    for ir in inst_rows
+                    for x in ir["rows"]
+                    if x["score"] is not None
+                    and x["score"] > 0
+                    and (x["profit_factor"] or 0) >= 1.2
+                ),
+            }
+        )
+    out_strats.sort(key=lambda x: x["best"]["score"] if x["best"] else -1e9, reverse=True)
+    return {
+        "strategies": out_strats,
+        "runs": len(rows),
+        "sweep_id": sweep_id,
+        "min_trades": min_trades,
+    }
 
 
 def _preset_of(r: dict) -> str:
@@ -113,17 +160,27 @@ def rank_score(m: dict, min_trades: int = 10) -> float:
     return score
 
 
-def leaderboard(engine: Engine, strategy: str | None = None, instrument: str | None = None,
-                timeframe: str | None = None, category: str | None = None, kind: str | None = None,
-                min_trades: int = 10, sweep_id: int | None = None, limit: int = 300,
-                latest_only: bool = True) -> list[dict]:
+def leaderboard(
+    engine: Engine,
+    strategy: str | None = None,
+    instrument: str | None = None,
+    timeframe: str | None = None,
+    category: str | None = None,
+    kind: str | None = None,
+    min_trades: int = 10,
+    sweep_id: int | None = None,
+    limit: int = 300,
+    latest_only: bool = True,
+) -> list[dict]:
     q = select(backtest_runs).where(backtest_runs.c.status == "DONE")
     if kind:
         q = q.where(backtest_runs.c.kind == kind)
     else:
         q = q.where(backtest_runs.c.kind.in_(["single", "walkforward"]))
     with engine.connect() as conn:
-        rows = [dict(r) for r in conn.execute(q.order_by(backtest_runs.c.id.desc())).mappings().all()]
+        rows = [
+            dict(r) for r in conn.execute(q.order_by(backtest_runs.c.id.desc())).mappings().all()
+        ]
     out: list[dict] = []
     seen: set[tuple] = set()
     for r in rows:
@@ -131,7 +188,11 @@ def leaderboard(engine: Engine, strategy: str | None = None, instrument: str | N
         m = r.get("metrics") or {}
         if sweep_id is not None and cfg.get("_sweep_id") != sweep_id:
             continue
-        s, i, tf = cfg.get("strategy"), (cfg.get("instrument_key") or "").upper(), cfg.get("timeframe")
+        s, i, tf = (
+            cfg.get("strategy"),
+            (cfg.get("instrument_key") or "").upper(),
+            cfg.get("timeframe"),
+        )
         if strategy and s != strategy:
             continue
         if instrument and i != instrument.upper():
@@ -140,25 +201,52 @@ def leaderboard(engine: Engine, strategy: str | None = None, instrument: str | N
             continue
         if category and (m.get("category") or _category_of(i)) != category.upper():
             continue
-        key = (r["kind"], s, i, tf, _params_key(cfg.get("params")), cfg.get("sentiment_mode", "off"))
+        key = (
+            r["kind"],
+            s,
+            i,
+            tf,
+            _params_key(cfg.get("params")),
+            cfg.get("sentiment_mode", "off"),
+        )
         if latest_only and key in seen:
             continue
         seen.add(key)
         n = int(m.get("trades") or 0)
         oos = r["kind"] == "walkforward"
-        out.append({
-            "run_id": r["id"], "kind": r["kind"], "oos": oos, "strategy": s, "instrument": i,
-            "category": m.get("category") or _category_of(i), "timeframe": tf,
-            "params": cfg.get("params") or {}, "sentiment_mode": cfg.get("sentiment_mode", "off"),
-            "trades": n, "win_rate": m.get("win_rate"), "profit_factor": _finite(m.get("profit_factor")),
-            "expectancy_r": m.get("expectancy_r"), "net_pnl": m.get("net_pnl"),
-            "max_drawdown_inr": m.get("max_drawdown_inr"), "sharpe": m.get("sharpe"),
-            "payoff": _finite(m.get("payoff")), "folds": m.get("folds"),
-            "pricing": m.get("pricing"), "score": rank_score(m, min_trades),
-            "created_at": r["created_at"].isoformat() if isinstance(r["created_at"], dt.datetime) else r["created_at"],
-            "label": r.get("label"), "sweep_id": cfg.get("_sweep_id"),
-        })
-    out.sort(key=lambda x: (x["score"] if x["score"] != float("-inf") else -1e9, x["trades"]), reverse=True)
+        out.append(
+            {
+                "run_id": r["id"],
+                "kind": r["kind"],
+                "oos": oos,
+                "strategy": s,
+                "instrument": i,
+                "category": m.get("category") or _category_of(i),
+                "timeframe": tf,
+                "params": cfg.get("params") or {},
+                "sentiment_mode": cfg.get("sentiment_mode", "off"),
+                "trades": n,
+                "win_rate": m.get("win_rate"),
+                "profit_factor": _finite(m.get("profit_factor")),
+                "expectancy_r": m.get("expectancy_r"),
+                "net_pnl": m.get("net_pnl"),
+                "max_drawdown_inr": m.get("max_drawdown_inr"),
+                "sharpe": m.get("sharpe"),
+                "payoff": _finite(m.get("payoff")),
+                "folds": m.get("folds"),
+                "pricing": m.get("pricing"),
+                "score": rank_score(m, min_trades),
+                "created_at": r["created_at"].isoformat()
+                if isinstance(r["created_at"], dt.datetime)
+                else r["created_at"],
+                "label": r.get("label"),
+                "sweep_id": cfg.get("_sweep_id"),
+            }
+        )
+    out.sort(
+        key=lambda x: (x["score"] if x["score"] != float("-inf") else -1e9, x["trades"]),
+        reverse=True,
+    )
     for x in out:
         if x["score"] == float("-inf"):
             x["score"] = None
@@ -176,14 +264,24 @@ def summarise(rows: list[dict]) -> dict:
             best_inst[r["instrument"]] = r
         if r["strategy"] not in best_strat or r["score"] > best_strat[r["strategy"]]["score"]:
             best_strat[r["strategy"]] = r
-    positive = [r for r in rows if r["score"] is not None and r["score"] > 0 and (r["profit_factor"] or 0) >= 1.2]
-    return {"runs": len(rows), "ranked": sum(1 for r in rows if r["score"] is not None),
-            "positive": len(positive), "best_by_instrument": best_inst, "best_by_strategy": best_strat}
+    positive = [
+        r
+        for r in rows
+        if r["score"] is not None and r["score"] > 0 and (r["profit_factor"] or 0) >= 1.2
+    ]
+    return {
+        "runs": len(rows),
+        "ranked": sum(1 for r in rows if r["score"] is not None),
+        "positive": len(positive),
+        "best_by_instrument": best_inst,
+        "best_by_strategy": best_strat,
+    }
 
 
 def _params_key(p: Any) -> str:
     try:
         import json
+
         return json.dumps(p or {}, sort_keys=True, default=str)
     except Exception:  # noqa: BLE001
         return str(p)

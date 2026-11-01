@@ -27,8 +27,18 @@ def test_atr_rsi_adx_match_talib(bars5):
     _close(ind.atr(h, l, c, 14), talib.ATR(h.to_numpy(), l.to_numpy(), c.to_numpy(), 14), tol=1e-8)
     _close(ind.rsi(c, 14), talib.RSI(c.to_numpy(), 14), tol=1e-8)
     a = ind.adx(h, l, c, 14)
-    _close(a["plus_di"], talib.PLUS_DI(h.to_numpy(), l.to_numpy(), c.to_numpy(), 14), tol=1e-4, skip=100)
-    _close(a["minus_di"], talib.MINUS_DI(h.to_numpy(), l.to_numpy(), c.to_numpy(), 14), tol=1e-4, skip=100)
+    _close(
+        a["plus_di"],
+        talib.PLUS_DI(h.to_numpy(), l.to_numpy(), c.to_numpy(), 14),
+        tol=1e-4,
+        skip=100,
+    )
+    _close(
+        a["minus_di"],
+        talib.MINUS_DI(h.to_numpy(), l.to_numpy(), c.to_numpy(), 14),
+        tol=1e-4,
+        skip=100,
+    )
     _close(a["adx"], talib.ADX(h.to_numpy(), l.to_numpy(), c.to_numpy(), 14), tol=1e-4, skip=150)
 
 
@@ -86,15 +96,17 @@ def test_swing_points_are_lagged(bars5):
 
 def test_tod_rvol_baseline(bars5):
     r = ind.tod_rvol(bars5["volume"], days=3)
-    assert r.iloc[:75 * 3].isna().all()
-    assert r.iloc[75 * 3:].notna().all()
+    assert r.iloc[: 75 * 3].isna().all()
+    assert r.iloc[75 * 3 :].notna().all()
 
 
 def test_divergence_detection_simple():
     idx = pd.date_range("2026-01-01 09:15", periods=40, freq="5min", tz="Asia/Kolkata")
     # peaks at bar 10 (105) and bar 20 (107, higher high), trough at 15; oscillator peaks 70 then 60
     p = [100 + i * 0.5 for i in range(11)] + [105 - (i - 10) * 0.8 for i in range(11, 16)]
-    p += [101 + (i - 15) * 1.2 for i in range(16, 21)] + [107 - (i - 20) * 0.7 for i in range(21, 40)]
+    p += [101 + (i - 15) * 1.2 for i in range(16, 21)] + [
+        107 - (i - 20) * 0.7 for i in range(21, 40)
+    ]
     o = [40 + i * 3 for i in range(11)] + [70 - (i - 10) * 4 for i in range(11, 16)]
     o += [50 + (i - 15) * 2 for i in range(16, 21)] + [60 - (i - 20) * 1.5 for i in range(21, 40)]
     price, osc = pd.Series(p, index=idx), pd.Series(o, index=idx)

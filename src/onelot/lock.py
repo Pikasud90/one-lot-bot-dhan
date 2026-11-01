@@ -28,11 +28,11 @@ class SingleInstanceLock:
 
     def _pid_alive(self, pid: int) -> bool:
         try:
-            os.kill(pid, 0)          # signal 0 = existence check, no effect
+            os.kill(pid, 0)  # signal 0 = existence check, no effect
         except ProcessLookupError:
             return False
         except PermissionError:
-            return True              # exists but owned by another user
+            return True  # exists but owned by another user
         except OSError:
             return False
         return True
@@ -49,7 +49,8 @@ class SingleInstanceLock:
                     f"another engine is already running (PID {pid}, lock "
                     f"{self.path}). Two engines would share one broker quota and "
                     "race the same position state. Stop the other one first, or "
-                    "delete the lock file if you are certain it is stale.")
+                    "delete the lock file if you are certain it is stale."
+                )
             log.warning("Removing stale lock file from PID %s", pid or "unknown")
             self.path.unlink(missing_ok=True)
 

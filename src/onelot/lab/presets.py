@@ -23,7 +23,11 @@ _EXIT_KEYS = set(EXITS)
 
 def presets_for(strategy: str) -> dict[str, dict]:
     space = SPACES.get(strategy) or {}
-    knobs = {k: v for k, v in space.items() if k not in _EXIT_KEYS and isinstance(v, dict) and v.get("choices")}
+    knobs = {
+        k: v
+        for k, v in space.items()
+        if k not in _EXIT_KEYS and isinstance(v, dict) and v.get("choices")
+    }
     low = {k: v["choices"][0] for k, v in knobs.items()}
     high = {k: v["choices"][-1] for k, v in knobs.items()}
     return {"low": low, "default": {}, "high": high}

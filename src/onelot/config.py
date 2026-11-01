@@ -33,6 +33,7 @@ class Strict(BaseModel):
 
 # ─────────────────────────── costs ────────────────────────────────────────
 
+
 class BrokerageCfg(Strict):
     mode: Literal["flat", "min_of"] = "flat"
     per_order_inr: float = 20.0
@@ -41,7 +42,7 @@ class BrokerageCfg(Strict):
 
 
 class TaxCfg(Strict):
-    stt_buy_pct: float = 0.0           # delivery equity only; everything else 0
+    stt_buy_pct: float = 0.0  # delivery equity only; everything else 0
     stt_sell_pct: float
     stt_exercise_pct: float = 0.0
     exchange_txn_pct: float
@@ -109,6 +110,7 @@ class CostConfig(Strict):
 
 # ─────────────────────────── main config ──────────────────────────────────
 
+
 class AccountCfg(Strict):
     # OPTIONAL. Nothing depends on it -- the one-lot rule means the engine
     # never needs your account size, and risk limits are absolute rupees.
@@ -139,9 +141,15 @@ class SessionCfg(Strict):
     mandatory_squareoff: dt.time = Field(default=dt.time(15, 15))
     clock_drift_tolerance_sec: float = 5.0
 
-    @field_validator("market_open", "market_close", "first_entry_after",
-                     "no_new_entry_after", "eod_advisory", "mandatory_squareoff",
-                     mode="before")
+    @field_validator(
+        "market_open",
+        "market_close",
+        "first_entry_after",
+        "no_new_entry_after",
+        "eod_advisory",
+        "mandatory_squareoff",
+        mode="before",
+    )
     @classmethod
     def _parse_time(cls, v):
         return parse_hhmm(v) if isinstance(v, str) else v
@@ -195,7 +203,8 @@ class DataCfg(Strict):
             raise ValueError(
                 "fallback_poll_interval_sec below 60s: the fallback is a safety "
                 "net, not a data feed. Polling a free public endpoint faster "
-                "than once a minute invites a block and buys nothing.")
+                "than once a minute invites a block and buys nothing."
+            )
         if self.chain_poll_interval_sec < 3.0:
             raise ValueError(
                 f"chain_poll_interval_sec={self.chain_poll_interval_sec} breaches the "
@@ -351,23 +360,23 @@ class BacktestCfg(Strict):
     """Backtest Lab defaults. Every backtest is ONE unit per trade: one share
     for stocks, one lot for futures/options/currency."""
 
-    slippage_pct: float = 0.03          # per side, % of price (stocks, futures, FX)
-    option_slippage_ticks: int = 2      # per side, in ticks, on the option premium
+    slippage_pct: float = 0.03  # per side, % of price (stocks, futures, FX)
+    option_slippage_ticks: int = 2  # per side, in ticks, on the option premium
     default_timeframe: str = "5m"
     warmup_sessions: int = 3
-    use_fine_path: bool = True          # resolve same-bar stop/target with finer bars
+    use_fine_path: bool = True  # resolve same-bar stop/target with finer bars
     # Denominator for percentage metrics (return %, drawdown %) only. The
     # one-lot rule means no sizing depends on it.
     reference_capital_inr: float = 100000.0
     # Synthetic option pricing (until Dhan's expired-options data is available):
     # Black-76 on the underlying with IV from India VIX (x a scale) or a constant.
     option_iv_source: Literal["vix", "constant"] = "vix"
-    option_iv_mult: float = 1.15        # Bank Nifty ATM IV runs ~1.1-1.3x India VIX
+    option_iv_mult: float = 1.15  # Bank Nifty ATM IV runs ~1.1-1.3x India VIX
     option_iv_constant: float = 0.15
-    option_target_delta: float = 0.65   # sufficiently ITM, like the live engine
-    option_expiry_weekday: int = 1      # 0=Mon .. 4=Fri; NSE monthly index expiry (verify)
+    option_target_delta: float = 0.65  # sufficiently ITM, like the live engine
+    option_expiry_weekday: int = 1  # 0=Mon .. 4=Fri; NSE monthly index expiry (verify)
     option_min_days_to_expiry: int = 3  # roll to the next month inside this window
-    option_spread_pct: float = 0.006    # half-spread as a fraction of premium (synthetic fills)
+    option_spread_pct: float = 0.006  # half-spread as a fraction of premium (synthetic fills)
     risk_free_rate: float = 0.065
 
     @model_validator(mode="after")
@@ -430,7 +439,8 @@ class RiskCfg(Strict):
             raise ValueError(
                 f"max_drawdown_inr ({self.max_drawdown_inr:,.0f}) is below "
                 f"daily_loss_limit_inr ({self.daily_loss_limit_inr:,.0f}): a "
-                "single normal day would trip the cumulative breaker")
+                "single normal day would trip the cumulative breaker"
+            )
         if self.max_open_positions < 1:
             raise ValueError("max_open_positions must be >= 1")
         if self.max_trades_per_day < 1:
@@ -551,6 +561,7 @@ class AppConfig(Strict):
 
 # ─────────────────────────── secrets ──────────────────────────────────────
 
+
 class Secrets:
     """Credentials, loaded from the environment (`.env`) only. Never logged.
 
@@ -562,8 +573,15 @@ class Secrets:
     are present and fall back cleanly when only one is.
     """
 
-    def __init__(self, client_id: str = "", access_token: str = "", api_token: str = "",
-                 data_access_token: str = "", pin: str = "", totp_secret: str = ""):
+    def __init__(
+        self,
+        client_id: str = "",
+        access_token: str = "",
+        api_token: str = "",
+        data_access_token: str = "",
+        pin: str = "",
+        totp_secret: str = "",
+    ):
         self.client_id = client_id
         self.access_token = access_token
         self.data_access_token = data_access_token
@@ -608,7 +626,13 @@ class Secrets:
             totp_secret=os.environ.get("DHAN_TOTP_SECRET", "").strip(),
         )
 
-    ENV_KEYS = ("DHAN_CLIENT_ID", "DHAN_ACCESS_TOKEN", "DHAN_DATA_ACCESS_TOKEN", "DHAN_PIN", "DHAN_TOTP_SECRET")
+    ENV_KEYS = (
+        "DHAN_CLIENT_ID",
+        "DHAN_ACCESS_TOKEN",
+        "DHAN_DATA_ACCESS_TOKEN",
+        "DHAN_PIN",
+        "DHAN_TOTP_SECRET",
+    )
 
     @classmethod
     def write_env(cls, project_root: Path, updates: dict[str, str]) -> Path:
@@ -646,13 +670,19 @@ class Secrets:
 
     def masked(self) -> dict:
         """What the Settings tab may show: presence and the last 4 characters only."""
+
         def m(v: str) -> str | None:
             return (f"…{v[-4:]}" if len(v) >= 8 else "set") if v else None
-        return {"client_id": m(self.client_id), "access_token": m(self.access_token),
-                "data_access_token": m(self.data_access_token),
-                "has_broker_creds": self.has_broker_creds,
-                "pin_set": bool(self.pin), "totp_set": bool(self.totp_secret),
-                "can_self_renew": self.can_self_renew}
+
+        return {
+            "client_id": m(self.client_id),
+            "access_token": m(self.access_token),
+            "data_access_token": m(self.data_access_token),
+            "has_broker_creds": self.has_broker_creds,
+            "pin_set": bool(self.pin),
+            "totp_set": bool(self.totp_secret),
+            "can_self_renew": self.can_self_renew,
+        }
 
     @staticmethod
     def _ephemeral_api_token(root: Path) -> str:
@@ -680,9 +710,18 @@ class Secrets:
 
     def secret_values(self) -> list[str]:
         """Everything the log redactor must scrub. See logging_setup.py."""
-        return [v for v in (self.client_id, self.access_token, self.data_access_token, self.api_token,
-                            self.pin, self.totp_secret)
-                if v and len(v) >= 4]
+        return [
+            v
+            for v in (
+                self.client_id,
+                self.access_token,
+                self.data_access_token,
+                self.api_token,
+                self.pin,
+                self.totp_secret,
+            )
+            if v and len(v) >= 4
+        ]
 
     def __repr__(self) -> str:  # never leak via repr in a traceback
         return f"<Secrets client_id={'set' if self.client_id else 'unset'} token=***>"

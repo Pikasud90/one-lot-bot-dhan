@@ -43,10 +43,10 @@ class TestClosedBarDiscipline:
         s = CandleSeries("IDX", 5, OPEN, has_volume=False)
         for t, p in [(at(9, 16), 54000.0), (at(9, 17), 54120.0), (at(9, 19), 53980.0)]:
             s.on_tick(t, p)
-        s.on_tick(at(9, 21), 55000.0)          # next bar opens, prior one closes
+        s.on_tick(at(9, 21), 55000.0)  # next bar opens, prior one closes
         b = s.latest_closed()
         assert (b.open, b.high, b.low, b.close) == (54000.0, 54120.0, 53980.0, 53980.0)
-        s.on_tick(at(9, 23), 99999.0)          # cannot retroactively alter it
+        s.on_tick(at(9, 23), 99999.0)  # cannot retroactively alter it
         assert s.latest_closed().high == 54120.0
 
     def test_bars_align_to_the_session_open(self):
@@ -67,7 +67,8 @@ class TestVolumeSemantics:
         s.on_tick(at(9, 16), 54000.0, cumulative_volume=999_999.0)
         s.on_tick(at(9, 21), 54100.0, cumulative_volume=1_500_000.0)
         assert s.latest_closed().volume is None, (
-            "storing volume on an index is what let v1 compute VWAP on 0/0")
+            "storing volume on an index is what let v1 compute VWAP on 0/0"
+        )
 
     def test_futures_series_accumulates_deltas_from_cumulative(self):
         s = CandleSeries("FUT", 5, OPEN, has_volume=True)
@@ -80,7 +81,7 @@ class TestVolumeSemantics:
     def test_volume_counter_reset_is_not_treated_as_negative(self):
         s = CandleSeries("FUT", 5, OPEN, has_volume=True)
         s.on_tick(at(9, 16), 54000.0, cumulative_volume=5000.0)
-        s.on_tick(at(9, 17), 54010.0, cumulative_volume=10.0)   # feed reset
+        s.on_tick(at(9, 17), 54010.0, cumulative_volume=10.0)  # feed reset
         s.on_tick(at(9, 21), 54020.0, cumulative_volume=60.0)
         assert s.latest_closed().volume >= 0
 
@@ -90,6 +91,7 @@ class TestWarmup:
 
     def test_seeding_makes_indicators_available_immediately(self):
         from onelot.analytics.indicators import adx, ema, rsi
+
         s = CandleSeries("IDX", 5, OPEN, has_volume=False)
         assert not s.warmup_status(40)[0]
 
@@ -207,9 +209,13 @@ class TestChainValidation:
     """v1 defect A9: broker greeks were trusted blindly."""
 
     def _cache(self, broker):
-        return ChainCache(broker, "BANKNIFTY", broker.expiry_date.isoformat(),
-                          greek_tolerance=0.08,
-                          forward_price_fn=lambda: broker.market.futures_price(broker.now()))
+        return ChainCache(
+            broker,
+            "BANKNIFTY",
+            broker.expiry_date.isoformat(),
+            greek_tolerance=0.08,
+            forward_price_fn=lambda: broker.market.futures_price(broker.now()),
+        )
 
     def test_agreeing_greeks_are_cross_checked(self):
         b = MockBroker(now=dt.datetime(2026, 8, 20, 11, 0, tzinfo=IST))
@@ -219,16 +225,18 @@ class TestChainValidation:
         assert "cross_checked" in srcs
 
     def test_missing_greeks_are_computed_locally(self):
-        b = MockBroker(now=dt.datetime(2026, 8, 20, 11, 0, tzinfo=IST),
-                       faults=Faults(omit_greeks=True))
+        b = MockBroker(
+            now=dt.datetime(2026, 8, 20, 11, 0, tzinfo=IST), faults=Faults(omit_greeks=True)
+        )
         c = self._cache(b)
         c.poll_once(b.expiry_dt, b.now())
         assert c.stats.greeks_repaired > 0
         assert all(r.delta is not None for r in c.usable_rows())
 
     def test_corrupt_broker_greeks_are_rejected_not_used(self):
-        b = MockBroker(now=dt.datetime(2026, 8, 20, 11, 0, tzinfo=IST),
-                       faults=Faults(corrupt_delta=0.30))
+        b = MockBroker(
+            now=dt.datetime(2026, 8, 20, 11, 0, tzinfo=IST), faults=Faults(corrupt_delta=0.30)
+        )
         c = self._cache(b)
         c.poll_once(b.expiry_dt, b.now())
         assert c.stats.greeks_rejected > 0
@@ -241,8 +249,7 @@ class TestChainValidation:
         b.faults = Faults(zero_bid_strikes={bad})
         c = self._cache(b)
         c.poll_once(b.expiry_dt, b.now())
-        assert all(r.strike != bad or r.opt_type != chain.rows[0].opt_type
-                   for r in c.usable_rows())
+        assert all(r.strike != bad or r.opt_type != chain.rows[0].opt_type for r in c.usable_rows())
 
     def test_put_delta_sign_is_normalised_negative(self):
         b = MockBroker(now=dt.datetime(2026, 8, 20, 11, 0, tzinfo=IST))
@@ -252,16 +259,18 @@ class TestChainValidation:
         assert pes and all(r.delta < 0 for r in pes)
 
     def test_stale_chain_is_reported_stale(self):
-        b = MockBroker(now=dt.datetime(2026, 8, 20, 11, 0, tzinfo=IST),
-                       faults=Faults(chain_staleness_sec=45.0))
+        b = MockBroker(
+            now=dt.datetime(2026, 8, 20, 11, 0, tzinfo=IST), faults=Faults(chain_staleness_sec=45.0)
+        )
         c = self._cache(b)
         c.poll_once(b.expiry_dt, b.now())
         assert not c.is_fresh(b.now())
         assert c.age_seconds(b.now()) >= 45
 
     def test_rate_limit_is_survived_not_crashed(self):
-        b = MockBroker(now=dt.datetime(2026, 8, 20, 11, 0, tzinfo=IST),
-                       faults=Faults(rate_limit_every_n=2))
+        b = MockBroker(
+            now=dt.datetime(2026, 8, 20, 11, 0, tzinfo=IST), faults=Faults(rate_limit_every_n=2)
+        )
         c = self._cache(b)
         results = [c.poll_once(b.expiry_dt, b.now()) for _ in range(4)]
         assert any(results) and not all(results)
@@ -281,7 +290,7 @@ class TestBarClosePathsBothFire:
     def test_tick_driven_close_returns_the_bar(self):
         s = CandleSeries("IDX", 5, OPEN, has_volume=False)
         s.on_tick(at(9, 16), 54000.0)
-        closed = s.on_tick(at(9, 21), 54100.0)      # crosses into the next bar
+        closed = s.on_tick(at(9, 21), 54100.0)  # crosses into the next bar
         assert len(closed) == 1 and closed[0].ts == at(9, 15)
 
     def test_clock_driven_close_finds_nothing_after_a_tick_close(self):
@@ -290,7 +299,8 @@ class TestBarClosePathsBothFire:
         s.on_tick(at(9, 16), 54000.0)
         assert len(s.on_tick(at(9, 21), 54100.0)) == 1
         assert s.mark_closed_through(at(9, 21, 5), 2.0) == [], (
-            "the 09:15 bar was already closed by the tick path")
+            "the 09:15 bar was already closed by the tick path"
+        )
 
     def test_feed_callback_fires_for_tick_driven_closes(self):
         """MarketFeed must surface tick-driven closes, or they vanish."""
@@ -300,11 +310,21 @@ class TestBarClosePathsBothFire:
         from onelot.ratelimit import RateLimiter
 
         seen = []
-        idx = Contract(security_id="I1", exchange_segment="IDX_I", symbol="X",
-                       underlying="X", instrument_type="INDEX")
-        feed = MarketFeed(MockBroker(), FeedContracts(index=idx), RateLimiter(),
-                          HealthMonitor(), OPEN,
-                          on_bar_closed=lambda k, b: seen.append((k, b)))
+        idx = Contract(
+            security_id="I1",
+            exchange_segment="IDX_I",
+            symbol="X",
+            underlying="X",
+            instrument_type="INDEX",
+        )
+        feed = MarketFeed(
+            MockBroker(),
+            FeedContracts(index=idx),
+            RateLimiter(),
+            HealthMonitor(),
+            OPEN,
+            on_bar_closed=lambda k, b: seen.append((k, b)),
+        )
         feed._on_tick(QuoteSnapshot("I1", at(9, 16), ltp=54000.0, source="ws"))
         feed._on_tick(QuoteSnapshot("I1", at(9, 21), ltp=54100.0, source="ws"))
         assert [k for k, _ in seen] == [INDEX_KEY]

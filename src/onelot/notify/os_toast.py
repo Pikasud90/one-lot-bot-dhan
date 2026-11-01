@@ -30,8 +30,7 @@ _MAC_SOUNDS = {
 def _escape_applescript(text: str) -> str:
     """AppleScript string literals: backslash and double-quote must be escaped,
     and newlines become literal \\n or osascript rejects the script."""
-    return (text.replace("\\", "\\\\").replace('"', '\\"')
-                .replace("\n", "\\n").replace("\r", ""))
+    return text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "")
 
 
 class MacToast:
@@ -40,7 +39,8 @@ class MacToast:
     def __init__(self):
         self.uses_terminal_notifier = shutil.which("terminal-notifier") is not None
         self.available = sys.platform == "darwin" and (
-            self.uses_terminal_notifier or shutil.which("osascript") is not None)
+            self.uses_terminal_notifier or shutil.which("osascript") is not None
+        )
         self.last_error: str | None = None
 
     def send(self, n: Notification) -> bool:
@@ -51,13 +51,14 @@ class MacToast:
         body = "\n".join(n.body.splitlines()[:3])
         try:
             if self.uses_terminal_notifier:
-                cmd = ["terminal-notifier", "-title", n.title, "-message", body,
-                       "-group", "onelot"]
+                cmd = ["terminal-notifier", "-title", n.title, "-message", body, "-group", "onelot"]
                 if n.sound:
                     cmd += ["-sound", sound]
             else:
-                script = (f'display notification "{_escape_applescript(body)}" '
-                          f'with title "{_escape_applescript(n.title)}"')
+                script = (
+                    f'display notification "{_escape_applescript(body)}" '
+                    f'with title "{_escape_applescript(n.title)}"'
+                )
                 if n.sound:
                     script += f' sound name "{sound}"'
                 cmd = ["osascript", "-e", script]
@@ -84,14 +85,16 @@ class WindowsToast:
             return
         try:
             from windows_toasts import Toast, WindowsToaster  # noqa: F401
+
             self.backend = "windows_toasts"
         except ImportError:
             try:
                 from plyer import notification  # noqa: F401
+
                 self.backend = "plyer"
             except ImportError:
                 self.available = False
-                self.last_error = ("no toast backend — pip install windows-toasts")
+                self.last_error = "no toast backend — pip install windows-toasts"
 
     def send(self, n: Notification) -> bool:  # pragma: no cover - Windows only
         if not self.available:
@@ -100,14 +103,15 @@ class WindowsToast:
         try:
             if self.backend == "windows_toasts":
                 from windows_toasts import Toast, WindowsToaster
+
                 toaster = WindowsToaster("Bank Nifty Trade Assistant")
                 t = Toast()
                 t.text_fields = [n.title, body]
                 toaster.show_toast(t)
                 return True
             from plyer import notification
-            notification.notify(title=n.title, message=body,
-                                app_name="OneLot", timeout=15)
+
+            notification.notify(title=n.title, message=body, app_name="OneLot", timeout=15)
             return True
         except Exception as exc:
             self.last_error = f"{type(exc).__name__}: {exc}"
@@ -119,8 +123,9 @@ class LinuxToast:
     name = "linux_toast"
 
     def __init__(self):
-        self.available = (sys.platform.startswith("linux")
-                          and shutil.which("notify-send") is not None)
+        self.available = (
+            sys.platform.startswith("linux") and shutil.which("notify-send") is not None
+        )
         self.last_error: str | None = None
 
     def send(self, n: Notification) -> bool:  # pragma: no cover - Linux only
@@ -131,7 +136,9 @@ class LinuxToast:
         try:
             r = subprocess.run(
                 ["notify-send", "-u", urgency, "-a", "OneLot", n.title, body],
-                capture_output=True, timeout=6)
+                capture_output=True,
+                timeout=6,
+            )
             return r.returncode == 0
         except Exception as exc:
             self.last_error = f"{type(exc).__name__}: {exc}"

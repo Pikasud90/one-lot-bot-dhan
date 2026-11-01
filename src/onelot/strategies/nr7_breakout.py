@@ -21,27 +21,53 @@ from .regime import NEUTRAL, RANGE, TREND
 
 
 class NR7Params(StrategyParams):
-    nr_n: int = Field(7, description="Yesterday's range must be the narrowest of the last N sessions",
-                      json_schema_extra=opt(4, 10, 1))
-    buffer_atr: float = Field(0.05, description="Break yesterday's high/low by this many ATR(14)",
-                              json_schema_extra=opt(0.0, 0.3, 0.05))
-    stop_mode: Literal["atr", "pd_mid"] = Field("atr", description="Stop: close -/+ stop_atr x ATR, or yesterday's mid-range")
-    stop_atr: float = Field(1.0, description="ATR stop distance", json_schema_extra=opt(0.5, 2.0, 0.25))
-    require_inside_day: bool = Field(False, description="Also require yesterday to be an inside day (NR7-ID)")
-    rvol_min: float = Field(0.9, description="Minimum relative volume on the breakout bar (ignored without volume)",
-                            json_schema_extra=opt(0.7, 1.5, 0.1))
-    stop_atr_max: float = Field(4.0, description="Skip setups whose initial risk exceeds this many ATR(14)",
-                                json_schema_extra=opt(2.0, 6.0, 0.5))
-    target_r: float = Field(2.0, description="Profit target in R", json_schema_extra=opt(0.0, 4.0, 0.5))
-    trail_atr_mult: float = Field(1.5, description="Trailing stop k x ATR (0 = off)", json_schema_extra=opt(0.0, 3.0, 0.5))
-    max_trades_per_day: int = Field(1, description="Per symbol per day", json_schema_extra=opt(1, 2, 1))
+    nr_n: int = Field(
+        7,
+        description="Yesterday's range must be the narrowest of the last N sessions",
+        json_schema_extra=opt(4, 10, 1),
+    )
+    buffer_atr: float = Field(
+        0.05,
+        description="Break yesterday's high/low by this many ATR(14)",
+        json_schema_extra=opt(0.0, 0.3, 0.05),
+    )
+    stop_mode: Literal["atr", "pd_mid"] = Field(
+        "atr", description="Stop: close -/+ stop_atr x ATR, or yesterday's mid-range"
+    )
+    stop_atr: float = Field(
+        1.0, description="ATR stop distance", json_schema_extra=opt(0.5, 2.0, 0.25)
+    )
+    require_inside_day: bool = Field(
+        False, description="Also require yesterday to be an inside day (NR7-ID)"
+    )
+    rvol_min: float = Field(
+        0.9,
+        description="Minimum relative volume on the breakout bar (ignored without volume)",
+        json_schema_extra=opt(0.7, 1.5, 0.1),
+    )
+    stop_atr_max: float = Field(
+        4.0,
+        description="Skip setups whose initial risk exceeds this many ATR(14)",
+        json_schema_extra=opt(2.0, 6.0, 0.5),
+    )
+    target_r: float = Field(
+        2.0, description="Profit target in R", json_schema_extra=opt(0.0, 4.0, 0.5)
+    )
+    trail_atr_mult: float = Field(
+        1.5, description="Trailing stop k x ATR (0 = off)", json_schema_extra=opt(0.0, 3.0, 0.5)
+    )
+    max_trades_per_day: int = Field(
+        1, description="Per symbol per day", json_schema_extra=opt(1, 2, 1)
+    )
 
 
 class NR7Breakout(Strategy):
     name = "nr7_breakout"
     label = "NR7 Breakout"
-    description = ("After the narrowest daily range of the last N sessions, trade the first break of "
-                   "yesterday's high or low (Crabel's range-contraction breakout).")
+    description = (
+        "After the narrowest daily range of the last N sessions, trade the first break of "
+        "yesterday's high or low (Crabel's range-contraction breakout)."
+    )
     regimes = (TREND, NEUTRAL, RANGE)
     Params = NR7Params
 
@@ -86,11 +112,16 @@ class NR7Breakout(Strategy):
     def _reasons(self, f, i, side):
         row = f.iloc[i]
         lvl = row["pd_high"] if side == "long" else row["pd_low"]
-        return [f"Yesterday was an NR{self.p.nr_n} session (narrowest range of the last {self.p.nr_n})",
-                f"Price broke yesterday's {'high' if side == 'long' else 'low'} {lvl:.2f}"], []
+        return [
+            f"Yesterday was an NR{self.p.nr_n} session (narrowest range of the last {self.p.nr_n})",
+            f"Price broke yesterday's {'high' if side == 'long' else 'low'} {lvl:.2f}",
+        ], []
 
     def implies(self, side: str) -> str:
-        return ("Range contraction tends to be followed by expansion; a break of yesterday's high is the "
-                "classic trigger. Fails fast when the market stays dull." if side == "long" else
-                "Range contraction tends to be followed by expansion; a break of yesterday's low is the "
-                "classic trigger. Fails fast when the market stays dull.")
+        return (
+            "Range contraction tends to be followed by expansion; a break of yesterday's high is the "
+            "classic trigger. Fails fast when the market stays dull."
+            if side == "long"
+            else "Range contraction tends to be followed by expansion; a break of yesterday's low is the "
+            "classic trigger. Fails fast when the market stays dull."
+        )

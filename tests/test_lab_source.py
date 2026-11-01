@@ -19,7 +19,13 @@ def _bars(n_days: int = 8, interval: int = 5, seed: int = 3, drift: float = 0.00
     day = pd.Timestamp("2026-09-01", tz=IST)
     while len({t.date() for t in ts}) < n_days:
         if day.weekday() < 5:
-            ts.extend(pd.date_range(day + pd.Timedelta(hours=9, minutes=15), periods=375 // interval, freq=f"{interval}min"))
+            ts.extend(
+                pd.date_range(
+                    day + pd.Timedelta(hours=9, minutes=15),
+                    periods=375 // interval,
+                    freq=f"{interval}min",
+                )
+            )
         day += pd.Timedelta(days=1)
     n = len(ts)
     c = 50000 * np.exp(np.cumsum(rng.normal(drift, 0.0012, n)))
@@ -31,12 +37,21 @@ def _bars(n_days: int = 8, interval: int = 5, seed: int = 3, drift: float = 0.00
 
 def test_rejects_timeframe_not_multiple_of_bar_interval():
     with pytest.raises(ValueError):
-        LabDirectionSource(LiveAlphaCfg(source="lab", lab_strategy="ema_cross", lab_timeframe="12m"), 5)
+        LabDirectionSource(
+            LiveAlphaCfg(source="lab", lab_strategy="ema_cross", lab_timeframe="12m"), 5
+        )
 
 
 def test_same_timeframe_evaluates_last_closed_bar():
-    src = LabDirectionSource(LiveAlphaCfg(source="lab", lab_strategy="ema_cross", lab_timeframe="5m",
-                                          lab_params={"adx_min": 0, "rsi_margin": 0, "confirm_atr": 0}), 5)
+    src = LabDirectionSource(
+        LiveAlphaCfg(
+            source="lab",
+            lab_strategy="ema_cross",
+            lab_timeframe="5m",
+            lab_params={"adx_min": 0, "rsi_margin": 0, "confirm_atr": 0},
+        ),
+        5,
+    )
     ts, o, h, l, c = _bars()
     v = src.evaluate(ts, o, h, l, c)
     assert v.strategy == "ema_cross" and v.bar_ts is not None
@@ -45,7 +60,9 @@ def test_same_timeframe_evaluates_last_closed_bar():
 
 
 def test_resampled_timeframe_only_uses_complete_bars():
-    src = LabDirectionSource(LiveAlphaCfg(source="lab", lab_strategy="ema_cross", lab_timeframe="15m"), 5)
+    src = LabDirectionSource(
+        LiveAlphaCfg(source="lab", lab_strategy="ema_cross", lab_timeframe="15m"), 5
+    )
     ts, o, h, l, c = _bars()
     # drop the last bar so the latest 15m bucket is incomplete (2 of 3 five-minute bars)
     v = src.evaluate(ts[:-1], o[:-1], h[:-1], l[:-1], c[:-1])
@@ -56,8 +73,15 @@ def test_resampled_timeframe_only_uses_complete_bars():
 
 
 def test_fires_only_on_the_fresh_bar_and_carries_a_structural_stop():
-    src = LabDirectionSource(LiveAlphaCfg(source="lab", lab_strategy="ema_cross", lab_timeframe="5m",
-                                          lab_params={"adx_min": 0, "rsi_margin": 0, "confirm_atr": 0}), 5)
+    src = LabDirectionSource(
+        LiveAlphaCfg(
+            source="lab",
+            lab_strategy="ema_cross",
+            lab_timeframe="5m",
+            lab_params={"adx_min": 0, "rsi_margin": 0, "confirm_atr": 0},
+        ),
+        5,
+    )
     # a driftless walk crosses its EMAs repeatedly; a strong trend never would
     ts, o, h, l, c = _bars(n_days=12, drift=0.0, seed=11)
     fired = []
@@ -74,7 +98,9 @@ def test_fires_only_on_the_fresh_bar_and_carries_a_structural_stop():
 
 
 def test_too_little_history_is_reported_not_raised():
-    src = LabDirectionSource(LiveAlphaCfg(source="lab", lab_strategy="supertrend_vol", lab_timeframe="5m"), 5)
+    src = LabDirectionSource(
+        LiveAlphaCfg(source="lab", lab_strategy="supertrend_vol", lab_timeframe="5m"), 5
+    )
     ts, o, h, l, c = _bars(n_days=1)
     v = src.evaluate(ts[:30], o[:30], h[:30], l[:30], c[:30])
     assert not v.ce_fired and not v.pe_fired and "need 60" in v.reason
@@ -84,18 +110,24 @@ class TestAlphaEngineWithLabSource:
     def test_alpha_engine_builds_lab_source_from_config(self, cfg, cost_model):
         from onelot.strategy.alpha import AlphaEngine
 
-        live = cfg.strategy.live.model_copy(update={"source": "lab", "lab_strategy": "supertrend_vol", "lab_timeframe": "5m"})
+        live = cfg.strategy.live.model_copy(
+            update={"source": "lab", "lab_strategy": "supertrend_vol", "lab_timeframe": "5m"}
+        )
         c2 = cfg.model_copy(update={"strategy": cfg.strategy.model_copy(update={"live": live})})
         eng = AlphaEngine(c2, cost_model)
         assert eng.lab is not None and eng.lab.name == "supertrend_vol"
         assert AlphaEngine(cfg, cost_model).lab is None
 
-    def test_gate_report_shows_lab_gate_instead_of_trend_momentum(self, cfg, cost_model, mock_broker, enriched_chain):
+    def test_gate_report_shows_lab_gate_instead_of_trend_momentum(
+        self, cfg, cost_model, mock_broker, enriched_chain
+    ):
         from onelot.analytics.ivp import IVPercentileEngine
         from onelot.analytics.regime import rule_based_regime
         from onelot.strategy.alpha import AlphaEngine, EvaluationContext
 
-        live = cfg.strategy.live.model_copy(update={"source": "lab", "lab_strategy": "ema_cross", "lab_timeframe": "5m"})
+        live = cfg.strategy.live.model_copy(
+            update={"source": "lab", "lab_strategy": "ema_cross", "lab_timeframe": "5m"}
+        )
         c2 = cfg.model_copy(update={"strategy": cfg.strategy.model_copy(update={"live": live})})
         eng = AlphaEngine(c2, cost_model)
         ts, o, h, l, c = _bars(n_days=6)
@@ -103,11 +135,27 @@ class TestAlphaEngineWithLabSource:
         regime = rule_based_regime(c[-300:])
         ivp = IVPercentileEngine("off", 252, 60).compute([], 0.15)
         ctx = EvaluationContext(
-            now=now, bar_ts=now, session_window=None, health_may_signal=True, health_reasons=[],
-            index_high=h, index_low=l, index_close=c, index_open=o, index_ts=ts,
-            chain_rows=enriched_chain.snapshot.rows, chain_age_sec=1.0, regime=regime, ivp=ivp,
-            expiry=mock_broker.expiry_date.isoformat(), lot_size=35, risk_allowed=True, risk_reason="",
-            risk_state="ACTIVE", open_positions=0)
+            now=now,
+            bar_ts=now,
+            session_window=None,
+            health_may_signal=True,
+            health_reasons=[],
+            index_high=h,
+            index_low=l,
+            index_close=c,
+            index_open=o,
+            index_ts=ts,
+            chain_rows=enriched_chain.snapshot.rows,
+            chain_age_sec=1.0,
+            regime=regime,
+            ivp=ivp,
+            expiry=mock_broker.expiry_date.isoformat(),
+            lot_size=35,
+            risk_allowed=True,
+            risk_reason="",
+            risk_state="ACTIVE",
+            open_positions=0,
+        )
         out = eng.evaluate(ctx)
         gates = {g["gate"] for g in out.all_gate_dicts()}
         assert "CE:lab_strategy" in gates and "PE:lab_strategy" in gates

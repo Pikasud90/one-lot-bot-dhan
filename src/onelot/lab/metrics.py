@@ -29,23 +29,35 @@ def trade_stats(df: pd.DataFrame) -> dict:
         "win_rate": float(len(wins) / len(df) * 100),
         "avg_win": float(wins.mean()) if len(wins) else 0.0,
         "avg_loss": float(losses.mean()) if len(losses) else 0.0,
-        "payoff": float(wins.mean() / -losses.mean()) if len(wins) and len(losses) and losses.mean() < 0 else float("nan"),
-        "profit_factor": float(gross_win / gross_loss) if gross_loss > 0 else float("inf") if gross_win > 0 else 0.0,
+        "payoff": float(wins.mean() / -losses.mean())
+        if len(wins) and len(losses) and losses.mean() < 0
+        else float("nan"),
+        "profit_factor": float(gross_win / gross_loss)
+        if gross_loss > 0
+        else float("inf")
+        if gross_win > 0
+        else 0.0,
         "net_pnl": float(pnl.sum()),
         "gross_pnl": float(df["gross_pnl"].sum()),
         "costs": float(df["costs"].sum()),
         "expectancy": float(pnl.mean()),
         "expectancy_r": float(r.mean()),
         "median_r": float(np.median(r)),
-        "sqn": float(r.mean() / r.std(ddof=1) * math.sqrt(min(len(r), 100))) if len(r) > 1 and r.std(ddof=1) > 0 else 0.0,
+        "sqn": float(r.mean() / r.std(ddof=1) * math.sqrt(min(len(r), 100)))
+        if len(r) > 1 and r.std(ddof=1) > 0
+        else 0.0,
         "max_consec_losses": _max_consecutive(pnl <= 0),
         "avg_bars_held": float(df["bars_held"].mean()),
         "avg_mfe_r": float(df["mfe_r"].mean()),
         "avg_mae_r": float(df["mae_r"].mean()),
         "long_trades": int((df["side"] == "LONG").sum()),
         "short_trades": int((df["side"] == "SHORT").sum()),
-        "long_win_rate": float((df.loc[df["side"] == "LONG", "net_pnl"] > 0).mean() * 100) if (df["side"] == "LONG").any() else float("nan"),
-        "short_win_rate": float((df.loc[df["side"] == "SHORT", "net_pnl"] > 0).mean() * 100) if (df["side"] == "SHORT").any() else float("nan"),
+        "long_win_rate": float((df.loc[df["side"] == "LONG", "net_pnl"] > 0).mean() * 100)
+        if (df["side"] == "LONG").any()
+        else float("nan"),
+        "short_win_rate": float((df.loc[df["side"] == "SHORT", "net_pnl"] > 0).mean() * 100)
+        if (df["side"] == "SHORT").any()
+        else float("nan"),
         "cost_share_pct": float(df["costs"].sum() / max(1e-9, abs(df["gross_pnl"]).sum()) * 100),
         "gross_profit": float(gross_win),
         "gross_loss": float(gross_loss),
@@ -120,15 +132,25 @@ def breakdown(trades: pd.DataFrame, by: str) -> pd.DataFrame:
     elif by == "weekday":
         df["weekday"] = pd.to_datetime(df["entry_ts"]).dt.day_name()
     elif by == "strength_bucket":
-        df["strength_bucket"] = pd.cut(df["strength"], [-1, 50, 65, 80, 101], labels=["<50", "50-65", "65-80", "80+"])
+        df["strength_bucket"] = pd.cut(
+            df["strength"], [-1, 50, 65, 80, 101], labels=["<50", "50-65", "65-80", "80+"]
+        )
     g = df.groupby(by, observed=True)
-    out = pd.DataFrame({
-        "trades": g.size(),
-        "win_rate": g["net_pnl"].apply(lambda s: (s > 0).mean() * 100),
-        "net_pnl": g["net_pnl"].sum(),
-        "avg_r": g["r_multiple"].mean(),
-        "profit_factor": g["net_pnl"].apply(lambda s: s[s > 0].sum() / -s[s <= 0].sum() if (s <= 0).any() and s[s <= 0].sum() < 0 else np.inf),
-    })
+    out = pd.DataFrame(
+        {
+            "trades": g.size(),
+            "win_rate": g["net_pnl"].apply(lambda s: (s > 0).mean() * 100),
+            "net_pnl": g["net_pnl"].sum(),
+            "avg_r": g["r_multiple"].mean(),
+            "profit_factor": g["net_pnl"].apply(
+                lambda s: (
+                    s[s > 0].sum() / -s[s <= 0].sum()
+                    if (s <= 0).any() and s[s <= 0].sum() < 0
+                    else np.inf
+                )
+            ),
+        }
+    )
     return out.round(3)
 
 

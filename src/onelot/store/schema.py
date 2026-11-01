@@ -66,7 +66,8 @@ METADATA = MetaData()
 # ── market data ───────────────────────────────────────────────────────────
 
 candles = Table(
-    "candles", METADATA,
+    "candles",
+    METADATA,
     Column("instrument_key", String(64), primary_key=True),
     Column("interval_min", Integer, primary_key=True),
     Column("ts", TZDateTime, primary_key=True),
@@ -83,7 +84,8 @@ candles = Table(
 )
 
 chain_snapshots = Table(
-    "chain_snapshots", METADATA,
+    "chain_snapshots",
+    METADATA,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("ts", TZDateTime, nullable=False),
     Column("underlying", String(32), nullable=False),
@@ -91,19 +93,26 @@ chain_snapshots = Table(
     Column("strike", Float, nullable=False),
     Column("opt_type", String(2), nullable=False),
     Column("security_id", String(32)),
-    Column("ltp", Float), Column("bid", Float), Column("ask", Float),
-    Column("bid_qty", Integer), Column("ask_qty", Integer),
-    Column("volume", Float), Column("oi", Float),
+    Column("ltp", Float),
+    Column("bid", Float),
+    Column("ask", Float),
+    Column("bid_qty", Integer),
+    Column("ask_qty", Integer),
+    Column("volume", Float),
+    Column("oi", Float),
     Column("iv", Float),
-    Column("delta", Float), Column("gamma", Float),
-    Column("theta", Float), Column("vega", Float),
-    Column("greek_source", String(16)),   # broker | local | cross_checked
+    Column("delta", Float),
+    Column("gamma", Float),
+    Column("theta", Float),
+    Column("vega", Float),
+    Column("greek_source", String(16)),  # broker | local | cross_checked
     Index("ix_chain_ts", "ts"),
     Index("ix_chain_lookup", "underlying", "expiry", "strike", "opt_type", "ts"),
 )
 
 atm_iv_history = Table(
-    "atm_iv_history", METADATA,
+    "atm_iv_history",
+    METADATA,
     Column("trade_date", String(10), primary_key=True),
     Column("underlying", String(32), primary_key=True),
     Column("atm_iv", Float, nullable=False),
@@ -114,18 +123,22 @@ atm_iv_history = Table(
 )
 
 daily_bars = Table(
-    "daily_bars", METADATA,
+    "daily_bars",
+    METADATA,
     Column("symbol", String(32), primary_key=True),
     Column("trade_date", String(10), primary_key=True),
-    Column("open", Float), Column("high", Float),
-    Column("low", Float), Column("close", Float),
+    Column("open", Float),
+    Column("high", Float),
+    Column("low", Float),
+    Column("close", Float),
     Column("volume", Float),
 )
 
 # ── decisions ─────────────────────────────────────────────────────────────
 
 signal_evaluations = Table(
-    "signal_evaluations", METADATA,
+    "signal_evaluations",
+    METADATA,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("eval_id", String(40), nullable=False, unique=True),
     Column("ts", TZDateTime, nullable=False),
@@ -138,7 +151,8 @@ signal_evaluations = Table(
 )
 
 gate_audit = Table(
-    "gate_audit", METADATA,
+    "gate_audit",
+    METADATA,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("eval_id", String(40), nullable=False),
     Column("ts", TZDateTime, nullable=False),
@@ -152,7 +166,8 @@ gate_audit = Table(
 )
 
 signals = Table(
-    "signals", METADATA,
+    "signals",
+    METADATA,
     Column("signal_id", String(40), primary_key=True),
     Column("eval_id", String(40)),
     Column("created_at", TZDateTime, nullable=False),
@@ -163,12 +178,22 @@ signals = Table(
     Column("strike", Float, nullable=False),
     Column("opt_type", String(2), nullable=False),
     Column("security_id", String(32)),
-    Column("quote_bid", Float), Column("quote_ask", Float), Column("quote_ltp", Float),
-    Column("entry_eff", Float), Column("stop_level", Float), Column("target_level", Float),
+    Column("quote_bid", Float),
+    Column("quote_ask", Float),
+    Column("quote_ltp", Float),
+    Column("entry_eff", Float),
+    Column("stop_level", Float),
+    Column("target_level", Float),
     Column("breakeven", Float),
-    Column("lots", Integer), Column("qty", Integer), Column("lot_size", Integer),
-    Column("net_risk", Float), Column("net_reward", Float), Column("rr_net", Float),
-    Column("delta", Float), Column("iv", Float), Column("theta_per_hour", Float),
+    Column("lots", Integer),
+    Column("qty", Integer),
+    Column("lot_size", Integer),
+    Column("net_risk", Float),
+    Column("net_reward", Float),
+    Column("rr_net", Float),
+    Column("delta", Float),
+    Column("iv", Float),
+    Column("theta_per_hour", Float),
     Column("status", String(24), nullable=False, default="PENDING"),
     Column("resolved_at", TZDateTime),
     Column("resolution_source", String(24)),
@@ -180,17 +205,22 @@ signals = Table(
 # ── positions and results ─────────────────────────────────────────────────
 
 positions = Table(
-    "positions", METADATA,
+    "positions",
+    METADATA,
     Column("position_id", String(40), primary_key=True),
     Column("signal_id", String(40)),
     Column("state", String(24), nullable=False),
     Column("opened_at", TZDateTime, nullable=False),
     Column("closed_at", TZDateTime),
     Column("direction", String(2), nullable=False),
-    Column("underlying", String(32)), Column("expiry", String(16)),
-    Column("strike", Float), Column("opt_type", String(2)),
+    Column("underlying", String(32)),
+    Column("expiry", String(16)),
+    Column("strike", Float),
+    Column("opt_type", String(2)),
     Column("security_id", String(32)),
-    Column("lots", Integer), Column("qty", Integer), Column("lot_size", Integer),
+    Column("lots", Integer),
+    Column("qty", Integer),
+    Column("lot_size", Integer),
     Column("entry_price", Float, nullable=False),
     Column("initial_stop", Float, nullable=False),
     Column("target", Float),
@@ -207,17 +237,23 @@ positions = Table(
 )
 
 trade_journal = Table(
-    "trade_journal", METADATA,
+    "trade_journal",
+    METADATA,
     Column("trade_id", String(40), primary_key=True),
     Column("position_id", String(40)),
     Column("trade_date", String(10), nullable=False),
     Column("closed_at", TZDateTime, nullable=False),
-    Column("direction", String(2)), Column("strike", Float), Column("opt_type", String(2)),
+    Column("direction", String(2)),
+    Column("strike", Float),
+    Column("opt_type", String(2)),
     Column("expiry", String(16)),
-    Column("lots", Integer), Column("qty", Integer),
-    Column("entry_price", Float), Column("exit_price", Float),
+    Column("lots", Integer),
+    Column("qty", Integer),
+    Column("entry_price", Float),
+    Column("exit_price", Float),
     Column("gross_pnl", Float, nullable=False),
-    Column("entry_cost", Float), Column("exit_cost", Float),
+    Column("entry_cost", Float),
+    Column("exit_cost", Float),
     Column("total_cost", Float, nullable=False),
     Column("net_pnl", Float, nullable=False),
     Column("r_multiple", Float),
@@ -229,7 +265,8 @@ trade_journal = Table(
 )
 
 risk_state = Table(
-    "risk_state", METADATA,
+    "risk_state",
+    METADATA,
     Column("trade_date", String(10), primary_key=True),
     Column("mode", String(8), primary_key=True),
     Column("realized_pnl", Float, nullable=False, default=0.0),
@@ -243,7 +280,8 @@ risk_state = Table(
 )
 
 engine_events = Table(
-    "engine_events", METADATA,
+    "engine_events",
+    METADATA,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("ts", TZDateTime, nullable=False),
     Column("level", String(12), nullable=False),
@@ -255,7 +293,8 @@ engine_events = Table(
 )
 
 regime_history = Table(
-    "regime_history", METADATA,
+    "regime_history",
+    METADATA,
     Column("trade_date", String(10), primary_key=True),
     Column("symbol", String(32), primary_key=True),
     Column("state", String(12), nullable=False),
@@ -266,7 +305,8 @@ regime_history = Table(
 )
 
 instruments = Table(
-    "instruments", METADATA,
+    "instruments",
+    METADATA,
     Column("security_id", String(32), primary_key=True),
     Column("exchange_segment", String(16), primary_key=True),
     Column("symbol", String(64)),
@@ -278,8 +318,7 @@ instruments = Table(
     Column("lot_size", Integer),
     Column("tick_size", Float),
     Column("refreshed_at", TZDateTime),
-    UniqueConstraint("underlying", "expiry", "strike", "opt_type",
-                     name="uq_instrument_contract"),
+    UniqueConstraint("underlying", "expiry", "strike", "opt_type", name="uq_instrument_contract"),
     Index("ix_instr_lookup", "underlying", "expiry", "opt_type"),
 )
 
@@ -287,20 +326,22 @@ instruments = Table(
 # ── data corpus + Backtest Lab ────────────────────────────────────────────
 
 universe = Table(
-    "universe", METADATA,
+    "universe",
+    METADATA,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("key", String(48), nullable=False, unique=True),     # e.g. BANKNIFTY_OPT
+    Column("key", String(48), nullable=False, unique=True),  # e.g. BANKNIFTY_OPT
     Column("label", String(96)),
-    Column("category", String(16), nullable=False),              # INDEX|STOCK|FUTURES|OPTIONS|CURRENCY
-    Column("series_key", String(48), nullable=False),           # price series that drives signals
+    Column("category", String(16), nullable=False),  # INDEX|STOCK|FUTURES|OPTIONS|CURRENCY
+    Column("series_key", String(48), nullable=False),  # price series that drives signals
     Column("yahoo_symbol", String(32)),
     Column("dhan_security_id", String(32)),
     Column("dhan_segment", String(16)),
     Column("dhan_instrument", String(16)),
     Column("lot_size", Integer, default=1),
     Column("tick_size", Float, default=0.05),
-    Column("product", String(32)),                               # cost product key
-    Column("session_open", String(5)), Column("session_close", String(5)),
+    Column("product", String(32)),  # cost product key
+    Column("session_open", String(5)),
+    Column("session_close", String(5)),
     Column("square_off", String(5)),
     Column("in_universe", Boolean, default=True),
     Column("extra", JSON),
@@ -311,8 +352,9 @@ universe = Table(
 # price-series key (an index, a stock, a spot FX pair, or later a futures
 # continuous series from Dhan).
 bars = Table(
-    "bars", METADATA,
-    Column("ts", TZDateTime, primary_key=True),                  # bar START (UTC on disk)
+    "bars",
+    METADATA,
+    Column("ts", TZDateTime, primary_key=True),  # bar START (UTC on disk)
     Column("series_key", String(48), primary_key=True),
     Column("resolution", String(4), primary_key=True),
     Column("open", Float, nullable=False),
@@ -321,12 +363,13 @@ bars = Table(
     Column("close", Float, nullable=False),
     Column("volume", Float, default=0),
     Column("oi", Float),
-    Column("source", String(8)),                                 # yahoo | dhan | csv
+    Column("source", String(8)),  # yahoo | dhan | csv
     Index("ix_bars_series_res_ts", "series_key", "resolution", "ts"),
 )
 
 param_sets = Table(
-    "param_sets", METADATA,
+    "param_sets",
+    METADATA,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("strategy", String(48), nullable=False),
     Column("label", String(96)),
@@ -340,15 +383,16 @@ param_sets = Table(
 )
 
 backtest_runs = Table(
-    "backtest_runs", METADATA,
+    "backtest_runs",
+    METADATA,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("created_at", TZDateTime, nullable=False),
     Column("finished_at", TZDateTime),
-    Column("kind", String(16)),                                  # single | optimize | walkforward | research
+    Column("kind", String(16)),  # single | optimize | walkforward | research
     Column("label", String(160)),
     Column("config", JSON),
     Column("config_hash", String(16)),
-    Column("status", String(12)),                                # QUEUED | RUNNING | DONE | FAILED
+    Column("status", String(12)),  # QUEUED | RUNNING | DONE | FAILED
     Column("progress", Float, default=0.0),
     Column("message", Text),
     Column("metrics", JSON),
@@ -356,7 +400,8 @@ backtest_runs = Table(
 )
 
 backtest_trades = Table(
-    "backtest_trades", METADATA,
+    "backtest_trades",
+    METADATA,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("run_id", Integer, nullable=False),
     Column("strategy", String(48)),
@@ -383,7 +428,8 @@ backtest_trades = Table(
 )
 
 app_settings = Table(
-    "app_settings", METADATA,
+    "app_settings",
+    METADATA,
     Column("key", String(64), primary_key=True),
     Column("value", JSON),
     Column("updated_at", TZDateTime),
@@ -392,7 +438,8 @@ app_settings = Table(
 # ── news + sentiment (endpoints exist now; the scorer is built separately) ──
 
 news_items = Table(
-    "news_items", METADATA,
+    "news_items",
+    METADATA,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("ts", TZDateTime, nullable=False),
     Column("source", String(64)),
@@ -400,21 +447,22 @@ news_items = Table(
     Column("body", Text),
     Column("url", Text),
     Column("symbols", JSON),
-    Column("sentiment", Float),                                  # -1..+1, optional
+    Column("sentiment", Float),  # -1..+1, optional
     Column("meta", JSON),
     Column("created_at", TZDateTime),
     Index("ix_news_ts", "ts"),
 )
 
 sentiment_scores = Table(
-    "sentiment_scores", METADATA,
+    "sentiment_scores",
+    METADATA,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("ts", TZDateTime, nullable=False),
-    Column("scope", String(16), nullable=False),                 # MARKET | INDEX | STOCK | SECTOR
+    Column("scope", String(16), nullable=False),  # MARKET | INDEX | STOCK | SECTOR
     Column("symbol", String(48)),
-    Column("score", Float, nullable=False),                      # -1..+1
+    Column("score", Float, nullable=False),  # -1..+1
     Column("confidence", Float),
-    Column("horizon", String(16)),                               # intraday | swing | positional
+    Column("horizon", String(16)),  # intraday | swing | positional
     Column("source", String(64)),
     Column("note", Text),
     Column("created_at", TZDateTime),
@@ -424,17 +472,19 @@ sentiment_scores = Table(
 # ── broker account snapshots (free-tier Trading API; cached, never polled) ──
 
 account_cache = Table(
-    "account_cache", METADATA,
-    Column("key", String(32), primary_key=True),                 # profile|funds|holdings|positions|ledger|trades
+    "account_cache",
+    METADATA,
+    Column("key", String(32), primary_key=True),  # profile|funds|holdings|positions|ledger|trades
     Column("fetched_at", TZDateTime),
     Column("payload", JSON),
     Column("error", Text),
 )
 
 data_jobs = Table(
-    "data_jobs", METADATA,
+    "data_jobs",
+    METADATA,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("kind", String(24), nullable=False),                  # backfill | quality
+    Column("kind", String(24), nullable=False),  # backfill | quality
     Column("status", String(12), nullable=False),
     Column("progress", Float, default=0.0),
     Column("message", Text),
@@ -446,25 +496,27 @@ data_jobs = Table(
 # ── Live Desk: multi-instrument signals and one-unit paper positions ──────
 
 desk_signals = Table(
-    "desk_signals", METADATA,
+    "desk_signals",
+    METADATA,
     Column("id", String(16), primary_key=True),
     Column("created_at", TZDateTime, nullable=False),
     Column("expires_at", TZDateTime),
     Column("resolved_at", TZDateTime),
     Column("instrument_key", String(48), nullable=False),
     Column("series_key", String(32), nullable=False),
-    Column("kind", String(8)),                                   # INDEX | STOCK
-    Column("side", String(8)),                                   # BUY | SELL (stock); BUY_CE | BUY_PE (index)
+    Column("kind", String(8)),  # INDEX | STOCK
+    Column("side", String(8)),  # BUY | SELL (stock); BUY_CE | BUY_PE (index)
     Column("strategy", String(48)),
     Column("timeframe", String(6)),
     Column("bar_ts", TZDateTime),
-    Column("status", String(12)),                                # PENDING | TAKEN | SKIPPED | EXPIRED
+    Column("status", String(12)),  # PENDING | TAKEN | SKIPPED | EXPIRED
     Column("payload", JSON),
     Index("ix_desk_signals_created", "created_at"),
 )
 
 desk_positions = Table(
-    "desk_positions", METADATA,
+    "desk_positions",
+    METADATA,
     Column("id", String(16), primary_key=True),
     Column("signal_id", String(16)),
     Column("instrument_key", String(48), nullable=False),
@@ -475,8 +527,8 @@ desk_positions = Table(
     Column("timeframe", String(6)),
     Column("opened_at", TZDateTime, nullable=False),
     Column("closed_at", TZDateTime),
-    Column("status", String(12), nullable=False),                # OPEN | CLOSED
-    Column("entry_price", Float),                                # per unit (share price / option premium)
+    Column("status", String(12), nullable=False),  # OPEN | CLOSED
+    Column("entry_price", Float),  # per unit (share price / option premium)
     Column("exit_price", Float),
     Column("qty", Integer),
     Column("gross_pnl", Float),

@@ -38,12 +38,17 @@ class ChainStats:
 class ChainCache:
     """Thread-safe latest-chain holder plus its polling loop."""
 
-    def __init__(self, broker, underlying: str, expiry: str,
-                 poll_interval_sec: float = 5.0,
-                 stale_after_sec: float = 15.0,
-                 greek_tolerance: float = 0.08,
-                 forward_price_fn=None,
-                 on_snapshot=None):
+    def __init__(
+        self,
+        broker,
+        underlying: str,
+        expiry: str,
+        poll_interval_sec: float = 5.0,
+        stale_after_sec: float = 15.0,
+        greek_tolerance: float = 0.08,
+        forward_price_fn=None,
+        on_snapshot=None,
+    ):
         self.broker = broker
         self.underlying = underlying
         self.expiry = expiry
@@ -92,8 +97,9 @@ class ChainCache:
         return snap.underlying_price
 
     # ── enrichment ────────────────────────────────────────────────────────
-    def enrich(self, snap: ChainSnapshot, expiry_dt: dt.datetime,
-               now: dt.datetime) -> ChainSnapshot:
+    def enrich(
+        self, snap: ChainSnapshot, expiry_dt: dt.datetime, now: dt.datetime
+    ) -> ChainSnapshot:
         """Attach locally computed greeks and validate the broker's.
 
         Three outcomes per row:
@@ -214,10 +220,13 @@ class ChainCache:
         return out
 
     def stats_dict(self) -> dict:
-        return {"polls": self.stats.polls, "failures": self.stats.failures,
-                "rate_limited": self.stats.rate_limited,
-                "greeks_repaired": self.stats.greeks_repaired,
-                "greeks_rejected": self.stats.greeks_rejected,
-                "last_error": self.stats.last_error,
-                "age_sec": round(self.age_seconds(), 1),
-                "fresh": self.is_fresh()}
+        return {
+            "polls": self.stats.polls,
+            "failures": self.stats.failures,
+            "rate_limited": self.stats.rate_limited,
+            "greeks_repaired": self.stats.greeks_repaired,
+            "greeks_rejected": self.stats.greeks_rejected,
+            "last_error": self.stats.last_error,
+            "age_sec": round(self.age_seconds(), 1),
+            "fresh": self.is_fresh(),
+        }

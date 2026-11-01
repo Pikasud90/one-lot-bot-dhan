@@ -19,15 +19,39 @@ from .regime import NEUTRAL, TREND, VOLATILE
 
 
 class VWAPPullbackParams(StrategyParams):
-    vwap_slope_bars: int = Field(6, description="Bars over which VWAP must be rising/falling", json_schema_extra=opt(3, 12, 3))
-    pullback_bars: int = Field(4, description="Look-back window for the pullback", json_schema_extra=opt(2, 8, 1))
-    zone_atr: float = Field(0.3, description="Pullback must come within this many ATR of VWAP/EMA20", json_schema_extra=opt(0.1, 0.8, 0.1))
-    max_pierce_atr: float = Field(0.3, description="Pullback may pierce VWAP by at most this many ATR", json_schema_extra=opt(0.0, 0.8, 0.1))
+    vwap_slope_bars: int = Field(
+        6,
+        description="Bars over which VWAP must be rising/falling",
+        json_schema_extra=opt(3, 12, 3),
+    )
+    pullback_bars: int = Field(
+        4, description="Look-back window for the pullback", json_schema_extra=opt(2, 8, 1)
+    )
+    zone_atr: float = Field(
+        0.3,
+        description="Pullback must come within this many ATR of VWAP/EMA20",
+        json_schema_extra=opt(0.1, 0.8, 0.1),
+    )
+    max_pierce_atr: float = Field(
+        0.3,
+        description="Pullback may pierce VWAP by at most this many ATR",
+        json_schema_extra=opt(0.0, 0.8, 0.1),
+    )
     rsi_len: int = Field(7, description="Short RSI length", json_schema_extra=opt(5, 14, 1))
-    rsi_lo: float = Field(40, description="Long trigger RSI lower bound (short: 100-hi)", json_schema_extra=opt(30, 50, 5))
-    rsi_hi: float = Field(72, description="Long trigger RSI upper bound (short: 100-lo)", json_schema_extra=opt(60, 80, 4))
+    rsi_lo: float = Field(
+        40,
+        description="Long trigger RSI lower bound (short: 100-hi)",
+        json_schema_extra=opt(30, 50, 5),
+    )
+    rsi_hi: float = Field(
+        72,
+        description="Long trigger RSI upper bound (short: 100-lo)",
+        json_schema_extra=opt(60, 80, 4),
+    )
     adx_min: float = Field(15, description="Minimum ADX(14)", json_schema_extra=opt(10, 30, 5))
-    rvol_min: float = Field(0.8, description="Minimum relative volume", json_schema_extra=opt(0.5, 1.5, 0.25))
+    rvol_min: float = Field(
+        0.8, description="Minimum relative volume", json_schema_extra=opt(0.5, 1.5, 0.25)
+    )
     stop_buffer_atr: float = Field(0.1, description="Stop below pullback low by this many ATR")
     vwap_exit: bool = Field(True, description="Exit when a bar closes back through VWAP")
 
@@ -35,8 +59,10 @@ class VWAPPullbackParams(StrategyParams):
 class VWAPPullback(Strategy):
     name = "vwap_pullback"
     label = "VWAP Pullback"
-    description = ("Trend continuation: buy the first reclaim after a shallow pullback to a rising VWAP "
-                   "(short the mirror below a falling VWAP).")
+    description = (
+        "Trend continuation: buy the first reclaim after a shallow pullback to a rising VWAP "
+        "(short the mirror below a falling VWAP)."
+    )
     regimes = (TREND, NEUTRAL, VOLATILE)
     Params = VWAPPullbackParams
 
@@ -61,7 +87,12 @@ class VWAPPullback(Strategy):
         dn = (c < vwap) & (slope < 0) & (e20 < e50) & same_day
         touched_dn = pb_high >= np.minimum(vwap, e20) - p.zone_atr * atr
         held_dn = pb_high <= vwap + p.max_pierce_atr * atr
-        trig_dn = (c < o) & (c < l.shift(1)) & (r < r.shift(1)) & r.between(100 - p.rsi_hi, 100 - p.rsi_lo)
+        trig_dn = (
+            (c < o)
+            & (c < l.shift(1))
+            & (r < r.shift(1))
+            & r.between(100 - p.rsi_hi, 100 - p.rsi_lo)
+        )
         short_entry = dn & touched_dn & held_dn & trig_dn & adx_ok & vol_ok
 
         dist = (c - vwap) / atr
@@ -73,9 +104,15 @@ class VWAPPullback(Strategy):
         out["short_exit"] = (c > vwap) if p.vwap_exit else False
         # pillars
         out["pl_price_long"] = 0.5 * (e20 > e50) + 0.5 * (1 - (dist - 0.5).abs().clip(0, 1.5) / 1.5)
-        out["pl_price_short"] = 0.5 * (e20 < e50) + 0.5 * (1 - (dist + 0.5).abs().clip(0, 1.5) / 1.5)
-        out["pl_momentum_long"] = 0.5 * ((r - 45) / 25).clip(0, 1) + 0.5 * ((f["adx"] - 15) / 20).clip(0, 1)
-        out["pl_momentum_short"] = 0.5 * ((55 - r) / 25).clip(0, 1) + 0.5 * ((f["adx"] - 15) / 20).clip(0, 1)
+        out["pl_price_short"] = 0.5 * (e20 < e50) + 0.5 * (
+            1 - (dist + 0.5).abs().clip(0, 1.5) / 1.5
+        )
+        out["pl_momentum_long"] = 0.5 * ((r - 45) / 25).clip(0, 1) + 0.5 * (
+            (f["adx"] - 15) / 20
+        ).clip(0, 1)
+        out["pl_momentum_short"] = 0.5 * ((55 - r) / 25).clip(0, 1) + 0.5 * (
+            (f["adx"] - 15) / 20
+        ).clip(0, 1)
         out["pl_volatility_long"] = out["pl_volatility_short"] = vol_pillar(f["atr_pct"])
         out["pl_volume_long"] = out["pl_volume_short"] = volume_pillar(f["rvol"])
         out["long_score"] = np.nan
@@ -85,12 +122,24 @@ class VWAPPullback(Strategy):
     def _reasons(self, f, i, side):
         row = f.iloc[i]
         if side == "long":
-            return ([f"Uptrend: above rising VWAP, EMA20 {row['ema20']:.2f} > EMA50 {row['ema50']:.2f}",
-                     "Pulled back into the VWAP/EMA20 zone and reclaimed it with a strong close"], [])
-        return ([f"Downtrend: below falling VWAP, EMA20 {row['ema20']:.2f} < EMA50 {row['ema50']:.2f}",
-                 "Rallied into the VWAP/EMA20 zone and was rejected with a weak close"], [])
+            return (
+                [
+                    f"Uptrend: above rising VWAP, EMA20 {row['ema20']:.2f} > EMA50 {row['ema50']:.2f}",
+                    "Pulled back into the VWAP/EMA20 zone and reclaimed it with a strong close",
+                ],
+                [],
+            )
+        return (
+            [
+                f"Downtrend: below falling VWAP, EMA20 {row['ema20']:.2f} < EMA50 {row['ema50']:.2f}",
+                "Rallied into the VWAP/EMA20 zone and was rejected with a weak close",
+            ],
+            [],
+        )
 
     def implies(self, side: str) -> str:
-        return ("Buyers defended VWAP; trend continuation is likely while price holds above the pullback low."
-                if side == "long" else
-                "Sellers defended VWAP; downtrend continuation is likely while price stays below the rally high.")
+        return (
+            "Buyers defended VWAP; trend continuation is likely while price holds above the pullback low."
+            if side == "long"
+            else "Sellers defended VWAP; downtrend continuation is likely while price stays below the rally high."
+        )

@@ -50,8 +50,14 @@ class WorkingBar:
         self.tick_count += 1
 
     def freeze(self) -> Bar:
-        return Bar(ts=self.ts, open=self.open, high=self.high, low=self.low,
-                   close=self.close, volume=self.volume)
+        return Bar(
+            ts=self.ts,
+            open=self.open,
+            high=self.high,
+            low=self.low,
+            close=self.close,
+            volume=self.volume,
+        )
 
 
 class CandleSeries:
@@ -61,9 +67,14 @@ class CandleSeries:
     volume, and storing 0 for it is what let v1 compute VWAP on 0/0 (defect B3).
     """
 
-    def __init__(self, instrument_key: str, interval_min: int,
-                 session_open: dt.datetime, has_volume: bool = True,
-                 max_bars: int = 2000):
+    def __init__(
+        self,
+        instrument_key: str,
+        interval_min: int,
+        session_open: dt.datetime,
+        has_volume: bool = True,
+        max_bars: int = 2000,
+    ):
         self.instrument_key = instrument_key
         self.interval_min = interval_min
         self.session_open = session_open
@@ -89,8 +100,9 @@ class CandleSeries:
         self._seeded += added
         return added
 
-    def on_tick(self, ts: dt.datetime, price: float,
-                cumulative_volume: float | None = None) -> list[Bar]:
+    def on_tick(
+        self, ts: dt.datetime, price: float, cumulative_volume: float | None = None
+    ) -> list[Bar]:
         """Feed a tick. Returns bars that closed as a result of this tick."""
         ts = to_ist(ts)
         if price is None or not np.isfinite(price) or price <= 0:
@@ -106,18 +118,19 @@ class CandleSeries:
         closed_now: list[Bar] = []
 
         if self._working is None:
-            self._working = WorkingBar(b_open, price, price, price, price,
-                                       0.0 if self.has_volume else None)
+            self._working = WorkingBar(
+                b_open, price, price, price, price, 0.0 if self.has_volume else None
+            )
         elif b_open > self._working.ts:
             closed_now.append(self._close_working())
-            self._working = WorkingBar(b_open, price, price, price, price,
-                                       0.0 if self.has_volume else None)
+            self._working = WorkingBar(
+                b_open, price, price, price, price, 0.0 if self.has_volume else None
+            )
 
         self._working.update(price, vol_delta)
         return closed_now
 
-    def mark_closed_through(self, now: dt.datetime,
-                            settle_delay_sec: float = 0.0) -> list[Bar]:
+    def mark_closed_through(self, now: dt.datetime, settle_delay_sec: float = 0.0) -> list[Bar]:
         """Close the working bar on TIME rather than on tick arrival.
 
         Necessary because a bar must close even if no trade prints in the next
@@ -142,7 +155,7 @@ class CandleSeries:
 
     def _trim(self) -> None:
         if len(self._closed) > self.max_bars:
-            self._closed = self._closed[-self.max_bars:]
+            self._closed = self._closed[-self.max_bars :]
 
     # ── access (strategy may ONLY use closed bars) ────────────────────────
     @property
@@ -163,8 +176,11 @@ class CandleSeries:
 
     def arrays(self, limit: int | None = None) -> dict[str, np.ndarray]:
         bars = self._closed[-limit:] if limit else self._closed
-        vol = (np.array([b.volume if b.volume is not None else np.nan for b in bars])
-               if self.has_volume else np.full(len(bars), np.nan))
+        vol = (
+            np.array([b.volume if b.volume is not None else np.nan for b in bars])
+            if self.has_volume
+            else np.full(len(bars), np.nan)
+        )
         return {
             "ts": np.array([b.ts for b in bars], dtype=object),
             "open": np.array([b.open for b in bars], dtype=float),
@@ -178,8 +194,11 @@ class CandleSeries:
         """Only today's bars — VWAP is anchored to the session open, not to
         whatever happens to be in the buffer."""
         bars = [b for b in self._closed if b.ts.date() == session_date]
-        vol = (np.array([b.volume if b.volume is not None else np.nan for b in bars])
-               if self.has_volume else np.full(len(bars), np.nan))
+        vol = (
+            np.array([b.volume if b.volume is not None else np.nan for b in bars])
+            if self.has_volume
+            else np.full(len(bars), np.nan)
+        )
         return {
             "high": np.array([b.high for b in bars], dtype=float),
             "low": np.array([b.low for b in bars], dtype=float),
@@ -191,8 +210,10 @@ class CandleSeries:
         n = self.count
         if n >= required_bars:
             return True, f"{n} closed bars ({self._seeded} seeded)"
-        return False, (f"warm-up incomplete: {n}/{required_bars} closed bars — "
-                       f"signals blocked until indicators are defined")
+        return False, (
+            f"warm-up incomplete: {n}/{required_bars} closed bars — "
+            f"signals blocked until indicators are defined"
+        )
 
 
 @dataclass
@@ -203,8 +224,7 @@ class CandleBook:
     interval_min: int = 5
     series: dict[str, CandleSeries] = field(default_factory=dict)
 
-    def ensure(self, key: str, has_volume: bool,
-               interval_min: int | None = None) -> CandleSeries:
+    def ensure(self, key: str, has_volume: bool, interval_min: int | None = None) -> CandleSeries:
         iv = interval_min or self.interval_min
         k = f"{key}@{iv}"
         if k not in self.series:
