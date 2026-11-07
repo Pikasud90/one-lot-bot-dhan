@@ -97,3 +97,35 @@ def test_the_coverage_scan_is_cached_until_a_bar_is_written(tmp_path, monkeypatc
         assert len(calls) == 2 and set(third["series_key"]) == {"X", "Y"}
     finally:
         db.dispose()
+
+
+def test_callers_that_arrive_during_a_scan_share_it(tmp_path, monkeypatch):
+    """QA cycle 1, BUG-12: the scan costs seconds; concurrent callers must not each rescan."""
+    import threading
+    import time as _time
+
+    from onelot.data import store
+    from onelot.store import init_database
+
+    db = init_database(f"sqlite:///{tmp_path / 'cov.db'}")
+    try:
+        calls = []
+        real = store._coverage_scan
+
+        def slow(engine):
+            calls.append(1)
+            _time.sleep(0.3)
+            return real(engine)
+
+        monkeypatch.setattr(store, "_coverage_scan", slow)
+        store._bars_written()  # whatever an earlier test cached is stale now
+        threads = [
+            threading.Thread(target=store.coverage_report, args=(db.engine,)) for _ in range(4)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert len(calls) == 1
+    finally:
+        db.dispose()

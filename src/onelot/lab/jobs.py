@@ -90,11 +90,17 @@ class JobRunner:
         self.pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="lab")
         self._stop_flags: dict[int, threading.Event] = {}
         self._run_flags: dict[int, threading.Event] = {}
+        self.recovered = 0
+
+    def recover_interrupted(self) -> int:
+        """Runs and data jobs still RUNNING or QUEUED belong to a process that is gone: mark
+        them FAILED so the Lab never waits on them. Call it ONLY from the process that holds
+        the app's single-instance lock (Engine.start): a second runner on the same database
+        (the CLI sweep, a second launch) would otherwise fail the live app's jobs."""
         self.recovered = self._recover_interrupted()
+        return self.recovered
 
     def _recover_interrupted(self) -> int:
-        """Runs and data jobs still RUNNING or QUEUED belong to a process that is gone (the
-        app holds a single-instance lock): mark them FAILED so the Lab never waits on them."""
 
         def fn(conn) -> int:
             n = conn.execute(

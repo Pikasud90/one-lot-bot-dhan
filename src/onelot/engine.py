@@ -173,6 +173,8 @@ class Engine:
 
     def start(self) -> None:
         self.lock.acquire()
+        # Only the process holding the lock may call the Lab's leftover runs interrupted.
+        self.lab_jobs.recover_interrupted()
         self.status.running = True
         self.status.started_at = now_ist()
         self.status.trade_date = self.trade_date

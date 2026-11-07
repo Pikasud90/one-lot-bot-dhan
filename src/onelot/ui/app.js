@@ -407,9 +407,19 @@ document.addEventListener("click", (e) => {
   h.parentElement.classList.toggle("open", alerts.open[k]);
 });
 function renderHomePositions(d) {
-  const ps = (d && d.positions) || [];
-  keepInputs($("home-positions"), () => { $("home-positions").innerHTML = positionsTable(ps); });
-  wirePositions($("home-positions"), () => loadAlerts(true));
+  drawPositions("home-positions", (d && d.positions) || [], () => loadAlerts(true));
+}
+// One positions table in the page at a time (QA cycle 1, BUG-1): the Home and Live Desk tables
+// use the same input ids, so the hidden tab's copy is cleared before the visible one is drawn
+// (each tab draws only while it is shown); a cleared Live table is redrawn on its next render.
+function drawPositions(box, ps, after) {
+  const other = $(box === "home-positions" ? "desk-positions" : "home-positions");
+  if (other && other.querySelectorAll("input[id]").length) {
+    other.innerHTML = "";
+    if (other.id === "desk-positions") desk.sig.pos = null;
+  }
+  keepInputs($(box), () => { $(box).innerHTML = positionsTable(ps); });
+  wirePositions($(box), after);
 }
 // Re-rendering a table must not wipe a price the owner is typing.
 function keepInputs(root, render) {
@@ -751,8 +761,7 @@ function renderDesk(d) {
   const psig = JSON.stringify((d.positions || []).map(p => [p.id, p.exit_advice, p.session_over, p.stop_underlying, p.last_underlying, p.unrealized, p.paper_status, p.user_entry_price, p.user_exit_price]));
   if (desk.sig.pos !== psig) {
     desk.sig.pos = psig;
-    keepInputs($("desk-positions"), () => { $("desk-positions").innerHTML = positionsTable(d.positions || []); });
-    wirePositions($("desk-positions"));
+    drawPositions("desk-positions", d.positions || []);
   }
   const ssig = JSON.stringify((d.signals || []).map(s => s.id));
   if (desk.sig.sig !== ssig) {

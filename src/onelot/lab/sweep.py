@@ -273,17 +273,17 @@ def leaderboard(
                 "sweep_id": cfg.get("_sweep_id"),
             }
         )
-    if sort == "score":
-        out.sort(
-            key=lambda x: (x["score"] if x["score"] != float("-inf") else -1e9, x["trades"]),
-            reverse=order == "desc",
-        )
-    else:
-        # A run without the figure always sorts last, whichever way the column is read.
-        have = [x for x in out if isinstance(x.get(sort), (int, float))]
-        lack = [x for x in out if not isinstance(x.get(sort), (int, float))]
-        have.sort(key=lambda x: (x[sort], x["trades"]), reverse=order == "desc")
-        out = have + lack
+
+    # A run without the figure (an unranked score is -inf) always sorts last, whichever way
+    # the column is read: "low first" must not open on hundreds of unranked runs.
+    def known(x: dict) -> bool:
+        v = x.get(sort)
+        return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+    have = [x for x in out if known(x)]
+    lack = [x for x in out if not known(x)]
+    have.sort(key=lambda x: (x[sort], x["trades"]), reverse=order == "desc")
+    out = have + lack
     for x in out:
         if x["score"] == float("-inf"):
             x["score"] = None

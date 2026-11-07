@@ -180,7 +180,8 @@ class TestJobsNeverHangRunning:
                 )
             )
         runner = JobRunner(lab_engine, workers=1)
-        assert runner.recovered == 3
+        assert runner.recovered == 0, "building a runner never touches other runs"
+        assert runner.recover_interrupted() == 3 and runner.recovered == 3
         with lab_engine.connect() as conn:
             st = dict(conn.execute(backtest_runs.select()).mappings().all()[0])
             runs = {

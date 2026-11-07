@@ -28,6 +28,7 @@ UTC = dt.timezone.utc
 COVERAGE_TTL_S = 300.0
 _coverage_lock = threading.Lock()
 _coverage_cache: dict[str, tuple[float, int, pd.DataFrame]] = {}
+_coverage_scan_lock = threading.Lock()
 _bars_generation = 0
 
 
@@ -180,12 +181,15 @@ def load_bars(
     if len(derived) > len(best):
         best = _merge(best, derived)
     latest = max(candidates, key=lambda r: (avail[r][1], -RESOLUTION_ORDER.index(r)))
-    if latest != widest and avail[latest][1] > avail[widest][1] and not derived.empty:
-        tail_from = derived.index.max()
-        if start is not None and _to_utc(start) > tail_from.tz_convert(UTC).to_pydatetime():
+    if latest != widest and avail[latest][1] > avail[widest][1]:
+        # the newer base adds what the widest one does not reach; when the window starts
+        # after the widest base ends (derived is empty), it serves the whole window
+        tail_from = derived.index.max() if not derived.empty else start
+        if start is not None and tail_from is not None and _to_utc(start) > _to_utc(tail_from):
             tail_from = start
         tail = resample_bars(_read_bars(engine, series_key, latest, tail_from, end), resolution)
-        tail = tail[tail.index > derived.index.max()]  # never a partial bucket twice
+        if not derived.empty:
+            tail = tail[tail.index > derived.index.max()]  # never a partial bucket twice
         if not tail.empty:
             best = _merge(best, tail)
     return best
@@ -202,14 +206,27 @@ def coverage_report(engine: Engine) -> pd.DataFrame:
     """Per series, resolution and source: first and last bar (IST) and the bar count.
     Cached per engine until a bar is written or COVERAGE_TTL_S passes (a copy is returned)."""
     key = str(engine.url)
-    with _coverage_lock:
-        hit = _coverage_cache.get(key)
-        generation = _bars_generation
-    if hit is not None and hit[1] == generation and time.monotonic() - hit[0] < COVERAGE_TTL_S:
-        return hit[2].copy()
-    frame = _coverage_scan(engine)
-    with _coverage_lock:
-        _coverage_cache[key] = (time.monotonic(), generation, frame)
+
+    def cached() -> pd.DataFrame | None:
+        with _coverage_lock:
+            hit, generation = _coverage_cache.get(key), _bars_generation
+        if hit is not None and hit[1] == generation and time.monotonic() - hit[0] < COVERAGE_TTL_S:
+            return hit[2].copy()
+        return None
+
+    frame = cached()
+    if frame is not None:
+        return frame
+    # one scan at a time: callers that arrive during a scan take its answer (single flight)
+    with _coverage_scan_lock:
+        frame = cached()
+        if frame is not None:
+            return frame
+        with _coverage_lock:
+            generation = _bars_generation
+        frame = _coverage_scan(engine)
+        with _coverage_lock:
+            _coverage_cache[key] = (time.monotonic(), generation, frame)
     return frame.copy()
 
 
@@ -284,7 +301,7 @@ def effective_coverage(
     for key in sorted(by_series):
         stored = by_series[key]
         for tf in timeframes:
-            bases = [r for r in stored if r == tf or can_derive(r, tf)]
+            bases = [r for r in stored if _base_for(r, tf)]
             if not bases:
                 continue
             widest = min(
@@ -310,6 +327,20 @@ def effective_coverage(
                 }
             )
     return out
+
+
+def _base_for(stored: str, target: str) -> bool:
+    """Whether load_bars would read `stored` bars for `target`: the target itself, or a
+    resolution it knows (RESOLUTION_ORDER) that derives it. A malformed resolution is not a
+    base (it never takes the whole coverage view down)."""
+    if stored == target:
+        return True
+    if stored not in RESOLUTION_ORDER:
+        return False
+    try:
+        return can_derive(stored, target)
+    except ValueError:
+        return False
 
 
 def coverage_by_series(engine: Engine) -> dict[str, dict[str, dict]]:
