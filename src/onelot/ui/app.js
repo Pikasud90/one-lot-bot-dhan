@@ -754,7 +754,7 @@ $("focus-tf").onchange = () => { if (latest) renderFocus(latest.desk); };
 tabLoaders.live = () => { renderGates(); desk.force = true; wantPaper(true); if (latest) { renderDesk(latest.desk); focus.lastAt = 0; renderFocus(latest.desk); } };
 
 /* ═══════════════════════════════ LAB ════════════════════════════════ */
-const lab = { strategies: [], instruments: [], focus: [], focusTfs: [], cat: store.get("lab.cat", "DESK"), runs: [], waiting: null, poll: null, shown: null };
+const lab = { strategies: [], instruments: [], focus: [], focusTfs: [], primary: [], cat: store.get("lab.cat", "DESK"), runs: [], waiting: null, poll: null, shown: null };
 const COMMON_EXITS = new Set(["stop_atr_min", "stop_atr_max", "min_risk_pct", "stop_datr_min", "max_risk_pct", "target_r", "trail_atr_mult",
   "trail_atr_period", "trail_activate_r", "partial_r", "partial_frac", "breakeven_after_partial", "max_bars", "exit_time"]);
 const COMMON_FILTERS = new Set(["allow_long", "allow_short", "entry_start", "entry_end", "min_strength", "market_filter", "regime_filter",
@@ -766,7 +766,7 @@ async function loadLab() {
   if (!lab.strategies.length) {
     const [s, i, f] = await Promise.all([api("/api/lab/strategies"), api("/api/lab/instruments"), api("/api/lab/focus")]);
     lab.strategies = s.strategies; lab.instruments = i.instruments.filter(x => x.tradeable);
-    lab.focus = f.instruments; lab.focusTfs = f.timeframes;
+    lab.focus = f.instruments; lab.focusTfs = f.timeframes; lab.primary = f.primary_strategies || [];
     renderCats(); renderInstruments(); renderStrategies(); onStrategyChange(); renderSweepForm();
   }
   refreshRuns();
@@ -952,6 +952,7 @@ function renderBacktest(r) {
     <div class="card"><h2>Trades <small>${(r.trades || []).length} · click a row to focus it on the chart</small></h2><div class="scroll" style="max-height:420px;overflow:auto" id="lab-trades">${tradesTable(r.trades || [])}</div></div>
     <div class="card"><details><summary class="muted">Configuration · ${Object.keys(cfg.params || {}).length ? "custom parameters" : "default parameters"}</summary><pre class="code">${esc(JSON.stringify(cfg, null, 2))}</pre></details></div>`;
   const ch = a.chart || {};
+  if (!a.chart && $("plot-px")) $("plot-px").insertAdjacentHTML("afterend", `<div class="hint">Runs made by a sweep keep no price chart (it saves gigabytes). Press <b>Run backtest</b> with this configuration to draw one.</div>`);
   if (C()) {
     C().candles($("plot-px"), ch.candles || [], ch.trades || [], { fit: "last" });
     C().equity($("plot-eq"), a.equity || [], cfg.reference_capital || 100000);
@@ -1022,6 +1023,7 @@ function renderSweepResult(r) {
 function boardTable(rows) {
   return table([{ l: "#", k: "run_id", n: 1 }, { l: "Strategy", k: "strategy" }, { l: "Instrument", k: "instrument" }, { l: "TF", k: "timeframe" },
     { l: "Kind", f: r => r.oos ? "<span class='oos'>OOS</span>" : "IS", c: r => r.oos ? "oos" : "" }, { l: "Trades", n: 1, k: "trades" }, { l: "Win %", n: 1, f: r => pct(r.win_rate) },
+    { l: "Profit %", n: 1, f: r => r.profit_pct == null ? "–" : spct(r.profit_pct, 2), c: r => cls(r.profit_pct) },
     { l: "PF", n: 1, f: r => fmt(r.profit_factor) }, { l: "Exp R", n: 1, f: r => fmt(r.expectancy_r, 3), c: r => cls(r.expectancy_r) }, { l: "Net ₹", n: 1, f: r => rup(r.net_pnl), c: r => cls(r.net_pnl) },
     { l: "Max DD ₹", n: 1, f: r => rup(r.max_drawdown_inr) }, { l: "Score", n: 1, f: r => r.score == null ? "<span class='dim'>unranked</span>" : fmt(r.score, 2), c: r => cls(r.score) },
     { l: "Sent.", f: r => r.sentiment_mode && r.sentiment_mode !== "off" ? esc(r.sentiment_mode) : "" }], rows, { empty: "No ranked runs yet — run a sweep.", rowClass: () => "lead" });
@@ -1032,6 +1034,9 @@ function wireBoard(root) {
 async function loadBoard() {
   const q = new URLSearchParams(); if ($("board-kind").value) q.set("kind", $("board-kind").value); if ($("board-cat").value) q.set("category", $("board-cat").value);
   q.set("min_trades", $("board-min").value || 10);
+  q.set("sort", $("board-sort").value || "score"); q.set("order", $("board-order").dataset.order === "asc" ? "asc" : "desc");
+  if ($("board-strats").value === "primary" && lab.primary && lab.primary.length) q.set("strategies", lab.primary.join(","));
+  store.set("board.view", { sort: $("board-sort").value, order: $("board-order").dataset.order, strats: $("board-strats").value });
   const r = await api("/api/lab/leaderboard?" + q.toString());
   const s = r.summary || {};
   $("board-summary").innerHTML = tile("Saved runs", s.runs || 0) + tile("Ranked", s.ranked || 0, `≥ ${$("board-min").value} trades`) + tile("Positive", s.positive || 0, "PF ≥ 1.2 & score > 0", s.positive ? "pos" : "") +
@@ -1040,7 +1045,11 @@ async function loadBoard() {
   wireBoard($("lab-board"));
 }
 $("board-refresh").onclick = () => loadBoard().catch(() => {});
-["board-kind", "board-cat"].forEach(id => $(id).onchange = () => loadBoard().catch(() => {}));
+["board-kind", "board-cat", "board-sort", "board-strats"].forEach(id => $(id).onchange = () => loadBoard().catch(() => {}));
+// Leaderboard order: one button flips high-first / low-first (owner feedback 2026-11-07).
+const boardOrderLabel = (o) => o === "asc" ? "↑ low first" : "↓ high first";
+$("board-order").onclick = () => { const b = $("board-order"); b.dataset.order = b.dataset.order === "asc" ? "desc" : "asc"; b.textContent = boardOrderLabel(b.dataset.order); loadBoard().catch(() => {}); };
+(() => { const v = store.get("board.view", null); if (!v) return; if (v.sort) $("board-sort").value = v.sort; if (v.strats != null) $("board-strats").value = v.strats; if (v.order === "asc" || v.order === "desc") { $("board-order").dataset.order = v.order; $("board-order").textContent = boardOrderLabel(v.order); } })();
 function renderSweepForm() {
   const chips = (el, items, key, labelOf) => {
     const sel = new Set(store.get("sweep." + key, items));

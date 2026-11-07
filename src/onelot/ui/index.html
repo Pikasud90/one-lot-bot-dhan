@@ -223,9 +223,12 @@
         </div>
         <div class="sub" data-sub="board">
           <div class="card">
-            <div class="row between"><h2>Leaderboard <small>every saved run, best first</small></h2>
+            <div class="row between"><h2>Leaderboard <small>every saved run · sort by win rate or profit %, high or low first</small></h2>
               <div class="actions"><select id="board-kind"><option value="">in-sample + walk-forward</option><option value="walkforward">walk-forward (OOS) only</option><option value="single">in-sample only</option></select>
                 <select id="board-cat"><option value="">all categories</option><option>OPTIONS</option><option>FUTURES</option><option>STOCK</option><option>CURRENCY</option></select>
+                <select id="board-strats" title="which strategies"><option value="primary">primary strategies</option><option value="">all strategies</option></select>
+                <select id="board-sort" title="sort by"><option value="score">sort: score</option><option value="win_rate">sort: win rate</option><option value="profit_pct">sort: profit %</option><option value="profit_factor">sort: profit factor</option><option value="expectancy_r">sort: expectancy R</option><option value="net_pnl">sort: net ₹</option><option value="trades">sort: trades</option></select>
+                <button class="btn small" id="board-order" data-order="desc" title="toggle ascending / descending">↓ high first</button>
                 <input type="number" id="board-min" value="10" min="1" style="width:90px;margin:0" title="minimum trades"><button class="btn small" id="board-refresh">refresh</button></div></div>
             <div class="tiles small" id="board-summary"></div>
             <div class="scroll" id="lab-board"></div>

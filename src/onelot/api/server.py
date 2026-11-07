@@ -510,6 +510,12 @@ def create_app(engine, api_token: str) -> FastAPI:
         sweep_id: int | None = None,
         min_trades: int = Query(10, ge=1, le=500),
         limit: int = Query(300, ge=1, le=2000),
+        sort: str = Query(
+            "score",
+            pattern="^(score|win_rate|profit_pct|profit_factor|expectancy_r|net_pnl|trades)$",
+        ),
+        order: str = Query("desc", pattern="^(asc|desc)$"),
+        strategies: str | None = Query(None, max_length=400),
     ) -> dict:
         from ..lab.sweep import leaderboard, summarise
 
@@ -522,9 +528,14 @@ def create_app(engine, api_token: str) -> FastAPI:
             kind=kind,
             min_trades=min_trades,
             sweep_id=sweep_id,
-            limit=limit,
+            limit=100000 if strategies else limit,
+            sort=sort,
+            order=order,
         )
-        return {"rows": rows, "summary": summarise(rows)}
+        if strategies:  # e.g. the desk's primary strategies, comma separated
+            keep = {x.strip() for x in strategies.split(",") if x.strip()}
+            rows = [r for r in rows if r["strategy"] in keep][:limit]
+        return {"rows": rows, "summary": summarise(rows), "sort": sort, "order": order}
 
     @app.get("/api/lab/matrix")
     def lab_matrix(sweep_id: int | None = None, min_trades: int = Query(5, ge=1, le=500)) -> dict:
@@ -540,9 +551,16 @@ def create_app(engine, api_token: str) -> FastAPI:
 
     @app.get("/api/lab/focus")
     def lab_focus() -> dict:
+        from ..desk.config import load_desk_config
         from ..lab.sweep import FOCUS_TIMEFRAMES, focus_instruments
 
-        return {"instruments": focus_instruments(), "timeframes": FOCUS_TIMEFRAMES}
+        desk = getattr(engine, "desk", None)
+        cfg = getattr(desk, "cfg", None) or load_desk_config()
+        return {
+            "instruments": focus_instruments(),
+            "timeframes": FOCUS_TIMEFRAMES,
+            "primary_strategies": list(cfg.primary_strategies()),
+        }
 
     @app.get("/api/lab/runs/{rid}")
     def lab_run(rid: int, trades: int = Query(1, ge=0, le=1)) -> dict:

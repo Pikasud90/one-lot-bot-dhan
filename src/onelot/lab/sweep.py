@@ -19,6 +19,7 @@ from typing import Any
 
 from sqlalchemy import Engine, select
 
+from ..clock import IST
 from ..data.schema import backtest_runs
 from ..settings import load_yaml
 from ..strategies.registry import REGISTRY
@@ -160,6 +161,11 @@ def rank_score(m: dict, min_trades: int = 10) -> float:
     return score
 
 
+LEADERBOARD_SORTS = frozenset(
+    {"score", "win_rate", "profit_pct", "profit_factor", "expectancy_r", "net_pnl", "trades"}
+)
+
+
 def leaderboard(
     engine: Engine,
     strategy: str | None = None,
@@ -171,8 +177,27 @@ def leaderboard(
     sweep_id: int | None = None,
     limit: int = 300,
     latest_only: bool = True,
+    sort: str = "score",
+    order: str = "desc",
 ) -> list[dict]:
-    q = select(backtest_runs).where(backtest_runs.c.status == "DONE")
+    """Saved runs as leaderboard rows, sorted by `sort` (score, win_rate, profit_pct,
+    profit_factor, expectancy_r, net_pnl, trades) in `order` (desc or asc) BEFORE the limit.
+
+    Only the columns a row needs are read: a run's `artifacts` (equity curve, chart, trade
+    breakdowns) average well over 100 KB, and reading them for thousands of runs made the
+    Matrix and the leaderboard time out (owner feedback, 2026-11-07)."""
+    if sort not in LEADERBOARD_SORTS:
+        raise ValueError(f"sort must be one of {sorted(LEADERBOARD_SORTS)}")
+    if order not in ("asc", "desc"):
+        raise ValueError("order must be asc or desc")
+    q = select(
+        backtest_runs.c.id,
+        backtest_runs.c.kind,
+        backtest_runs.c.label,
+        backtest_runs.c.config,
+        backtest_runs.c.metrics,
+        backtest_runs.c.created_at,
+    ).where(backtest_runs.c.status == "DONE")
     if kind:
         q = q.where(backtest_runs.c.kind == kind)
     else:
@@ -227,6 +252,7 @@ def leaderboard(
                 "sentiment_mode": cfg.get("sentiment_mode", "off"),
                 "trades": n,
                 "win_rate": m.get("win_rate"),
+                "profit_pct": _finite(m.get("total_return_pct")),
                 "profit_factor": _finite(m.get("profit_factor")),
                 "expectancy_r": m.get("expectancy_r"),
                 "net_pnl": m.get("net_pnl"),
@@ -236,17 +262,28 @@ def leaderboard(
                 "folds": m.get("folds"),
                 "pricing": m.get("pricing"),
                 "score": rank_score(m, min_trades),
-                "created_at": r["created_at"].isoformat()
+                "created_at": (
+                    r["created_at"].astimezone(IST)
+                    if r["created_at"].tzinfo is not None
+                    else r["created_at"]
+                ).isoformat()
                 if isinstance(r["created_at"], dt.datetime)
                 else r["created_at"],
                 "label": r.get("label"),
                 "sweep_id": cfg.get("_sweep_id"),
             }
         )
-    out.sort(
-        key=lambda x: (x["score"] if x["score"] != float("-inf") else -1e9, x["trades"]),
-        reverse=True,
-    )
+    if sort == "score":
+        out.sort(
+            key=lambda x: (x["score"] if x["score"] != float("-inf") else -1e9, x["trades"]),
+            reverse=order == "desc",
+        )
+    else:
+        # A run without the figure always sorts last, whichever way the column is read.
+        have = [x for x in out if isinstance(x.get(sort), (int, float))]
+        lack = [x for x in out if not isinstance(x.get(sort), (int, float))]
+        have.sort(key=lambda x: (x[sort], x["trades"]), reverse=order == "desc")
+        out = have + lack
     for x in out:
         if x["score"] == float("-inf"):
             x["score"] = None

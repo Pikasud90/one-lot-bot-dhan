@@ -11,7 +11,7 @@ from __future__ import annotations
 import datetime as dt
 
 import pandas as pd
-from sqlalchemy import Engine, and_, func, select
+from sqlalchemy import Engine, String, and_, func, select, type_coerce
 
 from ..clock import IST
 from .db import upsert
@@ -61,6 +61,18 @@ def _to_utc(value) -> dt.datetime:
     return ts.tz_convert(UTC).to_pydatetime()
 
 
+def _utc_index(raw: pd.Series) -> pd.DatetimeIndex:
+    """Stored bar times as tz-aware UTC. SQLite hands back the stored text
+    ('2026-05-29 04:15:00.000000', naive UTC per TZDateTime); another driver may hand back
+    datetimes. Either way, naive means UTC."""
+    if raw.dtype == object and len(raw) and isinstance(raw.iloc[0], str):
+        ts = pd.to_datetime(raw, format="ISO8601")
+    else:
+        ts = pd.to_datetime(raw)
+    idx = pd.DatetimeIndex(ts)
+    return idx.tz_localize(UTC) if idx.tz is None else idx.tz_convert(UTC)
+
+
 def _read_bars(
     engine: Engine, series_key: str, resolution: str, start=None, end=None
 ) -> pd.DataFrame:
@@ -69,9 +81,17 @@ def _read_bars(
         conds.append(bars.c.ts >= _to_utc(start))
     if end is not None:
         conds.append(bars.c.ts < _to_utc(end))
+    # `ts` is read raw and converted to UTC in one vectorised step: the column type's
+    # per-row conversion cost ~4 s per 2 million one-minute bars and made Lab runs crawl.
     q = (
         select(
-            bars.c.ts, bars.c.open, bars.c.high, bars.c.low, bars.c.close, bars.c.volume, bars.c.oi
+            type_coerce(bars.c.ts, String).label("ts"),
+            bars.c.open,
+            bars.c.high,
+            bars.c.low,
+            bars.c.close,
+            bars.c.volume,
+            bars.c.oi,
         )
         .where(and_(*conds))
         .order_by(bars.c.ts)
@@ -83,7 +103,7 @@ def _read_bars(
         )
     if df.empty:
         return df.set_index("ts")
-    ts = pd.to_datetime(df["ts"], utc=True)
+    ts = _utc_index(df["ts"])
     df = df.drop(columns=["ts"])
     df.index = pd.DatetimeIndex(ts).tz_convert(IST)
     df.index.name = "ts"
@@ -131,15 +151,32 @@ def load_bars(
         r for r in RESOLUTION_ORDER if r in avail and r != resolution and can_derive(r, resolution)
     ]
     best = direct
-    for base in candidates:
-        derived = resample_bars(_read_bars(engine, series_key, base, start, end), resolution)
-        if len(derived) > len(best):
-            best = (
-                derived
-                if best.empty
-                else pd.concat([best[~best.index.isin(derived.index)], derived]).sort_index()
-            )
+    if not candidates:
+        return best
+    # Read ONE base: the one with the widest history (earliest first bar; the finer on a
+    # tie). Reading and resampling every candidate cost seconds per Lab run on five years
+    # of one-minute bars. A different base that runs later only adds its newer tail.
+    widest = min(candidates, key=lambda r: (avail[r][0], RESOLUTION_ORDER.index(r)))
+    derived = resample_bars(_read_bars(engine, series_key, widest, start, end), resolution)
+    if len(derived) > len(best):
+        best = _merge(best, derived)
+    latest = max(candidates, key=lambda r: (avail[r][1], -RESOLUTION_ORDER.index(r)))
+    if latest != widest and avail[latest][1] > avail[widest][1] and not derived.empty:
+        tail_from = derived.index.max()
+        if start is not None and _to_utc(start) > tail_from.tz_convert(UTC).to_pydatetime():
+            tail_from = start
+        tail = resample_bars(_read_bars(engine, series_key, latest, tail_from, end), resolution)
+        tail = tail[tail.index > derived.index.max()]  # never a partial bucket twice
+        if not tail.empty:
+            best = _merge(best, tail)
     return best
+
+
+def _merge(best: pd.DataFrame, extra: pd.DataFrame) -> pd.DataFrame:
+    """`extra` wins where both have a bar."""
+    if best.empty:
+        return extra
+    return pd.concat([best[~best.index.isin(extra.index)], extra]).sort_index()
 
 
 def coverage_report(engine: Engine) -> pd.DataFrame:

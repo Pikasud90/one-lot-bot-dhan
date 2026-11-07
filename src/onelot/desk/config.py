@@ -50,6 +50,17 @@ class DeskConfig:
     stocks: tuple[DeskInstrumentCfg, ...] = ()
     path: str = ""
 
+    def primary_strategies(self) -> tuple[str, ...]:
+        """Every strategy the desk runs for alerts, in configuration order, each once.
+
+        These are the owner's primary strategies (desk.yaml); the Home scoreboard and the
+        Lab's 'primary strategies' filter show them."""
+        seen: dict[str, None] = {}
+        for inst in self.instruments:
+            for slot in inst.strategies:
+                seen.setdefault(slot.name, None)
+        return tuple(seen)
+
     @property
     def instruments(self) -> tuple[DeskInstrumentCfg, ...]:
         return self.indices + self.stocks
