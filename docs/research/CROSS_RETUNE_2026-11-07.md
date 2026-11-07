@@ -1,5 +1,11 @@
 # Cross-instrument retune of every Lab strategy — 7 Nov 2026
 
+> **Addendum 2026-11-08.** The index-option numbers below were computed with a model that charged
+> slippage twice (0.03 % on the index AND the premium's half-spread and ticks), about 2 points of
+> premium per round trip; the runner is fixed. Re-priced with Dhan's real traded premiums, no
+> option setting is profitable in all three periods either. See
+> [REAL_OPTIONS_2026-11-08.md](REAL_OPTIONS_2026-11-08.md). Stock results are unaffected.
+
 The owner rejected a shortlist that leaned on one stock (Adani Green) and asked for every
 strategy to be retuned so that **one setting works across the instruments**, tested with
 several sweep versions until the best settings are found. This is that study.

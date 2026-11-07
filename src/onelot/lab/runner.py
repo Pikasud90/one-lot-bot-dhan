@@ -267,9 +267,13 @@ def run_backtest(
         counts["signals_long"] = int(test["long_entry"].sum())
         counts["signals_short"] = int(test["short_entry"].sum())
         days = pd.DatetimeIndex(sorted(set(test.index.normalize())))
-        candidates = simulate(
-            f, strategy.p, spec.series_key, cfg.strategy, cfg.slippage_pct, fine, start_day
-        )
+        # An option's friction is taken once, on its premium (half-spread + ticks in
+        # execution.execute_trade); `slippage_pct` is for linear instruments only, as
+        # BacktestCfg documents. Until 2026-11-08 options paid both (~2 points of premium per
+        # round trip): Dhan's real premiums track the single-friction model (docs/research/
+        # REAL_OPTIONS_2026-11-08.md).
+        slip = 0.0 if spec.is_option else cfg.slippage_pct
+        candidates = simulate(f, strategy.p, spec.series_key, cfg.strategy, slip, fine, start_day)
     if progress:
         progress(0.6, f"{spec.key}: execution")
 

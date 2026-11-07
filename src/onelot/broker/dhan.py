@@ -61,6 +61,7 @@ EP_OPTION_CHAIN = "/optionchain"
 EP_QUOTE = "/marketfeed/quote"
 EP_INTRADAY = "/charts/intraday"
 EP_HISTORICAL = "/charts/historical"
+EP_ROLLING_OPTION = "/charts/rollingoption"  # expired options, rolling ATM-relative strikes
 
 # Free Trading-API reads (no Data API subscription needed). All GET.
 EP_PROFILE = "/profile"
@@ -778,6 +779,59 @@ class DhanAdapter:
         )
         bars = self._bars_from_payload(data)
         return [b for b in bars if start <= b.ts <= end]
+
+    def rolling_option(
+        self,
+        underlying_security_id: str | int,
+        fno_segment: str,
+        expiry_code: int,
+        strike: str,
+        option_type: str,
+        start: dt.date,
+        end: dt.date,
+        expiry_flag: str = "MONTH",
+        interval_min: int = 1,
+    ) -> dict:
+        """Expired options on a rolling basis (Data API, read-only market data).
+
+        One series per underlying, expiry flag/code (1 = near contract, 2 = next), CALL/PUT
+        and a strike RELATIVE to each minute's at-the-money strike ("ATM", "ATM+3",
+        "ATM-10"). Returns the leg's column lists: timestamp, open, high, low, close, iv,
+        volume, oi, strike, spot; {} when Dhan has no bars. Dhan refuses expiryCode 0 here.
+        """
+        if option_type not in ("CALL", "PUT"):
+            raise ValueError(f"option_type must be CALL or PUT, not {option_type!r}")
+        data = self._post(
+            EP_ROLLING_OPTION,
+            {
+                "exchangeSegment": fno_segment,
+                "interval": str(interval_min),
+                "securityId": str(underlying_security_id),
+                "instrument": "OPTIDX",
+                "expiryFlag": expiry_flag,
+                "expiryCode": int(expiry_code),
+                "strike": strike,
+                "drvOptionType": option_type,
+                "requiredData": [
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "iv",
+                    "volume",
+                    "strike",
+                    "oi",
+                    "spot",
+                ],
+                "fromDate": start.isoformat(),
+                "toDate": end.isoformat(),
+            },
+            "historical",
+        )
+        if not isinstance(data, dict):
+            return {}
+        leg = data.get("ce" if option_type == "CALL" else "pe")
+        return leg if isinstance(leg, dict) else {}
 
     # ── WebSocket feed ────────────────────────────────────────────────────
     def start_stream(self, contracts: list[Contract], on_tick: TickCallback) -> None:
