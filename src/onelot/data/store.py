@@ -9,6 +9,8 @@ underlying prices into instrument P&L.
 from __future__ import annotations
 
 import datetime as dt
+import threading
+import time
 
 import pandas as pd
 from sqlalchemy import Engine, String, and_, func, select, type_coerce
@@ -19,6 +21,20 @@ from .resample import RESOLUTION_ORDER, can_derive, normalize_resolution, resamp
 from .schema import bars
 
 UTC = dt.timezone.utc
+
+# coverage_report scans every stored bar (~6 s on the owner's 7 GB corpus) and the Lab, Data
+# and Settings tabs all ask for it. One answer per engine is kept until a bar is written
+# (save_bars bumps the generation) or COVERAGE_TTL_S passes.
+COVERAGE_TTL_S = 300.0
+_coverage_lock = threading.Lock()
+_coverage_cache: dict[str, tuple[float, int, pd.DataFrame]] = {}
+_bars_generation = 0
+
+
+def _bars_written() -> None:
+    global _bars_generation
+    with _coverage_lock:
+        _bars_generation += 1
 
 
 def save_bars(
@@ -49,7 +65,9 @@ def save_bars(
                 "source": source,
             }
         )
-    return upsert(engine, bars, rows, ["ts", "series_key", "resolution"])
+    written = upsert(engine, bars, rows, ["ts", "series_key", "resolution"])
+    _bars_written()
+    return written
 
 
 def _to_utc(value) -> dt.datetime:
@@ -180,6 +198,21 @@ def _merge(best: pd.DataFrame, extra: pd.DataFrame) -> pd.DataFrame:
 
 
 def coverage_report(engine: Engine) -> pd.DataFrame:
+    """Per series, resolution and source: first and last bar (IST) and the bar count.
+    Cached per engine until a bar is written or COVERAGE_TTL_S passes (a copy is returned)."""
+    key = str(engine.url)
+    with _coverage_lock:
+        hit = _coverage_cache.get(key)
+        generation = _bars_generation
+    if hit is not None and hit[1] == generation and time.monotonic() - hit[0] < COVERAGE_TTL_S:
+        return hit[2].copy()
+    frame = _coverage_scan(engine)
+    with _coverage_lock:
+        _coverage_cache[key] = (time.monotonic(), generation, frame)
+    return frame.copy()
+
+
+def _coverage_scan(engine: Engine) -> pd.DataFrame:
     q = (
         select(
             bars.c.series_key,

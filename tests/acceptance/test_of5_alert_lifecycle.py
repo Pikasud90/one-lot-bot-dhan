@@ -323,6 +323,15 @@ def test_an_old_position_row_without_of5_fields_reads_back_in_the_journal(rig):
     (journal,) = rig.desk.journal()
     assert journal["user_exit_price"] == 101.0
     assert journal["alert_entry_price"] == alert["economics"]["entry_price"]
+    # the alert's time comes from the alert itself when the position does not carry it
+    with rig.engine.begin() as conn:
+        payload = stored_position(rig, pid)["payload"]
+        payload.pop("alert_created_at", None)
+        conn.execute(
+            update(desk_positions).where(desk_positions.c.id == pid).values(payload=payload)
+        )
+    (journal,) = rig.desk.journal()
+    assert journal["alert_created_at"][:16] == alert["created_at"][:16]
 
 
 # ══ through the HTTP API ═══════════════════════════════════════════════════════════════

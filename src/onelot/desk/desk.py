@@ -1269,6 +1269,21 @@ class Desk:
             if d["user_exit_price"] is None and not payload.get("exit_source"):
                 d["user_exit_price"] = r["exit_price"]  # closed before OF-5: at the owner's price
             out.append(d)
+        # positions taken before OF-5 do not carry their alert's time: read it from the alert
+        missing = {d["signal_id"] for d in out if not d["alert_created_at"] and d["signal_id"]}
+        if missing:
+            with self.engine.connect() as conn:
+                found = {
+                    sid: _iso(_aware(at))
+                    for sid, at in conn.execute(
+                        select(desk_signals.c.id, desk_signals.c.created_at).where(
+                            desk_signals.c.id.in_(missing)
+                        )
+                    )
+                }
+            for d in out:
+                if not d["alert_created_at"]:
+                    d["alert_created_at"] = found.get(d["signal_id"])
         return out
 
     # ── audit of archived alerts ──────────────────────────────────────────

@@ -70,3 +70,30 @@ def test_the_last_bar_is_the_latest_of_any_base():
     )
     assert got[("X", "15m")]["last"] == "2026-11-06 15:25"
     assert got[("X", "15m")]["first"] == "2021-11-01"
+
+
+def test_the_coverage_scan_is_cached_until_a_bar_is_written(tmp_path, monkeypatch):
+    """The scan costs seconds on a large corpus: asked twice, it runs once; a bar written
+    (save_bars) makes the next answer fresh."""
+    import pandas as pd
+
+    from onelot.clock import IST
+    from onelot.data import store
+    from onelot.store import init_database
+
+    db = init_database(f"sqlite:///{tmp_path / 'cov.db'}")
+    try:
+        calls = []
+        real = store._coverage_scan
+        monkeypatch.setattr(store, "_coverage_scan", lambda e: calls.append(1) or real(e))
+        idx = pd.DatetimeIndex([pd.Timestamp("2026-11-02 09:15", tz=IST)])
+        bar = pd.DataFrame({"open": [1.0], "high": [1.0], "low": [1.0], "close": [1.0]}, index=idx)
+        store.save_bars(db.engine, "X", "5m", bar, "yahoo")
+        first = store.coverage_report(db.engine)
+        second = store.coverage_report(db.engine)
+        assert len(calls) == 1 and first.equals(second)
+        store.save_bars(db.engine, "Y", "5m", bar, "dhan")
+        third = store.coverage_report(db.engine)
+        assert len(calls) == 2 and set(third["series_key"]) == {"X", "Y"}
+    finally:
+        db.dispose()
