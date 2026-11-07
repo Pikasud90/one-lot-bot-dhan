@@ -97,6 +97,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("preflight", help="which Dhan endpoints can this token reach?")
     sub.add_parser("cost", help="one-lot cost preview (python -m onelot.cost_preview)")
+    fc = sub.add_parser(
+        "fill-costs", help="measured one-unit fill costs from quotes (never an order)"
+    )
+    fc.add_argument("--days", type=int, default=30)
     return p
 
 
@@ -383,6 +387,72 @@ def cmd_preflight(args, cfg: AppConfig, secrets: Secrets) -> int:
     return preflight_main()
 
 
+def cmd_fill_costs(args, cfg: AppConfig, secrets: Secrets) -> int:
+    from .data.db import get_engine
+    from .desk.fillcost import report
+
+    r = report(get_engine(cfg.db_url_resolved), args.days)
+
+    def pct(v):
+        return "-" if v is None else f"{v:.3f}%"
+
+    a, m = r["lab_assumptions"], r["measured"]
+    print(f"Fill costs, last {r['days']} days: {r['samples']} quote samples (never an order)")
+    print(
+        f"  stocks : measured half-spread {pct(m['stock_half_spread_median_pct'])} per side"
+        f" vs the Lab's {a['stock_slippage_pct_per_side']}% slippage"
+    )
+    print(
+        f"  options: measured half-spread {pct(m['option_half_spread_median_pct'])} per side"
+        f" vs the Lab's {a['option_half_spread_pct_per_side']}% + "
+        f"{a['option_slippage_ticks_per_side']} ticks"
+    )
+    for x in r["by_instrument"]:
+        print(
+            f"  {x['instrument']:<22} n={x['samples']:<5} median {pct(x['half_spread_median_pct'])}"
+            f"  p90 {pct(x['half_spread_p90_pct'])}"
+        )
+    for x in r["alerts"]:
+        later = "  ".join(
+            f"+{k.split('_')[1]} {pct(v)}" for k, v in x.items() if k.startswith("after_")
+        )
+        print(
+            f"  alert {x['alert_id']} {x['instrument']} {x['side']}: half-spread "
+            f"{pct(x['half_spread_pct'])}, fill vs alert {pct(x['fill_vs_alert_pct'])}  {later}"
+        )
+    for x in r["owner_fills"]:
+        print(
+            f"  your {x['leg']} on {x['instrument']}: {x['your_price']} vs alert "
+            f"{x['alert_price']} -> {pct(x['slippage_pct'])}"
+        )
+    if secrets.has_broker_creds:  # the owner's own fills: billed charges vs the cost table
+        import datetime as dt
+
+        from .broker.dhan import DhanAdapter
+        from .config import CostConfig
+        from .costs import CostModel
+        from .desk.fillcost import charges_check
+        from .ratelimit import RateLimiter
+
+        try:
+            trades = DhanAdapter(
+                secrets.client_id, secrets.access_token, RateLimiter()
+            ).trade_history(dt.date.today() - dt.timedelta(days=365), dt.date.today(), 60)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  charges: trade book unavailable ({type(exc).__name__})")
+            return 0
+        table = CostConfig.load(cfg.project_root / "config" / "costs.yaml")
+        rows = charges_check(trades, lambda name: CostModel(table.product(name)))
+        print(f"Charges on your own fills (Dhan trade book, 365 days, {len(trades)} fills):")
+        for x in rows:
+            print(
+                f"  {x['product']:<16} {x['side']:<4} fills {x['fills']:<4} billed "
+                f"{x['actual']:.2f} ({pct(x['actual_pct'])}) vs cost table {x['model']:.2f} "
+                f"({pct(x['model_pct'])})"
+            )
+    return 0
+
+
 def cmd_cost(args, cfg: AppConfig, secrets: Secrets) -> int:
     from .cost_preview import main as cost_main
 
@@ -400,6 +470,7 @@ def main(argv: list[str] | None = None) -> int:
         "quality",
         "preflight",
         "cost",
+        "fill-costs",
         "-h",
         "--help",
     }
@@ -429,6 +500,7 @@ def main(argv: list[str] | None = None) -> int:
         "quality": cmd_quality,
         "preflight": cmd_preflight,
         "cost": cmd_cost,
+        "fill-costs": cmd_fill_costs,
     }[component]
     return int(fn(args, cfg, secrets) or 0)
 

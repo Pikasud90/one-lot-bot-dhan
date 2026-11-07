@@ -30,9 +30,11 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 from sqlalchemy import Engine, select, update
 
+from ..broker.base import Contract
 from ..clock import IST, now_ist, to_ist
 from ..data.schema import desk_positions, desk_signals
 from ..data.universe import load_specs
+from ..lab.real_options import premium_in_minute
 from ..notify.base import Notification, NotificationLevel, shown_confidence
 from .audit import audit_signal, confidence, strategy_scoreboard
 from .config import DeskConfig, load_desk_config
@@ -44,6 +46,8 @@ from .economics import (
     index_option_economics_from_chain,
     stock_economics,
 )
+from .fillcost import FillCostRecorder, Watched, charges_check
+from .rules import pick_expiry
 from .tracker import InstrumentTracker, StrategySlot, Verdict
 
 if TYPE_CHECKING:  # annotation only: the paper package is never imported by the desk
@@ -209,6 +213,8 @@ class Desk:
         self.archive: list[dict] = []  # recent signals (any status) with outcomes, newest first
         self.scoreboard: dict[str, dict] = {}
         self._chain_cache: dict[str, tuple[dt.datetime, Any]] = {}
+        # the alerted contracts' one-minute bars for the paper book's real premiums
+        self._contract_cache: dict[str, tuple[dt.datetime, pd.DataFrame]] = {}
         self._board_cache: tuple[dt.datetime | None, dict] = (None, {})
         self.version = 0
         self._snapshot: dict = {
@@ -231,10 +237,64 @@ class Desk:
         self.last_error: str | None = None
         self.polls = 0
         self._recover()
+        self._restore_slot_counters(now_ist())
         self._tell_paper_tracked()
         from .pulse import MarketPulse
 
         self.pulse = MarketPulse(engine, self, self._adapter_getter, self._data_api_active)
+        # what a one-unit fill costs: read-only quotes on its own thread (owner, 2026-11-07)
+        self.fillcost = FillCostRecorder(
+            engine,
+            self._adapter_getter,
+            lambda: bool(self._data_api_active()),
+            self._market_open,
+            self._fill_stocks,
+            self._fill_indices,
+            roll_days=self.cfg.option_roll_days,
+        )
+
+    def fill_charges(self, days: int = 365) -> dict:
+        """Dhan's billed charges on the owner's own fills (trade history, a free read) beside
+        the cost table's, cached for an hour. {} without a broker."""
+        now = now_ist()
+        hit = getattr(self, "_charges_cache", None)
+        if hit is not None and (now - hit[0]).total_seconds() < 3600 and hit[1] == days:
+            return hit[2]
+        adapter = self._adapter_getter()
+        if adapter is None:
+            return {}
+        from ..config import CostConfig
+        from ..costs import CostModel
+
+        table = CostConfig.load(self.app_cfg.project_root / "config" / "costs.yaml")
+        trades = adapter.trade_history((now - dt.timedelta(days=days)).date(), now.date(), 60)
+        out = {
+            "days": days,
+            "fills": len(trades),
+            "by_product": charges_check(trades, lambda name: CostModel(table.product(name))),
+        }
+        self._charges_cache = (now, days, out)
+        return out
+
+    # ── fill-cost sampling inputs ─────────────────────────────────────────
+    def _market_open(self, now: dt.datetime) -> bool:
+        window = self.session_clock.current_window(now)
+        return bool(window and window.is_open(now))
+
+    def _fill_stocks(self) -> list[Watched]:
+        return [
+            Watched(t.instrument.key, str(t.series.dhan_security_id), t.series.dhan_segment,
+                    t.series.key, "EQUITY")
+            for t in list(self.trackers.values())
+            if t.cfg.kind == "STOCK" and t.series.dhan_security_id
+        ]  # fmt: skip
+
+    def _fill_indices(self) -> list[tuple[str, str, str, str]]:
+        return [
+            (t.series.key, str(t.series.dhan_security_id), t.series.exchange, t.instrument.key)
+            for t in list(self.trackers.values())
+            if t.cfg.kind == "INDEX" and t.series.dhan_security_id
+        ]
 
     # ── setup ─────────────────────────────────────────────────────────────
     def _all_specs(self) -> dict:
@@ -310,6 +370,37 @@ class Desk:
             log.info("desk: recovered %d open position(s)", len(self.positions))
         self._recover_exits()
 
+    def _restore_slot_counters(self, now: dt.datetime) -> None:
+        """After a restart, each strategy slot's own limits continue where they were: today's
+        alerts count toward its `max_trades_per_day`, and its latest archived exit restarts its
+        cooldown (both lived in memory only)."""
+        today = now.astimezone(IST).date()
+        for sig in self.archive:
+            t = self.trackers.get(str(sig.get("series_key") or ""))
+            if t is None:
+                continue
+            slot = next(
+                (
+                    s
+                    for s in t.slots
+                    if s.cfg.name == sig.get("strategy") and s.cfg.timeframe == sig.get("timeframe")
+                ),
+                None,
+            )
+            if slot is None:
+                continue
+            created = sig.get("created_at")
+            try:
+                day = dt.datetime.fromisoformat(str(created)).astimezone(IST).date()
+            except (TypeError, ValueError):
+                day = None
+            if day == today:
+                slot.signals_today += 1
+            exit_info = sig.get("exit") or {}
+            if exit_info.get("at"):
+                self._note_slot_exit(sig, exit_info)
+        self._counter_day = today.isoformat()  # the first poll must not wipe what was restored
+
     def _recover_exits(self) -> None:
         """Archived alerts whose paper trade is over show that exit (OF-5), also the ones that
         exited before the exit was recorded on the alert. Memory only: nothing is written and
@@ -332,10 +423,12 @@ class Desk:
     def start(self) -> None:
         self._thread = threading.Thread(target=self._loop, name="desk-loop", daemon=True)
         self._thread.start()
+        self.fillcost.start()
 
     def stop(self) -> None:
         self._stop.set()
         self._wake.set()
+        self.fillcost.stop()
 
     def _loop(self) -> None:
         while not self._stop.is_set():
@@ -591,6 +684,10 @@ class Desk:
             except Exception:  # noqa: BLE001 - the alert must go out whatever the book does
                 self.hook_errors += 1
                 log.exception("paper: on_alert failed for alert %s", sid)
+        try:  # the alerted instrument's quote now and 1, 2, 5 minutes later (never an order)
+            self.fillcost.on_alert(sig)
+        except Exception:  # noqa: BLE001 - measurement never stops an alert
+            log.exception("fill costs: on_alert failed for alert %s", sid)
         title = (
             f"{eco.side.replace('_', ' ')} {t.series.label}"
             + (f" {eco.option['strike']:g} {eco.option['opt_type']}" if eco.option else "")
@@ -669,6 +766,9 @@ class Desk:
                     t.instrument, v.direction, float(v.close), float(v.stop), target_r, chain, now
                 )
                 if eco is not None:
+                    if eco.option is not None:  # where its own bars live (real premiums)
+                        eco.option.setdefault("segment", f"{t.series.exchange}_FNO")
+                        eco.option.setdefault("underlying", t.series.key)
                     return eco
             except Exception:  # noqa: BLE001
                 log.exception("chain economics failed; using the synthetic model")
@@ -678,7 +778,9 @@ class Desk:
         )
 
     def _live_chain(self, t: InstrumentTracker, now: dt.datetime):
-        """Nearest-expiry option chain for an index, cached 60 s (1 request / 3 s limit)."""
+        """The option chain of the contract an index alert names (desk.yaml `option_expiry`:
+        the Lab's monthly contract by default, rolled inside `option_roll_days`), cached
+        60 s (1 request / 3 s limit)."""
         adapter = self._adapter_getter()
         if adapter is None or not self._data_api_active():
             return None
@@ -691,15 +793,75 @@ class Desk:
             return hit[1]
         try:
             expiries = adapter.expiry_list_raw(int(sid), seg) or []
-            if not expiries:
+            expiry = pick_expiry(
+                expiries, now.date(), self.cfg.option_expiry, self.cfg.option_roll_days
+            )
+            if expiry is None:
                 return None
-            snap = adapter.option_chain(t.series.key, expiries[0], int(sid), seg)
+            snap = adapter.option_chain(t.series.key, expiry, int(sid), seg)
         except Exception as exc:  # noqa: BLE001
             log.warning("option chain for %s unavailable: %s", t.cfg.key, exc)
             self._chain_cache[t.cfg.key] = (now, None)
             return None
         self._chain_cache[t.cfg.key] = (now, snap)
         return snap
+
+    # ── real option prices for the paper book (paper test, owner 2026-11-07) ──────────
+    def real_premium_at(self, option: dict, underlying: float, ts: dt.datetime) -> float | None:
+        """The alerted option's TRADED price when its index stood at `underlying` at `ts`:
+        the contract's own one-minute bars (Dhan intraday, read again when the wanted minute
+        is not in them yet, at most every 5 s)
+        against the index's one-minute bars (`lab.real_options.premium_in_minute`). None
+        whenever either is missing (Yahoo bars, no Data API, no trade in that minute), and
+        the paper book's model prices that leg instead."""
+        sid, seg, und = option.get("security_id"), option.get("segment"), option.get("underlying")
+        opt = option.get("opt_type")
+        if not (sid and seg and und) or opt not in ("CE", "PE"):
+            return None
+        t = self.trackers.get(str(und))
+        if t is None or t.fine_minutes != 1 or t.bars.empty or not self._data_api_active():
+            return None
+        bars = self._contract_bars(str(sid), str(seg), str(und), ts)
+        if bars is None or bars.empty:
+            return None
+        return premium_in_minute(bars, t.bars, float(underlying), ts, str(opt))
+
+    def _contract_bars(self, sid: str, seg: str, und: str, ts: dt.datetime) -> pd.DataFrame | None:
+        now = now_ist()
+        want = pd.Timestamp(ts).tz_convert(IST).floor("min")
+        hit = self._contract_cache.get(sid)
+        if hit is not None:
+            fetched_at, df = hit
+            covered = not df.empty and df.index[-1] >= want
+            if covered or (now - fetched_at).total_seconds() < 5:  # at most 1 read / 5 s
+                return df
+        adapter = self._adapter_getter()
+        if adapter is None:
+            return hit[1] if hit else None
+        day = min(want.to_pydatetime(), now)
+        start = day.replace(hour=9, minute=0, second=0, microsecond=0)
+        contract = Contract(
+            security_id=sid, exchange_segment=seg, symbol=sid, underlying=und,
+            instrument_type="OPTIDX",
+        )  # fmt: skip
+        try:
+            got = adapter.historical_intraday(contract, 1, start, now)
+        except Exception as exc:  # noqa: BLE001 - the model prices it instead
+            log.debug("desk: bars of option %s unavailable: %s", sid, exc)
+            self._contract_cache[sid] = (now, hit[1] if hit else pd.DataFrame())
+            return hit[1] if hit else None
+        # only FINISHED minutes: Dhan's answer can hold the minute still forming, whose
+        # candle would later pass for that minute's final one (DhanBars drops it too)
+        rows = [
+            {"ts": b.ts, "open": b.open, "high": b.high, "low": b.low, "close": b.close}
+            for b in got
+            if b.ts + dt.timedelta(minutes=1) <= now
+        ]
+        df = pd.DataFrame(rows).set_index("ts").sort_index() if rows else pd.DataFrame()
+        if len(self._contract_cache) > 64:  # bounded: a day's alerted contracts
+            self._contract_cache.pop(next(iter(self._contract_cache)))
+        self._contract_cache[sid] = (now, df)
+        return df
 
     def _expire_signals(self, now: dt.datetime) -> None:
         for sid, s in list(self.signals.items()):
@@ -1609,6 +1771,7 @@ class Desk:
         sig = self._archived(trade.alert_id)
         base: dict = sig if sig is not None else dict(snapshot)
         info = _exit_info(trade)
+        self._note_slot_exit(base, info)
         told_before = bool(sig and sig.get("exit_told"))
         if sig is not None:  # in memory first: nothing below can make it tell twice
             sig["exit"] = info
@@ -1635,6 +1798,22 @@ class Desk:
                 lambda: self._annotate_closed(trade.alert_id, price),
             )
         self.version += 1
+
+    def _note_slot_exit(self, alert: dict, info: dict) -> None:
+        """Remember when this strategy slot's trade closed: the Lab's cooldown counts from it.
+        Only a trade that filled and CLOSED: a NO_FILL was never a position (the Lab's
+        `last_exit_i` moves only when a position closes)."""
+        t = self.trackers.get(str(alert.get("series_key") or ""))
+        at = info.get("at")
+        if t is None or not at or info.get("status") != "CLOSED":
+            return
+        when = _aware(dt.datetime.fromisoformat(str(at)))
+        for slot in t.slots:
+            if slot.cfg.name == alert.get("strategy") and slot.cfg.timeframe == alert.get(
+                "timeframe"
+            ):
+                if slot.last_exit_at is None or (when and when > slot.last_exit_at):
+                    slot.last_exit_at = when
 
     def _guarded_write(self, what: str, work: Any) -> None:
         try:

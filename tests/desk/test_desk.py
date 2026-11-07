@@ -205,13 +205,15 @@ class TestConfig:
             "MIDCPNIFTY",
             "SENSEX",
         ]
-        assert len(c.stocks) == 10 and {s.key for s in c.stocks} >= {
+        # the paper test (2026-11-07): the retune's 18-stock basket, Adani Green excluded
+        assert len(c.stocks) == 18 and {s.key for s in c.stocks} >= {
             "RELIANCE",
             "MM",
             "TMPV",
             "HEROMOTOCO",
         }
-        assert all(len(i.strategies) >= 2 for i in c.instruments)
+        assert "ADANIGREEN" not in {s.key for s in c.stocks}
+        assert all(len(i.strategies) >= 1 for i in c.instruments)
         assert any(x.manual for x in c.context)  # GIFT NIFTY is a manual slot
 
 

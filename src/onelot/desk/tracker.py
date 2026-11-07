@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 from dataclasses import dataclass, field
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -15,6 +16,7 @@ from ..data.universe import InstrumentSpec, SeriesSpec
 from ..strategies.base import Context
 from ..strategies.registry import REGISTRY, get_strategy
 from .config import DeskInstrumentCfg, StrategySlotCfg
+from .rules import lab_entry_risk
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +45,8 @@ class StrategySlot:
     last_verdict: Verdict = field(default_factory=Verdict)
     last_eval_at: dt.datetime | None = None
     signals_today: int = 0
+    # when this slot's last alert's paper trade closed: the Lab's cooldown counts from it
+    last_exit_at: dt.datetime | None = None
     last_features: dict = field(default_factory=dict)
     last_flags: dict = field(
         default_factory=dict
@@ -182,6 +186,10 @@ class InstrumentTracker:
                 log.exception("desk %s %s failed", self.cfg.key, slot.cfg.name)
                 continue
             slot.error = None
+            if v.direction != "none" and v.fresh:
+                held = _strategy_limit(slot, v)
+                if held is not None:
+                    v = Verdict("none", held, v.bar_ts, None, v.close, v.strength, [], v.fresh)
             slot.last_verdict = v
             slot.last_eval_at = now
             if v.direction != "none" and v.fresh and entries_allowed:
@@ -274,6 +282,26 @@ class InstrumentTracker:
                     reasons,
                     fresh,
                 )
+            cooling = _cooling_down(slot, df)
+            if cooling is not None:
+                return Verdict(
+                    "none", cooling, bar_ts, None, close, _num(last.get(f"{side}_score")), [], fresh
+                )
+            # the Lab's entry risk rule: widen a too-tight stop, skip a too-wide one
+            stop, skipped = lab_entry_risk(
+                side, close, stop, _num(last.get("atr")), _num(last.get("d_atr")), _params(slot)
+            )
+            if stop is None:
+                return Verdict(
+                    "none",
+                    f"{side} setup skipped by the strategy's risk rule: {skipped}",
+                    bar_ts,
+                    None,
+                    close,
+                    _num(last.get(f"{side}_score")),
+                    reasons,
+                    fresh,
+                )
             return Verdict(
                 side,
                 "entry on the last closed bar"
@@ -351,6 +379,32 @@ class InstrumentTracker:
                 "last_error": self.last_error,
             },
         }
+
+
+def _params(slot: StrategySlot) -> Any:
+    """The slot strategy's parameters (StrategySlot types the strategy as `object`)."""
+    return cast(Any, slot.strategy).p
+
+
+def _strategy_limit(slot: StrategySlot, v: Verdict) -> str | None:
+    """The strategy's OWN `max_trades_per_day`, as the Lab simulates it (not a risk
+    governor): alerts per session. None when the entry may be alerted."""
+    cap = int(getattr(_params(slot), "max_trades_per_day", 0) or 0)
+    if cap and slot.signals_today >= cap:
+        return f"the strategy's limit of {cap} trade(s) a day is reached"
+    return None
+
+
+def _cooling_down(slot: StrategySlot, bars: pd.DataFrame) -> str | None:
+    """The Lab's `cooldown_bars`: a signal bar must come MORE than that many strategy bars
+    after the bar its last trade exited in (counted across sessions, like the backtest)."""
+    n = int(getattr(_params(slot), "cooldown_bars", 0) or 0)
+    if not n or slot.last_exit_at is None or bars.empty:
+        return None
+    exit_i = int(bars.index.searchsorted(pd.Timestamp(slot.last_exit_at), side="right")) - 1
+    if len(bars) - 1 - exit_i > n:
+        return None
+    return f"cooling down: {n} {slot.cfg.timeframe} bars after its last exit"
 
 
 def _num(v) -> float | None:

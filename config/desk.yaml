@@ -28,27 +28,41 @@ context:                  # the strip above the two panels
   - {key: GIFTNIFTY, label: "GIFT NIFTY", manual: true,
      note: "No free feed exists (NSE IX). Feed it from your own source: POST /api/desk/context {\"key\":\"GIFTNIFTY\",\"last\":25410,\"change_pct\":0.3}"}
 
-# The owner's primary strategies (2026-11-07), in the owner's order: they raise the alerts and
-# head the Home scoreboard and the Lab leaderboard filter. All on 15-minute bars. gap_fade
-# compares a stock's opening gap with NIFTY's, so it runs on stocks only.
-primary_strategies: [ema_cross, supertrend_vol, gap_fade, nr7_breakout, turtle_soup, ema_pullback, cpr_breakout]
+# PAPER TEST (owner's go-ahead, 2026-11-07): the desk runs ONLY the closest candidates of the
+# cross-instrument retune (docs/research/CROSS_RETUNE_2026-11-07.md), with the retune's exact
+# settings, so every alert and its paper trade is forward evidence for one setting tested
+# across the whole basket. None of them passed all three backtest years: this is a test, not
+# a recommendation. Before the test the desk ran the owner's seven on 15-minute bars:
+#   primary_strategies: [ema_cross, supertrend_vol, gap_fade, nr7_breakout, turtle_soup,
+#                        ema_pullback, cpr_breakout]  (every slot `timeframe: 15m`, defaults)
+# `allow_long` / `allow_short` are the Lab's `direction`. Index alerts name the MONTHLY
+# contract at delta ~0.65, rolled to the next month inside its last 3 days, like the Lab.
+primary_strategies: [supertrend_vol, supertrend_adx]
+
+option_expiry: monthly    # monthly (the Lab's contract) | nearest (the weekly where one exists)
+option_roll_days: 3       # a monthly contract with fewer days left than this is skipped
 
 defaults:
-  index_strategies:       # applied to every index unless it lists its own
-    - {name: ema_cross,       timeframe: 15m}
-    - {name: supertrend_vol,  timeframe: 15m}
-    - {name: nr7_breakout,    timeframe: 15m}
-    - {name: turtle_soup,     timeframe: 15m}
-    - {name: ema_pullback,    timeframe: 15m}
-    - {name: cpr_breakout,    timeframe: 15m}
-  stock_strategies:
-    - {name: ema_cross,       timeframe: 15m}
-    - {name: supertrend_vol,  timeframe: 15m}
-    - {name: gap_fade,        timeframe: 15m}
-    - {name: nr7_breakout,    timeframe: 15m}
-    - {name: turtle_soup,     timeframe: 15m}
-    - {name: ema_pullback,    timeframe: 15m}
-    - {name: cpr_breakout,    timeframe: 15m}
+  index_strategies:       # 5 index options, long only (BUY CE): passed tuning + choosing, lost the test year
+    - name: supertrend_vol
+      timeframe: 30m
+      params: {allow_long: true, allow_short: false, adx_min: 12, entry_end: "13:00",
+               flip_window: 2, max_bars: 12, max_trades_per_day: 1, min_strength: 40,
+               partial_r: 0.0, regime_filter: false, rsi_long_min: 55, st_mult: 2.0,
+               st_period: 14, target_r: 2.5, trail_atr_mult: 1.5}
+  stock_strategies:       # 18 stocks, one share, short only: lost the choosing year
+    - name: supertrend_vol
+      timeframe: 60m
+      params: {allow_long: false, allow_short: true, adx_min: 12, entry_end: "11:30",
+               flip_window: 4, max_bars: 12, max_trades_per_day: 2, min_strength: 55,
+               partial_r: 0.0, regime_filter: true, rsi_long_min: 50, st_mult: 2.0,
+               st_period: 7, target_r: 1.5, trail_atr_mult: 2.5}
+    - name: supertrend_adx
+      timeframe: 30m
+      params: {allow_long: false, allow_short: true, adx_min: 25, entry_end: "11:30",
+               flip_window: 4, max_bars: 24, max_trades_per_day: 1, max_vwap_dist_atr: 3.0,
+               min_strength: 0, partial_r: 0.0, regime_filter: true, st_mult: 2.5,
+               st_period: 14, target_r: 1.5, trail_atr_mult: 1.5}
 
 indices:
   - {key: BANKNIFTY,  tracked: BANKNIFTY_OPT}
@@ -57,7 +71,7 @@ indices:
   - {key: MIDCPNIFTY, tracked: MIDCPNIFTY_OPT}
   - {key: SENSEX,     tracked: SENSEX_OPT}
 
-stocks:
+stocks:                     # the retune's 18-stock basket (Adani Green excluded at the owner's request)
   - {key: RELIANCE}
   - {key: MM}                   # Mahindra & Mahindra (NSE symbol M&M)
   - {key: SBIN}
@@ -65,6 +79,14 @@ stocks:
   - {key: ITC}
   - {key: TMPV, note: "Tata Motors Passenger Vehicles (post-demerger); TMCV is the commercial-vehicle entity"}
   - {key: MARUTI}
-  - {key: ADANIGREEN}
   - {key: ICICIBANK}
   - {key: HEROMOTOCO}
+  - {key: INFY}
+  - {key: TCS}
+  - {key: AXISBANK}
+  - {key: KOTAKBANK}
+  - {key: LT}
+  - {key: BAJFINANCE}
+  - {key: BHARTIARTL}
+  - {key: TATASTEEL}
+  - {key: SUNPHARMA}

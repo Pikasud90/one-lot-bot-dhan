@@ -175,3 +175,73 @@ def _usable(value: object) -> bool:
 def _require_aware(ts: dt.datetime, name: str) -> None:
     if not isinstance(ts, dt.datetime) or ts.tzinfo is None or ts.utcoffset() is None:
         raise ValueError(f"{name}={ts!r} must be a timezone-aware datetime")
+
+
+# ── Lab parity for the paper test (owner's go-ahead, 2026-11-07) ───────────────────────────
+def lab_entry_risk(
+    direction: str,
+    price: float,
+    stop: float,
+    atr: float | None,
+    d_atr: float | None,
+    p: object,
+) -> tuple[float | None, str | None]:
+    """The Lab's entry risk rule (`lab.simulator.simulate`, pending-entry fill), at the alert.
+
+    The initial risk is widened to the floor max(stop_atr_min x ATR(14), min_risk_pct % of
+    the price, stop_datr_min x the prior session's ATR) and a setup riskier than
+    max(min(stop_atr_max x ATR, max_risk_pct % of the price), the floor when min_risk_pct > 0)
+    is skipped, exactly as the backtest does. `price` is the signal bar's close (the Lab uses
+    the next bar's open, which the alert cannot know). Returns (stop, None) to alert at that
+    stop, or (None, why) when the backtest would not have traded it."""
+    side = _sign(direction)
+    risk = (float(price) - float(stop)) * side
+    # like the simulator: only a missing ATR (NaN) or a stop on the wrong side stops it
+    if not _finite(atr) or float(cast(Real, atr)) < 0 or risk <= 0:
+        return None, "no usable ATR or stop"
+    a = float(cast(Real, atr))
+    datr = float(cast(Real, d_atr)) if _usable(d_atr) else 0.0
+    max_risk = min(float(p.stop_atr_max) * a, float(p.max_risk_pct) / 100 * float(price))  # type: ignore[attr-defined]
+    floor = max(
+        float(p.stop_atr_min) * a,  # type: ignore[attr-defined]
+        float(p.min_risk_pct) / 100 * float(price),  # type: ignore[attr-defined]
+        float(p.stop_datr_min) * datr,  # type: ignore[attr-defined]
+    )
+    widened = float(stop)
+    if risk < floor:
+        risk = floor
+        widened = float(price) - side * risk
+    cap = max(max_risk, floor if float(p.min_risk_pct) > 0 else 0.0)  # type: ignore[attr-defined]
+    if risk <= cap:
+        return widened, None
+    return None, f"risk {risk:.2f} is above the strategy's cap {cap:.2f} (the Lab skips it)"
+
+
+def pick_expiry(
+    expiries: Iterable[str], today: dt.date, mode: str = "monthly", roll_days: int = 3
+) -> str | None:
+    """The expiry an index alert names, from the broker's expiry list (ISO dates).
+
+    monthly: the last listed expiry of a calendar month (the monthly contract) that is at least
+    `roll_days` days away, as the Lab's `execution.monthly_expiry` picks it; nearest: the
+    first expiry on or after today (a weekly where one exists). None when nothing fits."""
+    dates: list[dt.date] = []
+    for e in expiries:
+        try:
+            dates.append(dt.date.fromisoformat(str(e)[:10]))
+        except ValueError:
+            continue
+    dates = sorted(set(dates))
+    future = [d for d in dates if d >= today]
+    if not future:
+        return None
+    if mode == "nearest":
+        return future[0].isoformat()
+    last_of_month: dict[tuple[int, int], dt.date] = {}
+    for d in dates:
+        last_of_month[(d.year, d.month)] = d  # sorted, so the last one wins
+    monthly = [d for d in future if last_of_month[(d.year, d.month)] == d]
+    for d in monthly:
+        if (d - today).days >= roll_days:
+            return d.isoformat()
+    return None

@@ -435,9 +435,9 @@ class TestScale:
         elapsed = time.perf_counter() - started
         assert events == [] and elapsed < 1.5, elapsed
 
-    def test_the_desk_is_not_modified_by_this_story_it_does_not_use_the_shared_rules_yet(self):
-        """Guard for AC8 ('Desk is not modified in this story'). RETIRE in US-025, which makes the
-        desk adopt onelot/desk/rules.py."""
+    def test_the_desk_never_imports_the_paper_books_manager(self):
+        """Guard for AC8, narrowed when the desk adopted onelot/desk/rules.py (the paper test,
+        2026-11-08: `pick_expiry`): the desk still never imports the paper book's manager."""
         tree = ast.parse(DESK_PY.read_text(encoding="utf-8"))
         mentioned = set()
         for node in ast.walk(tree):
@@ -446,8 +446,4 @@ class TestScale:
                 mentioned.update(a.name for a in node.names)
             elif isinstance(node, ast.Import):
                 mentioned.update(a.name.split(".")[-1] for a in node.names)
-        assert (
-            "rules" not in mentioned
-            and "manage" not in mentioned
-            and "manage_step" not in mentioned
-        )
+        assert "manage" not in mentioned and "manage_step" not in mentioned

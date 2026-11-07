@@ -241,6 +241,7 @@ class PaperBook:
         cost_for: CostFor,
         premium_at: PremiumAt,
         clock: Callable[[], dt.datetime] = now_ist,
+        real_premium_at: PremiumAt | None = None,
     ) -> None:
         self.engine = engine
         self.cfg = cfg
@@ -248,6 +249,9 @@ class PaperBook:
         self.specs = specs
         self.cost_for = cost_for
         self.premium_at = premium_at
+        # The alerted contract's TRADED price (paper test, owner 2026-11-07): asked first at
+        # every fill, exit and mark; None (no bar there yet, no feed) falls back to the model.
+        self.real_premium_at = real_premium_at
         self.clock = clock
         self._lock = threading.RLock()
         self._active: dict[str, PaperTrade] = {}  # non-closed trades, by alert id
@@ -1232,10 +1236,12 @@ class PaperBook:
             if trade.kind == "INDEX":
                 booked += self._mark(trade, plan, before, state, new)
             return self._commit(trade, values, booked, counter=None)
-        exit_paise, also = self._price_exit(trade, plan, new.closed)
+        exit_paise, also, source = self._price_exit(trade, plan, new.closed)
         for kind, _, detail in booked:
             if kind == CLOSED:
                 detail["exit_paise"] = exit_paise  # the rule level stays in price_paise (A13)
+                if source is not None:
+                    detail["exit_premium_source"] = source
         gross = _gross(trade, exit_paise)
         costs, uncosted = self._costs(trade, exit_paise, new.closed.at)
         net = None if gross is None or costs is None else gross - costs
@@ -1317,9 +1323,13 @@ class PaperBook:
                 record["mark_paise"] = known["mark_paise"]
             return []
         option = plan["alert"]["economics"].get("option") or {}
+        tick = to_paise(self._tick(trade))
+        real = self._real_premium(option, close, at)
+        if real is not None:  # the contract's traded price: no basis
+            record["mark_paise"] = max(to_paise(real), tick)
+            return []
         fair, why = self._premium(option, close, at)
         if fair is not None:
-            tick = to_paise(self._tick(trade))
             record["mark_paise"] = max(to_paise(fair) + _basis_paise(plan), tick)
             return []
         record["mark_paise"] = None
@@ -1332,16 +1342,44 @@ class PaperBook:
     def _quote(
         self, trade: PaperTrade, plan: Mapping[str, Any], underlying_paise: int, ts: dt.datetime
     ) -> tuple[float | None, str | None]:
-        """The option premium a fill is priced from: the model plus the live-chain basis
-        (Manager decision 1, option A: entry, exit and the risk leg alike, so a live-chain
-        trade never shows P&L at birth), never below one tick. A synthetic alert has no
-        basis: the model's premium, untouched (the Lab differential stays exact)."""
+        fair, why, _ = self._quote_ex(trade, plan, underlying_paise, ts)
+        return fair, why
+
+    def _quote_ex(
+        self, trade: PaperTrade, plan: Mapping[str, Any], underlying_paise: int, ts: dt.datetime
+    ) -> tuple[float | None, str | None, str]:
+        """(premium, why not, source) a fill is priced from, never below one tick.
+
+        "real": the alerted contract's traded price at that moment and underlying level
+        (`real_premium_at`), taken as it is. Otherwise "model": the model plus the live-chain
+        basis (Manager decision 1, option A: entry, exit and the risk leg alike, so a
+        live-chain trade never shows P&L at birth); a synthetic alert has no basis: the
+        model's premium, untouched (the Lab differential stays exact)."""
         option = plan["alert"]["economics"].get("option") or {}
+        real = self._real_premium(option, underlying_paise, ts)
+        if real is not None:
+            return max(real, self._tick(trade)), None, "real"
         fair, why = self._premium(option, underlying_paise, ts)
         basis = _basis_paise(plan)
         if fair is None or basis == 0:
-            return fair, why
-        return max(fair + basis / 100, self._tick(trade)), None
+            return fair, why, "model"
+        return max(fair + basis / 100, self._tick(trade)), None, "model"
+
+    def _real_premium(
+        self, option: Mapping[str, Any], underlying_paise: int, ts: dt.datetime
+    ) -> float | None:
+        """real_premium_at, or None: a failing feed is logged and the model prices it."""
+        if self.real_premium_at is None or not option:
+            return None
+        try:
+            value = self.real_premium_at(dict(option), underlying_paise / 100, ts)
+            price = None if value is None else float(value)
+        except Exception as exc:  # noqa: BLE001 - the model is the fallback, never a guess
+            log.debug("paper: real premium unavailable for %s at %s: %s", option, ts, exc)
+            return None
+        if price is None or not math.isfinite(price) or price <= 0:
+            return None
+        return price
 
     def _position(self, trade: PaperTrade, plan: Mapping[str, Any]) -> PositionState:
         """The managed state: the plan's record, or (a row filled before US-002) the fill."""
@@ -1413,7 +1451,7 @@ class PaperBook:
 
     def _price_exit(
         self, trade: PaperTrade, plan: Mapping[str, Any], close: PaperClose
-    ) -> tuple[int | None, list[Booked]]:
+    ) -> tuple[int | None, list[Booked], str | None]:
         """The exit fill for the rule level the trade closed at (Manager decision 2).
 
         A stock mirrors the Lab: slipped by slippage_pct against the trader and snapped to
@@ -1431,22 +1469,28 @@ class PaperBook:
                 "underlying_paise": None,
                 "error": "no usable bar was managed before the session ended: no price is invented",
             }
-            return None, [("PRICING_UNAVAILABLE", close.at, unpriced)]
+            return None, [("PRICING_UNAVAILABLE", close.at, unpriced)], None
         if trade.kind != "INDEX":
             if close.reason == "TARGET":
-                return close.price_paise, []
+                return close.price_paise, [], None
             tick = to_paise(self._tick(trade))
-            return stock_exit_paise(
-                close.price_paise, trade.direction, self.bt.slippage_pct, tick
-            ), []
-        fair, why = self._quote(trade, plan, close.price_paise, close.at)
+            return (
+                stock_exit_paise(close.price_paise, trade.direction, self.bt.slippage_pct, tick),
+                [],
+                None,
+            )
+        fair, why, source = self._quote_ex(trade, plan, close.price_paise, close.at)
         if fair is None:
             problem = {"leg": "exit", "underlying_paise": close.price_paise, "error": why}
-            return None, [("PRICING_UNAVAILABLE", close.at, problem)]
+            return None, [("PRICING_UNAVAILABLE", close.at, problem)], None
         bt = self.bt
-        return option_exit_paise(
-            fair, bt.option_spread_pct, bt.option_slippage_ticks, self._tick(trade)
-        ), []
+        return (
+            option_exit_paise(
+                fair, bt.option_spread_pct, bt.option_slippage_ticks, self._tick(trade)
+            ),
+            [],
+            source,
+        )
 
     def _deadline(self, trade: PaperTrade) -> dt.datetime:
         """expires_at, plus the feed delay for a delayed-grade trade (ADR-001 amendment 3)."""
@@ -1479,7 +1523,7 @@ class PaperBook:
         not below the entry, the trade still fills with risk_paise NULL and a
         PRICING_UNAVAILABLE event (ADR-001 amendment 6).
         """
-        fair, why = self._quote(trade, plan, open_paise, bar_ts)
+        fair, why, source = self._quote_ex(trade, plan, open_paise, bar_ts)
         if fair is None:
             return why or "no premium"
         bt = self.bt
@@ -1489,9 +1533,10 @@ class PaperBook:
             "fair_premium_paise": to_paise(fair),
             "option_spread_pct": bt.option_spread_pct,
             "option_slippage_ticks": bt.option_slippage_ticks,
+            "premium_source": source,
         }
         basis = _basis_paise(plan)
-        if basis:
+        if basis and source == "model":
             inputs["basis_paise"] = basis  # included in fair_premium_paise
         stop_fair, why = self._quote(trade, plan, stop_paise, bar_ts)
         risk = None

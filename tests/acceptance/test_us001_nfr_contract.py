@@ -116,10 +116,13 @@ class TestConfig:
 class TestPublicContract:
     def test_constructor_takes_the_injected_dependencies_in_contract_order(self):
         sig = inspect.signature(H.paper_book_class().__init__)
+        # real_premium_at (paper test, owner 2026-11-07): the alerted contract's traded price,
+        # optional and last, so every earlier call site keeps working
         assert list(sig.parameters)[1:] == [
-            "engine", "cfg", "bt", "specs", "cost_for", "premium_at", "clock"
+            "engine", "cfg", "bt", "specs", "cost_for", "premium_at", "clock", "real_premium_at"
         ]  # fmt: skip
         assert sig.parameters["clock"].default is not inspect.Parameter.empty
+        assert sig.parameters["real_premium_at"].default is None
 
     def test_the_methods_have_the_contract_signatures(self):
         cls = H.paper_book_class()

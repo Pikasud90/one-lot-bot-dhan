@@ -11,6 +11,7 @@ from ..store.schema import (  # noqa: F401
     desk_positions,
     desk_signals,
     engine_events,
+    fill_quotes,
     news_items,
     param_sets,
     sentiment_scores,

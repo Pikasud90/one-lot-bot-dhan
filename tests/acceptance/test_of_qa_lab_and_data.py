@@ -314,32 +314,57 @@ class TestJobsAreRecoveredOnceNotRepeatedly:
         assert status == "RUNNING"
 
 
-# ══ OF-5: the owner's seven primary strategies ════════════════════════════════════════════
-OWNERS_PRIMARY = (
-    "ema_cross",
-    "supertrend_vol",
-    "gap_fade",
-    "nr7_breakout",
-    "turtle_soup",
-    "ema_pullback",
-    "cpr_breakout",
-)
+# ══ OF-5, then the paper test (owner's go-ahead 2026-11-07) ═══════════════════════════════
+# Until 2026-11-07 the desk ran the owner's seven on 15-minute bars. The owner then approved a
+# paper test of the cross-instrument retune's closest candidates, with the retune's exact
+# settings (docs/research/CROSS_RETUNE_2026-11-07.md): this list replaced the seven.
+OWNERS_PRIMARY = ("supertrend_vol", "supertrend_adx")
+RESEARCH_STOCKS = {
+    "RELIANCE", "MM", "SBIN", "HDFCBANK", "ITC", "TMPV", "MARUTI", "ICICIBANK", "HEROMOTOCO",
+    "INFY", "TCS", "AXISBANK", "KOTAKBANK", "LT", "BAJFINANCE", "BHARTIARTL", "TATASTEEL",
+    "SUNPHARMA",
+}  # fmt: skip
+# The retune's picks, verbatim (`direction` is the desk's allow_long / allow_short)
+PAPER_TEST = {
+    ("INDEX", "supertrend_vol", "30m"): {
+        "allow_long": True, "allow_short": False, "adx_min": 12, "entry_end": "13:00",
+        "flip_window": 2, "max_bars": 12, "max_trades_per_day": 1, "min_strength": 40,
+        "partial_r": 0.0, "regime_filter": False, "rsi_long_min": 55, "st_mult": 2.0,
+        "st_period": 14, "target_r": 2.5, "trail_atr_mult": 1.5,
+    },
+    ("STOCK", "supertrend_vol", "60m"): {
+        "allow_long": False, "allow_short": True, "adx_min": 12, "entry_end": "11:30",
+        "flip_window": 4, "max_bars": 12, "max_trades_per_day": 2, "min_strength": 55,
+        "partial_r": 0.0, "regime_filter": True, "rsi_long_min": 50, "st_mult": 2.0,
+        "st_period": 7, "target_r": 1.5, "trail_atr_mult": 2.5,
+    },
+    ("STOCK", "supertrend_adx", "30m"): {
+        "allow_long": False, "allow_short": True, "adx_min": 25, "entry_end": "11:30",
+        "flip_window": 4, "max_bars": 24, "max_trades_per_day": 1, "max_vwap_dist_atr": 3.0,
+        "min_strength": 0, "partial_r": 0.0, "regime_filter": True, "st_mult": 2.5,
+        "st_period": 14, "target_r": 1.5, "trail_atr_mult": 1.5,
+    },
+}  # fmt: skip
 
 
 class TestThePrimaryStrategies:
-    def test_the_desk_runs_exactly_the_owners_seven_on_15_minute_bars(self):
+    def test_the_desk_runs_exactly_the_paper_test_settings(self):
         from onelot.desk.config import load_desk_config
-        from onelot.strategies.registry import REGISTRY
+        from onelot.strategies.registry import REGISTRY, get_strategy
 
         cfg = load_desk_config()
         assert cfg.primary_strategies() == OWNERS_PRIMARY
-        slots = [(i.kind, s) for i in cfg.instruments for s in i.strategies]
-        assert {s.name for _, s in slots} == set(OWNERS_PRIMARY)
-        assert {s.timeframe for _, s in slots} == {"15m"}
+        assert {s.key for s in cfg.stocks} == RESEARCH_STOCKS  # Adani Green excluded
+        assert len(cfg.indices) == 5
+        assert cfg.option_expiry == "monthly" and cfg.option_roll_days == 3
+        for inst in cfg.instruments:
+            got = {(inst.kind, s.name, s.timeframe): dict(s.params) for s in inst.strategies}
+            want = {k: v for k, v in PAPER_TEST.items() if k[0] == inst.kind}
+            assert got == want, inst.key
         assert set(OWNERS_PRIMARY) <= set(REGISTRY)
-        # gap_fade compares a stock's gap with NIFTY's: stocks only
-        assert not [s for kind, s in slots if kind == "INDEX" and s.name == "gap_fade"]
-        assert [s for kind, s in slots if kind == "STOCK" and s.name == "gap_fade"]
+        for (_, name, tf), params in PAPER_TEST.items():  # every key is a real parameter
+            strat = get_strategy(name, {**params, "timeframe": tf})
+            assert all(getattr(strat.p, k) == v for k, v in params.items())
 
     def test_the_lab_offers_the_same_list_and_filters_the_leaderboard_by_it(self, lab_engine):
         import warnings
@@ -350,7 +375,7 @@ class TestThePrimaryStrategies:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             from fastapi.testclient import TestClient
-        saved = [(n, "SBIN", "15m", 40, 50.0, 1.0) for n in (*OWNERS_PRIMARY, "orb")]
+        saved = [(n, "SBIN", "30m", 40, 50.0, 1.0) for n in (*OWNERS_PRIMARY, "orb")]
         save_runs(lab_engine, saved)
         engine = MagicMock()
         engine.db = SimpleNamespace(engine=lab_engine)

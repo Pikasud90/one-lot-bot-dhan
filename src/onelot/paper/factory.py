@@ -22,9 +22,14 @@ from .pricing import black76_premium
 
 
 def build_paper_book(
-    app_cfg: AppConfig, engine: Engine, clock: Callable[[], dt.datetime] = now_ist
+    app_cfg: AppConfig,
+    engine: Engine,
+    clock: Callable[[], dt.datetime] = now_ist,
+    real_premium_at: Callable[[Mapping[str, Any], float, dt.datetime], float | None] | None = None,
 ) -> PaperBook:
-    """The PaperBook the Engine attaches to the Desk.
+    """The PaperBook the Engine attaches to the Desk. `real_premium_at` (the desk's live
+    one-minute bars of the alerted contract) is asked first at every option fill, exit and
+    mark; the Black-76 model below prices whatever it cannot.
 
     Raises when the cost table or the instrument specs cannot be read: the Engine logs that
     and runs the desk without a book rather than with a half-configured one.
@@ -47,5 +52,12 @@ def build_paper_book(
         return black76_premium(option, underlying, ts, rate)
 
     return PaperBook(
-        engine, app_cfg.paper, app_cfg.backtest, instruments, cost_for, premium_at, clock=clock
+        engine,
+        app_cfg.paper,
+        app_cfg.backtest,
+        instruments,
+        cost_for,
+        premium_at,
+        clock=clock,
+        real_premium_at=real_premium_at,
     )

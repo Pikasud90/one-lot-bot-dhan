@@ -108,10 +108,12 @@ class TestSweep:
     def test_plan_is_the_full_grid_over_the_desk_watchlist(self):
         combos = plan(["ema_cross", "orb"], None, ["5m", "15m"])
         insts = {c["instrument_key"] for c in combos}
+        # the paper test's watchlist (2026-11-07): 5 index options + the retune's 18 stocks
         assert (
-            "BANKNIFTY_OPT" in insts and "RELIANCE" in insts and "MM" in insts and len(insts) == 15
+            "BANKNIFTY_OPT" in insts and "RELIANCE" in insts and "MM" in insts and len(insts) == 23
         )
-        assert len(combos) == 2 * 15 * 2
+        assert "ADANIGREEN" not in insts
+        assert len(combos) == 2 * 23 * 2
         with pytest.raises(ValueError):
             plan(["nope"], ["SBIN"], ["5m"])
 

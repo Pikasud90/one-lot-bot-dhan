@@ -541,6 +541,31 @@ desk_positions = Table(
     Index("ix_desk_positions_status", "status"),
 )
 
+# ── Fill-cost measurement (owner request 2026-11-07): read-only broker quotes ──────────────
+# What a ONE-unit market order would have paid: the best bid/ask of a watched instrument
+# every few minutes (SAMPLE), of an alerted instrument at the alert (ALERT) and 1, 2 and 5
+# minutes later (FOLLOW). Never an order.
+fill_quotes = Table(
+    "fill_quotes",
+    METADATA,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("ts", TZDateTime, nullable=False),
+    Column("kind", String(8), nullable=False),  # SAMPLE | ALERT | FOLLOW
+    Column("instrument_key", String(48), nullable=False),  # RELIANCE | NIFTY_OPT
+    Column("security_id", String(24), nullable=False),
+    Column("segment", String(12)),
+    Column("label", String(64)),  # "NIFTY 24900 CE 2026-11-23" for an option
+    Column("alert_id", String(16)),
+    Column("side", String(8)),  # BUY | SELL: the alert's own order side
+    Column("offset_sec", Integer),  # FOLLOW: seconds after the alert
+    Column("ltp", Float),
+    Column("bid", Float),
+    Column("ask", Float),
+    Column("bid_qty", Integer),
+    Column("ask_qty", Integer),
+    Index("ix_fill_quotes_ts", "ts"),
+)
+
 # ── Paper book (ADR-001): one paper trade per desk alert, never an order ──
 # Money is integer PAISE (BIGINT); Decimal only at the cost-model boundary. A NO_FILL
 # row keeps entry/exit NULL and gross/costs/net 0.

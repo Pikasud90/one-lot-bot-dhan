@@ -165,11 +165,17 @@ class Engine:
         try:
             from .paper.factory import build_paper_book
 
-            return build_paper_book(self.cfg, self.db.engine)
+            return build_paper_book(self.cfg, self.db.engine, real_premium_at=self._real_premium)
         except Exception:
             log.exception("paper book failed to build; the Live Desk runs without paper trades")
             self.status.warnings.append("Paper book failed to build — no paper trades; see the log")
             return None
+
+    def _real_premium(self, option, underlying: float, ts) -> float | None:
+        """The paper book's real-premium source: the desk's live bars of the alerted contract
+        (bound late: the book is built before the desk)."""
+        desk = self.desk
+        return desk.real_premium_at(option, underlying, ts) if desk is not None else None
 
     def start(self) -> None:
         self.lock.acquire()

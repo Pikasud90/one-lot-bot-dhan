@@ -50,6 +50,11 @@ class DeskConfig:
     stocks: tuple[DeskInstrumentCfg, ...] = ()
     path: str = ""
     primary: tuple[str, ...] = ()  # desk.yaml primary_strategies: the owner's order
+    # The option an index alert names (paper test, 2026-11-07): "monthly" = the Lab's
+    # contract (the month's last expiry with at least `option_roll_days` days left);
+    # "nearest" = the first listed expiry (a weekly where one exists).
+    option_expiry: str = "monthly"
+    option_roll_days: int = 3
 
     def primary_strategies(self) -> tuple[str, ...]:
         """The owner's primary strategies: desk.yaml `primary_strategies` in the owner's
@@ -131,4 +136,16 @@ def load_desk_config(path: str | Path | None = None) -> DeskConfig:
         stocks,
         str(p),
         tuple(dict.fromkeys(str(n) for n in raw.get("primary_strategies") or ())),
+        _expiry_mode(raw.get("option_expiry", "monthly")),
+        int(raw.get("option_roll_days", 3)),
     )
+
+
+def _expiry_mode(value: object) -> str:
+    """monthly (also when the key is empty) or nearest; anything else is a config error."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return "monthly"
+    mode = str(value).strip().lower()
+    if mode not in ("monthly", "nearest"):
+        raise ValueError(f"desk.yaml option_expiry must be monthly or nearest, not {value!r}")
+    return mode

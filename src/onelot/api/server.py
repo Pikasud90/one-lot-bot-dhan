@@ -373,6 +373,21 @@ def create_app(engine, api_token: str) -> FastAPI:
         d._wake.set()
         return {"ok": True}
 
+    @app.get("/api/desk/fill-costs")
+    def desk_fill_costs(days: int = Query(30, ge=1, le=365)) -> dict:
+        """Measured one-unit fill costs (bid/ask quotes, never an order) beside the Lab's
+        slippage assumptions: spreads per instrument and time of day, every alert's spread
+        and the drift 1, 2 and 5 minutes later, and the owner's own fills."""
+        from ..desk.fillcost import report
+
+        d = _desk()
+        out = report(d.engine, days)
+        try:  # the owner's own fills: Dhan's billed charges against the cost table
+            out["charges"] = d.fill_charges()
+        except Exception as exc:  # noqa: BLE001 - quotes still answer without the trade book
+            out["charges"] = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+        return out
+
     @app.get("/api/desk/journal")
     def desk_journal(limit: int = Query(200, ge=1, le=2000)) -> dict:
         return {"trades": _desk().journal(limit)}

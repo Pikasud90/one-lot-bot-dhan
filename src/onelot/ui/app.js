@@ -674,6 +674,32 @@ const paperViewKey = (view, key) => { const n = PAPER_VIEWS.length, i = PAPER_VI
 // `view` is the chosen view, `last` the last good answer (re-rendered at once on a switch).
 const paperFeed = { at: 0, timer: null, version: null, shown: false, view: "today", last: null };
 const liveTabActive = () => { const s = document.querySelector('section[data-tab="live"]'); return !!s && s.classList.contains("active"); };
+// ── fill costs (owner, 2026-11-07): measured one-unit spreads beside the Lab's assumptions ──
+const fillCost = { at: 0 };
+const pctTxt = (v, d = 3) => (v === null || v === undefined || Number.isNaN(Number(v))) ? "–" : `${Number(v).toFixed(d)}%`;
+async function loadFillCosts(force) {
+  if (!force && Date.now() - fillCost.at < 300000) return;
+  fillCost.at = Date.now();
+  try {
+    const r = await fetch("/api/desk/fill-costs?days=30");
+    const f = await r.json().catch(() => null);
+    if (!r.ok || !f || !Array.isArray(f.by_instrument)) throw new Error((f && f.detail) || `HTTP ${r.status}`);
+    const a = f.lab_assumptions || {}, m = f.measured || {};
+    $("desk-fillcost-meta").textContent = `${f.samples} quotes · last ${f.days} days`;
+    const head = `<p class="muted">Stocks: measured half-spread <b>${pctTxt(m.stock_half_spread_median_pct)}</b> a side (Lab assumes ${pctTxt(a.stock_slippage_pct_per_side, 2)} slippage). Options: <b>${pctTxt(m.option_half_spread_median_pct)}</b> a side (Lab assumes ${pctTxt(a.option_half_spread_pct_per_side, 1)} + ${esc(a.option_slippage_ticks_per_side)} ticks). Positive drift = a worse price for that alert's side.</p>`;
+    const rows = f.by_instrument.map(x => `<tr><td>${esc(x.instrument)}</td><td>${esc(x.kind)}</td><td class="num">${esc(x.samples)}</td><td class="num">${pctTxt(x.half_spread_median_pct)}</td><td class="num">${pctTxt(x.half_spread_p90_pct)}</td><td>${Object.entries(x.by_time || {}).map(([b, v]) => `${esc(b)} ${pctTxt(v)}`).join(" · ")}</td></tr>`).join("");
+    const inst = rows ? `<table><thead><tr><th>Instrument</th><th>Kind</th><th>Quotes</th><th>Half-spread (median)</th><th>p90</th><th>By time of day</th></tr></thead><tbody>${rows}</tbody></table>` : `<div class="muted">No quotes yet: the desk samples every 5 minutes while the market is open (Dhan Data API).</div>`;
+    const al = (f.alerts || []).slice(-10).reverse().map(x => `<tr><td>${esc((x.at || "").slice(0, 16).replace("T", " "))}</td><td>${esc(x.instrument)}</td><td>${esc(x.side)}</td><td class="num">${pctTxt(x.half_spread_pct)}</td><td class="num">${pctTxt(x.fill_vs_alert_pct)}</td><td class="num">${pctTxt(x.after_60s_pct)}</td><td class="num">${pctTxt(x.after_120s_pct)}</td><td class="num">${pctTxt(x.after_300s_pct)}</td></tr>`).join("");
+    const alerts = al ? `<h3>At each alert</h3><table><thead><tr><th>Alert</th><th>Instrument</th><th>Side</th><th>Half-spread</th><th>Fill vs alert</th><th>+1 min</th><th>+2 min</th><th>+5 min</th></tr></thead><tbody>${al}</tbody></table>` : "";
+    const own = (f.owner_fills || []).map(x => `<tr><td>${esc(x.instrument)}</td><td>${esc(x.leg)}</td><td class="num">${esc(x.alert_price)}</td><td class="num">${esc(x.your_price)}</td><td class="num">${pctTxt(x.slippage_pct)}</td></tr>`).join("");
+    const mine = own ? `<h3>Your own fills</h3><table><thead><tr><th>Instrument</th><th>Leg</th><th>Alert price</th><th>Your price</th><th>Slippage</th></tr></thead><tbody>${own}</tbody></table>` : "";
+    const ch = ((f.charges || {}).by_product || []).map(x => `<tr><td>${esc(x.product)}</td><td>${esc(x.side)}</td><td class="num">${esc(x.fills)}</td><td class="num">${rup(x.turnover)}</td><td class="num">${rup2(x.actual)} (${pctTxt(x.actual_pct)})</td><td class="num">${rup2(x.model)} (${pctTxt(x.model_pct)})</td></tr>`).join("");
+    const charges = ch ? `<h3>Charges on your own fills <small>Dhan's trade book, last ${esc((f.charges || {}).days)} days · billed vs the cost table</small></h3><table><thead><tr><th>Product</th><th>Side</th><th>Fills</th><th>Turnover</th><th>Billed by Dhan</th><th>Cost table</th></tr></thead><tbody>${ch}</tbody></table>` : "";
+    $("desk-fillcost").innerHTML = head + inst + alerts + mine + charges;
+  } catch (e) {
+    $("desk-fillcost-meta").textContent = `fill costs unavailable: ${e.message}`;
+  }
+}
 function wantPaper(force) {
   if (paperFeed.timer || (!force && paperFeed.version === lastDeskVersion)) return;
   paperFeed.timer = setTimeout(loadPaper, Math.max(0, 5000 - (Date.now() - paperFeed.at)));
@@ -833,7 +859,7 @@ function applyStream(payload) {
   renderPanels(latest); renderJournal(latest); renderFeed(payload.notifications);
   const changed = latest.desk && latest.desk.version !== lastDeskVersion;
   if (changed) lastDeskVersion = latest.desk.version;
-  if (document.querySelector('[data-tab="live"]').classList.contains("active")) { renderDesk(latest.desk); if (changed) { renderFocus(latest.desk); wantPaper(false); } }
+  if (document.querySelector('[data-tab="live"]').classList.contains("active")) { renderDesk(latest.desk); if (changed) { renderFocus(latest.desk); wantPaper(false); } loadFillCosts(false).catch(() => {}); }
   if (changed && document.querySelector('[data-tab="home"]').classList.contains("active")) { renderHomePositions(latest.desk); if (Date.now() - alerts.loadedAt > 15000) { alerts.loadedAt = Date.now(); loadAlerts(true).catch(() => {}); } }
 }
 function connect() {
@@ -880,7 +906,7 @@ function renderFocus(d) {
 }
 $("focus-key").onchange = () => { focus.key = $("focus-key").value; store.set("focus.key", focus.key); if (latest) renderFocus(latest.desk); };
 $("focus-tf").onchange = () => { if (latest) renderFocus(latest.desk); };
-tabLoaders.live = () => { renderGates(); desk.force = true; wantPaper(true); if (latest) { renderDesk(latest.desk); focus.lastAt = 0; renderFocus(latest.desk); } };
+tabLoaders.live = () => { renderGates(); desk.force = true; wantPaper(true); loadFillCosts(true).catch(() => {}); if (latest) { renderDesk(latest.desk); focus.lastAt = 0; renderFocus(latest.desk); } };
 
 /* ═══════════════════════════════ LAB ════════════════════════════════ */
 const lab = { strategies: [], instruments: [], focus: [], focusTfs: [], primary: [], cat: store.get("lab.cat", "DESK"), runs: [], waiting: null, poll: null, shown: null };

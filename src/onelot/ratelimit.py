@@ -105,8 +105,10 @@ DEFAULT_ENDPOINTS: tuple[EndpointSpec, ...] = (
     EndpointSpec("option_chain", rate_per_sec=1.0 / 3.2, capacity=1.0),
     # Market quote REST, used as the WebSocket failover path.
     EndpointSpec("quote", rate_per_sec=1.0, capacity=2.0),
-    # Historical / warm-up candles: infrequent, chunky.
-    EndpointSpec("historical", rate_per_sec=0.5, capacity=2.0),
+    # Historical candles: the desk pulls every watched series once a poll (23 with the
+    # paper test's 18 stocks), so 0.5/s took ~50 s of a 60 s poll. Dhan allows 5/s for data
+    # APIs (100,000 a day); 2/s leaves room for research fetches on the same account.
+    EndpointSpec("historical", rate_per_sec=2.0, capacity=4.0),
     # Instrument master download and expiry list.
     EndpointSpec("reference", rate_per_sec=0.2, capacity=1.0),
     # Free Trading-API reads (profile, funds, holdings, positions, ledger, trades).
