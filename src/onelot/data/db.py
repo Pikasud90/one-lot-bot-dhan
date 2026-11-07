@@ -60,8 +60,13 @@ def upsert(
     keys: Iterable[str],
     update_cols: Iterable[str] | None = None,
     chunk: int = 5000,
+    per_chunk: bool = False,
 ) -> int:
-    """INSERT ... ON CONFLICT (keys) DO UPDATE, batched. SQLite dialect."""
+    """INSERT ... ON CONFLICT (keys) DO UPDATE, batched. SQLite dialect.
+
+    One transaction for every row by default. `per_chunk=True` commits each batch on its
+    own, so a long idempotent load (five years of one-minute bars) never holds SQLite's
+    write lock for long: the desk and the Lab write between batches."""
     if not rows:
         return 0
     keys = list(keys)
@@ -69,20 +74,25 @@ def upsert(
     update_cols = [c for c in (update_cols or cols) if c not in keys]
     # SQLite caps bound parameters per statement (32766).
     chunk = max(1, min(chunk, 30000 // max(1, len(cols))))
-    n = 0
+
+    def statement(part: Sequence[dict[str, Any]]):
+        stmt = sqlite.insert(table).values(list(part))
+        if update_cols:
+            return stmt.on_conflict_do_update(
+                index_elements=keys, set_={c: getattr(stmt.excluded, c) for c in update_cols}
+            )
+        return stmt.on_conflict_do_nothing(index_elements=keys)
+
+    parts = [rows[i : i + chunk] for i in range(0, len(rows), chunk)]
+    if per_chunk:
+        for part in parts:
+            with engine.begin() as conn:
+                conn.execute(statement(part))
+        return len(rows)
     with engine.begin() as conn:
-        for i in range(0, len(rows), chunk):
-            part = rows[i : i + chunk]
-            stmt = sqlite.insert(table).values(part)
-            if update_cols:
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=keys, set_={c: getattr(stmt.excluded, c) for c in update_cols}
-                )
-            else:
-                stmt = stmt.on_conflict_do_nothing(index_elements=keys)
-            conn.execute(stmt)
-            n += len(part)
-    return n
+        for part in parts:
+            conn.execute(statement(part))
+    return len(rows)
 
 
 def set_setting(engine: Engine, key: str, value: Any) -> None:

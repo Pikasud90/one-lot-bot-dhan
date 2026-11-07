@@ -65,7 +65,8 @@ def save_bars(
                 "source": source,
             }
         )
-    written = upsert(engine, bars, rows, ["ts", "series_key", "resolution"])
+    # idempotent rows: commit per batch so a 5-year load never blocks the desk's writes
+    written = upsert(engine, bars, rows, ["ts", "series_key", "resolution"], per_chunk=True)
     _bars_written()
     return written
 
