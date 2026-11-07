@@ -10,7 +10,7 @@
 # params" writes the same keys).
 
 poll_seconds: 60          # how often fresh bars are pulled during the session
-history_days: 10          # fine bars kept in memory per instrument (warm-up for 60 bars at 30m needs ~5 sessions)
+history_days: 25          # fine bars kept in memory per instrument: ~17 sessions, so the daily ATR(14), NR7 and CPR warm up
 source: auto              # auto = Dhan 1-minute bars when the Data API is active, else Yahoo 2-minute (delayed ~15 min)
 signal_valid_minutes: 10  # a BUY/SELL alert expires if not acknowledged within this window
 
@@ -23,15 +23,27 @@ context:                  # the strip above the two panels
   - {key: GIFTNIFTY, label: "GIFT NIFTY", manual: true,
      note: "No free feed exists (NSE IX). Feed it from your own source: POST /api/desk/context {\"key\":\"GIFTNIFTY\",\"last\":25410,\"change_pct\":0.3}"}
 
+# The owner's primary strategies (2026-11-07), in the owner's order: they raise the alerts and
+# head the Home scoreboard and the Lab leaderboard filter. All on 15-minute bars. gap_fade
+# compares a stock's opening gap with NIFTY's, so it runs on stocks only.
+primary_strategies: [ema_cross, supertrend_vol, gap_fade, nr7_breakout, turtle_soup, ema_pullback, cpr_breakout]
+
 defaults:
   index_strategies:       # applied to every index unless it lists its own
-    - {name: ema_cross,       timeframe: 12m}
-    - {name: supertrend_vol,  timeframe: 5m}
-    - {name: orb,             timeframe: 5m}
+    - {name: ema_cross,       timeframe: 15m}
+    - {name: supertrend_vol,  timeframe: 15m}
+    - {name: nr7_breakout,    timeframe: 15m}
+    - {name: turtle_soup,     timeframe: 15m}
+    - {name: ema_pullback,    timeframe: 15m}
+    - {name: cpr_breakout,    timeframe: 15m}
   stock_strategies:
     - {name: ema_cross,       timeframe: 15m}
     - {name: supertrend_vol,  timeframe: 15m}
-    - {name: mean_reversion,  timeframe: 5m}
+    - {name: gap_fade,        timeframe: 15m}
+    - {name: nr7_breakout,    timeframe: 15m}
+    - {name: turtle_soup,     timeframe: 15m}
+    - {name: ema_pullback,    timeframe: 15m}
+    - {name: cpr_breakout,    timeframe: 15m}
 
 indices:
   - {key: BANKNIFTY,  tracked: BANKNIFTY_OPT}

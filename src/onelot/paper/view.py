@@ -9,7 +9,8 @@ nothing is ever invented for display.
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from decimal import ROUND_HALF_EVEN, Decimal
 from typing import TYPE_CHECKING, Any, TypedDict
 
 from ..clock import IST
@@ -17,6 +18,7 @@ from .money import format_rupees, to_decimal
 
 if TYPE_CHECKING:  # annotation only: book.py imports this module
     from .book import PaperTrade
+    from .ledger import StrategyTotals
 
 TERMINAL_STATUSES = ("NO_FILL", "CLOSED")  # final: the trade is no longer managed
 
@@ -129,6 +131,63 @@ def totals_view(totals: DayTotals) -> dict[str, Any]:
 def last_session_view(day: dt.date, totals: DayTotals) -> dict[str, Any]:
     """GET /api/paper's `last_session` (US-032): {date: "YYYY-MM-DD" (IST), totals}."""
     return {"date": day.isoformat(), "totals": totals_view(totals)}
+
+
+def scoreboard_view(
+    totals: Mapping[str, StrategyTotals],
+    primary: Sequence[str] = (),
+    open_counts: Mapping[str, int] | None = None,
+) -> list[dict[str, Any]]:
+    """The Home strategy scoreboard (owner feedback OF-5): one row per strategy from the
+    paper book, the `primary` strategies first in the owner's order (listed even before
+    their first trade), then any other strategy that traded, by net P&L.
+
+    win_rate is a percent of the trades with a net (None before the first one); money is a
+    rupee string from exact paise; avg_net is rounded half-even to the paisa; profit_factor
+    is won / |lost| (None when nothing was lost); avg_r is the mean R multiple.
+    """
+    opened = open_counts or {}
+    names = list(dict.fromkeys(primary))
+    others = sorted(
+        (name for name in totals if name not in names),
+        key=lambda name: -totals[name].net_paise,
+    )
+    rows: list[dict[str, Any]] = []
+    for name in [*names, *others]:
+        row = totals.get(name)
+        trades = row.trades if row else 0
+        avg = (
+            None
+            if not row or not trades
+            else int(
+                (Decimal(row.net_paise) / Decimal(trades)).quantize(
+                    Decimal(1), rounding=ROUND_HALF_EVEN
+                )
+            )
+        )
+        rows.append(
+            {
+                "strategy": name,
+                "primary": name in names,
+                "trades": trades,
+                "wins": row.wins if row else 0,
+                "losses": row.losses if row else 0,
+                "no_fill": row.no_fill if row else 0,
+                "open": int(opened.get(name, 0)),
+                "win_rate": round(100.0 * row.wins / trades, 1) if row and trades else None,
+                "net": format_rupees(row.net_paise) if row and trades else None,
+                "costs": format_rupees(row.costs_paise) if row and trades else None,
+                "avg_net": format_rupees(avg),
+                "profit_factor": (
+                    round(row.won_paise / -row.lost_paise, 2)
+                    if row and row.lost_paise < 0
+                    else None
+                ),
+                "avg_r": round(row.r_sum / row.r_trades, 2) if row and row.r_trades else None,
+                "last_exit": _iso(row.last_exit) if row else None,
+            }
+        )
+    return rows
 
 
 def _iso(ts: dt.datetime | None) -> str | None:

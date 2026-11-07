@@ -41,6 +41,21 @@ def make_rig(tmp_path):
         yield build
 
 
+def position(desk: Any, pid: str) -> dict:
+    """A taken position, open or closed. Since owner feedback OF-5 an alert without a paper
+    trade closes on its one exit advice, so a closed one is read back from its stored row."""
+    if pid in desk.positions:
+        return desk.positions[pid]
+    from sqlalchemy import select
+
+    from onelot.data.schema import desk_positions
+
+    with desk.engine.connect() as conn:
+        return conn.execute(
+            select(desk_positions.c.payload).where(desk_positions.c.id == pid)
+        ).scalar_one()
+
+
 def fall_through_stop(desk: Any, key: str, pid: str, rise: bool = False) -> None:
     """Move the last bar through the position's stop (up for a short, down for a long)."""
     tracker = desk.trackers[key]
@@ -92,12 +107,12 @@ def test_a_swing_config_still_squares_a_short_off_at_the_exit_time_but_not_a_lon
 
         desk._manage_positions(after_close, OpenClock().current_window(after_close))
 
-        assert desk.positions[short_pid]["exit_advice"] == "SQUARE_OFF"
-        desk.close_position(short_pid, desk.positions[short_pid]["entry_price"])
+        assert position(desk, short_pid)["exit_advice"] == "SQUARE_OFF"
+        assert short_pid not in desk.positions  # OF-5: its one exit closed it
         long = raise_signal(desk, clock(), direction="long")
         long_pid = desk.acknowledge(long["id"], "TAKE")["position_id"]
         desk._manage_positions(after_close, OpenClock().current_window(after_close))
-        assert desk.positions[long_pid]["exit_advice"] != "SQUARE_OFF", "a swing long is carried"
+        assert position(desk, long_pid)["exit_advice"] != "SQUARE_OFF", "a swing long is carried"
     finally:
         db.dispose()
 
@@ -124,7 +139,7 @@ def test_the_phone_tells_the_owner_to_buy_back_a_stock_short_and_to_sell_a_long(
         # a short in the (swing) desk config still reads "intraday short" on the phone
         assert alert_text == f"SELL SBIN {DOT} 1 share {DOT} intraday short"
         assert exit_text == f"EXIT: BUY SBIN {DOT} 1 share {DOT} cover short"
-        assert desk.positions[pid]["exit_advice"] == "STOP"
+        assert position(desk, pid)["exit_advice"] == "STOP"
     finally:
         db.dispose()
 
@@ -171,7 +186,7 @@ def test_a_symbol_with_an_ampersand_is_shown_as_the_trading_symbol_and_escaped_o
         rig.drain()
 
         assert sig["series_key"] == "MM" and sig["trading_symbol"] == "M&M"
-        assert desk.positions[pid]["trading_symbol"] == "M&M"
+        assert position(desk, pid)["trading_symbol"] == "M&M"
         alert, exit_ = rig.rec.texts()
         assert alert.split("\n")[0] == f"<b>BUY M&amp;M {DOT} 1 share {DOT} delivery</b>"
         assert exit_.split("\n")[0] == f"<b>EXIT: SELL M&amp;M {DOT} 1 share</b>"
@@ -292,9 +307,9 @@ def test_a_swing_position_from_an_earlier_session_is_managed_as_before(
         desk._manage_positions(morning, OpenClock().current_window(morning))
         rig.drain()
 
-        assert desk.positions[pid]["exit_advice"] == "STOP"
+        assert position(desk, pid)["exit_advice"] == "STOP"
         assert [r["kind"] for r in rig.rows() if r["kind"] == "exit"] == ["exit"]
-        assert "session_over" not in desk.positions[pid]
+        assert "session_over" not in position(desk, pid)
         assert not [t for t in info_titles(notifier) if t.startswith("Session over")]
     finally:
         db.dispose()
@@ -327,6 +342,6 @@ def test_the_session_over_rule_starts_with_the_next_ist_date(
 
         desk._manage_positions(moment, OpenClock().current_window(moment))
 
-        assert (desk.positions[pid]["exit_advice"] == "STOP") is advice_expected
+        assert (position(desk, pid)["exit_advice"] == "STOP") is advice_expected
     finally:
         db.dispose()

@@ -5,7 +5,8 @@ no broker); only the Notifier is real here, with the Telegram channel on a file-
 a fake clock. The Desk calls Notifier.send while it holds its own RLock, so this also proves the
 channel's work happens inside that call without HTTP.
 
-  * a risk-blocked, Yahoo-delayed SIGNAL arrives at the phone as BLOCKED and delayed, and silent;
+  * a Yahoo-delayed SIGNAL arrives at the phone delayed, never BLOCKED (OF-5: no risk governor
+    on alerts), and audible;
   * a live, allowed SIGNAL arrives audible, with no tags;
   * an EXIT advice the Desk raises on every poll becomes 1 message + 3 reminders (AC5, real
     payloads).
@@ -46,7 +47,7 @@ def make_rig(tmp_path):
 
 
 # ========================= tests ========================================================
-def test_a_blocked_and_delayed_signal_reaches_the_phone_tagged_and_silent(
+def test_a_delayed_signal_reaches_the_phone_tagged_and_unblocked_when_the_governor_says_no(
     make_rig, tmp_path, monkeypatch
 ):
     tg = telegram()
@@ -59,15 +60,16 @@ def test_a_blocked_and_delayed_signal_reaches_the_phone_tagged_and_silent(
         sig = raise_signal(desk, clock())
         assert rig.rec.calls == 0, "the Desk's call only queues"
         stored = rig.row()["payload"]
-        assert find_key(stored, "risk_allowed") is False
+        # owner feedback OF-5: no risk governor on alerts, so never blocked, never muted
+        assert find_key(stored, "risk_allowed") is True
         assert find_key(find_key(stored, "data"), "delayed") is True
 
         rig.drain()
 
         (text,) = rig.rec.texts()
         assert text == tg.format_alert(sig, clock())
-        assert text.startswith("<b>[BLOCKED by risk] ") and "<b>delayed ~15m</b>" in text
-        assert rig.rec.silent() == [True], "a risk-blocked signal is sent silent"
+        assert "BLOCKED" not in text and "<b>delayed ~15m</b>" in text
+        assert rig.rec.silent() == [False]
     finally:
         db.dispose()
 
@@ -94,7 +96,7 @@ def test_a_live_allowed_signal_reaches_the_phone_untagged_and_audible(
         db.dispose()
 
 
-def test_an_exit_the_desk_raises_on_every_poll_is_one_message_and_three_reminders(
+def test_an_exit_is_one_message_and_the_position_closes_whatever_the_desk_polls(
     make_rig, tmp_path, monkeypatch
 ):
     clock = FakeClock(now_ist())
@@ -118,15 +120,15 @@ def test_an_exit_the_desk_raises_on_every_poll_is_one_message_and_three_reminder
             desk._manage_positions(clock(), OpenClock().current_window(clock()))
             rig.drain()
 
-        assert desk.positions[pid]["exit_advice"] == "STOP"
+        # owner feedback OF-5: one exit per entry, never repeated. With no paper trade the
+        # desk's advice is that exit; it closes the position, so later polls say nothing.
+        assert pid not in desk.positions and position["exit_advice"] == "STOP"
         exits = [
             (at - origin).total_seconds()
             for at, text in zip(rig.rec.times, rig.rec.texts(), strict=True)
             if visible(text).startswith("EXIT: SELL SBIN")  # US-003 decision 7: closing action
         ]
-        assert exits == [0.0, 300.0, 600.0, 900.0], (
-            "1 EXIT + 3 reminders, 5 minutes apart, while the Desk keeps raising it"
-        )
-        assert len([r for r in rig.rows() if r["kind"] == "exit"]) == 4
+        assert exits == [0.0], "one EXIT, no reminders"
+        assert len([r for r in rig.rows() if r["kind"] == "exit"]) == 1
     finally:
         db.dispose()

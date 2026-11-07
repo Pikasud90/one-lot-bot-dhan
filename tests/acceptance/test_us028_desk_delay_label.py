@@ -332,9 +332,9 @@ def raise_alert(d: Desk, key: str) -> dict:
     """Raise a long alert on `key` through Desk._raise_signal and return the pending alert."""
     t = d.trackers[key]
     close = float(t.bars["close"].iloc[-1])
-    v = Verdict(
-        "long", "test", t.bars.index[-1].to_pydatetime(), close * 0.995, close, 60.0, ["test"], True
-    )
+    # a distinct bar per call: since OF-5 the desk never alerts the same bar twice
+    bar_ts = t.bars.index[-1].to_pydatetime() + dt.timedelta(seconds=len(d.archive))
+    v = Verdict("long", "test", bar_ts, close * 0.995, close, 60.0, ["test"], True)
     d._raise_signal(t, t.slots[0], v, now_ist())
     alerts = [s for s in d.signals.values() if s["series_key"] == key]
     assert len(alerts) == 1, f"harness: no alert was raised for {key} ({t.last_error})"
@@ -841,25 +841,26 @@ class TestSignalTitleMarker:
         assert not notifier.sent[-1].title.startswith(MARKER)
         assert "delayed" not in notifier.sent[-1].title
 
-    def test_blocked_stays_first_then_delayed_then_the_unchanged_title(
+    def test_a_halted_governor_changes_nothing_and_delayed_still_leads(
         self, app_cfg, db, monkeypatch
     ):
+        """Owner feedback OF-5: no risk governor on alerts, so a halt adds no BLOCKED."""
         d, notifier, dhan, _ = make_desk(app_cfg, db, monkeypatch, set(KEYS))
         raise_alert(d, "SBIN")
-        base = notifier.sent[-1].title  # live, not blocked
+        base = notifier.sent[-1].title  # live
         clear_alert(d, next(iter(d.signals.values())))
         d.governor.manual_panic_halt()
-        blocked_live = raise_alert(d, "SBIN")
-        assert blocked_live["risk_allowed"] is False
-        assert notifier.sent[-1].title == BLOCKED + base
-        clear_alert(d, blocked_live)
+        halted_live = raise_alert(d, "SBIN")
+        assert halted_live["risk_allowed"] is True
+        assert notifier.sent[-1].title == base
+        clear_alert(d, halted_live)
         dhan.serves.discard("SBIN")
         d.poll()
-        blocked_delayed = raise_alert(d, "SBIN")
-        assert blocked_delayed["risk_allowed"] is False and blocked_delayed["data"]["delayed"]
+        halted_delayed = raise_alert(d, "SBIN")
+        assert halted_delayed["risk_allowed"] is True and halted_delayed["data"]["delayed"]
         title = notifier.sent[-1].title
-        assert title == BLOCKED + MARKER + base
-        assert title.split()[0] == "[BLOCKED" and title.count("(delayed ~15m)") == 1
+        assert title == MARKER + base
+        assert BLOCKED.strip() not in title and title.count("(delayed ~15m)") == 1
 
     def test_title_marker_changes_nothing_else_in_the_notification_or_the_alert(
         self, app_cfg, db, monkeypatch
@@ -876,16 +877,14 @@ class TestSignalTitleMarker:
         assert "(delayed ~15m)" not in json.dumps(alert, default=str), "title-only change"
         assert alert["data"]["delay_note"] == "Yahoo bars run ~15 minutes behind the exchange"
 
-    def test_a_blocked_delayed_notification_body_is_still_text_plus_the_risk_line(
-        self, app_cfg, db, monkeypatch
-    ):
+    def test_a_halted_governor_adds_no_risk_line_to_a_delayed_body(self, app_cfg, db, monkeypatch):
         d, notifier, _, _ = make_desk(app_cfg, db, monkeypatch, serves={"SBIN"})
         d.governor.manual_panic_halt()
         alert = raise_alert(d, "BANKNIFTY")
         sent = notifier.sent[-1]
-        assert sent.title.startswith(BLOCKED + MARKER)
-        assert sent.body == alert["text"] + f"\nRisk governor: {alert['risk_reason']}"
-        assert not sent.body.startswith(("(delayed", "[BLOCKED"))
+        assert sent.title.startswith(MARKER)
+        assert sent.body == alert["text"]
+        assert "Risk governor" not in sent.body
 
 
 # ══ mode B: end to end through the HTTP API and the UI helper ═════════════════════════

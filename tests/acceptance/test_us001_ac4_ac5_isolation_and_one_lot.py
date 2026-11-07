@@ -146,7 +146,8 @@ class TestTheGovernorIsNeverTouched:
         forbid_governor_mutation(monkeypatch)
 
         alert = H.raise_alert(d, "SBIN", now=H.mid_session(d, "SBIN"))
-        assert alert["risk_allowed"] is (mode == "allowed")
+        # owner feedback OF-5: the desk no longer asks the governor; every alert goes out
+        assert alert["risk_allowed"] is True
         assert [H.val(r["status"]) for r in H.trade_rows(desk_db.engine)] == ["PENDING_FILL"]
         d.poll()  # the paper book fills (or closes) on the next poll
         d.poll()
@@ -161,13 +162,14 @@ class TestTheGovernorIsNeverTouched:
     def test_a_manually_taken_position_and_a_paper_trade_do_not_share_counters(
         self, app_cfg, desk_db
     ):
-        """Taking the alert by hand books the owner's position and the governor's counters; the
-        paper trade is not a second position and stays one row."""
+        """Taking the alert by hand books the owner's position; the paper trade is not a second
+        position and stays one row. Since owner feedback OF-5 the desk's trades no longer feed
+        the risk governor either."""
         book = H.desk_book(app_cfg, desk_db.engine)
         d, _ = warmed_desk(app_cfg, desk_db, book)
         alert = H.raise_alert(d, "SBIN", now=H.mid_session(d, "SBIN"))
         assert d.acknowledge(alert["id"], "TAKE")["accepted"]
-        assert d.governor.snapshot().open_positions == 1 and d.governor.trades_taken == 1
+        assert d.governor.snapshot().open_positions == 0 and d.governor.trades_taken == 0
         assert len(d.positions) == 1 and len(H.trade_rows(desk_db.engine)) == 1
 
 

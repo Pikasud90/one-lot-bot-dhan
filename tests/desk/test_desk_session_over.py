@@ -101,16 +101,24 @@ def test_the_session_over_note_is_said_once_even_after_a_restart(cfg, db):
     assert restarted.positions[pid]["hold_check"] == SESSION_OVER
 
 
+def _closed(desk: Desk, pid: str) -> dict:
+    """The journal row of a position the desk closed."""
+    return next(j for j in desk.journal() if j["id"] == pid)
+
+
 def test_the_same_session_intraday_position_still_gets_its_exit(cfg, db):
     desk = _desk(cfg, db)
     pid = _taken(desk, "short")
     _through_the_stop(desk, pid)
 
-    sent = _manage(desk, now_ist())
+    sent = _manage(desk, now_ist()) + _manage(desk, now_ist())
 
-    assert desk.positions[pid]["exit_advice"] == "STOP"
-    assert [n.level for n in sent] == [NotificationLevel.EXIT]
-    assert not desk.positions[pid].get("session_over")
+    # OF-5: no paper book here, so the desk's advice is the alert's one exit: told once,
+    # and the position closes at the desk's price (never re-advised every poll)
+    assert pid not in desk.positions
+    assert [n.level for n in sent].count(NotificationLevel.EXIT) == 1
+    row = _closed(desk, pid)
+    assert row["exit_reason"] == "STOP" and row["exit_source"] == "desk"
 
 
 def test_a_swing_long_from_an_earlier_session_is_managed_as_before(cfg, db):
@@ -121,8 +129,9 @@ def test_a_swing_long_from_an_earlier_session_is_managed_as_before(cfg, db):
 
     sent = _manage(desk, _today(10, 0))
 
-    assert desk.positions[pid]["exit_advice"] == "STOP"
-    assert [n.level for n in sent] == [NotificationLevel.EXIT]
+    assert pid not in desk.positions
+    assert [n.level for n in sent].count(NotificationLevel.EXIT) == 1
+    assert _closed(desk, pid)["exit_reason"] == "STOP"
 
 
 def test_the_note_also_covers_a_position_the_broker_did_not_close(cfg, db):

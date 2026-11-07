@@ -255,53 +255,57 @@ def test_an_index_alert_with_a_live_chain_premium_reads_ask(app_cfg, db, monkeyp
 
 
 # ==========================================================================================
-# risk-blocked alerts
+# no risk-blocked alerts (owner feedback OF-5, 2026-11-07): a governor that says no blocks
+# nothing on the desk, so the phone never reads "[BLOCKED by risk]" for a desk alert. The
+# formatter's own handling of risk_allowed False stays covered in tests/notify.
 # ==========================================================================================
 def _block_risk(desk: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(desk.governor, "may_open", lambda now: (False, "daily loss limit reached"))
 
 
-def test_a_risk_blocked_alert_is_still_sent_and_prefixed_like_the_desk_title(
+def test_a_governor_that_says_no_leaves_the_alert_and_its_phone_text_unmarked(
     app_cfg, db, monkeypatch
 ):
     desk, notifier, _, _ = make(app_cfg, db, monkeypatch, {"SBIN", "BANKNIFTY"})
     _block_risk(desk, monkeypatch)
     alert = harness.raise_alert(desk, "SBIN")
     notification = sent_alert(notifier)
-    assert alert["risk_allowed"] is False
-    assert notification.title.startswith(BLOCKED)  # the desk's own marker
+    assert alert["risk_allowed"] is True and alert["risk_reason"] is None
+    assert not notification.title.startswith(BLOCKED)
     now = clock_for(alert)
     text = telegram().format_alert(alert, now)
     lines = text.split("\n")
-    assert visible(lines[0]) == f"{BLOCKED}BUY SBIN {DOT} 1 share{product(alert)}"
+    assert visible(lines[0]) == f"BUY SBIN {DOT} 1 share{product(alert)}"
     assert lines[2:] == expected_lines(alert, now)
-    assert "daily loss limit" not in text  # the reason stays in the app
+    assert "BLOCKED" not in text and "daily loss limit" not in text
     assert_budget(text)
     assert_well_formed(text)
 
 
-def test_a_blocked_and_delayed_alert_carries_both_markers_like_the_desk_title(
+def test_a_delayed_alert_keeps_only_the_delay_marker_when_the_governor_says_no(
     app_cfg, db, monkeypatch
 ):
     desk, notifier, _, _ = make(app_cfg, db, monkeypatch, {"BANKNIFTY"})
     _block_risk(desk, monkeypatch)
     alert = harness.raise_alert(desk, "SBIN")
     notification = sent_alert(notifier)
-    assert notification.title.startswith(f"{BLOCKED}{DELAYED_TITLE_MARKER}")
+    assert notification.title.startswith(DELAYED_TITLE_MARKER)
     text = telegram().format_alert(alert, clock_for(alert))
-    assert visible(header_of(text)).startswith(f"{BLOCKED}BUY SBIN")
+    assert visible(header_of(text)).startswith("BUY SBIN")
     assert "Data <b>delayed ~15m</b>" in text.split("\n")
     assert_budget(text)
     assert_well_formed(text)
 
 
-def test_a_blocked_index_alert_keeps_the_contract_in_the_header(app_cfg, db, monkeypatch):
+def test_an_index_alert_keeps_the_contract_in_the_header_when_the_governor_says_no(
+    app_cfg, db, monkeypatch
+):
     desk, notifier, _, _ = make(app_cfg, db, monkeypatch, {"SBIN", "BANKNIFTY"})
     _block_risk(desk, monkeypatch)
     alert = harness.raise_alert(desk, "BANKNIFTY")
     option = alert["economics"]["option"]
     text = telegram().format_alert(alert, clock_for(alert))
-    want = f"{BLOCKED}BUY BANKNIFTY {dd_mmm(option['expiry'])} {strike(option['strike'])} CE"
+    want = f"BUY BANKNIFTY {dd_mmm(option['expiry'])} {strike(option['strike'])} CE"
     assert visible(header_of(text)).startswith(want)
     assert_budget(text)
     assert_well_formed(text)

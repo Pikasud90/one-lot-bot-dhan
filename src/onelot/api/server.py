@@ -47,6 +47,13 @@ class CloseBody(BaseModel):
     reason: str = "MANUAL"
 
 
+class ReportBody(BaseModel):
+    """The owner's own fill prices for a taken position (OF-5): kept beside the alert's."""
+
+    entry_price: float | None = Field(None, description="the price you actually bought/sold at")
+    exit_price: float | None = Field(None, description="the price you actually exited at")
+
+
 class BacktestBody(BaseModel):
     strategy: str
     instrument_key: str
@@ -182,6 +189,29 @@ def _paper_payload(desk: object, now: dt.datetime) -> dict[str, Any]:
             None if session is None else last_session_view(session, book.day_totals(session))
         ),
     }
+
+
+def _paper_scoreboard(desk: object) -> list[dict[str, Any]] | None:
+    """The Home strategy scoreboard (OF-5) from the desk's paper book: every closed paper
+    trade by strategy, the desk's primary strategies first. None without a book."""
+    from collections import Counter
+
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from ..paper.ledger import PaperLedger
+    from ..paper.view import scoreboard_view
+
+    book = getattr(desk, "paper", None)
+    if book is None:
+        return None
+    try:
+        totals = PaperLedger(book.engine).by_strategy()
+        opened = Counter(str(t.strategy) for t in book.open_trades())
+    except (SQLAlchemyError, OSError) as exc:
+        log.warning("the paper scoreboard could not be read: %s", type(exc).__name__)
+        return None
+    primary = desk.cfg.primary_strategies() if hasattr(desk, "cfg") else ()
+    return scoreboard_view(totals, primary, opened)
 
 
 def create_app(engine, api_token: str) -> FastAPI:
@@ -320,6 +350,14 @@ def create_app(engine, api_token: str) -> FastAPI:
             raise HTTPException(404, "position not found or already closed")
         return res
 
+    @app.post("/api/desk/position/{position_id}/report", dependencies=[Depends(require_token)])
+    def desk_report(position_id: str, body: ReportBody) -> dict:
+        """Your own entry and/or exit price for a taken position, open or closed (OF-5)."""
+        res = _desk().report_prices(position_id, body.entry_price, body.exit_price)
+        if res is None:
+            raise HTTPException(404, "position not found")
+        return res
+
     @app.post("/api/desk/context", dependencies=[Depends(require_token)])
     def desk_context(body: DeskContextBody) -> dict:
         """Feed a context value the desk has no free source for (GIFT NIFTY)."""
@@ -341,8 +379,13 @@ def create_app(engine, api_token: str) -> FastAPI:
 
     @app.get("/api/desk/signals")
     def desk_signals_view(days: int = Query(7, ge=1, le=60)) -> dict:
-        """Every alert of the last `days` with its audited outcome, plus the per-strategy scoreboard."""
-        return _desk().signals_view(days)
+        """Every alert of the last `days` with its audited outcome and its exit (OF-5), the
+        audit scoreboard, and the paper scoreboard of the primary strategies."""
+        d = _desk()
+        out = d.signals_view(days)
+        out["primary_strategies"] = list(d.cfg.primary_strategies())
+        out["paper_scoreboard"] = _paper_scoreboard(d)
+        return out
 
     @app.get("/api/desk/bars")
     def desk_bars(

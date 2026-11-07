@@ -8,8 +8,13 @@ positions the operator has confirmed (trail, target, stop, strategy exit, square
 for intraday, session time stop for swing) -> re-audit every archived alert against
 the bars that followed -> cache a versioned snapshot the SSE stream ships.
 
-The global RiskGovernor is the master switch for every instrument. Nothing here can
-place an order.
+Alert lifecycle (owner feedback OF-5, 2026-11-07): every alert opens a paper trade, the
+paper trade's close IS the alert's one exit (one EXIT notification, never repeated), and a
+position the owner took closes at that exit alert's price. Prices are the alerts'; the
+owner may report their own entry and exit to see the difference. The risk governor gates
+neither alerts nor paper trades, and the desk's trades no longer feed it (it still guards the
+Bank Nifty engine); one live idea per instrument keeps alerts from repeating.
+Nothing here can place an order.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ from __future__ import annotations
 import copy
 import datetime as dt
 import logging
+import math
 import threading
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -50,6 +56,58 @@ log = logging.getLogger(__name__)
 DELAYED_TITLE_MARKER = "(delayed ~15m)"
 # The card of an intraday position left open from an earlier session (US-004 decision E).
 SESSION_OVER_NOTE = "session over: record the broker square-off"
+# A paper trade in one of these states is over: its close is the alert's exit (OF-5).
+FINAL_PAPER = ("CLOSED", "NO_FILL")
+
+
+def _reported(value: object) -> float | None:
+    """A price the owner typed: a finite number above zero, else None (not reported)."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        price = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return price if math.isfinite(price) and price > 0 else None
+
+
+def _rupees(paise: object) -> float | None:
+    """Integer paise from the paper book as rupees for the desk's float bookkeeping."""
+    if paise is None or isinstance(paise, bool) or not isinstance(paise, int):
+        return None
+    return paise / 100.0
+
+
+PRICE_FIELDS = (
+    "alert_entry_price",
+    "alert_exit_price",
+    "user_entry_price",
+    "user_exit_price",
+    "alert_net_pnl",
+    "user_net_pnl",
+    "diff_pnl",
+    "net_pnl",
+)
+
+
+def _prices(p: dict) -> dict:
+    """The alert's and the owner's prices of a taken position, and their P&L (OF-5)."""
+    out = {k: p.get(k) for k in PRICE_FIELDS}
+    if out["alert_entry_price"] is None:
+        out["alert_entry_price"] = p.get("entry_price")
+    return out
+
+
+def _trade_brief(p: dict) -> dict:
+    """What the alert archive shows of the position taken on it."""
+    return {
+        "net_pnl": p.get("net_pnl"),
+        "exit_price": p.get("exit_price"),
+        "reason": p.get("exit_reason"),
+        "source": p.get("exit_source"),
+        "user_net_pnl": p.get("user_net_pnl"),
+        "diff_pnl": p.get("diff_pnl"),
+    }
 
 
 def _iso(v: dt.datetime | None) -> str | None:
@@ -364,17 +422,16 @@ class Desk:
     def _raise_signal(
         self, t: InstrumentTracker, slot: StrategySlot, v: Verdict, now: dt.datetime
     ) -> None:
-        if any(s["instrument_key"] == t.instrument.key for s in self.signals.values()):
-            return  # one pending alert per instrument
-        if any(p["instrument_key"] == t.instrument.key for p in self.positions.values()):
-            return  # already holding it
-        allowed, why = self.governor.may_open(now)
-        per_symbol_cap = int(getattr(slot.strategy.p, "max_trades_per_day", 2) or 2)
-        if t.trades_today >= per_symbol_cap:
-            allowed, why = (
-                False,
-                f"{t.cfg.key}: {t.trades_today} trade(s) today (cap {per_symbol_cap})",
+        busy = self._busy_reason(t.instrument.key, slot.cfg.name, slot.cfg.timeframe, v)
+        if busy is not None:
+            log.debug(
+                "desk: %s %s %s not alerted: %s",
+                t.cfg.key,
+                slot.cfg.name,
+                slot.cfg.timeframe,
+                busy,
             )
+            return
         try:
             eco = self._economics(t, slot, v, now)
         except Exception as exc:  # noqa: BLE001
@@ -441,8 +498,9 @@ class Desk:
             "economics": eco.as_dict(),
             "text": text,
             "status": "PENDING",
-            "risk_allowed": allowed,
-            "risk_reason": why,
+            # no risk governor on alerts or paper trades (owner, 2026-11-07): never blocked
+            "risk_allowed": True,
+            "risk_reason": None,
             "outcome": None,
             "manage": {
                 "target_r": float(getattr(slot.strategy.p, "target_r", 0) or 0),
@@ -497,12 +555,10 @@ class Desk:
         )
         if delayed:
             title = f"{DELAYED_TITLE_MARKER} {title}"
-        if not allowed:  # blocked outranks delayed: it stays the very first word
-            title = f"[BLOCKED by risk] {title}"
         self.notifier.send(
             Notification(
                 title=title,
-                body=text + ("" if allowed else f"\nRisk governor: {why}"),
+                body=text,
                 level=NotificationLevel.SIGNAL,
                 signal_id=sid,
                 ttl_seconds=self.cfg.signal_valid_minutes * 60,
@@ -511,6 +567,44 @@ class Desk:
             dedup_key=f"desk:{sid}",
         )
         self.version += 1
+
+    def _busy_reason(
+        self, instrument_key: str, strategy: str, timeframe: str, v: Verdict
+    ) -> str | None:
+        """Why a fresh entry on this instrument is not alerted, or None (OF-5).
+
+        One live idea per instrument, so the same alert is never sent again while it runs:
+        an alert still pending, a taken position the desk still watches, or a paper trade
+        still waiting or open (its exit alert has not come). And never the same bar twice (a
+        restart evaluates the last bar again). No risk governor and no per-symbol cap.
+        """
+        if any(s["instrument_key"] == instrument_key for s in self.signals.values()):
+            return "an alert on it is still pending"
+        if any(
+            p["instrument_key"] == instrument_key and not p.get("session_over")
+            for p in self.positions.values()
+        ):
+            return "a taken position on it is still open"
+        if self.paper is not None:
+            try:
+                active = self.paper.open_trades()
+            except Exception:  # noqa: BLE001 - the book never stops an alert
+                self.hook_errors += 1
+                log.exception("paper: open_trades() failed")
+                active = []
+            if any(tr.instrument_key == instrument_key for tr in active):
+                return "its paper trade has not exited yet"
+        bar = _iso(v.bar_ts)
+        if bar is not None and any(
+            s.get("instrument_key") == instrument_key
+            and s.get("strategy") == strategy
+            and s.get("timeframe") == timeframe
+            and s.get("bar_ts") == bar
+            and s.get("direction") == v.direction
+            for s in self.archive
+        ):
+            return "this bar was already alerted"
+        return None
 
     def _economics(
         self, t: InstrumentTracker, slot: StrategySlot, v: Verdict, now: dt.datetime
@@ -606,7 +700,10 @@ class Desk:
             now = now_ist()
             eco = s["economics"]
             t = self.trackers.get(s["series_key"])
-            entry = float(fill_price) if fill_price else float(eco["entry_price"])
+            # The alert's price is the record (OF-5); what the owner typed is kept beside it
+            # so the difference shows, never in its place.
+            entry = float(eco["entry_price"])
+            user_entry = _reported(fill_price)
             pid = uuid.uuid4().hex[:12]
             pos = {
                 "id": pid,
@@ -623,6 +720,9 @@ class Desk:
                 "opened_at": _iso(now),
                 "qty": int(eco["qty"]),
                 "entry_price": entry,
+                "alert_entry_price": entry,
+                "user_entry_price": user_entry,
+                "alert_created_at": s.get("created_at"),
                 "entry_underlying": float(eco["underlying_entry"]),
                 "stop_underlying": float(eco["underlying_stop"]),
                 "target_underlying": eco.get("underlying_target"),
@@ -646,7 +746,6 @@ class Desk:
             self.positions[pid] = pos
             if t is not None:
                 t.trades_today += 1
-            self.governor.record_open(now)
             with self.engine.begin() as conn:
                 conn.execute(
                     desk_positions.insert().values(
@@ -666,9 +765,11 @@ class Desk:
                     )
                 )
             self._resolve_signal(sid, "TAKEN")
+            yours = f" · you reported {user_entry:,.2f}" if user_entry is not None else ""
             self.notifier.info(
                 f"Monitoring {s['label']} {s['side'].replace('_', ' ')}",
-                f"entry {entry:,.2f} · stop {pos['stop_underlying']:,.2f} (underlying) · {pos['horizon']} · re-checked every poll",
+                f"alert entry {entry:,.2f}{yours} · stop {pos['stop_underlying']:,.2f} "
+                f"(underlying) · {pos['horizon']} · it closes at the alert's exit price",
                 dedup_key=f"desk:open:{pid}",
             )
             return {
@@ -755,24 +856,23 @@ class Desk:
                 if not strat_exit
                 else strat_exit.replace("_", " ").lower()
             )
-            if horizon == "intraday" and to_ist(opened).date() < to_ist(now).date():
+            linked = self._paper_link(p)
+            if linked is not None:
+                # The paper trade's close is this alert's one exit (OF-5): the desk gives no
+                # advice of its own and sends nothing; _step_paper closes the position at the
+                # exit alert's price.
+                advice = None
+                p["paper_trade_id"], p["paper_status"] = linked.id, linked.status
+                p["hold_check"] += (
+                    f" · exit alert from paper trade #{linked.id}"
+                    f" ({str(linked.status).replace('_', ' ').lower()})"
+                )
+            elif horizon == "intraday" and to_ist(opened).date() < to_ist(now).date():
                 advice = None  # the broker squared it off at the close: no trading advice
                 self._note_session_over(pid, p)
             p["exit_advice"] = advice
-            if advice:
-                self.notifier.send(
-                    Notification(
-                        title=f"EXIT {p['label']} — {advice.replace('_', ' ')}",
-                        body=(
-                            f"{p['side'].replace('_', ' ')} from {p['entry_price']:,.2f}; underlying now {last:,.2f} "
-                            f"({r_now:+.2f}R, est. {p['unrealized']:+,.0f}). Close it at the market and record the exit price."
-                        ),
-                        level=NotificationLevel.EXIT,
-                        position_id=pid,
-                        payload={"advice": advice, "position": p},
-                    ),
-                    dedup_key=f"desk:exit:{pid}:{advice}",
-                )
+            if advice and self._fallback_exit(pid, p, advice, last, r_now, now):
+                continue  # closed at its exit alert's price; the close stored the row
             with self.engine.begin() as conn:
                 conn.execute(
                     update(desk_positions).where(desk_positions.c.id == pid).values(payload=p)
@@ -797,6 +897,70 @@ class Desk:
             "Closed.",
             dedup_key=f"desk:session_over:{pid}",
         )
+
+    def _paper_link(self, p: dict) -> Any:
+        """The paper trade of a taken position's alert, in any state, or None when the alert
+        has none (an alert from before the paper book, paper off, or a book that failed). A
+        failed lookup is None for this poll only: asked again next poll (unique alert_id)."""
+        sid = p.get("signal_id")
+        if self.paper is None or not sid:
+            return None
+        try:
+            return self.paper.for_alert(sid)
+        except Exception:  # noqa: BLE001 - the book never stops the desk
+            self.hook_errors += 1
+            log.exception("paper: for_alert(%s) failed", sid)
+            return None
+
+    def _mark_price(self, p: dict, now: dt.datetime, last: float | None = None) -> float | None:
+        """What the desk would book this position at now: a stock at its last price, an
+        option at the model premium for the last underlying. None when nothing is known
+        (never an invented price)."""
+        if last is None:
+            t = self.trackers.get(p["series_key"])
+            last = t.last_price() if t is not None else None
+        if last is None:
+            return None
+        if p["kind"] == "STOCK":
+            return round(float(last), 2)
+        o = p.get("option") or {}
+        prem = self._premium_at(o, last, now) if o else None
+        if prem is None or not math.isfinite(prem) or prem <= 0:
+            return None
+        return round(float(prem), 2)
+
+    def _fallback_exit(
+        self, pid: str, p: dict, advice: str, last: float, r_now: float, now: dt.datetime
+    ) -> bool:
+        """A taken position whose alert has no paper trade: the desk's own advice is the
+        alert's one exit (OF-5). It is told ONCE (the flag is stored with the position) and
+        the position closes at the desk's price; with no price it stays open, flagged, for
+        the owner to close with their own price. True when it closed."""
+        price = self._mark_price(p, now, last)
+        if not p.get("exit_alert_sent"):
+            p["exit_alert_sent"] = advice
+            closing = (
+                f"Closed here at {price:,.2f}; report your own exit to compare."
+                if price is not None
+                else "No price is known here: close it at the market and record your exit."
+            )
+            self.notifier.send(
+                Notification(
+                    title=f"EXIT {p['label']} — {advice.replace('_', ' ')}",
+                    body=(
+                        f"{p['side'].replace('_', ' ')} from {p['entry_price']:,.2f}; underlying "
+                        f"now {last:,.2f} ({r_now:+.2f}R, est. {p['unrealized']:+,.0f}). {closing}"
+                    ),
+                    level=NotificationLevel.EXIT,
+                    position_id=pid,
+                    payload={"advice": advice, "position": p},
+                ),
+                dedup_key=f"desk:exit:{pid}",
+            )
+        if price is None:
+            return False
+        self._close(pid, reason=advice, source="desk", alert_exit=price, now=now)
+        return True
 
     def _unrealized(self, p: dict, last: float, now: dt.datetime) -> float:
         sign = 1 if p["direction"] == "long" else -1
@@ -832,42 +996,50 @@ class Desk:
             return None
 
     def close_position(self, pid: str, exit_price: float, reason: str = "MANUAL") -> dict | None:
+        """The owner closed a taken position themselves, before its exit alert, at their own
+        price: kept as their reported exit. The alert's exit price is added to the closed
+        trade when the alert's exit comes (OF-5), so the two can be compared. None when there
+        is no such open position."""
+        price = _reported(exit_price)
+        if price is None:
+            if pid not in self.positions:
+                return None
+            return {"closed": False, "message": "type the price you exited at (above zero)"}
+        return self._close(pid, reason=reason, source="user", user_exit=price)
+
+    def _close(
+        self,
+        pid: str,
+        *,
+        reason: str,
+        source: str,
+        alert_exit: float | None = None,
+        user_exit: float | None = None,
+        now: dt.datetime | None = None,
+    ) -> dict | None:
+        """Close a taken position: at its exit alert's price (`source` "alert": the paper
+        trade's close; "desk": the desk's own advice for an alert without one) or at the
+        owner's price ("user"). One close per position: None if it is not open."""
         with self._lock:
             p = self.positions.pop(pid, None)
             if p is None:
                 return None
-            now = now_ist()
-            t = self.trackers.get(p["series_key"])
-            inst = self.instruments.get(p["instrument_key"])
-            sign = 1 if p["direction"] == "long" else -1
-            qty = int(p["qty"])
-            gross = (
-                sign * (float(exit_price) - float(p["entry_price"])) * qty
-                if p["kind"] == "STOCK"
-                else (float(exit_price) - float(p["entry_price"])) * qty
-            )
-            costs = 0.0
-            if inst is not None:
-                from .economics import _costs_for
-
-                try:
-                    costs = _costs_for(inst).round_trip_cost(
-                        float(p["entry_price"]), float(exit_price), qty
-                    )
-                except Exception:  # noqa: BLE001
-                    costs = 0.0
-            net = gross - costs
+            now = now or now_ist()
+            if alert_exit is not None:
+                p["alert_exit_price"] = float(alert_exit)
+            if user_exit is not None:
+                p["user_exit_price"] = float(user_exit)
             p.update(
                 {
                     "status": "CLOSED",
                     "closed_at": _iso(now),
-                    "exit_price": float(exit_price),
-                    "gross_pnl": round(gross, 2),
-                    "costs": round(costs, 2),
-                    "net_pnl": round(net, 2),
                     "exit_reason": reason,
+                    "exit_source": source,
                 }
             )
+            self._settle(p)
+            exit_price = float(p["exit_price"])
+            gross, costs, net = float(p["gross_pnl"]), float(p["costs"]), float(p["net_pnl"])
             with self.engine.begin() as conn:
                 conn.execute(
                     update(desk_positions)
@@ -875,7 +1047,7 @@ class Desk:
                     .values(
                         status="CLOSED",
                         closed_at=now,
-                        exit_price=float(exit_price),
+                        exit_price=exit_price,
                         gross_pnl=gross,
                         costs=costs,
                         net_pnl=net,
@@ -883,30 +1055,141 @@ class Desk:
                         payload=p,
                     )
                 )
-            self.governor.record_close(net, now)
+            t = self.trackers.get(p["series_key"])
             if t is not None:
                 t.pnl_today += net
                 t.consecutive_losses = t.consecutive_losses + 1 if net < 0 else 0
             for r in self.archive:
                 if r["id"] == p.get("signal_id"):
                     r["status"] = "CLOSED"
-                    r["trade"] = {
-                        "net_pnl": round(net, 2),
-                        "exit_price": float(exit_price),
-                        "reason": reason,
-                    }
+                    r["trade"] = _trade_brief(p)
+            whose = "your price" if source == "user" else "the exit alert's price"
             self.notifier.info(
                 f"Closed {p['label']}: {net:+,.0f} net",
-                f"{reason} at {exit_price:,.2f}; costs {costs:,.0f}",
+                f"{reason.replace('_', ' ')} at {exit_price:,.2f} ({whose}); costs {costs:,.0f}",
                 dedup_key=f"desk:close:{pid}",
             )
             self.version += 1
             return {
                 "closed": True,
+                "exit_price": exit_price,
                 "net_pnl": round(net, 2),
                 "gross_pnl": round(gross, 2),
                 "costs": round(costs, 2),
+                "user_net_pnl": p.get("user_net_pnl"),
+                "diff_pnl": p.get("diff_pnl"),
             }
+
+    def report_prices(
+        self, pid: str, entry_price: float | None = None, exit_price: float | None = None
+    ) -> dict | None:
+        """The owner's own fill prices for a taken position, open or closed (OF-5). They are
+        kept beside the alert's prices, never in their place, so the difference shows. None
+        when there is no such position."""
+        entry, exit_ = _reported(entry_price), _reported(exit_price)
+        if entry is None and exit_ is None:
+            return {"ok": False, "message": "give your entry or exit price (above zero)"}
+        with self._lock:
+            p = self.positions.get(pid)
+            if p is not None:
+                if entry is not None:
+                    p["user_entry_price"] = entry
+                if exit_ is not None:
+                    p["user_exit_price"] = exit_
+                with self.engine.begin() as conn:
+                    conn.execute(
+                        update(desk_positions).where(desk_positions.c.id == pid).values(payload=p)
+                    )
+                self.version += 1
+                return {"ok": True, "status": "OPEN", **_prices(p)}
+        with self.engine.connect() as conn:
+            row = (
+                conn.execute(select(desk_positions).where(desk_positions.c.id == pid))
+                .mappings()
+                .first()
+            )
+        if row is None:
+            return None
+        p = dict(row["payload"] or {})
+        p.setdefault("id", pid)
+        p["status"] = row["status"]
+        if entry is not None:
+            p["user_entry_price"] = entry
+        if exit_ is not None:
+            p["user_exit_price"] = exit_
+        self._store_settled(pid, p, closed=row["status"] == "CLOSED")
+        return {"ok": True, "status": row["status"], **_prices(p)}
+
+    def _store_settled(self, pid: str, p: dict, closed: bool) -> None:
+        """Recompute a stored position's money from its prices and write it back; the
+        archive's trade brief follows."""
+        self._settle(p)
+        values: dict[str, Any] = {"payload": p}
+        if closed and p.get("net_pnl") is not None:
+            values |= {
+                "exit_price": p["exit_price"],
+                "gross_pnl": p["gross_pnl"],
+                "costs": p["costs"],
+                "net_pnl": p["net_pnl"],
+            }
+        with self.engine.begin() as conn:
+            conn.execute(update(desk_positions).where(desk_positions.c.id == pid).values(**values))
+        with self._lock:
+            for r in self.archive:
+                if r["id"] == p.get("signal_id") and r.get("trade") is not None:
+                    r["trade"] = _trade_brief(p)
+            self.version += 1
+
+    def _settle(self, p: dict) -> None:
+        """A taken position's money from its four prices (OF-5). The alert's entry and exit
+        are the record; the owner's reported prices, where given, make `user_net_pnl` and
+        `diff_pnl` (theirs minus the alert's). The headline (`exit_price`, `gross_pnl`,
+        `costs`, `net_pnl`) is the alert's once its exit is known, else the owner's. A
+        position closed before OF-5 was closed at the owner's price: that price is theirs."""
+        entry = float(p.get("alert_entry_price") or p["entry_price"])
+        alert_exit = p.get("alert_exit_price")
+        user_entry, user_exit = p.get("user_entry_price"), p.get("user_exit_price")
+        if (
+            p.get("status") == "CLOSED"
+            and alert_exit is None
+            and user_exit is None
+            and p.get("exit_price") is not None
+        ):
+            user_exit = p["user_exit_price"] = float(p["exit_price"])
+        alert = self._pnl(p, entry, float(alert_exit)) if alert_exit is not None else None
+        theirs = None
+        if user_entry is not None or user_exit is not None:
+            out = user_exit if user_exit is not None else alert_exit
+            if out is not None:
+                into = float(user_entry) if user_entry is not None else entry
+                theirs = self._pnl(p, into, float(out))
+        p["alert_net_pnl"] = round(alert[2], 2) if alert else None
+        p["user_net_pnl"] = round(theirs[2], 2) if theirs else None
+        p["diff_pnl"] = round(theirs[2] - alert[2], 2) if alert and theirs else None
+        head, head_exit = (alert, alert_exit) if alert else (theirs, user_exit)
+        if head is not None and head_exit is not None:
+            p["exit_price"] = float(head_exit)
+            p["gross_pnl"], p["costs"], p["net_pnl"] = (round(x, 2) for x in head)
+
+    def _pnl(self, p: dict, entry: float, exit_: float) -> tuple[float, float, float]:
+        """(gross, costs, net) in rupees of one unit (one lot or one share) from entry to
+        exit: a stock by its direction, an option as long premium."""
+        qty = int(p["qty"])
+        if p["kind"] == "STOCK":
+            sign = 1 if p["direction"] == "long" else -1
+            gross = sign * (exit_ - entry) * qty
+        else:
+            gross = (exit_ - entry) * qty
+        costs = 0.0
+        inst = self.instruments.get(p["instrument_key"])
+        if inst is not None:
+            from .economics import _costs_for
+
+            try:
+                costs = float(_costs_for(inst).round_trip_cost(entry, exit_, qty))
+            except Exception:  # noqa: BLE001
+                costs = 0.0
+        return gross, costs, gross - costs
 
     def journal(self, limit: int = 200) -> list[dict]:
         with self.engine.connect() as conn:
@@ -945,6 +1228,13 @@ class Desk:
                 _iso(_aware(r["opened_at"])),
                 _iso(_aware(r["closed_at"])),
             )
+            payload = r["payload"] or {}
+            d |= _prices(payload)
+            d["alert_entry_price"] = payload.get("alert_entry_price") or r["entry_price"]
+            for k in ("signal_id", "label", "trading_symbol", "alert_created_at", "exit_source"):
+                d[k] = payload.get(k)
+            if d["user_exit_price"] is None and not payload.get("exit_source"):
+                d["user_exit_price"] = r["exit_price"]  # closed before OF-5: at the owner's price
             out.append(d)
         return out
 
@@ -1150,13 +1440,167 @@ class Desk:
         return reason, slot.last_bar_ts + dt.timedelta(minutes=slot.tf_min)
 
     def _step_paper(self, now: dt.datetime) -> None:
+        """Step the paper book; each trade it closes (or that never filled) is its alert's
+        one exit (OF-5): told once, and a position taken on that alert closes at the exit
+        alert's price."""
         if self.paper is None:
             return
         try:
-            self.paper.step(now, self._paper_bars, self._paper_strategy_exit)
+            events = list(self.paper.step(now, self._paper_bars, self._paper_strategy_exit) or [])
         except Exception:  # noqa: BLE001 - the poll carries on whatever the book does
             self.hook_errors += 1
             log.exception("paper: step failed (poll %d)", self.polls)
+            events = []
+        final = dict.fromkeys(e.trade_id for e in events if getattr(e, "kind", None) in FINAL_PAPER)
+        for trade_id in final:
+            try:
+                self._alert_exit(trade_id)
+            except Exception:  # noqa: BLE001 - one exit never stops the others or the poll
+                self.hook_errors += 1
+                log.exception("desk: the exit alert of paper trade %s failed", trade_id)
+        try:
+            self._settle_taken(now)
+        except Exception:  # noqa: BLE001
+            self.hook_errors += 1
+            log.exception("desk: settling taken positions failed")
+
+    def _alert_exit(self, trade_id: int) -> None:
+        """The one exit of an alert (OF-5): its paper trade closed (or never filled). The
+        archive row records it, the owner is told ONCE (EXIT), and a trade the owner closed
+        early gets the alert's exit price beside theirs."""
+        assert self.paper is not None
+        trade = self.paper.trade(trade_id)
+        if trade is None or trade.status not in FINAL_PAPER:
+            return
+        plan = trade.plan if isinstance(trade.plan, dict) else {}
+        raw = plan.get("alert")
+        snapshot: dict = raw if isinstance(raw, dict) else {}
+        sig = next((r for r in self.archive if r.get("id") == trade.alert_id), None)
+        base: dict = sig if sig is not None else dict(snapshot)
+        when = trade.exit_ts or trade.updated_at
+        info = {
+            "trade_id": trade.id,
+            "status": trade.status,
+            "reason": str(trade.close_reason or trade.status),
+            "at": _iso(_aware(when)),
+            "price": _rupees(trade.exit_paise),
+            "net": _rupees(trade.net_paise),
+            "grade": trade.grade,
+        }
+        if sig is not None:
+            sig["exit"] = info
+            with self.engine.begin() as conn:
+                conn.execute(
+                    update(desk_signals).where(desk_signals.c.id == sig["id"]).values(payload=sig)
+                )
+        taken = any(p.get("signal_id") == trade.alert_id for p in self.positions.values())
+        self._send_alert_exit(trade, base, info, taken)
+        if info["price"] is not None:
+            self._annotate_closed(trade.alert_id, float(info["price"]))
+        self.version += 1
+
+    def _send_alert_exit(self, trade: Any, base: dict, info: dict, taken: bool) -> None:
+        label = str(base.get("label") or trade.series_key)
+        side = str(base.get("side") or trade.side)
+        raw_eco = base.get("economics")
+        eco: dict = raw_eco if isinstance(raw_eco, dict) else {}
+        raw_option = eco.get("option")
+        option: dict = raw_option if isinstance(raw_option, dict) else {}
+        words = info["reason"].replace("_", " ")
+        price, net = info["price"], info["net"]
+        at_price = f" @ ₹{price:,.2f}" if price is not None else ""
+        alerted = str(base.get("created_at") or "")[11:16]
+        if info["status"] == "NO_FILL":
+            title = f"EXIT {label} — NO FILL" + (f" ({words})" if words != "NO FILL" else "")
+            body = (
+                f"The {alerted} alert never filled on paper, so it is over. If you entered "
+                "anyway, close it at the market and report your exit price."
+            )
+        else:
+            title = f"EXIT {label} — {words}{at_price}"
+            body = f"The {alerted} {side.replace('_', ' ')} alert exits: {words}{at_price}." + (
+                f" Paper net ₹{net:+,.0f}." if net is not None else ""
+            )
+        if taken:
+            body += (
+                " You took it: the desk closes your position at the exit alert's price; "
+                "report your own exit to compare."
+            )
+        position = {
+            "id": f"alert-{trade.alert_id}",
+            "label": label,
+            "trading_symbol": base.get("trading_symbol") or trade.series_key,
+            "series_key": trade.series_key,
+            "kind": trade.kind,
+            "side": side,
+            "qty": trade.qty,
+            "option": option,
+            "unrealized": net,
+        }
+        self.notifier.send(
+            Notification(
+                title=title,
+                body=body,
+                level=NotificationLevel.EXIT,
+                position_id=f"alert-{trade.alert_id}",
+                payload={
+                    "advice": f"{words}{at_price}",
+                    "position": position,
+                    "exit": info,
+                    "alert_id": trade.alert_id,
+                },
+            ),
+            dedup_key=f"desk:alert-exit:{trade.alert_id}",
+        )
+
+    def _settle_taken(self, now: dt.datetime) -> None:
+        """Close every taken position whose alert has exited (its paper trade is final) at
+        the exit alert's price; a no-fill (no exit price) closes at the desk's price. This
+        also ends positions left open before OF-5 whose alert exited long ago."""
+        for pid, p in list(self.positions.items()):
+            trade = self._paper_link(p)
+            if trade is None or trade.status not in FINAL_PAPER:
+                continue
+            price = _rupees(trade.exit_paise)
+            if price is None:
+                price = self._mark_price(p, now)
+            if price is None:
+                p["hold_check"] = (
+                    f"the alert has exited ({trade.close_reason or trade.status}) with no "
+                    "price known here: close it with your own exit price"
+                )
+                continue
+            when = _aware(trade.exit_ts or trade.updated_at) or now
+            self._close(
+                pid,
+                reason=str(trade.close_reason or trade.status),
+                source="alert",
+                alert_exit=price,
+                now=max(when, _aware(dt.datetime.fromisoformat(p["opened_at"])) or when),
+            )
+
+    def _annotate_closed(self, alert_id: str, price: float) -> None:
+        """A position the owner closed before the alert's exit gets that exit's price beside
+        theirs, so the difference shows (OF-5)."""
+        with self.engine.connect() as conn:
+            rows = (
+                conn.execute(
+                    select(desk_positions).where(
+                        desk_positions.c.signal_id == alert_id,
+                        desk_positions.c.status == "CLOSED",
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        for row in rows:
+            p = dict(row["payload"] or {})
+            if p.get("alert_exit_price") is not None:
+                continue
+            p.setdefault("id", row["id"])
+            p["status"] = "CLOSED"
+            p["alert_exit_price"] = price
+            self._store_settled(row["id"], p, closed=True)
 
     def _paper_block(self) -> dict | None:
         """snapshot["paper"]: the book's status() and the desk's own hook_errors, apart."""
@@ -1181,7 +1625,6 @@ class Desk:
         ]
         pending = {s["instrument_key"]: s for s in self.signals.values()}
         open_by = {p["instrument_key"]: p for p in self.positions.values()}
-        halted = self.governor.state.value == "HALTED"
         for d in trackers:
             d["signal"] = pending.get(d["tracked"])
             d["position"] = open_by.get(d["tracked"])
@@ -1192,7 +1635,7 @@ class Desk:
                 if (d["signal"] and d["signal"]["direction"] == "long")
                 else "SELL"
                 if d["signal"]
-                else ("HALTED" if halted else "TRACKING")
+                else "TRACKING"
             )
             d["recent"] = [
                 {

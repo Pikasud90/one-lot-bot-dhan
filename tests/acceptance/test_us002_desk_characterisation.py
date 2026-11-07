@@ -1,7 +1,9 @@
 """CHARACTERISATION of the desk's CURRENT advice (US-002 NFR; protects US-025).
 
-The desk (`Desk._manage_positions`) advises a manually taken position from ONE live price: it
-never closes anything, a touch counts, nothing is bar-aware. This story leaves the desk UNTOUCHED,
+The desk (`Desk._manage_positions`) advises a manually taken position from ONE live price: a
+touch counts, nothing is bar-aware. Since owner feedback OF-5 (2026-11-07) the advice is used
+only for a position whose alert has no paper trade, and it is that alert's one exit: told
+once, and the position closes at the desk's price (the advice values below are unchanged). This story leaves the desk UNTOUCHED,
 so every test here must pass today and keep passing when US-025 makes `_manage_positions` call
 `onelot/desk/rules.py` (ratchet_stop, r_multiple, bars_held, sessions_held, session_due,
 exit_priority): "every characterised advice is unchanged" (US-025 AC1).
@@ -116,14 +118,20 @@ class TestStopAndTarget:
     def test_no_target_means_no_target_advice(self, harness):
         assert harness.advise(pos(target=None), [1000.0, 5000.0])["exit_advice"] is None
 
-    def test_the_desk_only_advises_the_position_stays_open_and_an_exit_alert_goes_out(
+    def test_without_a_paper_trade_the_advice_is_the_one_exit_and_closes_the_position(
         self, harness
     ):
+        """Owner feedback OF-5 (2026-11-07) replaced "the desk only advises; the position
+        stays open and the EXIT repeats every poll": an alert with no paper trade exits on
+        the desk's advice, told ONCE, and the position closes at the desk's price."""
         p = harness.advise(pos(), [1000.0, 989.0])
-        assert p["exit_advice"] == "STOP" and p["status"] == "OPEN"
-        assert p["id"] in harness.desk.positions
+        assert p["exit_advice"] == "STOP" and p["status"] == "CLOSED"
+        assert p["id"] not in harness.desk.positions
+        assert p["exit_price"] == 989.0 and p["exit_source"] == "desk"
         (alert,) = harness.exits()
         assert alert.payload["advice"] == "STOP" and alert.position_id == p["id"]
+        harness.advise(p, [1000.0, 985.0])  # polled again: nothing more is said
+        assert len(harness.exits()) == 1
 
     def test_the_marks_are_refreshed_every_poll(self, harness):
         p = harness.advise(pos(), [1000.0, 1005.0])

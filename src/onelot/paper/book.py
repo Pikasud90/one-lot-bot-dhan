@@ -535,6 +535,19 @@ class PaperBook:
         with self._lock:
             self._counts["hook_errors"] += 1
 
+    def trade(self, trade_id: int) -> PaperTrade | None:
+        """The stored trade with this id, read from the database (None if there is none).
+        Never takes the book's lock."""
+        return self._fetch_id(trade_id)
+
+    def for_alert(self, alert_id: str) -> PaperTrade | None:
+        """The paper trade of an alert: the managed copy while it is active, else the stored
+        row (None when the alert never got one: paper off, or an alert from before the book).
+        """
+        with self._lock:
+            active = self._active.get(alert_id)
+        return active if active is not None else self._fetch(alert_id)
+
     def open_trades(self) -> list[PaperTrade]:
         """A copy of the trades still managed (PENDING_FILL or OPEN), oldest first."""
         with self._lock:

@@ -539,7 +539,11 @@ class TestAnOptionThroughTheDeskPoll:
 class TestEveryPollReadsEachSeriesOnce:
     def test_bars_is_asked_once_per_series_per_poll_whatever_the_number_of_trades(self, rig):
         first = rig.alert("SBIN")
-        second = rig.alert("SBIN")  # a second alert on the same series (the first was resolved)
+        # Since owner feedback OF-5 the desk keeps one live alert per instrument, so the second
+        # trade on the same series is opened on the book directly: two trades is what this
+        # test needs, whoever opened them.
+        second = {**copy.deepcopy(first), "id": f"{first['id']}b"}
+        rig.desk.paper.on_alert(second, H.mid_session(rig.desk, "SBIN"))
         option = rig.alert("BANKNIFTY")
         assert first["id"] != second["id"]
         calls = []

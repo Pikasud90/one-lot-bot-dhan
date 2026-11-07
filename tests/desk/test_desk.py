@@ -5,6 +5,7 @@ Everything runs on synthetic bars through a fake bar source; no network, no brok
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import zlib
 
@@ -360,24 +361,32 @@ class TestDeskFlow:
         assert res["accepted"] and len(d.positions) == 1 and not d.signals
         pid = res["position_id"]
         pos = d.positions[pid]
-        assert pos["entry_price"] == pytest.approx(sig["economics"]["entry_price"] + 0.5)
-        assert gov.open_positions == 1 and t.trades_today == 1
-
-        # price runs to the target -> EXIT advice + alert
-        t.bars.loc[t.bars.index[-1], "close"] = pos["target_underlying"] + 1
-        d._manage_positions(now_ist(), OpenClock().current_window())
-        assert d.positions[pid]["exit_advice"] == "TARGET"
-        assert any(n.level.value == "EXIT" for n in notifier.sent)
+        # OF-5: the alert's price is the record; the owner's fill is kept beside it
+        assert pos["entry_price"] == pytest.approx(sig["economics"]["entry_price"])
+        assert pos["user_entry_price"] == pytest.approx(sig["economics"]["entry_price"] + 0.5)
+        # the desk's trades no longer feed the risk governor (owner, 2026-11-07)
+        assert gov.open_positions == 0 and t.trades_today == 1
         snap = d._rebuild_snapshot(now_ist(), OpenClock().current_window()) or d.snapshot()
         assert snap["stocks"][0]["state"] == "HOLD"
 
-        out = d.close_position(pid, pos["target_underlying"], "TARGET")
-        assert out["closed"] and out["net_pnl"] > 0 and not d.positions
-        assert gov.open_positions == 0 and gov.realized_pnl == pytest.approx(
-            out["net_pnl"], abs=0.01
-        )
+        # price runs to the target. No paper book here, so the desk's own advice is the
+        # alert's one exit: told ONCE, and the position closes at the desk's price.
+        t.bars.loc[t.bars.index[-1], "close"] = pos["target_underlying"] + 1
+        d._manage_positions(now_ist(), OpenClock().current_window())
+        assert not d.positions
+        assert [n.level.value for n in notifier.sent].count("EXIT") == 1
+        d._manage_positions(now_ist(), OpenClock().current_window())
+        assert [n.level.value for n in notifier.sent].count("EXIT") == 1  # never again
+        assert gov.realized_pnl == 0
+
         j = d.journal()
         assert len(j) == 1 and j[0]["exit_reason"] == "TARGET" and j[0]["qty"] == 1
+        assert j[0]["exit_price"] == pytest.approx(pos["target_underlying"] + 1, abs=0.01)
+        assert j[0]["alert_exit_price"] == j[0]["exit_price"] and j[0]["net_pnl"] > 0
+        # the owner paid 0.50 more than the alert: their net is lower by about that
+        assert j[0]["user_net_pnl"] < j[0]["net_pnl"]
+        assert j[0]["diff_pnl"] == pytest.approx(j[0]["user_net_pnl"] - j[0]["net_pnl"])
+        assert j[0]["diff_pnl"] == pytest.approx(-0.5, abs=0.05)
 
     def test_skip_and_expiry_and_recovery(self, cfg, db):
         d, notifier, gov = self._desk(cfg, db)
@@ -398,17 +407,24 @@ class TestDeskFlow:
         d._raise_signal(t, t.slots[0], v, now_ist())
         sid = next(iter(d.signals))
         assert d.acknowledge(sid, "SKIP")["accepted"] and not d.signals
-        d._raise_signal(t, t.slots[0], v, now_ist() - dt.timedelta(minutes=30))
+        # OF-5: the same bar is never alerted twice (a restart evaluates it again)
+        d._raise_signal(t, t.slots[0], v, now_ist())
+        assert not d.signals and len(d.archive) == 1
+
+        def later(minutes: int):
+            return dataclasses.replace(v, bar_ts=v.bar_ts + dt.timedelta(minutes=minutes))
+
+        d._raise_signal(t, t.slots[0], later(5), now_ist() - dt.timedelta(minutes=30))
         d._expire_signals(now_ist())
         assert not d.signals and d.archive[0]["status"] == "EXPIRED"
         # an open position survives a restart
-        d._raise_signal(t, t.slots[0], v, now_ist())
+        d._raise_signal(t, t.slots[0], later(10), now_ist())
         sid = next(iter(d.signals))
         d.acknowledge(sid, "TAKE")
         d2 = Desk(db.engine, cfg, notifier, gov, OpenClock(), repo=Repo(db), desk_cfg=small_cfg())
         assert len(d2.positions) == 1 and next(iter(d2.positions.values()))["side"] == "SELL"
 
-    def test_risk_governor_blocks_but_still_alerts(self, cfg, db):
+    def test_a_halted_risk_governor_neither_blocks_nor_marks_an_alert(self, cfg, db):
         d, notifier, gov = self._desk(cfg, db)
         d.poll()
         gov.manual_panic_halt()
@@ -427,8 +443,10 @@ class TestDeskFlow:
         )
         d._raise_signal(t, t.slots[0], v, now_ist())
         sig = next(iter(d.signals.values()))
-        assert sig["risk_allowed"] is False and "HALT" in sig["risk_reason"].upper()
-        assert notifier.sent[-1].title.startswith("[BLOCKED by risk]")
+        # owner, 2026-11-07: no risk governor on alerts or paper trades
+        assert sig["risk_allowed"] is True and sig["risk_reason"] is None
+        assert "BLOCKED" not in notifier.sent[-1].title
+        assert "Risk governor" not in notifier.sent[-1].body
 
 
 class TestIsDelayedSource:
@@ -517,12 +535,13 @@ class TestFeedDelayLabel:
         assert sent.payload is sig and "delayed ~15m" not in sig["text"]
         assert sent.body == sig["text"]
 
-    def test_a_blocked_delayed_alert_keeps_the_blocked_prefix_first(self, cfg, db, monkeypatch):
+    def test_a_halted_governor_leaves_the_delay_marker_first(self, cfg, db, monkeypatch):
         d, notifier = self._composite_desk(cfg, db, monkeypatch, {"SBIN"})
         d.governor.manual_panic_halt()
         t = d.trackers["SBIN"]
         d._raise_signal(t, t.slots[0], self._verdict(t), now_ist())
-        assert notifier.sent[-1].title.startswith("[BLOCKED by risk] (delayed ~15m) ")
+        assert notifier.sent[-1].title.startswith("(delayed ~15m) ")
+        assert "BLOCKED" not in notifier.sent[-1].title
 
     def test_snapshot_marks_only_the_yahoo_served_tracker_delayed(self, cfg, db, monkeypatch):
         d, _ = self._composite_desk(cfg, db, monkeypatch, {"SBIN"})

@@ -25,14 +25,14 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import get_args
 
-from sqlalchemy import Engine, select, type_coerce
+from sqlalchemy import ColumnElement, Engine, func, select, type_coerce
 from sqlalchemy.types import NullType
 
 from ..store.schema import paper_trades
 from .alert import Grade
 from .money import stored_paise
 
-__all__ = ["GRADES", "LedgerTotals", "PaperLedger"]
+__all__ = ["GRADES", "LedgerTotals", "PaperLedger", "StrategyTotals"]
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +51,28 @@ class LedgerTotals:
     gross_paise: int
     costs_paise: int
     net_paise: int
+
+
+@dataclass
+class StrategyTotals:
+    """One strategy's closed paper trades that have a net (owner feedback OF-5): the same
+    exact sums as `LedgerTotals`, plus what the Home scoreboard needs. `won_paise` is the sum
+    of the winning nets, `lost_paise` of the losing ones (<= 0); `r_sum` / `r_trades` average
+    the R multiple (net / risk) over the trades whose risk is a positive whole number of paise.
+    """
+
+    trades: int = 0
+    wins: int = 0
+    losses: int = 0
+    gross_paise: int = 0
+    costs_paise: int = 0
+    net_paise: int = 0
+    won_paise: int = 0
+    lost_paise: int = 0
+    r_sum: float = 0.0  # analytics: float is fine here, the money sums stay int
+    r_trades: int = 0
+    no_fill: int = 0
+    last_exit: dt.datetime | None = None
 
 
 class PaperLedger:
@@ -109,6 +131,75 @@ class PaperLedger:
             net += trade_net
         return LedgerTotals(trades, wins, losses, gross, costs, net)
 
+    def by_strategy(
+        self,
+        *,
+        grade: str | None = None,
+        since: dt.datetime | None = None,
+        until: dt.datetime | None = None,
+    ) -> dict[str, StrategyTotals]:
+        """`totals()` split by strategy, plus NO_FILL counts, for the Home scoreboard (OF-5).
+
+        Same rules as `totals()`: CLOSED rows with a net, exit time in [since, until), exact
+        integer sums, a corrupt money cell warned about and left out. NO_FILL rows (no money)
+        are counted apart in `no_fill`, with the same window on the time the book closed them.
+        Strategies with no trade in the window are absent: the caller lists the ones it wants.
+        """
+        _check_grade(grade)
+        _check_aware(since, "since")
+        _check_aware(until, "until")
+        if since is not None and until is not None and since > until:
+            raise ValueError(f"since={since.isoformat()} is after until={until.isoformat()}")
+        t = paper_trades.c
+        when = func.coalesce(t.exit_ts, t.updated_at)
+        where: list[ColumnElement[bool]] = [t.status.in_(("CLOSED", "NO_FILL"))]
+        if grade is not None:
+            where.append(t.grade == grade)
+        if since is not None:
+            where.append(when >= since)
+        if until is not None:
+            where.append(when < until)
+        cells = [type_coerce(t[name], NullType()).label(name) for name in _MONEY]
+        risk = type_coerce(t.risk_paise, NullType()).label("risk_paise")
+        stmt = (
+            select(t.id, t.strategy, t.status, t.exit_ts, risk, *cells).where(*where).order_by(t.id)
+        )
+        with self.engine.connect() as conn:
+            rows = conn.execute(stmt).all()
+        out: dict[str, StrategyTotals] = {}
+        for trade_id, strategy, status, exit_ts, raw_risk, *raw in rows:
+            row = out.setdefault(str(strategy or "?"), StrategyTotals())
+            if status == "NO_FILL":
+                row.no_fill += 1
+                continue
+            if raw[-1] is None:
+                continue  # closed without a priced exit: not a trade the ledger counts
+            money = self._money(trade_id, raw)
+            if money is None:
+                continue
+            trade_gross, trade_costs, trade_net = money
+            row.trades += 1
+            if trade_net > 0:
+                row.wins += 1
+                row.won_paise += trade_net
+            elif trade_net < 0:
+                row.losses += 1
+                row.lost_paise += trade_net
+            row.gross_paise += trade_gross
+            row.costs_paise += trade_costs
+            row.net_paise += trade_net
+            try:
+                risk_paise = stored_paise(raw_risk)
+            except ValueError:
+                risk_paise = None
+            if risk_paise is not None and risk_paise > 0:
+                row.r_sum += trade_net / risk_paise
+                row.r_trades += 1
+            ts = _as_aware(exit_ts)
+            if ts is not None and (row.last_exit is None or ts > row.last_exit):
+                row.last_exit = ts
+        return out
+
     def _money(self, trade_id: object, raw: list[object]) -> tuple[int, int, int] | None:
         """(gross, costs, net) of one row as integer paise, or None (warned) when any of them
         is not a whole number of paise or is missing beside a known net."""
@@ -142,6 +233,13 @@ class PaperLedger:
             column,
             value,
         )
+
+
+def _as_aware(ts: object) -> dt.datetime | None:
+    """A stored time as an aware datetime (TZDateTime already reads back aware UTC)."""
+    if not isinstance(ts, dt.datetime):
+        return None
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=dt.UTC)
 
 
 def _check_grade(grade: object) -> None:

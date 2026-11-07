@@ -325,14 +325,9 @@ def test_a_desk_poll_loop_and_the_worker_share_one_sqlite_file_without_errors(
     critical = [r for r in rows if r["kind"] == "critical"]
     exits = [r for r in rows if r["kind"] == "exit"]
     assert len(critical) == polls and all(r["status"] == "sent" for r in critical)
-    # 1 EXIT + 3 reminders were queued. The worker runs concurrently, so a reminder queued
-    # while an older one is still unsent supersedes it (decision B): each row is either sent or
-    # superseded, the newest is always sent, and nothing is sent twice.
-    assert len(exits) == 4 and exits[-1]["status"] == "sent"
-    for row in exits:
-        assert row["status"] == "sent" or (
-            row["status"] == "skipped" and "superseded" in (row["last_error"] or "")
-        ), row
+    # Owner feedback OF-5: one exit per entry. The desk tells the EXIT once and closes the
+    # position (no paper trade here), so 120 polls queue exactly one EXIT, and it is sent.
+    assert len(exits) == 1 and exits[0]["status"] == "sent"
     sent_exits = [r for r in exits if r["status"] == "sent"]
     assert rig.rec.calls == 1 + len(critical) + len(sent_exits), "every sent row sent once"
     titles = [t for t in (visible(x) for x in rig.rec.texts()) if "Feed " in t]

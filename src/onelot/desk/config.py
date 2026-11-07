@@ -49,13 +49,13 @@ class DeskConfig:
     indices: tuple[DeskInstrumentCfg, ...] = ()
     stocks: tuple[DeskInstrumentCfg, ...] = ()
     path: str = ""
+    primary: tuple[str, ...] = ()  # desk.yaml primary_strategies: the owner's order
 
     def primary_strategies(self) -> tuple[str, ...]:
-        """Every strategy the desk runs for alerts, in configuration order, each once.
-
-        These are the owner's primary strategies (desk.yaml); the Home scoreboard and the
-        Lab's 'primary strategies' filter show them."""
-        seen: dict[str, None] = {}
+        """The owner's primary strategies: desk.yaml `primary_strategies` in the owner's
+        order, else every strategy the desk runs, in configuration order, each once. The
+        Home scoreboard and the Lab's 'primary strategies' filter show them."""
+        seen: dict[str, None] = dict.fromkeys(self.primary)
         for inst in self.instruments:
             for slot in inst.strategies:
                 seen.setdefault(slot.name, None)
@@ -130,4 +130,5 @@ def load_desk_config(path: str | Path | None = None) -> DeskConfig:
         indices,
         stocks,
         str(p),
+        tuple(dict.fromkeys(str(n) for n in raw.get("primary_strategies") or ())),
     )

@@ -74,7 +74,10 @@ def _advice_after_the_close(desk: Desk, pid: str) -> str | None:
     desk.trackers["SBIN"].slots[0].exit_advice = lambda side: None  # type: ignore[method-assign]
     late = dt.datetime.combine(now_ist().date(), dt.time(15, 20), tzinfo=IST)
     desk._manage_positions(late, OpenClock().current_window(late))
-    return desk.positions[pid]["exit_advice"]
+    if pid in desk.positions:
+        return desk.positions[pid]["exit_advice"]
+    # OF-5: an alert without a paper trade closes on the desk's own advice
+    return next(j for j in desk.journal() if j["id"] == pid)["exit_reason"]
 
 
 def test_a_stock_sell_alert_is_intraday_even_when_stocks_default_to_swing(cfg, db):
