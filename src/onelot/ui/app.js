@@ -345,7 +345,11 @@ function alertRow(s) {
 async function loadAlerts(force) {
   const days = $("alerts-days").value || 7, filt = $("alerts-filter").value;
   const r = await api(`/api/desk/signals?days=${days}`).catch(() => null);
-  if (!r) { $("home-signals").innerHTML = `<div class="card"><div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sweat"/></svg> Live Desk not running.</div></div>`; return; }
+  if (!r) {
+    $("home-signals").innerHTML = `<div class="card"><div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sweat"/></svg> Live Desk not running.</div></div>`;
+    if (latest && latest.desk) renderHomePositions(latest.desk);  // the snapshot in hand still lists them
+    return;
+  }
   alerts.rows = r.signals || []; alerts.scoreboard = r.scoreboard || {}; alerts.paper = r.paper_scoreboard || null; alerts.primary = r.primary_strategies || [];
   const rows = alerts.rows.filter(s => !filt || s.status === filt || (filt === "TAKEN" && s.status === "CLOSED"));
   const pend = rows.filter(s => s.status === "PENDING");
@@ -412,9 +416,17 @@ function renderHomePositions(d) {
 // One positions table in the page at a time (QA cycle 1, BUG-1): the Home and Live Desk tables
 // use the same input ids, so the hidden tab's copy is cleared before the visible one is drawn
 // (each tab draws only while it is shown); a cleared Live table is redrawn on its next render.
+// QA cycle 2: a render that lands for a tab no longer shown (a late Home reload while the
+// owner is on the Live Desk) draws nothing and clears nothing (BUG-13); a price typed but not
+// saved in the cleared table is kept as a draft and put back when that table is drawn again
+// (BUG-16).
+const positionDrafts = {};
+const tabShown = (name) => { const s = document.querySelector(`section[data-tab="${name}"]`); return !!s && s.classList.contains("active"); };
 function drawPositions(box, ps, after) {
+  if (!tabShown(box === "home-positions" ? "home" : "live")) { if (box === "desk-positions") desk.sig.pos = null; return; }
   const other = $(box === "home-positions" ? "desk-positions" : "home-positions");
   if (other && other.querySelectorAll("input[id]").length) {
+    other.querySelectorAll("input[id]").forEach(i => { if (i.value !== "" && i.dataset.dirty) positionDrafts[i.id] = i.value; });
     other.innerHTML = "";
     if (other.id === "desk-positions") desk.sig.pos = null;
   }
@@ -426,6 +438,7 @@ function keepInputs(root, render) {
   const vals = {}, focus = document.activeElement && root.contains(document.activeElement) ? document.activeElement.id : null;
   root.querySelectorAll("input[id]").forEach(i => { if (i.value !== "" && i.dataset.dirty) vals[i.id] = i.value; });
   render();
+  root.querySelectorAll("input[id]").forEach(i => { if (positionDrafts[i.id] !== undefined && vals[i.id] === undefined) { vals[i.id] = positionDrafts[i.id]; } delete positionDrafts[i.id]; });
   Object.entries(vals).forEach(([id, v]) => { const i = $(id); if (i) { i.value = v; i.dataset.dirty = "1"; } });
   if (focus && $(focus)) $(focus).focus();
   root.querySelectorAll("input[id]").forEach(i => i.addEventListener("input", () => { i.dataset.dirty = "1"; }));
@@ -449,7 +462,7 @@ function wirePositions(root, after) {
   });
 }
 ["alerts-days", "alerts-filter"].forEach(id => $(id).onchange = () => { alerts.shown = 10; loadAlerts(true); });
-tabLoaders.home = () => { if (!acctLoaded) loadAccount(false).catch(() => {}); renderHomeJournal(); loadAlerts(true).catch(() => {}); };
+tabLoaders.home = () => { if (!acctLoaded) loadAccount(false).catch(() => {}); if (latest && latest.desk) renderHomePositions(latest.desk); renderHomeJournal(); loadAlerts(true).catch(() => {}); };
 $("acct-refresh").onclick = async () => { $("acct-refresh").disabled = true; try { await loadAccount(true); toast("Account refreshed", "ok"); } finally { $("acct-refresh").disabled = false; } };
 
 /* ═══════════════════ LIVE: legacy Bank Nifty engine ═════════════════ */

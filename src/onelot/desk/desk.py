@@ -67,7 +67,7 @@ MAX_REPORTED_PRICE = 1e7
 
 
 def _reported(value: object) -> float | None:
-    """A price the owner typed: a finite number above zero, else None (not reported)."""
+    """A price the owner typed: finite, above zero and below MAX_REPORTED_PRICE, else None."""
     if value is None or isinstance(value, bool):
         return None
     try:
@@ -716,12 +716,12 @@ class Desk:
 
     def _resolve_signal(self, sid: str, status: str, note: str | None = None) -> None:
         s = self.signals.pop(sid, None)
-        self._resolve_signal_db(sid, status)
         now = now_ist()
-        for r in self.archive:
+        for r in self.archive:  # memory first: a failed write below still resolves the card
             if r["id"] == sid:
                 r["status"] = status
                 r["resolved_at"] = _iso(now)
+        self._resolve_signal_db(sid, status)
         if s and self.repo is not None:
             try:
                 self.repo.event(now, "INFO", "desk_signal", f"{sid} {status}", {"note": note})
@@ -1059,7 +1059,11 @@ class Desk:
         if price is None:
             if pid not in self.positions:
                 return None
-            return {"closed": False, "message": "type the price you exited at (above zero)"}
+            return {
+                "closed": False,
+                "message": "type the price you exited at: above zero and below "
+                f"{MAX_REPORTED_PRICE:,.0f}",
+            }
         return self._close(pid, reason=reason, source="user", user_exit=price)
 
     def _close(
@@ -1118,7 +1122,10 @@ class Desk:
                 if r["id"] == p.get("signal_id"):
                     r["status"] = "CLOSED"
                     r["trade"] = _trade_brief(p)
-            whose = "your price" if source == "user" else "the exit alert's price"
+            whose = {
+                "user": "your price",
+                "desk": "the desk's last price",
+            }.get(source, "the exit alert's price")
             self.notifier.info(
                 f"Closed {p['label']}: {net:+,.0f} net",
                 f"{reason.replace('_', ' ')} at {exit_price:,.2f} ({whose}); costs {costs:,.0f}",
@@ -1143,7 +1150,11 @@ class Desk:
         when there is no such position."""
         entry, exit_ = _reported(entry_price), _reported(exit_price)
         if entry is None and exit_ is None:
-            return {"ok": False, "message": "give your entry or exit price (above zero)"}
+            return {
+                "ok": False,
+                "message": "give your entry or exit price: above zero and below "
+                f"{MAX_REPORTED_PRICE:,.0f}",
+            }
         with self._lock:
             p = self.positions.get(pid)
             if p is not None:
@@ -1598,23 +1609,45 @@ class Desk:
         sig = self._archived(trade.alert_id)
         base: dict = sig if sig is not None else dict(snapshot)
         info = _exit_info(trade)
-        if trade.alert_id in self.signals:
-            # still pending when its exit came: the entry is over, it can no longer be taken
-            self._resolve_signal(trade.alert_id, "EXPIRED", "its exit alert came first")
         told_before = bool(sig and sig.get("exit_told"))
-        if sig is not None:
+        if sig is not None:  # in memory first: nothing below can make it tell twice
             sig["exit"] = info
             sig["exit_told"] = sig.get("exit_told") or info["reason"]
-            with self.engine.begin() as conn:
-                conn.execute(
-                    update(desk_signals).where(desk_signals.c.id == sig["id"]).values(payload=sig)
-                )
         taken = any(p.get("signal_id") == trade.alert_id for p in self.positions.values())
         if not told_before:  # one exit per alert, whichever path told it first
             self._send_alert_exit(trade, base, info, taken)
+        # Bookkeeping after the message: a locked database here never costs the owner the
+        # alert's one exit (the paper event comes once; QA cycle 2, BUG-14).
+        if trade.alert_id in self.signals:
+            # still pending when its exit came: the entry is over, it can no longer be taken
+            self._guarded_write(
+                "expire the pending card",
+                lambda: self._resolve_signal(
+                    trade.alert_id, "EXPIRED", "its exit alert came first"
+                ),
+            )
+        if sig is not None:
+            self._guarded_write("store the alert's exit", lambda: self._store_signal(sig))
         if info["price"] is not None:
-            self._annotate_closed(trade.alert_id, float(info["price"]))
+            price = float(info["price"])
+            self._guarded_write(
+                "add the alert's exit to an early close",
+                lambda: self._annotate_closed(trade.alert_id, price),
+            )
         self.version += 1
+
+    def _guarded_write(self, what: str, work: Any) -> None:
+        try:
+            work()
+        except Exception:  # noqa: BLE001 - counted and logged; the poll carries on
+            self.hook_errors += 1
+            log.exception("desk: could not %s", what)
+
+    def _store_signal(self, sig: dict) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                update(desk_signals).where(desk_signals.c.id == sig["id"]).values(payload=sig)
+            )
 
     def _send_alert_exit(self, trade: Any, base: dict, info: dict, taken: bool) -> None:
         label = str(base.get("label") or trade.series_key)

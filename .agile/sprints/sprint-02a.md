@@ -54,6 +54,28 @@ prices (HDFCBANK SIGNAL_EXIT 693.75, SBIN and MIDCPNIFTY SESSION_END); the desk 
   TELEGRAM_CHAT_ID in .env yourself (never paste the token in chat).
 - Currencies are Yahoo spot FX: 5m-30m history stays at ~60 days (60m 2 years, 1d decades).
   Longer intraday FX needs a Dhan currency-futures series (a backlog decision).
-- Dhan 1m backfill for every Dhan-listed series started 2026-11-07 (data jobs #5 and #6).
+- Dhan 1m backfill done 2026-11-07 (data job #5: 5,671,192 rows, 0 errors, ~22 min, no lock
+  errors): every index and stock now has 5 years at every intraday timeframe (TMCV since its
+  Nov 2025 listing); only the 5 FX pairs stay under 120 days. DB 7.8 -> 8.9 GB.
+- Observation: Dhan's stock 1m bars end at 15:14 IST every day since 2026-08-03 (indices run to
+  15:29): continuous cash trading now stops at 15:15. The 15:15 stock exits already fit.
 - Lab evidence: all primaries negative after costs at 5-15m in earlier sweeps; promote nothing
   to real money on this evidence.
+
+## QA (Sonnet Tester, independent)
+- Cycle 1 (2026-11-07): FAIL - 1 MAJOR, 9 MINOR, 3 NIT; everything else in the owner's words
+  verified. MAJOR: Home Monitoring and Live Desk tables repeated input ids (Live Desk Save /
+  Close now read the hidden Home inputs). All 12 fixed in 57c629d with the Tester's 83 tests
+  (tests/acceptance/test_of_qa_*.py, tests/paper/test_of_qa_scoreboard_properties.py); gate
+  6293 passed, 1 skipped. Design notes taken: stock_horizon intraday until US-027 (a "swing"
+  alert promised a hold its paper exit never gives). Left for the owner: one live alert per
+  instrument vs per strategy (the scoreboard measures "first to fire"); the journal's alert
+  P&L (alert's quoted entry) differs from the paper P&L (next-bar fill) by entry slippage.
+- Cycle 2 (2026-11-07): PASS - all 12 cycle-1 fixes verified with fresh probes (Hypothesis for
+  load_bars and the leaderboard, real threads for the report/exit race, the real Engine for
+  recovery order). New: 2 MINOR (a late Home render could clear the visible Live table, a fix
+  side effect; the EXIT message depended on bookkeeping writes before it) and 4 NIT (Monitoring
+  blank when the alerts list fails, an unsaved Live price lost on a Home visit, the closed
+  notice crediting the alert for a desk-priced close, the refusal not naming the ceiling). All
+  fixed with the Tester's 86 tests (tests/acceptance/test_of_qa2_*.py); gate 6379 passed, 1
+  skipped.

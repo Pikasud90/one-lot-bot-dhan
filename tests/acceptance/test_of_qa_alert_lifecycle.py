@@ -502,9 +502,13 @@ class TestPricesTheOwnerTypesAtTakeTime:
     def test_an_early_close_with_a_bad_price_changes_nothing(self, rig):
         alert = pending(rig)
         pid = rig.desk.acknowledge(alert["id"], "TAKE")["position_id"]
-        for bad in (0, -1, float("nan"), "x", None):
+        for bad in (0, -1, float("nan"), "x", None, 1e7):
             out = rig.desk.close_position(pid, bad)
-            assert out == {"closed": False, "message": "type the price you exited at (above zero)"}
+            # QA cycle 2 (BUG-18): the refusal names the whole accepted range
+            assert out == {
+                "closed": False,
+                "message": "type the price you exited at: above zero and below 10,000,000",
+            }
         assert pid in rig.desk.positions
         assert rig.desk.close_position("nope", 10.0) is None
 
