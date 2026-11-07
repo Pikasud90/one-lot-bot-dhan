@@ -76,7 +76,7 @@ class VWAPPullback(Strategy):
         pb_low = l.rolling(p.pullback_bars, min_periods=1).min()
         pb_high = h.rolling(p.pullback_bars, min_periods=1).max()
         adx_ok = f["adx"] >= p.adx_min
-        vol_ok = f["rvol"] >= p.rvol_min
+        vol_ok = (f["rvol"] >= p.rvol_min) | f["rvol"].isna()  # neutral without volume
 
         up = (c > vwap) & (slope > 0) & (e20 > e50) & same_day
         touched_up = pb_low <= np.maximum(vwap, e20) + p.zone_atr * atr

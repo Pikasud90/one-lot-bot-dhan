@@ -132,7 +132,15 @@ class DataCache:
     def bars(self, series_key: str, res: str) -> pd.DataFrame:
         k = (series_key, res)
         if k not in self._bars:
-            self._bars[k] = load_bars(self.engine, series_key, res)
+            df = load_bars(self.engine, series_key, res)
+            spec = self.series.get(series_key)
+            if spec is not None and not spec.has_volume and "volume" in df.columns:
+                # An index or spot FX has no traded volume, and the live desk drops whatever
+                # the feed sends for it (has_volume=False). Dhan's index history carries a
+                # volume figure only from 2025-12-03, so without this every volume filter
+                # would switch on part-way through a backtest and the years would not compare.
+                df = df.assign(volume=0.0)
+            self._bars[k] = df
         return self._bars[k]
 
     def market_symbol(self) -> str:

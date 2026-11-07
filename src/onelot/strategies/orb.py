@@ -109,9 +109,13 @@ class OpeningRangeBreakout(Strategy):
         or_vol_day = f["volume"].where(in_or).groupby(key).sum()
         or_rvol_day = or_vol_day / or_vol_day.shift(1).rolling(10, min_periods=3).mean()
         or_rvol = pd.Series(pd.Series(or_rvol_day).reindex(key).to_numpy(), index=f.index)
-        in_play = (or_rvol >= p.or_rvol_min) | (p.or_rvol_min <= 0)
+        # A series without any volume (an index) is always "in play" and its relative-volume
+        # check is neutral, as base.py documents. A stock keeps both checks (its first
+        # sessions, with no volume history yet, are not in play, as before).
+        no_volume = float(f["volume"].fillna(0).sum()) <= 0
+        in_play = (or_rvol >= p.or_rvol_min) | (p.or_rvol_min <= 0) | no_volume
         ready = ~in_or & before_last & width_ok & gap_ok & in_play
-        vol_ok = f["rvol"] >= p.rvol_min
+        vol_ok = (f["rvol"] >= p.rvol_min) | f["rvol"].isna()
 
         if p.direction_mode == "first_candle":
             or_open = f["open"].groupby(key).transform("first")
@@ -138,6 +142,9 @@ class OpeningRangeBreakout(Strategy):
         else:
             out["long_stop"] = (mid if p.stop_mode == "mid" else or_low) - buf
             out["short_stop"] = (mid if p.stop_mode == "mid" else or_high) + buf
+        # never an entry without a stop (an index's first session has no ATR yet)
+        out["long_entry"] = out["long_entry"] & out["long_stop"].notna()
+        out["short_entry"] = out["short_entry"] & out["short_stop"].notna()
         out["or_rvol"] = or_rvol
         out["or_high"], out["or_low"] = or_high, or_low
         # pillars

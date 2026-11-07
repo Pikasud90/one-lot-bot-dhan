@@ -70,7 +70,7 @@ class SqueezeBreakout(Strategy):
             (h.rolling(p.mom_len).max() + l.rolling(p.mom_len).min()) / 2 + ind.sma(c, p.mom_len)
         ) / 2
         mom = ind.linreg_slope(c - mid, p.mom_len)
-        vol_ok = f["rvol"] >= p.rvol_min
+        vol_ok = (f["rvol"] >= p.rvol_min) | f["rvol"].isna()  # neutral without volume
         long_entry = (
             recent_release
             & (c > dc["dc_upper"])

@@ -80,7 +80,7 @@ class SupertrendADX(Strategy):
         adx_up = f["adx"] > f["adx"].shift(p.adx_rising_bars)
         adx_ok = (f["adx"] >= p.adx_min) & adx_up
         dist = (c - f["vwap"]) / f["atr"]
-        vol_ok = f["rvol"] >= p.rvol_min
+        vol_ok = (f["rvol"] >= p.rvol_min) | f["rvol"].isna()  # neutral without volume
 
         long_c = (
             (d == 1)

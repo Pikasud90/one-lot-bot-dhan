@@ -268,8 +268,24 @@ def test_an_intraday_position_from_an_earlier_session_raises_no_exit_and_says_se
         db.dispose()
 
 
+IN_SESSION = dt.datetime(2026, 11, 6, 11, 0, tzinfo=IST)  # a Friday, mid-session
+
+
+def freeze_now(monkeypatch: pytest.MonkeyPatch, at: dt.datetime) -> None:
+    """Pin every onelot `now_ist` (the desk, the paper book, the clock) to `at`."""
+    import sys
+
+    for name, module in list(sys.modules.items()):
+        if name.startswith("onelot") and callable(getattr(module, "now_ist", None)):
+            monkeypatch.setattr(module, "now_ist", lambda: at)
+
+
 def test_the_session_over_note_is_not_repeated_after_a_restart(make_rig, tmp_path, monkeypatch):
-    clock = FakeClock(now_ist())
+    # Pinned inside a session: after the close, a restarted desk's first poll ends the
+    # alert's paper trade and, by the OF-5 rule, the taken position with it, so on the wall
+    # clock this test failed every evening (found 2026-11-07, 17:53 IST).
+    freeze_now(monkeypatch, IN_SESSION)
+    clock = FakeClock(IN_SESSION)
     rig = make_rig(clock=clock)
     notifier, _ = build_notifier(rig)
     db = init_database(f"sqlite:///{tmp_path / 'desk.db'}")
