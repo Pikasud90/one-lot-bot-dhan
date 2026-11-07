@@ -1,7 +1,7 @@
 # Board
-_Generated 2026-11-02T01:08+05:30 by agile_board.py; do not edit by hand._
+_Generated 2026-11-07T07:19+05:30 by agile_board.py; do not edit by hand._
 
-## backlog — 26 stories, 107 pts
+## backlog — 27 stories, 108 pts
 | ID | Title | Pts | Priority | Sprint | Protocol |
 |---|---|---|---|---|---|
 | US-005 | Reads require authentication whenever the app is reachable off-loopback | 5 | Must | 2 | driver-navigator |
@@ -28,6 +28,7 @@ _Generated 2026-11-02T01:08+05:30 by agile_board.py; do not edit by hand._
 | US-022 | Operator runbook, release notes and 1.0 cut | 3 | Should | 6 | driver-navigator |
 | US-025 | Desk manual positions adopt the shared rules; fix short costing | 3 | Should | 3 | ping-pong-tdd |
 | US-029 | Fallback bars never pollute a Dhan series; alerts report the resolution that served them | 3 | Should | 2 | ping-pong-tdd |
+| US-033 | Dhan feed shuts down cleanly (MarketFeed.disconnect awaited) | 1 | Should | 2 | ping-pong-tdd |
 | SP-001 | Spike: review fnolab.in end to end for reference ideas | 2 | Could | 5 | driver-navigator |
 | US-012 | Paper vs taken reconciliation and slippage report | 3 | Could | 6 | ping-pong-tdd |
 
@@ -44,4 +45,4 @@ _Generated 2026-11-02T01:08+05:30 by agile_board.py; do not edit by hand._
 | US-030 | Paper trades visible on the desk (thin slice of US-016) | 2 | Must | 1 | driver-navigator |
 | US-032 | Paper panel shows the last session when nothing closed today | 2 | Must | 1 | driver-navigator |
 
-**Total:** 35 stories, 31/138 points done
+**Total:** 36 stories, 31/139 points done
