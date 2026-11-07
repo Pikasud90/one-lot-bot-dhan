@@ -451,10 +451,14 @@ def create_app(engine, api_token: str) -> FastAPI:
 
     @app.get("/api/lab/coverage")
     def lab_coverage() -> dict:
-        from ..data.store import coverage_report
+        """The bars stored per series, resolution and source (`coverage`), and what the Lab
+        can load per timeframe after deriving from finer bars (`effective`, OF-3), with the
+        history each provider serves (`limits`)."""
+        from ..data.store import SOURCE_LIMITS, coverage_report, effective_coverage
 
         cov = coverage_report(db.engine)
-        return {"coverage": cov.to_dict("records") if not cov.empty else []}
+        rows = cov.to_dict("records") if not cov.empty else []
+        return {"coverage": rows, "effective": effective_coverage(rows), "limits": SOURCE_LIMITS}
 
     @app.post("/api/lab/backtest", dependencies=[Depends(require_token)])
     def lab_backtest(body: BacktestBody) -> dict:

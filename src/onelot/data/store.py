@@ -213,6 +213,71 @@ def coverage_report(engine: Engine) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+LAB_TIMEFRAMES = ("5m", "15m", "30m", "60m", "1d")
+# How far back each provider serves bars (owner feedback OF-3): Yahoo caps intraday history,
+# so a series that only Yahoo serves can never hold more at 5m-30m, however often it is
+# backfilled; the corpus grows from there as later backfills append.
+SOURCE_LIMITS = {
+    "yahoo": "Yahoo serves 1m for 7 days, 2m-30m for the last 60 days, 60m for 2 years, 1d for decades",
+    "dhan": "Dhan serves 1m bars for about 5 years (90 days per request) and daily bars for decades",
+}
+
+
+def effective_coverage(
+    rows: list[dict], timeframes: tuple[str, ...] = LAB_TIMEFRAMES
+) -> list[dict]:
+    """What the Lab can load per series and timeframe (OF-3), from `coverage_report` rows.
+
+    `load_bars` builds a timeframe from every stored resolution that can produce it (the
+    timeframe itself, or a finer one that divides it; anything intraday makes 1d), so the
+    usable history is the widest of those: 15m from five years of Dhan 1m bars is five
+    years, not the 60 days of Yahoo 15m bars stored beside it. Each row says which stored
+    resolution and source give the start (`base`, `source`) and how many days it spans.
+    """
+    by_series: dict[str, dict[str, dict]] = {}
+    for r in rows:
+        res = by_series.setdefault(str(r["series_key"]), {}).setdefault(
+            str(r["resolution"]), {"first": None, "last": None, "sources": set(), "bars": 0}
+        )
+        first, last = str(r["first"])[:10], str(r["last"])
+        if res["first"] is None or first < res["first"]:
+            res["first"], res["first_source"] = first, r["source"]
+        if res["last"] is None or last > res["last"]:
+            res["last"] = last
+        res["sources"].add(str(r["source"]))
+        res["bars"] += int(r["bars"])
+    out: list[dict] = []
+    for key in sorted(by_series):
+        stored = by_series[key]
+        for tf in timeframes:
+            bases = [r for r in stored if r == tf or can_derive(r, tf)]
+            if not bases:
+                continue
+            widest = min(
+                bases,
+                key=lambda r: (
+                    stored[r]["first"],
+                    RESOLUTION_ORDER.index(r) if r in RESOLUTION_ORDER else 99,
+                ),
+            )
+            first = stored[widest]["first"]
+            last = max(stored[r]["last"] for r in bases)
+            days = (pd.Timestamp(last[:10]) - pd.Timestamp(first)).days
+            out.append(
+                {
+                    "series_key": key,
+                    "timeframe": tf,
+                    "first": first,
+                    "last": last,
+                    "days": int(days),
+                    "base": widest,
+                    "source": stored[widest]["first_source"],
+                    "sources": sorted(set().union(*(stored[r]["sources"] for r in bases))),
+                }
+            )
+    return out
+
+
 def coverage_by_series(engine: Engine) -> dict[str, dict[str, dict]]:
     """{series_key: {resolution: {first, last, bars}}} for the UI."""
     cov = coverage_report(engine)

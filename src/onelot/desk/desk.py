@@ -98,6 +98,20 @@ def _prices(p: dict) -> dict:
     return out
 
 
+def _exit_info(trade: Any) -> dict:
+    """An alert's exit (OF-5) from its final paper trade: what the archive and the EXIT show."""
+    when = trade.exit_ts or trade.updated_at
+    return {
+        "trade_id": trade.id,
+        "status": trade.status,
+        "reason": str(trade.close_reason or trade.status),
+        "at": _iso(_aware(when)),
+        "price": _rupees(trade.exit_paise),
+        "net": _rupees(trade.net_paise),
+        "grade": trade.grade,
+    }
+
+
 def _trade_brief(p: dict) -> dict:
     """What the alert archive shows of the position taken on it."""
     return {
@@ -279,6 +293,25 @@ class Desk:
             self.archive.append(p)
         if self.positions:
             log.info("desk: recovered %d open position(s)", len(self.positions))
+        self._recover_exits()
+
+    def _recover_exits(self) -> None:
+        """Archived alerts whose paper trade is over show that exit (OF-5), also the ones that
+        exited before the exit was recorded on the alert. Memory only: nothing is written and
+        nobody is told again. A book that cannot be read leaves the rows as they are."""
+        if self.paper is None:
+            return
+        for sig in self.archive:
+            if sig.get("exit") or sig.get("status") == "PENDING":
+                continue
+            try:
+                trade = self.paper.for_alert(sig["id"])
+            except Exception:  # noqa: BLE001 - the desk starts whatever the book does
+                self.hook_errors += 1
+                log.exception("paper: the exits of archived alerts could not be read")
+                return
+            if trade is not None and trade.status in FINAL_PAPER:
+                sig["exit"] = _exit_info(trade)
 
     # ── thread ────────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -1477,16 +1510,7 @@ class Desk:
         snapshot: dict = raw if isinstance(raw, dict) else {}
         sig = next((r for r in self.archive if r.get("id") == trade.alert_id), None)
         base: dict = sig if sig is not None else dict(snapshot)
-        when = trade.exit_ts or trade.updated_at
-        info = {
-            "trade_id": trade.id,
-            "status": trade.status,
-            "reason": str(trade.close_reason or trade.status),
-            "at": _iso(_aware(when)),
-            "price": _rupees(trade.exit_paise),
-            "net": _rupees(trade.net_paise),
-            "grade": trade.grade,
-        }
+        info = _exit_info(trade)
         if sig is not None:
             sig["exit"] = info
             with self.engine.begin() as conn:

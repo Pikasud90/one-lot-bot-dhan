@@ -85,21 +85,9 @@
 
   <!-- ───────────────────────────── HOME ───────────────────────────── -->
   <section data-tab="home" class="tab">
+    <!-- 1. My portfolio -->
     <div class="row between">
-      <h1 class="h1">Alerts <small>every signal the desk raised · click one for the full picture</small></h1>
-      <div class="actions"><span class="muted" id="alerts-meta"></span>
-        <select id="alerts-days"><option value="1">today</option><option value="3">3 days</option><option value="7" selected>7 days</option><option value="30">30 days</option></select>
-        <select id="alerts-filter"><option value="">all</option><option value="PENDING">pending</option><option value="TAKEN">taken / monitoring</option><option value="EXPIRED">expired</option><option value="SKIPPED">skipped</option></select></div>
-    </div>
-    <div id="home-signals"></div>
-    <div class="grid2">
-      <div class="card"><h2>Monitoring <small>positions you confirmed · live hold / exit advice</small></h2><div id="home-positions"></div></div>
-      <div class="card"><h2>Strategy scoreboard <small>how each strategy's alerts fared at the alerted price</small></h2><div class="scroll" id="home-scoreboard"></div></div>
-    </div>
-    <div class="card"><h2>Archive <small>outcome = what the alert would have done at its own entry, stop and target</small></h2><div class="scroll" id="home-archive"></div></div>
-    <div class="card"><h2>Engine alerts <small>notifications as they were sent</small></h2><div class="feed" id="home-feed"></div></div>
-    <div class="row between mt">
-      <h1 class="h1">Portfolio <small>free Trading API · cached — refreshed only when you ask or after a trade</small></h1>
+      <h1 class="h1">My portfolio <small>free Trading API · cached — refreshed only when you ask or after a trade</small></h1>
       <div class="actions">
         <span class="muted" id="acct-age"></span>
         <button class="btn" id="acct-refresh">Refresh from Dhan</button>
@@ -107,30 +95,40 @@
     </div>
     <div id="acct-notice"></div>
     <div class="tiles" id="acct-tiles"></div>
-    <div class="grid2">
-      <div class="card"><h2>Profile &amp; entitlements</h2><div id="acct-profile"></div></div>
-      <div class="card"><h2>Desk journal <small>closed one-unit trades you confirmed</small></h2><div id="home-journal"></div></div>
+    <!-- 2. Alerts -->
+    <div class="row between mt">
+      <h1 class="h1">Alerts <small>every alert opens a paper trade · one exit alert closes it · click one for the full picture</small></h1>
+      <div class="actions"><span class="muted" id="alerts-meta"></span>
+        <select id="alerts-days"><option value="1">today</option><option value="3">3 days</option><option value="7" selected>7 days</option><option value="30">30 days</option></select>
+        <select id="alerts-filter"><option value="">all</option><option value="PENDING">pending</option><option value="TAKEN">taken / monitoring</option><option value="EXPIRED">expired</option><option value="SKIPPED">skipped</option></select></div>
     </div>
-    <div class="card"><h2>Open positions (broker)</h2><div class="scroll" id="acct-positions"></div></div>
-    <div class="card"><h2>Holdings <small>marked at Dhan's last traded price as of the last refresh</small></h2><div class="scroll" id="acct-holdings"></div></div>
+    <div id="home-signals"></div>
+    <!-- 3. Monitoring | Strategy scoreboard -->
+    <div class="grid2">
+      <div class="card"><h2>Monitoring <small>alerts you took · each closes at its exit alert's price · scroll sideways for every column</small></h2><div class="scroll" id="home-positions"></div></div>
+      <div class="card"><h2>Strategy scoreboard <small>primary strategies · every alert's paper trade, net of costs</small></h2><div class="scroll" id="home-scoreboard"></div></div>
+    </div>
+    <!-- 4. Archive, 10 at a time -->
+    <div class="card"><h2>Archive <small>newest first · 10 at a time · exit = the alert's one exit alert (its paper trade)</small></h2><div class="scroll" id="home-archive"></div><div class="actions mt" id="home-archive-more"></div></div>
+    <!-- 5. Alert feed -->
+    <div class="card"><h2>Alert feed <small>notifications as they were sent</small></h2><div class="feed" id="home-feed"></div></div>
+    <!-- 6. Ledger, journal, profile and the rest -->
     <div class="grid2">
       <div class="card"><h2>Ledger — last 30 days</h2><div class="scroll" id="acct-ledger"></div></div>
       <div class="card"><h2>Trade book — last 30 days</h2><div class="scroll" id="acct-trades"></div></div>
     </div>
+    <div class="card"><h2>Desk journal <small>closed trades you took · the alert's prices, and yours beside them when you report them</small></h2><div id="home-journal"></div></div>
+    <div class="grid2">
+      <div class="card"><h2>Profile &amp; entitlements</h2><div id="acct-profile"></div></div>
+      <div class="card"><h2>Open positions (broker)</h2><div class="scroll" id="acct-positions"></div></div>
+    </div>
+    <div class="card"><h2>Holdings <small>marked at Dhan's last traded price as of the last refresh</small></h2><div class="scroll" id="acct-holdings"></div></div>
   </section>
 
   <!-- ──────────────────────────── LIVE DESK ────────────────────────── -->
   <section data-tab="live" class="tab">
-    <div class="card" id="focus-card">
-      <div class="row between"><h2>Instrument focus <small>everything the desk knows about one instrument</small></h2>
-        <div class="actions"><select id="focus-key"></select><select id="focus-tf"><option>2m</option><option>5m</option><option selected>15m</option><option>30m</option><option>60m</option></select></div></div>
-      <div class="focus-grid">
-        <div><div class="plot" id="focus-chart" style="height:320px"></div><div class="hint" id="focus-chart-note"></div></div>
-        <div id="focus-body" class="focus-body"></div>
-      </div>
-    </div>
     <div class="card strip" id="desk-positions-card">
-      <div class="row between"><h2>Open positions <small>one unit each · managed every poll · you close them</small></h2><span class="muted" id="desk-risk-line"></span></div>
+      <div class="row between"><h2>Open positions <small>alerts you took · one unit each · each closes at its exit alert's price</small></h2><span class="muted" id="desk-risk-line"></span></div>
       <div id="desk-positions"><div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sleep"/></svg> Flat. Moo is napping until you take a signal.</div></div>
     </div>
     <div id="desk-signals"></div>
@@ -152,6 +150,14 @@
         <div class="acc" id="desk-indices"></div></div>
       <div class="card"><div class="row between"><h2>Stocks <small>buy / sell · 1 share · intraday</small></h2><span class="muted" id="desk-stk-count"></span></div>
         <div class="acc" id="desk-stocks"></div></div>
+    </div>
+    <div class="card" id="focus-card">
+      <div class="row between"><h2>Instrument focus <small>everything the desk knows about one instrument</small></h2>
+        <div class="actions"><select id="focus-key"></select><select id="focus-tf"><option>2m</option><option>5m</option><option selected>15m</option><option>30m</option><option>60m</option></select></div></div>
+      <div class="focus-grid">
+        <div><div class="plot" id="focus-chart" style="height:320px"></div><div class="hint" id="focus-chart-note"></div></div>
+        <div id="focus-body" class="focus-body"></div>
+      </div>
     </div>
     <details class="card legacy"><summary><h2 style="display:inline">Bank Nifty option engine <small>the original gate-based engine · alerts feed · paper journal</small></h2></summary>
       <div class="card signal none mt" id="signalCard"><h2>Active signal</h2><div id="signalBody"><div class="muted">No active signal.</div></div></div>
@@ -297,7 +303,15 @@
           <button class="btn ghost" id="data-quality">Quality report (5m)</button></div>
         <div class="scroll mt" id="data-jobs"></div>
       </div>
-      <div class="card"><h2>Coverage</h2><div class="scroll" id="data-coverage"></div></div>
+      <div class="card"><div class="row between"><h2>Coverage <small id="cov-meta"></small></h2>
+          <div class="actions">
+            <select id="cov-view" title="What the Lab can load per timeframe, or the raw rows stored"><option value="effective">what the Lab can use</option><option value="stored">bars stored</option></select>
+            <select id="cov-source"><option value="">all sources</option><option value="dhan">Dhan</option><option value="yahoo">Yahoo</option></select>
+            <select id="cov-tf"><option value="">all timeframes</option><option>1m</option><option>2m</option><option>5m</option><option>15m</option><option>30m</option><option>60m</option><option>1d</option></select>
+            <input type="search" id="cov-q" placeholder="series" style="width:120px">
+          </div></div>
+        <div class="hint" id="cov-note"></div>
+        <div class="scroll" id="data-coverage"></div></div>
     </div>
     <div class="card" id="data-quality-card" hidden><h2>Quality</h2><div class="scroll" id="data-quality-out"></div></div>
     <div class="card">

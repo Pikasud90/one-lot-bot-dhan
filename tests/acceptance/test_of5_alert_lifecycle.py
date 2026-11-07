@@ -371,3 +371,23 @@ class TestTheApi:
         mine = board[alert["strategy"]]
         assert mine["trades"] == 1 and mine["losses"] + mine["wins"] <= 1
         assert mine["net"] == f"{rupees(rig.row(alert)['net_paise']):.2f}"
+
+
+def test_a_restart_shows_the_exit_of_an_alert_that_exited_before_it_was_recorded(rig, desk_db):
+    """Alerts from before OF-5 have no exit on their row: the desk reads it from the paper
+    trade when it starts (memory only), and tells nobody again."""
+    alert = rig.alert("SBIN")
+    through_the_stop(rig, alert)
+    rig.poll()
+    with rig.engine.begin() as conn:  # the row as an older desk stored it: no exit
+        payload = conn.execute(
+            select(desk_signals.c.payload).where(desk_signals.c.id == alert["id"])
+        ).scalar_one()
+        payload.pop("exit", None)
+        conn.execute(
+            update(desk_signals).where(desk_signals.c.id == alert["id"]).values(payload=payload)
+        )
+    restarted, notifier = H.new_desk(rig.cfg, desk_db, paper=rig.book, frames=rig.frames)
+    row = next(r for r in restarted.archive if r["id"] == alert["id"])
+    assert row["exit"]["reason"] == "STOP"
+    assert [n for n in notifier.sent if getattr(n.level, "value", None) == "EXIT"] == []

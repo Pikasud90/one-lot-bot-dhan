@@ -388,6 +388,11 @@ td.oos{color:var(--ok);font-weight:700}
 .alert-body pre{white-space:pre-wrap;font-family:var(--ui);font-size:14.5px;line-height:1.45;margin:8px 0;background:var(--panel2);padding:10px 12px;border:1px solid var(--line)}
 .outc{font-weight:800;font-size:12px;letter-spacing:.06em}
 .outc.TARGET{color:var(--ok)} .outc.STOP,.outc.TRAIL_STOP{color:var(--bad)} .outc.OPEN{color:var(--cyan)} .outc.SQUARE_OFF{color:var(--warn)}
+/* OF-5: the exit alert's reasons (the paper book's names) */
+.outc.SIGNAL_EXIT,.outc.OPPOSITE_SIGNAL{color:var(--cyan)} .outc.SESSION_END,.outc.TIME_STOP{color:var(--warn)} .outc.NO_FILL,.outc.GAP_THROUGH_STOP,.outc.GAP_THROUGH_TARGET{color:var(--muted)}
+td.pform{white-space:nowrap} td.pform input{display:inline-block;margin:0 4px 0 0;vertical-align:middle}
+tr.jedit td{background:var(--panel2);white-space:normal}
+#home-archive-more:empty{display:none}
 .conf-bar{height:6px;background:var(--panel3);margin-top:3px}
 .conf-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--bad),var(--warn) 50%,var(--ok))}
 

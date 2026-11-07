@@ -244,28 +244,70 @@ function renderAccount(a) {
     { l: "Charges", n: 1, f: r => rup((+r.brokerageCharges || 0) + (+r.stt || 0) + (+r.exchangeTransactionCharges || 0) + (+r.sebiTax || 0) + (+r.stampDuty || 0) + (+r.serviceTax || 0)) },
   ], tr, { empty: "No trades in the window." });
 }
+const journal = { rows: [], shown: 10, edit: {} };
 async function renderHomeJournal() {
   try {
-    const j = await api("/api/desk/journal?limit=50");
-    const t = j.trades || [];
-    if (!t.length) { $("home-journal").innerHTML = `<div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sleep"/></svg> No closed desk trades yet.</div>`; return; }
-    const net = t.reduce((a, x) => a + (x.net_pnl || 0), 0), wins = t.filter(x => x.net_pnl > 0).length;
-    $("home-journal").innerHTML = kv("Trades", t.length) + kv("Win rate", pct(wins / t.length * 100)) + kv("Net P&L", rup(net), cls(net)) +
-      kv("Costs", rup(t.reduce((a, x) => a + (x.costs || 0), 0)), "neg") +
-      `<div class="scroll mt">` + table([{ l: "Closed", f: r => tsf(r.closed_at) }, { l: "Instrument", k: "instrument_key" }, { l: "Side", k: "side" },
-        { l: "Net", n: 1, f: r => rup(r.net_pnl), c: r => cls(r.net_pnl) }, { l: "Why", k: "exit_reason" }], t.slice(0, 8)) + `</div>`;
+    const j = await api("/api/desk/journal?limit=500");
+    journal.rows = j.trades || [];
+    drawJournal();
   } catch (e) {}
 }
+function drawJournal() {
+  const t = journal.rows, el = $("home-journal");
+  if (!t.length) { el.innerHTML = `<div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sleep"/></svg> No closed desk trades yet. A trade you take closes by itself at its exit alert's price.</div>`; return; }
+  const sum = (k) => t.reduce((a, x) => a + (Number(x[k]) || 0), 0);
+  const net = sum("net_pnl"), wins = t.filter(x => x.net_pnl > 0).length, mine = t.filter(x => x.user_net_pnl != null);
+  const diff = mine.reduce((a, x) => a + (Number(x.diff_pnl) || 0), 0);
+  const rows = t.slice(0, journal.shown), left = t.length - rows.length;
+  const yours = (r, k) => r[k] != null ? fmt(r[k]) : `<span class="dim">–</span>`;
+  el.innerHTML = `<div class="tiles small">` +
+      `<div class="tile"><small>Trades</small><b>${t.length}</b></div>` +
+      `<div class="tile"><small>Win rate</small><b>${pct(wins / t.length * 100)}</b></div>` +
+      `<div class="tile"><small>Net P&amp;L · alert prices</small><b class="${cls(net)}">${rup(net)}</b></div>` +
+      `<div class="tile"><small>Costs</small><b class="neg">${rup(sum("costs"))}</b></div>` +
+      `<div class="tile"><small>Yours vs the alerts' (${mine.length} reported)</small><b class="${cls(diff)}">${mine.length ? rup(diff) : "–"}</b></div></div>` +
+    `<div class="scroll mt"><table><thead><tr><th>Alert at</th><th>Closed</th><th>Instrument</th><th>Side</th><th>Strategy</th>` +
+      `<th class="n">Alert entry</th><th class="n">Alert exit</th><th class="n">Net · alert</th><th class="n">Your entry</th><th class="n">Your exit</th><th class="n">Your net</th><th class="n">Difference</th><th>Why</th><th></th></tr></thead><tbody>` +
+    rows.map(r => `<tr><td>${tsf(r.alert_created_at)}</td><td>${tsf(r.closed_at)}</td><td><b>${esc(r.label || r.instrument_key)}</b></td>` +
+      `<td>${esc(String(r.side || "").replace(/_/g, " "))}</td><td>${esc(r.strategy)} <span class="dim">${esc(r.timeframe)}</span></td>` +
+      `<td class="n">${fmt(r.alert_entry_price)}</td><td class="n">${r.alert_exit_price != null ? fmt(r.alert_exit_price) : `<span class="dim" title="closed by you before its exit alert">pending</span>`}</td>` +
+      `<td class="n ${cls(r.net_pnl)}">${rup(r.net_pnl)}</td><td class="n">${yours(r, "user_entry_price")}</td><td class="n">${yours(r, "user_exit_price")}</td>` +
+      `<td class="n ${cls(r.user_net_pnl)}">${r.user_net_pnl != null ? rup(r.user_net_pnl) : "–"}</td><td class="n ${cls(r.diff_pnl)}">${r.diff_pnl != null ? rup(r.diff_pnl) : "–"}</td>` +
+      `<td>${esc(String(r.exit_reason || "").replace(/_/g, " "))}${r.exit_source === "user" ? ` <span class="dim">(you)</span>` : ""}</td>` +
+      `<td><button class="btn small ghost" data-jedit="${esc(r.id)}">${journal.edit[r.id] ? "cancel" : "my prices"}</button></td></tr>` +
+      (journal.edit[r.id] ? `<tr class="jedit"><td colspan="14"><label class="inline">Your entry <input type="number" step="0.05" id="je_${esc(r.id)}" value="${r.user_entry_price ?? ""}" style="width:120px"></label>
+        <label class="inline">Your exit <input type="number" step="0.05" id="jx_${esc(r.id)}" value="${r.user_exit_price ?? ""}" style="width:120px"></label>
+        <button class="btn small" data-jsave="${esc(r.id)}">Save my prices</button> <span class="dim">the alert's prices stay the record; yours show the difference</span></td></tr>` : "")).join("") +
+    `</tbody></table></div>` +
+    (left > 0 ? `<div class="actions mt"><button class="btn small" id="journal-more">Load 10 more</button><span class="muted">${rows.length} of ${t.length} shown</span></div>` : "");
+  el.querySelectorAll("[data-jedit]").forEach(b => b.onclick = () => { const k = b.dataset.jedit; journal.edit[k] = !journal.edit[k]; drawJournal(); });
+  el.querySelectorAll("[data-jsave]").forEach(b => b.onclick = async () => {
+    const k = b.dataset.jsave, en = $("je_" + k).value, ex = $("jx_" + k).value;
+    if (!en && !ex) { toast("Type your entry and/or exit price first.", "warn"); return; }
+    const r = await api(`/api/desk/position/${k}/report`, { entry_price: en ? Number(en) : null, exit_price: ex ? Number(ex) : null });
+    toast(r.ok ? `Saved · difference ${r.diff_pnl != null ? rup(r.diff_pnl) : "–"}` : (r.message || "not saved"), r.ok ? "ok" : "warn");
+    if (r.ok) { journal.edit[k] = false; renderHomeJournal(); }
+  });
+  const more = $("journal-more"); if (more) more.onclick = () => { journal.shown += 10; drawJournal(); };
+}
 /* ── Home: alerts (pending cards, monitoring, archive with audited outcomes) ── */
-const alerts = { open: store.get("alerts.open", {}), rows: [], scoreboard: {}, loadedAt: 0 };
+const alerts = { open: store.get("alerts.open", {}), rows: [], rest: [], scoreboard: {}, paper: null, primary: [], shown: 10, loadedAt: 0 };
 const srcTag = (d) => d ? `${esc(d.source)} ${esc(d.resolution)}${d.delayed ? " · <span class='warn'>~15 min delayed</span>" : " · live"}` : "–";
 function confBadge(c) { return c ? `<div class="conf ${c.label}" title="${esc(JSON.stringify(c.parts))}">${fmt(confShown(c.score), 0)} ${esc(c.label)}</div>` : `<div class="conf medium">–</div>`; }
+// OF-5: every alert's one exit is its paper trade's close (s.exit); the audit is a fallback
+// for alerts from before the paper book.
+function exitCell(x) {
+  if (x.status === "NO_FILL") return `<span class="outc NO_FILL" title="${esc(x.reason)}">NO FILL</span>`;
+  return `<span class="outc ${esc(x.reason)}">EXIT ${esc(String(x.reason).replace(/_/g, " "))}</span> <span class="num">${x.price != null ? rup2(x.price) : "–"}</span>` +
+    (x.net != null ? ` <span class="${cls(x.net)}" style="font-family:var(--mono)">${rup(x.net)}</span>` : "");
+}
 function outcomeCell(s) {
   const o = s.outcome;
   if (s.status === "PENDING") return `<span class="countdown" data-exp="${esc(s.expires_at)}">…</span>`;
+  if (s.exit) return exitCell(s.exit) + (s.trade ? ` <span class="dim">· yours ${rup(s.trade.net_pnl)}</span>` : "");
   if (s.status === "TAKEN") return s.trade ? `<span class="outc ${s.trade.net_pnl >= 0 ? "TARGET" : "STOP"}">CLOSED ${rup(s.trade.net_pnl)}</span>` : `<span class="outc OPEN">MONITORING</span>`;
-  if (!o || !o.outcome || o.outcome === "NO_DATA") return `<span class="dim">no data yet</span>`;
-  return `<span class="outc ${esc(o.outcome)}">${esc(o.outcome.replace("_", " "))}</span> <span class="${cls(o.r_now)}" style="font-family:var(--mono)">${fmt(o.r_now, 2)}R</span>`;
+  if (!o || !o.outcome || o.outcome === "NO_DATA") return `<span class="dim">awaiting its exit</span>`;
+  return `<span class="outc ${esc(o.outcome)}">${esc(o.outcome.replace("_", " "))}</span> <span class="${cls(o.r_now)}" style="font-family:var(--mono)">${fmt(o.r_now, 2)}R</span> <span class="dim">audit</span>`;
 }
 function alertRow(s) {
   const e = s.economics || {}, o = s.option || e.option || {}, out = s.outcome || {}, c = s.confidence || {};
@@ -275,17 +317,18 @@ function alertRow(s) {
   const body = `
     <div class="grid3">
       <div><h4>Alert</h4>${kv("Raised", tsf(s.created_at) + " IST")}${kv("Signal bar", hhmm(s.bar_ts))}${kv("Valid until", hhmm(s.expires_at))}${kv("Status", esc(s.status))}
-        ${kv("Data", srcTag(s.data))}${kv("Horizon", esc(s.horizon || "intraday"))}${kv("Risk governor", s.risk_allowed ? "<span class='pos'>allowed</span>" : `<span class='neg'>blocked: ${esc(s.risk_reason)}</span>`)}</div>
+        ${kv("Data", srcTag(s.data))}${kv("Horizon", esc(s.horizon || "intraday"))}
+        <h4>Exit alert</h4>${s.exit ? kv("Exit", exitCell(s.exit)) + kv("Exit at", tsf(s.exit.at) + " IST") + kv("Paper trade", "#" + esc(s.exit.trade_id) + " · " + esc(s.exit.grade || "")) : `<div class="muted">not yet: its paper trade is still waiting or open</div>`}</div>
       <div><h4>One-unit economics</h4>${kv("Unit", esc(e.unit_label || ""))}${kv(s.kind === "INDEX" ? "Est. premium" : "Entry", rup2(e.entry_price))}${kv(s.kind === "INDEX" ? "Premium at stop" : "Stop", rup2(e.stop_price), "neg")}
         ${kv(s.kind === "INDEX" ? "Premium at target" : "Target", e.target_price != null ? rup2(e.target_price) : "trail", "pos")}${kv("Risk ₹ (incl. charges)", rup(e.risk_inr), "neg")}${kv("Net reward ₹", e.reward_inr != null ? rup(e.reward_inr) : "–", "pos")}${kv("Net R/R", fmt(e.rr_net))}
         ${s.kind === "INDEX" ? kv("Underlying entry / stop / target", `${fmt(e.underlying_entry, 0)} / ${fmt(e.underlying_stop, 0)} / ${e.underlying_target != null ? fmt(e.underlying_target, 0) : "–"}`) : ""}${e.synthetic ? `<div class="hint warn">premium synthetic (Black-76) — no live chain at alert time</div>` : (o.spread_pct != null ? kv("Chain spread", pct(o.spread_pct)) : "")}</div>
       <div><h4>Confidence ${fmt(confShown(c.score), 0)} <span class="dim">${esc(c.label || "")}</span></h4>
         ${["signal_strength", "backtest_evidence", "live_record", "regime_fit"].map(k => `<div class="kv"><span>${k.replace("_", " ")}</span><span>${fmt(parts[k], 0)}</span></div><div class="conf-bar"><i style="width:${Math.max(0, Math.min(100, parts[k] || 0))}%"></i></div>`).join("")}
         <div class="hint">${esc(parts.backtest_note || "")}<br>${esc(parts.live_note || "")}</div>
-        <h4>Outcome at the alerted levels</h4>${out.outcome ? kv("Result", outcomeCell(s)) + kv("Best / worst excursion", `${fmt(out.mfe_r, 2)}R / −${fmt(out.mae_r, 2)}R`) + kv("Est. P&L (1 unit)", rup(out.pnl_est), cls(out.pnl_est)) + kv("Resolved", out.exit_ts ? tsf(out.exit_ts) : "–") : `<div class="muted">audited once the next bars arrive</div>`}</div>
+        <h4>Audit at the alerted levels</h4>${out.outcome ? kv("Result", outcomeCell(s)) + kv("Best / worst excursion", `${fmt(out.mfe_r, 2)}R / −${fmt(out.mae_r, 2)}R`) + kv("Est. P&L (1 unit)", rup(out.pnl_est), cls(out.pnl_est)) + kv("Resolved", out.exit_ts ? tsf(out.exit_ts) : "–") : `<div class="muted">audited once the next bars arrive</div>`}</div>
     </div>
     <pre>${esc(s.text || "")}</pre>
-    ${s.status === "PENDING" ? `<div class="actions"><label class="inline">Your actual fill <input type="number" step="0.05" id="afill_${s.id}" placeholder="${fmt(e.entry_price)}" style="width:130px"></label>
+    ${s.status === "PENDING" ? `<div class="actions"><label class="inline">Your fill (optional, to compare) <input type="number" step="0.05" id="afill_${s.id}" placeholder="${fmt(e.entry_price)}" style="width:130px"></label>
       <button class="btn take" data-take="${s.id}">Trade taken</button><button class="btn" data-skip="${s.id}">Skipped</button></div>` : ""}`;
   return `<div class="alert-row ${s.status === "PENDING" ? "pending" : ""} ${s.status === "TAKEN" ? "taken" : ""} ${sell ? "sell" : ""} ${alerts.open[s.id] ? "open" : ""}" data-aid="${s.id}">
     <div class="alert-head" data-atoggle="${s.id}">
@@ -303,18 +346,52 @@ async function loadAlerts(force) {
   const days = $("alerts-days").value || 7, filt = $("alerts-filter").value;
   const r = await api(`/api/desk/signals?days=${days}`).catch(() => null);
   if (!r) { $("home-signals").innerHTML = `<div class="card"><div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sweat"/></svg> Live Desk not running.</div></div>`; return; }
-  alerts.rows = r.signals || []; alerts.scoreboard = r.scoreboard || {};
+  alerts.rows = r.signals || []; alerts.scoreboard = r.scoreboard || {}; alerts.paper = r.paper_scoreboard || null; alerts.primary = r.primary_strategies || [];
   const rows = alerts.rows.filter(s => !filt || s.status === filt || (filt === "TAKEN" && s.status === "CLOSED"));
-  const pend = rows.filter(s => s.status === "PENDING"), rest = rows.filter(s => s.status !== "PENDING");
-  $("alerts-meta").textContent = `${alerts.rows.length} alerts · ${pend.length} pending · ${alerts.rows.filter(s => s.status === "TAKEN").length} taken`;
-  $("home-signals").innerHTML = (pend.length ? `<h3>Pending — act or let them expire</h3>` + pend.map(alertRow).join("") : `<div class="card"><div class="empty-inline"><svg class="mascot sm"><use href="#m-cow"/></svg> No pending alert. The desk is tracking ${latest && latest.desk ? latest.desk.counts.instruments : "the watchlist"} instruments.</div></div>`);
-  $("home-archive").innerHTML = rest.length ? rest.map(alertRow).join("") : `<div class="muted">Nothing archived in this window.</div>`;
-  wireAlerts($("home-signals")); wireAlerts($("home-archive"));
-  const sb = Object.values(alerts.scoreboard).sort((a, b) => (b.avg_r || 0) - (a.avg_r || 0));
-  $("home-scoreboard").innerHTML = table([{ l: "Strategy", k: "strategy" }, { l: "Alerts", n: 1, k: "n" }, { l: "Positive %", n: 1, f: x => pct(x.hit_rate) },
-    { l: "Avg R", n: 1, f: x => fmt(x.avg_r, 2), c: x => cls(x.avg_r) }, { l: "Targets / stops / sq-off", n: 1, f: x => `${x.targets} / ${x.stops} / ${x.square_offs}` },
-    { l: "Σ est. P&L", n: 1, f: x => rup(x.pnl_sum), c: x => cls(x.pnl_sum) }], sb, { empty: "No resolved alerts yet — the scoreboard fills as alerts are audited against later bars." });
+  const pend = rows.filter(s => s.status === "PENDING");
+  alerts.rest = rows.filter(s => s.status !== "PENDING");
+  const exited = alerts.rows.filter(s => s.exit).length;
+  $("alerts-meta").textContent = `${alerts.rows.length} alerts · ${pend.length} pending · ${alerts.rows.filter(s => s.status === "TAKEN" || s.status === "CLOSED").length} taken · ${exited} exited`;
+  $("home-signals").innerHTML = (pend.length ? `<h3>Pending — take it or let it expire · its paper trade is already open</h3>` + pend.map(alertRow).join("") : `<div class="card"><div class="empty-inline"><svg class="mascot sm"><use href="#m-cow"/></svg> No pending alert. The desk is tracking ${latest && latest.desk ? latest.desk.counts.instruments : "the watchlist"} instruments.</div></div>`);
+  wireAlerts($("home-signals"));
+  drawArchive();
+  drawScoreboard();
   if (latest && latest.desk) renderHomePositions(latest.desk);
+}
+// The archive shows the newest 10; "Load 10 more" adds a page without asking the server again.
+function drawArchive() {
+  const rest = alerts.rest, page = rest.slice(0, alerts.shown), left = rest.length - page.length;
+  $("home-archive").innerHTML = page.length ? page.map(alertRow).join("") : `<div class="muted">Nothing archived in this window.</div>`;
+  wireAlerts($("home-archive"));
+  $("home-archive-more").innerHTML = left > 0
+    ? `<button class="btn small" id="archive-more">Load ${Math.min(10, left)} more</button><span class="muted">${page.length} of ${rest.length} shown</span>`
+    : (rest.length > 10 ? `<span class="muted">all ${rest.length} shown</span> <button class="btn small ghost" id="archive-less">Show the newest 10</button>` : "");
+  const more = $("archive-more"); if (more) more.onclick = () => { alerts.shown += 10; drawArchive(); };
+  const less = $("archive-less"); if (less) less.onclick = () => { alerts.shown = 10; drawArchive(); };
+}
+function drawScoreboard() {
+  const ps = alerts.paper;
+  if (!Array.isArray(ps)) {  // no paper book: the audit scoreboard, as before
+    const sb = Object.values(alerts.scoreboard).sort((a, b) => (b.avg_r || 0) - (a.avg_r || 0));
+    $("home-scoreboard").innerHTML = table([{ l: "Strategy", k: "strategy" }, { l: "Alerts", n: 1, k: "n" }, { l: "Positive %", n: 1, f: x => pct(x.hit_rate) },
+      { l: "Avg R", n: 1, f: x => fmt(x.avg_r, 2), c: x => cls(x.avg_r) }, { l: "Σ est. P&L", n: 1, f: x => rup(x.pnl_sum), c: x => cls(x.pnl_sum) }], sb,
+      { empty: "No resolved alerts yet." });
+    return;
+  }
+  const prim = ps.filter(x => x.primary), others = ps.filter(x => !x.primary && x.trades);
+  $("home-scoreboard").innerHTML = table([
+    { l: "Strategy", f: x => `<b>${esc(x.strategy)}</b>` },
+    { l: "Trades", n: 1, k: "trades" },
+    { l: "Win %", n: 1, f: x => x.win_rate != null ? pct(x.win_rate) : "–" },
+    { l: "Net ₹", n: 1, f: x => esc(inr(x.net)), c: x => x.net == null ? "" : cls(Number(x.net)) },
+    { l: "Avg / trade", n: 1, f: x => esc(inr(x.avg_net)), c: x => x.avg_net == null ? "" : cls(Number(x.avg_net)) },
+    { l: "Profit factor", n: 1, f: x => fmt(x.profit_factor, 2) },
+    { l: "Avg R", n: 1, f: x => fmt(x.avg_r, 2), c: x => cls(x.avg_r) },
+    { l: "Open", n: 1, k: "open" },
+    { l: "No fill", n: 1, k: "no_fill" },
+  ], prim, { empty: "No primary strategy configured." }) +
+  `<div class="hint mt">One unit per trade, every alert, net of costs. A strategy with no trades yet has not alerted since the paper book started.` +
+  (others.length ? ` Earlier strategies (no longer primary): ${others.map(x => `${esc(x.strategy)} ${x.trades} trades ${esc(inr(x.net))}`).join(" · ")}.` : "") + `</div>`;
 }
 function wireAlerts(root) {
   root.querySelectorAll("[data-take]").forEach(b => b.onclick = async (e) => { e.stopPropagation();
@@ -331,15 +408,37 @@ document.addEventListener("click", (e) => {
 });
 function renderHomePositions(d) {
   const ps = (d && d.positions) || [];
-  $("home-positions").innerHTML = positionsTable(ps);
-  $("home-positions").querySelectorAll("[data-dclose]").forEach(b => b.onclick = async () => {
-    const v = $("dx_" + b.dataset.dclose).value;
-    if (!v) { toast("Enter the price you actually exited at.", "warn"); return; }
-    const r = await api(`/api/desk/position/${b.dataset.dclose}/close`, { exit_price: Number(v), reason: "MANUAL" });
-    toast(`Closed: net ${rup(r.net_pnl)}`, r.net_pnl >= 0 ? "ok" : "bad"); desk.force = true; renderHomeJournal(); loadAlerts(true);
+  keepInputs($("home-positions"), () => { $("home-positions").innerHTML = positionsTable(ps); });
+  wirePositions($("home-positions"), () => loadAlerts(true));
+}
+// Re-rendering a table must not wipe a price the owner is typing.
+function keepInputs(root, render) {
+  const vals = {}, focus = document.activeElement && root.contains(document.activeElement) ? document.activeElement.id : null;
+  root.querySelectorAll("input[id]").forEach(i => { if (i.value !== "" && i.dataset.dirty) vals[i.id] = i.value; });
+  render();
+  Object.entries(vals).forEach(([id, v]) => { const i = $(id); if (i) { i.value = v; i.dataset.dirty = "1"; } });
+  if (focus && $(focus)) $(focus).focus();
+  root.querySelectorAll("input[id]").forEach(i => i.addEventListener("input", () => { i.dataset.dirty = "1"; }));
+}
+function wirePositions(root, after) {
+  root.querySelectorAll("[data-dreport]").forEach(b => b.onclick = async () => {
+    const id = b.dataset.dreport, en = $("du_" + id).value, ex = $("dx_" + id).value;
+    if (!en && !ex) { toast("Type your entry and/or exit price first.", "warn"); return; }
+    const r = await api(`/api/desk/position/${id}/report`, { entry_price: en ? Number(en) : null, exit_price: ex ? Number(ex) : null });
+    toast(r.ok ? "Saved: your prices sit beside the alert's" : (r.message || "not saved"), r.ok ? "ok" : "warn");
+    if (r.ok) { ["du_", "dx_"].forEach(k => { const i = $(k + id); if (i) delete i.dataset.dirty; }); }
+    desk.force = true; if (after) after();
+  });
+  root.querySelectorAll("[data-dclose]").forEach(b => b.onclick = async () => {
+    const id = b.dataset.dclose, v = $("dx_" + id).value;
+    if (!v) { toast("Type the price you exited at, then Close now.", "warn"); return; }
+    if (!confirm("Close it now at your exit price? It would otherwise close by itself at its exit alert's price.")) return;
+    const r = await api(`/api/desk/position/${id}/close`, { exit_price: Number(v), reason: "MANUAL" });
+    toast(r.closed ? `Closed: net ${rup(r.net_pnl)}` : (r.message || "not closed"), r.closed ? (r.net_pnl >= 0 ? "ok" : "bad") : "warn");
+    desk.force = true; renderHomeJournal(); if (after) after();
   });
 }
-["alerts-days", "alerts-filter"].forEach(id => $(id).onchange = () => loadAlerts(true));
+["alerts-days", "alerts-filter"].forEach(id => $(id).onchange = () => { alerts.shown = 10; loadAlerts(true); });
 tabLoaders.home = () => { if (!acctLoaded) loadAccount(false).catch(() => {}); renderHomeJournal(); loadAlerts(true).catch(() => {}); };
 $("acct-refresh").onclick = async () => { $("acct-refresh").disabled = true; try { await loadAccount(true); toast("Account refreshed", "ok"); } finally { $("acct-refresh").disabled = false; } };
 
@@ -474,7 +573,7 @@ function signalCard(s) {
   const e = s.economics || {}, sell = s.direction === "short", o = e.option || {};
   const title = s.kind === "INDEX" ? `BUY ${esc(s.label)} ${o.strike ? fmt(o.strike, 0) : ""} ${esc(o.opt_type || "")} <span class="num" style="font-size:15px">${esc(e.unit_label)}</span>`
     : `${sell ? "SELL" : "BUY"} ${esc(s.label)} <span class="num" style="font-size:15px">1 share</span>`;
-  return `<div class="card sigcard ${sell ? "sell" : ""} ${s.risk_allowed ? "" : "blocked"}" data-sig="${s.id}">
+  return `<div class="card sigcard ${sell ? "sell" : ""}" data-sig="${s.id}">
     <div class="row between"><div class="sig-title">${title}</div><span class="countdown" data-exp="${esc(s.expires_at)}">…</span></div>
     <div class="sig-sub">${esc(s.strategy_label || s.strategy)} · ${esc(s.timeframe)} · signal bar ${hhmm(s.bar_ts)} · strength ${fmt(s.strength, 0)}${e.synthetic ? " · <span class='warn'>premium synthetic</span>" : ""}</div>
     <div class="sig-nums">
@@ -488,24 +587,38 @@ function signalCard(s) {
       ${s.kind === "INDEX" ? sigNum("Underlying stop / target", `${fmt(e.underlying_stop, 0)} / ${e.underlying_target != null ? fmt(e.underlying_target, 0) : "–"}`) : ""}
     </div>
     <pre>${esc(s.text)}</pre>
-    ${s.risk_allowed ? "" : `<div class="warnbar"><b>Blocked by the risk governor:</b> ${esc(s.risk_reason)} — shown for information; do not take it.</div>`}
     <div class="actions">
-      <label class="inline">Your actual fill <input type="number" step="0.05" id="dfill_${s.id}" placeholder="${fmt(e.entry_price)}" style="width:130px"></label>
+      <label class="inline">Your fill (optional, to compare) <input type="number" step="0.05" id="dfill_${s.id}" placeholder="${fmt(e.entry_price)}" style="width:130px"></label>
       <button class="btn take" data-take="${s.id}">Trade taken</button>
       <button class="btn" data-skip="${s.id}">Skipped</button>
     </div></div>`;
 }
+function positionAlertAt(p) {
+  if (p.alert_created_at) return p.alert_created_at;
+  const a = alerts.rows.find(s => s.id === p.signal_id);
+  return a ? a.created_at : null;
+}
+function positionExit(p) {
+  if (p.paper_status) return [`on its exit alert <span class="dim">· paper #${esc(p.paper_trade_id)} ${esc(String(p.paper_status).replace(/_/g, " ").toLowerCase())}</span>`, "muted"];
+  if (p.session_over) return [esc(p.hold_check || "session over"), "neg pos-advice"];
+  if (p.exit_advice) return [`EXIT · ${esc(p.exit_advice.replace(/_/g, " "))}`, "neg pos-advice"];
+  return ["hold", "muted"];
+}
 function positionsTable(ps) {
   if (!ps.length) return `<div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sleep"/></svg> Flat. Moo is napping until you take a signal.</div>`;
-  return `<table><thead><tr><th>Instrument</th><th>Side</th><th class="n">Entry</th><th class="n">Underlying now</th><th class="n">Stop</th><th class="n">Target</th>
-    <th class="n">R now</th><th class="n">Unrealised</th><th>Advice</th><th class="n">Held</th><th></th></tr></thead><tbody>` +
-    ps.map(p => `<tr><td><b>${esc(p.label)}</b> <span class="dim">${esc(p.strategy)} ${esc(p.timeframe)}${p.option && p.option.strike ? ` · ${fmt(p.option.strike, 0)} ${esc(p.option.opt_type)}` : ""}</span></td>
-      <td>${esc(p.side.replace("_", " "))}</td><td class="n">${fmt(p.entry_price)}</td><td class="n">${fmt(p.last_underlying)}</td>
+  return `<table><thead><tr><th>Alert at</th><th>Taken at</th><th>Instrument</th><th>Side</th><th class="n">Alert entry</th><th class="n">Your entry</th><th class="n">Underlying now</th><th class="n">Stop</th><th class="n">Target</th>
+    <th class="n">R now</th><th class="n">Unrealised</th><th>Exit</th><th class="n">Held</th><th>Your prices <span class="dim">(optional)</span></th></tr></thead><tbody>` +
+    ps.map(p => { const [ex, exCls] = positionExit(p); return `<tr><td>${tsf(positionAlertAt(p))}</td><td>${tsf(p.opened_at)}</td>
+      <td><b>${esc(p.label)}</b> <span class="dim">${esc(p.strategy)} ${esc(p.timeframe)}${p.option && p.option.strike ? ` · ${fmt(p.option.strike, 0)} ${esc(p.option.opt_type)}` : ""}</span></td>
+      <td>${esc(p.side.replace("_", " "))}</td><td class="n">${fmt(p.alert_entry_price != null ? p.alert_entry_price : p.entry_price)}</td>
+      <td class="n">${p.user_entry_price != null ? fmt(p.user_entry_price) : "<span class='dim'>–</span>"}</td><td class="n">${fmt(p.last_underlying)}</td>
       <td class="n">${fmt(p.stop_underlying)}${p.trail_active ? " <span class='dim'>trail</span>" : ""}</td><td class="n">${p.target_underlying != null ? fmt(p.target_underlying) : "–"}</td>
       <td class="n ${cls(p.r_now)}">${fmt(p.r_now, 2)}R</td><td class="n ${cls(p.unrealized)}">${rup(p.unrealized)}</td>
-      <td class="${p.exit_advice || p.session_over ? "neg pos-advice" : "muted"}">${p.session_over ? esc(p.hold_check || "session over") : p.exit_advice ? "EXIT · " + esc(p.exit_advice.replace("_", " ")) : "hold"}</td><td class="n">${p.bars_held} bars</td>
-      <td><input type="number" step="0.05" id="dx_${p.id}" placeholder="exit price" style="width:110px;display:inline-block;margin:0">
-        <button class="btn small danger" data-dclose="${p.id}">Closed</button></td></tr>`).join("") + `</tbody></table>`;
+      <td class="${exCls}">${ex}</td><td class="n">${p.bars_held} bars</td>
+      <td class="pform"><input type="number" step="0.05" id="du_${p.id}" placeholder="your entry" value="${p.user_entry_price != null ? p.user_entry_price : ""}" style="width:110px">
+        <input type="number" step="0.05" id="dx_${p.id}" placeholder="your exit" value="${p.user_exit_price != null ? p.user_exit_price : ""}" style="width:110px">
+        <button class="btn small" data-dreport="${p.id}">Save</button>
+        <button class="btn small ghost" data-dclose="${p.id}" title="You exited before its exit alert: close it now at your exit price">Close now</button></td></tr>`; }).join("") + `</tbody></table>`;
 }
 /* ── paper trades (US-030): every alert's paper trade · one unit · never an order ──
    Pure one-line helpers (node-tested) render GET /api/paper; money arrives as rupee strings. */
@@ -633,19 +746,13 @@ function renderDesk(d) {
   $("desk-source").textContent = `${src.name} · ${src.resolution} bars · ${delayNote(src)} · poll ${src.poll_seconds}s · ` +
     `${ses.open ? "market open" : (ses.trading_day ? "market closed" : "holiday / weekend")} · ${ses.entries_allowed ? "entries allowed" : "no new entries"} · updated ${hhmm(d.updated_at)}` +
     (src.last_error ? ` · ⚠ ${src.last_error.slice(0, 80)}` : "");
-  const risk = d.risk || {};
-  $("desk-risk-line").textContent = `risk ${risk.state || "–"} · realised ${rup(risk.realized_pnl)} · ${risk.trades_taken || 0} trade(s) today`;
+  $("desk-risk-line").textContent = `${(d.positions || []).length} open · each closes at its exit alert's price`;
   // positions (re-render only when something changed)
-  const psig = JSON.stringify((d.positions || []).map(p => [p.id, p.exit_advice, p.session_over, p.stop_underlying, p.last_underlying, p.unrealized]));
+  const psig = JSON.stringify((d.positions || []).map(p => [p.id, p.exit_advice, p.session_over, p.stop_underlying, p.last_underlying, p.unrealized, p.paper_status, p.user_entry_price, p.user_exit_price]));
   if (desk.sig.pos !== psig) {
     desk.sig.pos = psig;
-    $("desk-positions").innerHTML = positionsTable(d.positions || []);
-    $("desk-positions").querySelectorAll("[data-dclose]").forEach(b => b.onclick = async () => {
-      const v = $("dx_" + b.dataset.dclose).value;
-      if (!v) { toast("Enter the price you actually exited at.", "warn"); return; }
-      const r = await api(`/api/desk/position/${b.dataset.dclose}/close`, { exit_price: Number(v), reason: "MANUAL" });
-      toast(`Closed: net ${rup(r.net_pnl)}`, r.net_pnl >= 0 ? "ok" : "bad"); desk.force = true; renderHomeJournal();
-    });
+    keepInputs($("desk-positions"), () => { $("desk-positions").innerHTML = positionsTable(d.positions || []); });
+    wirePositions($("desk-positions"));
   }
   const ssig = JSON.stringify((d.signals || []).map(s => s.id));
   if (desk.sig.sig !== ssig) {
@@ -1114,10 +1221,35 @@ tabLoaders.lab = () => loadLab().catch(e => console.error(e));
 
 /* ═══════════════════════════════ DATA ═══════════════════════════════ */
 let dataPoll = null;
+// OF-3: filter the coverage by source and timeframe; "what the Lab can use" shows the history
+// per timeframe after deriving it from finer bars (15m from Dhan 1m is five years).
+const covState = { data: null, view: store.get("cov.view", "effective"), source: store.get("cov.source", ""), tf: store.get("cov.tf", ""), q: "" };
+function drawCoverage() {
+  const cov = covState.data; if (!cov) return;
+  const q = covState.q.trim().toUpperCase(), eff = covState.view === "effective";
+  const keep = (r) => (!q || String(r.series_key).includes(q)) && (!covState.tf || (eff ? r.timeframe : r.resolution) === covState.tf) &&
+    (!covState.source || r.source === covState.source);
+  const rows = (eff ? cov.effective || [] : cov.coverage || []).filter(keep);
+  const short = eff ? rows.filter(r => r.timeframe !== "1d" && r.timeframe !== "60m" && r.days < 120) : [];
+  $("cov-meta").textContent = `${rows.length} row${rows.length === 1 ? "" : "s"}` + (short.length ? ` · ${short.length} intraday with under 120 days` : "");
+  const lim = cov.limits || {};
+  $("cov-note").innerHTML = eff
+    ? `Each timeframe is built from the finest bars that can make it, so the history is the widest base's. ` +
+      `<b>${esc(lim.yahoo || "")}</b>: a series only Yahoo serves (currencies, and stocks or indices without a Dhan 1-minute backfill) stays at about 60 days at 5m–30m, and grows only as later backfills append. ` +
+      `${esc(lim.dhan || "")}: once your Dhan token is renewed (Settings), <b>Dhan: 5-year 1-minute history</b> lifts every Dhan-traded series to five years at every intraday timeframe. Currencies here are spot FX from Yahoo by design.`
+    : `The raw rows in the corpus, per series, resolution and source.`;
+  const days = (r) => `<span class="${r.timeframe !== "1d" && r.timeframe !== "60m" && r.days < 120 ? "warn" : ""}">${Number(r.days).toLocaleString("en-IN")}</span>`;
+  $("data-coverage").innerHTML = eff
+    ? table([{ l: "Series", k: "series_key" }, { l: "Timeframe", k: "timeframe" }, { l: "From", k: "first" }, { l: "To", k: "last" }, { l: "Days", n: 1, f: days },
+        { l: "Built from", f: r => `${esc(r.base)} · ${esc(r.source)}` }, { l: "Sources", f: r => esc((r.sources || []).join(" + ")) }], rows, { empty: "Nothing matches — clear a filter, or start a backfill." })
+    : table([{ l: "Series", k: "series_key" }, { l: "Res", k: "resolution" }, { l: "Source", k: "source" },
+        { l: "First", k: "first" }, { l: "Last", k: "last" }, { l: "Bars", n: 1, f: r => Number(r.bars).toLocaleString("en-IN") }], rows, { empty: "Nothing matches — clear a filter, or start a backfill." });
+}
+[["cov-view", "view"], ["cov-source", "source"], ["cov-tf", "tf"]].forEach(([id, k]) => { const el = $(id); if (!el) return; el.value = covState[k]; el.onchange = () => { covState[k] = el.value; store.set("cov." + k, el.value); drawCoverage(); }; });
+if ($("cov-q")) $("cov-q").oninput = () => { covState.q = $("cov-q").value; drawCoverage(); };
 async function loadData() {
   const [cov, jobs] = await Promise.all([api("/api/lab/coverage"), api("/api/data/jobs")]);
-  $("data-coverage").innerHTML = table([{ l: "Series", k: "series_key" }, { l: "Res", k: "resolution" }, { l: "Source", k: "source" },
-    { l: "First", k: "first" }, { l: "Last", k: "last" }, { l: "Bars", n: 1, f: r => Number(r.bars).toLocaleString("en-IN") }], cov.coverage, { empty: "Empty corpus — start a backfill." });
+  covState.data = cov; drawCoverage();
   const busy = jobs.jobs.some(j => j.status === "RUNNING" || j.status === "QUEUED");
   $("data-jobs").innerHTML = table([{ l: "#", k: "id", n: 1 }, { l: "Kind", k: "kind" },
     { l: "Status", f: j => j.status === "RUNNING" ? `RUNNING <div class="progress"><i style="width:${Math.round((j.progress || 0) * 100)}%"></i></div>` : esc(j.status), c: j => j.status === "FAILED" ? "neg" : "" },
