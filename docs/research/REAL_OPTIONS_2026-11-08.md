@@ -174,9 +174,9 @@ a recommendation.
 
 Added so a paper trade is the backtest's trade:
 
-* the Lab's entry risk rule at the alert: a stop tighter than max(0.4 ATR, 0.35 % of price) is
-  widened; a setup riskier than min(2.5 ATR, 2 % of price) is not alerted
-  (`desk.rules.lab_entry_risk`);
+* the Lab's entry risk rule at the alert: a stop tighter than max(0.4 ATR, 0.15 % of price;
+  0.35 % for supertrend_adx) is widened; a setup riskier than min(8 ATR, 2 % of price) is not
+  alerted (`desk.rules.lab_entry_risk`; these strategies' own `stop_atr_max` is 8);
 * the strategy's own `max_trades_per_day` and `cooldown_bars` (counted in strategy bars after
   its last paper exit, across sessions, like the simulator). These are the strategy's rules,
   not a risk governor;
@@ -186,7 +186,13 @@ Added so a paper trade is the backtest's trade:
 * the paper book prices option fills, exits and marks with the alerted contract's TRADED
   one-minute prices (Dhan intraday bars of that contract) whenever that minute traded, and
   records `premium_source` real/model on every fill. The model prices only what did not
-  trade.
+  trade;
+* (2026-11-08, after the first write-up) the desk zeroes index volume as the Lab does
+  (`desk.data._clean`). Dhan's index bars carry a volume figure from 2025-12-03 and the Lab
+  sets it to 0 (commit 4904e0c), so the index candidate's `rvol_min` 1.0 and its strength's
+  volume pillar are neutral there; the desk read Dhan's figure. On that year the index setting
+  gave 87 Lab entries and 81 desk entries, only 38 the same (49 of the Lab's 87 had a desk
+  relative volume below 1.0). Fixed before the test's first session.
 
 Differences that remain: the risk rule uses the signal bar's close (the Lab, the next open); the
 paper trail uses the ATR frozen at the alert; a paper target needs a trade-through; one live
@@ -199,6 +205,13 @@ At the backtest's rate the test gives about 1.7 option alerts and 1.1 stock aler
 Proposed review point, fixed now: 30 closed paper trades per strategy (about 4 months for the
 options, 6-12 months for the stocks). A strategy stays only if its paper net per trade is above
 zero after costs by then.
+
+The Home scoreboard counts each candidate by strategy, timeframe and market (2026-11-08):
+supertrend_vol ran on 15-minute stock and 5-minute index bars before the test, and those 15
+paper trades are their own rows, not the candidate's.
+
+Owner's decision, 2026-11-08: keep the index option alerts in the paper test despite the
+real-premium result above, and judge them at the review point like the stock candidates.
 
 ## 3. Fill costs (what one share or one lot costs to fill)
 

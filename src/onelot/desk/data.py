@@ -74,6 +74,12 @@ def _clean(df: pd.DataFrame, spec: SeriesSpec, res_min: int) -> pd.DataFrame:
     now = pd.Timestamp.now(tz=IST)
     df = df[df.index + pd.Timedelta(minutes=res_min) <= now]  # closed bars only
     df = df[~df.index.duplicated(keep="last")].sort_index()
+    if not spec.has_volume:
+        # An index or spot FX has no traded volume. Dhan's index bars carry a volume figure
+        # from 2025-12-03 (the socket's bars none), and the Lab zeroes it (lab/runner.py), so
+        # the desk does too: every volume filter is neutral on both, and a paper trade is
+        # the backtest's trade (the paper test, 2026-11-08).
+        df["volume"] = 0.0
     df.index.name = "ts"
     return df.astype("float64")
 
