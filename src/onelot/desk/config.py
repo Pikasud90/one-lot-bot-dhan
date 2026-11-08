@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
 
 from ..settings import PROJECT_ROOT
+
+if TYPE_CHECKING:
+    from ..paper.ledger import Slot
 
 
 @dataclass(frozen=True)
@@ -65,6 +69,21 @@ class DeskConfig:
             for slot in inst.strategies:
                 seen.setdefault(slot.name, None)
         return tuple(seen)
+
+    def primary_slots(self) -> tuple[Slot, ...]:
+        """The primary strategies as the desk runs them (the paper test, 2026-11-08): one
+        (name, timeframe, market) per configured slot of a primary strategy, in the owner's
+        strategy order, then configuration order, each once. The Home scoreboard counts each
+        apart, so an earlier timeframe of the same strategy never counts toward it."""
+        from ..paper.ledger import Slot  # here: the paper layer stays out of config imports
+
+        order = {name: i for i, name in enumerate(self.primary_strategies())}
+        seen: dict[Slot, None] = {}
+        for inst in self.instruments:
+            for slot in inst.strategies:
+                if slot.name in order:
+                    seen.setdefault(Slot(slot.name, slot.timeframe, inst.kind), None)
+        return tuple(sorted(seen, key=lambda s: order[s.strategy]))  # stable: config order
 
     @property
     def instruments(self) -> tuple[DeskInstrumentCfg, ...]:

@@ -382,9 +382,13 @@ function drawScoreboard() {
       { empty: "No resolved alerts yet." });
     return;
   }
+  // one row per strategy, timeframe and market (paper test, 2026-11-08): an earlier timeframe
+  // of the same strategy is its own row and never counts toward the test
+  const market = x => x.kind === "INDEX" ? "index options" : x.kind === "STOCK" ? "stocks" : "";
+  const slot = x => [x.timeframe, market(x)].filter(Boolean).join(" · ");
   const prim = ps.filter(x => x.primary), others = ps.filter(x => !x.primary && x.trades);
   $("home-scoreboard").innerHTML = table([
-    { l: "Strategy", f: x => `<b>${esc(x.strategy)}</b>` },
+    { l: "Strategy", f: x => `<b>${esc(x.strategy)}</b>` + (slot(x) ? ` <span class="muted">${esc(slot(x))}</span>` : "") },
     { l: "Trades", n: 1, k: "trades" },
     { l: "Win %", n: 1, f: x => x.win_rate != null ? pct(x.win_rate) : "–" },
     { l: "Net ₹", n: 1, f: x => esc(inr(x.net)), c: x => x.net == null ? "" : cls(Number(x.net)) },
@@ -394,8 +398,8 @@ function drawScoreboard() {
     { l: "Open", n: 1, k: "open" },
     { l: "No fill", n: 1, k: "no_fill" },
   ], prim, { empty: "No primary strategy configured." }) +
-  `<div class="hint mt">One unit per trade, every alert, net of costs. A strategy with no trades yet has not alerted since the paper book started.` +
-  (others.length ? ` Earlier strategies (no longer primary): ${others.map(x => `${esc(x.strategy)} ${x.trades} trades ${esc(inr(x.net))}`).join(" · ")}.` : "") + `</div>`;
+  `<div class="hint mt">One unit per trade, every alert, net of costs. Each row is one strategy on one timeframe and market, so trades from an earlier setting are not counted in it. A row with no trades has not alerted yet.` +
+  (others.length ? ` Earlier strategies (no longer primary): ${others.map(x => `${esc(x.strategy)}${slot(x) ? ` ${esc(slot(x))}` : ""} ${x.trades} trades ${esc(inr(x.net))}`).join(" · ")}.` : "") + `</div>`;
 }
 function wireAlerts(root) {
   root.querySelectorAll("[data-take]").forEach(b => b.onclick = async (e) => { e.stopPropagation();

@@ -14,6 +14,7 @@ from decimal import ROUND_HALF_EVEN, Decimal
 from typing import TYPE_CHECKING, Any, TypedDict
 
 from ..clock import IST
+from .ledger import Slot  # at run time: the ledger imports neither the book nor this module
 from .money import format_rupees, to_decimal
 
 if TYPE_CHECKING:  # annotation only: book.py imports this module
@@ -152,42 +153,69 @@ def scoreboard_view(
         (name for name in totals if name not in names),
         key=lambda name: -totals[name].net_paise,
     )
-    rows: list[dict[str, Any]] = []
-    for name in [*names, *others]:
-        row = totals.get(name)
-        trades = row.trades if row else 0
-        avg = (
-            None
-            if not row or not trades
-            else int(
-                (Decimal(row.net_paise) / Decimal(trades)).quantize(
-                    Decimal(1), rounding=ROUND_HALF_EVEN
-                )
+    return [
+        {"strategy": name, "primary": name in names, **_score(totals.get(name), opened, name)}
+        for name in [*names, *others]
+    ]
+
+
+def slot_scoreboard_view(
+    totals: Mapping[Slot, StrategyTotals],
+    primary: Sequence[tuple[str, str, str]] = (),
+    open_counts: Mapping[Slot, int] | None = None,
+) -> list[dict[str, Any]]:
+    """The Home scoreboard of the paper test (2026-11-08): `scoreboard_view`'s rows, one per
+    slot (strategy, timeframe, market), each row with the slot's `timeframe` and `kind`
+    (INDEX | STOCK) beside its `strategy`. The `primary` slots come first in the given order,
+    listed even before their first trade; then any other slot that traded, by net P&L. A
+    primary strategy's trades on another timeframe or market (an earlier setting) stay in
+    their own row, which is not primary, so they never count toward the paper test."""
+    opened = open_counts or {}
+    slots = list(dict.fromkeys(Slot(*s) for s in primary))
+    others = sorted(
+        (slot for slot in totals if slot not in slots),
+        key=lambda slot: -totals[slot].net_paise,
+    )
+    return [
+        {
+            "strategy": slot.strategy,
+            "timeframe": slot.timeframe,
+            "kind": slot.kind,
+            "primary": slot in slots,
+            **_score(totals.get(slot), opened, slot),
+        }
+        for slot in [*slots, *others]
+    ]
+
+
+def _score(row: StrategyTotals | None, opened: Mapping[Any, int], key: object) -> dict[str, Any]:
+    """One scoreboard row's numbers (see `scoreboard_view`)."""
+    trades = row.trades if row else 0
+    avg = (
+        None
+        if not row or not trades
+        else int(
+            (Decimal(row.net_paise) / Decimal(trades)).quantize(
+                Decimal(1), rounding=ROUND_HALF_EVEN
             )
         )
-        rows.append(
-            {
-                "strategy": name,
-                "primary": name in names,
-                "trades": trades,
-                "wins": row.wins if row else 0,
-                "losses": row.losses if row else 0,
-                "no_fill": row.no_fill if row else 0,
-                "open": int(opened.get(name, 0)),
-                "win_rate": round(100.0 * row.wins / trades, 1) if row and trades else None,
-                "net": format_rupees(row.net_paise) if row and trades else None,
-                "costs": format_rupees(row.costs_paise) if row and trades else None,
-                "avg_net": format_rupees(avg),
-                "profit_factor": (
-                    round(row.won_paise / -row.lost_paise, 2)
-                    if row and row.lost_paise < 0
-                    else None
-                ),
-                "avg_r": round(row.r_sum / row.r_trades, 2) if row and row.r_trades else None,
-                "last_exit": _iso(row.last_exit) if row else None,
-            }
-        )
-    return rows
+    )
+    return {
+        "trades": trades,
+        "wins": row.wins if row else 0,
+        "losses": row.losses if row else 0,
+        "no_fill": row.no_fill if row else 0,
+        "open": int(opened.get(key, 0)),
+        "win_rate": round(100.0 * row.wins / trades, 1) if row and trades else None,
+        "net": format_rupees(row.net_paise) if row and trades else None,
+        "costs": format_rupees(row.costs_paise) if row and trades else None,
+        "avg_net": format_rupees(avg),
+        "profit_factor": (
+            round(row.won_paise / -row.lost_paise, 2) if row and row.lost_paise < 0 else None
+        ),
+        "avg_r": round(row.r_sum / row.r_trades, 2) if row and row.r_trades else None,
+        "last_exit": _iso(row.last_exit) if row else None,
+    }
 
 
 def _iso(ts: dt.datetime | None) -> str | None:

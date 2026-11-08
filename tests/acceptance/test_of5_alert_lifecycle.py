@@ -376,10 +376,31 @@ class TestTheApi:
         assert body["primary_strategies"] == list(rig.desk.cfg.primary_strategies())
         row = next(s for s in body["signals"] if s["id"] == alert["id"])
         assert row["exit"]["reason"] == "STOP"
-        board = {r["strategy"]: r for r in body["paper_scoreboard"]}
-        mine = board[alert["strategy"]]
-        assert mine["trades"] == 1 and mine["losses"] + mine["wins"] <= 1
+        board = {(r["strategy"], r["timeframe"], r["kind"]): r for r in body["paper_scoreboard"]}
+        mine = board[(alert["strategy"], alert["timeframe"], "STOCK")]
+        assert mine["primary"] and mine["trades"] == 1 and mine["losses"] + mine["wins"] <= 1
         assert mine["net"] == f"{rupees(rig.row(alert)['net_paise']):.2f}"
+
+    def test_an_earlier_timeframe_of_the_same_strategy_never_counts_toward_its_row(self, rig):
+        """The paper test (2026-11-08): supertrend_vol ran on 15-minute bars before; those
+        trades are their own row, not primary, and the candidate's row counts only its own."""
+        from onelot.store.schema import paper_trades
+
+        alert = rig.alert("SBIN")
+        through_the_stop(rig, alert)
+        rig.poll()
+        own = rig.row(alert)
+        older = {k: v for k, v in own.items() if k != "id"}
+        older.update(alert_id="older-setting", timeframe="1m", net_paise=123_456)
+        with rig.engine.begin() as conn:
+            conn.execute(paper_trades.insert().values(**older))
+        body = api(rig.desk).get("/api/desk/signals").json()
+        board = {(r["strategy"], r["timeframe"], r["kind"]): r for r in body["paper_scoreboard"]}
+        mine = board[(alert["strategy"], alert["timeframe"], "STOCK")]
+        assert mine["primary"] and mine["trades"] == 1
+        assert mine["net"] == f"{rupees(own['net_paise']):.2f}"
+        before = board[(alert["strategy"], "1m", "STOCK")]
+        assert not before["primary"] and before["trades"] == 1 and before["net"] == "1234.56"
 
 
 def test_a_restart_shows_the_exit_of_an_alert_that_exited_before_it_was_recorded(rig, desk_db):

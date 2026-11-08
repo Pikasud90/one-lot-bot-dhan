@@ -22,8 +22,9 @@ import datetime as dt
 import logging
 import threading
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import get_args
+from typing import NamedTuple, TypeVar, get_args
 
 from sqlalchemy import ColumnElement, Engine, func, select, type_coerce
 from sqlalchemy.types import NullType
@@ -32,13 +33,35 @@ from ..store.schema import paper_trades
 from .alert import Grade
 from .money import stored_paise
 
-__all__ = ["GRADES", "LedgerTotals", "PaperLedger", "StrategyTotals"]
+__all__ = ["GRADES", "LedgerTotals", "PaperLedger", "Slot", "StrategyTotals"]
 
 log = logging.getLogger(__name__)
 
 GRADES: frozenset[str] = frozenset(get_args(Grade))  # the grades the book writes
 WARN_CAP = 1000  # corrupt cells a ledger remembers having warned about (LRU)
 _MONEY = ("gross_paise", "costs_paise", "net_paise")
+
+
+class Slot(NamedTuple):
+    """One strategy as the desk runs it: its name, its bar timeframe and its market
+    (INDEX | STOCK). The paper test's candidates (2026-11-08) share their names with older
+    desk strategies (supertrend_vol ran on 15-minute bars before), so the Home scoreboard
+    counts each slot apart: an earlier setting's trades never count toward a candidate."""
+
+    strategy: str
+    timeframe: str
+    kind: str
+
+
+K = TypeVar("K")
+
+
+def _name_key(strategy: object, timeframe: object, kind: object) -> str:
+    return str(strategy or "?")
+
+
+def _slot_key(strategy: object, timeframe: object, kind: object) -> Slot:
+    return Slot(str(strategy or "?"), str(timeframe or "?"), str(kind or "?"))
 
 
 @dataclass(frozen=True)
@@ -145,6 +168,28 @@ class PaperLedger:
         are counted apart in `no_fill`, with the same window on the time the book closed them.
         Strategies with no trade in the window are absent: the caller lists the ones it wants.
         """
+        return self._grouped(_name_key, grade, since, until)
+
+    def by_slot(
+        self,
+        *,
+        grade: str | None = None,
+        since: dt.datetime | None = None,
+        until: dt.datetime | None = None,
+    ) -> dict[Slot, StrategyTotals]:
+        """`by_strategy()` split further by timeframe and market: one entry per `Slot`, for
+        the Home scoreboard of the paper test. Same rules, same window."""
+        return self._grouped(_slot_key, grade, since, until)
+
+    def _grouped(
+        self,
+        key: Callable[[object, object, object], K],
+        grade: str | None,
+        since: dt.datetime | None,
+        until: dt.datetime | None,
+    ) -> dict[K, StrategyTotals]:
+        """The closed and NO_FILL rows in the window, summed per `key(strategy, timeframe,
+        kind)`: the body of `by_strategy()` and `by_slot()`."""
         _check_grade(grade)
         _check_aware(since, "since")
         _check_aware(until, "until")
@@ -162,13 +207,15 @@ class PaperLedger:
         cells = [type_coerce(t[name], NullType()).label(name) for name in _MONEY]
         risk = type_coerce(t.risk_paise, NullType()).label("risk_paise")
         stmt = (
-            select(t.id, t.strategy, t.status, t.exit_ts, risk, *cells).where(*where).order_by(t.id)
+            select(t.id, t.strategy, t.timeframe, t.kind, t.status, t.exit_ts, risk, *cells)
+            .where(*where)
+            .order_by(t.id)
         )
         with self.engine.connect() as conn:
             rows = conn.execute(stmt).all()
-        out: dict[str, StrategyTotals] = {}
-        for trade_id, strategy, status, exit_ts, raw_risk, *raw in rows:
-            row = out.setdefault(str(strategy or "?"), StrategyTotals())
+        out: dict[K, StrategyTotals] = {}
+        for trade_id, strategy, timeframe, kind, status, exit_ts, raw_risk, *raw in rows:
+            row = out.setdefault(key(strategy, timeframe, kind), StrategyTotals())
             if status == "NO_FILL":
                 row.no_fill += 1
                 continue

@@ -193,25 +193,29 @@ def _paper_payload(desk: object, now: dt.datetime) -> dict[str, Any]:
 
 def _paper_scoreboard(desk: object) -> list[dict[str, Any]] | None:
     """The Home strategy scoreboard (OF-5) from the desk's paper book: every closed paper
-    trade by strategy, the desk's primary strategies first. None without a book."""
+    trade by slot (strategy, timeframe, market), the desk's primary slots first, so a
+    strategy's trades from an earlier timeframe never count toward the paper test
+    (2026-11-08). None without a book."""
     from collections import Counter
 
     from sqlalchemy.exc import SQLAlchemyError
 
-    from ..paper.ledger import PaperLedger
-    from ..paper.view import scoreboard_view
+    from ..paper.ledger import PaperLedger, Slot
+    from ..paper.view import slot_scoreboard_view
 
     book = getattr(desk, "paper", None)
     if book is None:
         return None
     try:
-        totals = PaperLedger(book.engine).by_strategy()
-        opened = Counter(str(t.strategy) for t in book.open_trades())
+        totals = PaperLedger(book.engine).by_slot()
+        opened = Counter(
+            Slot(str(t.strategy), str(t.timeframe), str(t.kind)) for t in book.open_trades()
+        )
     except (SQLAlchemyError, OSError) as exc:
         log.warning("the paper scoreboard could not be read: %s", type(exc).__name__)
         return None
-    primary = desk.cfg.primary_strategies() if hasattr(desk, "cfg") else ()
-    return scoreboard_view(totals, primary, opened)
+    primary = desk.cfg.primary_slots() if hasattr(desk, "cfg") else ()
+    return slot_scoreboard_view(totals, primary, opened)
 
 
 def create_app(engine, api_token: str) -> FastAPI:
