@@ -14,6 +14,23 @@ are reference only.
 > Decision support, not advice. Every rupee figure is an estimate until reconciled with a
 > real contract note (see `docs/05_COST_RECONCILIATION.md`). See [DISCLAIMER.md](DISCLAIMER.md).
 
+> **Current state (2026-11-08, branch `sprint-02-owner-feedback`).** Parts of this README
+> predate the owner's review of 2026-11-07. Where they differ, these win:
+>
+> * **One exit per alert.** Each entry alert gets exactly one exit alert, taken or not (no
+>   repeated *hold / tighten* advice), and every alert opens a paper trade at the alert's own
+>   prices. No risk governor blocks or hides an alert.
+> * **Paper test.** The Live Desk runs only three candidates of the cross-instrument retune,
+>   with its exact settings (`config/desk.yaml`): Supertrend + volume on 30-minute bars, long
+>   only, on the 5 index options (monthly CE, delta about 0.65); Supertrend + volume on
+>   60-minute bars and Supertrend + ADX + MACD on 30-minute bars, short only, on 18 stocks.
+>   None passed all three backtest years: it is a forward test, not a recommendation.
+> * **Real option prices.** The paper book prices option fills with the alerted contract's
+>   traded one-minute prices; `scripts/real_options_study.py` re-prices option backtests with
+>   Dhan's expired-options data. The Lab's own option backtests are still Black-76.
+> * Write-ups: `docs/research/CROSS_RETUNE_2026-11-07.md` and
+>   `docs/research/REAL_OPTIONS_2026-11-08.md`.
+
 ---
 
 ## What you get
