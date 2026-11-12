@@ -59,24 +59,23 @@ def main() -> int:
         window = window[: int(sys.argv[1])]
 
     def fine(k: str, day: dt.date) -> pd.DataFrame | None:
+        """The session as minute bars: the open, then the close on the last bar. A weekend
+        session (a Budget day) gets 60 minutes, as a real special session has: fewer would be
+        a stray bar (`delivery.special_min_bars`)."""
         if day not in rows[k]:
             return None
         o, c = rows[k][day]
         last = dt.time(15, 29) if k == "NIFTY" else dt.time(15, 14)
-        idx = pd.DatetimeIndex(
-            [
-                dt.datetime.combine(day, dt.time(9, 15), tzinfo=IST),
-                dt.datetime.combine(day, last, tzinfo=IST),
-            ]
-        )
+        first = dt.datetime.combine(day, dt.time(9, 15), tzinfo=IST)
+        if day.weekday() >= 5:
+            idx = pd.date_range(first, periods=60, freq="1min")
+        else:
+            idx = pd.DatetimeIndex([first, dt.datetime.combine(day, last, tzinfo=IST)])
+        opens = np.full(len(idx), o)
+        closes = np.full(len(idx), o)
+        closes[-1] = c
         return pd.DataFrame(
-            {
-                "open": [o, o],
-                "high": [max(o, c)] * 2,
-                "low": [min(o, c)] * 2,
-                "close": [o, c],
-                "volume": 1.0,
-            },
+            {"open": opens, "high": max(o, c), "low": min(o, c), "close": closes, "volume": 1.0},
             index=idx,
         )
 
