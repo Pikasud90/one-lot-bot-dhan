@@ -1,5 +1,5 @@
 # Board
-_Generated 2026-11-12T11:22+05:30 by agile_board.py; do not edit by hand._
+_Generated 2026-11-12T13:27+05:30 by agile_board.py; do not edit by hand._
 
 ## backlog — 27 stories, 108 pts
 | ID | Title | Pts | Priority | Sprint | Protocol |
@@ -32,12 +32,7 @@ _Generated 2026-11-12T11:22+05:30 by agile_board.py; do not edit by hand._
 | SP-001 | Spike: review fnolab.in end to end for reference ideas | 2 | Could | 5 | driver-navigator |
 | US-012 | Paper vs taken reconciliation and slippage report | 3 | Could | 6 | ping-pong-tdd |
 
-## review — 1 story, 13 pts
-| ID | Title | Pts | Priority | Sprint | Protocol |
-|---|---|---|---|---|---|
-| US-067 | The pullback rule as delivery stock trades in the paper test | 13 | Must | - | driver-navigator |
-
-## done — 9 stories, 31 pts
+## done — 10 stories, 44 pts
 | ID | Title | Pts | Priority | Sprint | Protocol |
 |---|---|---|---|---|---|
 | US-000 | Quality gate baseline is green: format, pins, mypy ratchet, repo hygiene | 3 | Must | 0 | driver-navigator |
@@ -49,5 +44,6 @@ _Generated 2026-11-12T11:22+05:30 by agile_board.py; do not edit by hand._
 | US-028 | Fix: alerts served by the Yahoo fallback are labelled live | 1 | Must | 1 | ping-pong-tdd |
 | US-030 | Paper trades visible on the desk (thin slice of US-016) | 2 | Must | 1 | driver-navigator |
 | US-032 | Paper panel shows the last session when nothing closed today | 2 | Must | 1 | driver-navigator |
+| US-067 | The pullback rule as delivery stock trades in the paper test | 13 | Must | - | driver-navigator |
 
-**Total:** 37 stories, 31/152 points done
+**Total:** 37 stories, 44/152 points done
