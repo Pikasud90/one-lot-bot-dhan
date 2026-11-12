@@ -249,9 +249,13 @@ def test_desk_down_over_the_exit_signal_and_several_sessions(w):
     w.start(at(L[9], "10:00"))
     w.poll(at(L[9], "10:05"))
     w.poll(at(L[9], "10:05"))
+    # Lead's ruling of 2026-11-12, round 2 item 2: a fill never uses a bar earlier than its alert
+    assert w.trades()["ITC"].status == "EXIT_PENDING"  # no sale on the 10:05 poll
+    w.poll(at(L[9], "10:06"))
     itc = w.trades()["ITC"]
     assert itc.exit_signal_date == L[5] and itc.exit_reason == "SMA20"
     assert itc.status == "CLOSED" and itc.exit_late
+    assert itc.exit_ts == at(L[9], "10:05")  # the first bar at or after the alert
     assert [n.title.split()[0] for n in w.notifier.sent].count("SELL") >= 1
     sells = [n for n in w.notifier.sent if n.title.startswith("SELL") and "ITC" in n.title]
     assert len(sells) == 1

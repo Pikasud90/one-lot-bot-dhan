@@ -123,6 +123,8 @@ paper trades only: the system never places an order.
   A day whose bars stop early is read as it is for exits only once a later session is
   complete, with "<date> read from incomplete data" on the card and the trade. A Muhurat
   session counts the next day; a bar with a bad price is left out with a note.
+- A day off the calendar counts as a special session only with at least `special_min_bars`
+  (30) one-minute bars in `delivery:`; fewer are a stray bar, ignored with a note.
 - Known limit: after a catch-up over several sessions, an entry signal on the day after an exit
   signal can be dropped, because that exit is still pending. The reference would take it.
 - With the Dhan Data API on, the desk tops up the store's one-minute bars once a day outside
