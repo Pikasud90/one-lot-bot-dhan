@@ -166,9 +166,10 @@ class DeliveryDesk:
         # in memory between polls (cost of a poll, reviewer 4)
         self._hist: dict[str, tuple[tuple[Any, ...], RuleHistory]] = {}
         self._last_eval: dict[str, dt.date | None] = {}
-        self._gap_seen: dict[tuple[int, tuple[Any, ...]], None] = {}
+        self._gap_seen: dict[tuple[int, dt.date | None], None] = {}
         self._told_version = -1
         self._retell_at: dict[tuple[int, str], dt.datetime] = {}
+        self._accepted: set[tuple[int, str]] = set()  # alerts a channel took in this process
         self._rebuilt_on: tuple[Any, ...] | None = None
         self.calls: Counter[str] = Counter()  # join_live, rebuild, untold: for the tests
 
@@ -317,7 +318,10 @@ class DeliveryDesk:
         if hit is not None and hit[0] == sig:
             return hit[1]
         self.calls["join_live"] += 1
-        h = join_live(key, stored, last, live, self.last_bar_at)
+        h = join_live(
+            key, stored, last, live, self.last_bar_at, self.calendar.is_trading_day,
+            self.cfg.special_min_bars,
+        )  # fmt: skip
         self._hist[key] = (sig, h)
         return h
 
@@ -371,8 +375,9 @@ class DeliveryDesk:
         done = self._complete(h, now)
         if t.status == PENDING_ENTRY:
             got = decide(
-                bars, t.signal_date, self.started_at, done, may_miss=True, opening=self._opening
-            )
+                bars, t.signal_date, self.started_at, done, may_miss=True,
+                opening=self._opening, given_at=t.created_at,
+            )  # fmt: skip
             if isinstance(got, Fill):
                 self.book.fill_entry(
                     t.id, got.ts, got.session, entry_fill(got.open_, stock.params), got.late, now
@@ -386,8 +391,14 @@ class DeliveryDesk:
             )  # fmt: skip
             if isinstance(got, Fill):
                 self.book.fill_exit(t.id, got.ts, exit_fill(got.open_, stock.params), got.late, now)
-        seen = (t.id, _frame_key(bars))
+        last_day = (
+            None
+            if bars is None or not len(bars)
+            else pd.Timestamp(bars.index[-1]).tz_convert(IST).date()
+        )
+        seen = (t.id, last_day)  # one look per trade and session: never grows with each bar
         if seen not in self._gap_seen:
+            self._gap_seen = {k: v for k, v in self._gap_seen.items() if k[0] != t.id}
             self._gap_seen[seen] = None
             warning = gap_warning(bars, t.signal_date, self.cfg.gap_warn_pct / 100.0)
             if warning is not None:
@@ -414,10 +425,9 @@ class DeliveryDesk:
         done = self._complete(h, now)
         last = self._evaluated(key)
         days = [d for d in h.days.index if last is None or d > last]
-        if days:
-            self.notes.pop(key, None)  # what this reading finds is noted again below
         complete = [done(d) for d in days]
         todo: list[tuple[dt.date, bool]] = []  # (day, complete)
+        stall: tuple[str, dt.date] | None = None
         for i, d in enumerate(days):
             if complete[i]:
                 todo.append((d, True))
@@ -427,16 +437,36 @@ class DeliveryDesk:
                 if self._past_close(d, now):
                     bar = h.last_bar.get(d)
                     at = bar.strftime("%H:%M") if bar else "none"
-                    self._note(key, f"the session of {d} is incomplete (last bar {at})", d)
+                    stall = (f"the session of {d} is incomplete (last bar {at})", d)
                 break
         if last is None:
             todo = todo[-1:]  # a first start reads the newest completed session only
         todo = todo[-CATCH_UP:]
+        if todo:
+            # a note stays until a reading replaces it (never cleared by today's partial day)
+            self.notes.pop(key, None)
+        if stall is not None:
+            self._note(key, *stall)
         if not todo:
             return
         newest = todo[-1][0]
         for day, whole in todo:
+            if whole and self._nifty_pending(nh, day, now):
+                self._note(key, f"waiting for NIFTY's session of {day}", day)
+                return  # not recorded: read again at the next poll
             self._evaluate_session(now, stock, h, nh, day, whole, day == newest)
+
+    def _nifty_pending(self, nh: RuleHistory, day: dt.date, now: dt.datetime) -> bool:
+        """NIFTY's bar of a calendar session is missing or ends before `last_bar_at` while
+        the clock is within an hour of that session's close: wait for it rather than record
+        "no entry" (round 2, item 7). After that hour the day is read as it is."""
+        if not self.calendar.is_trading_day(day) or day in nh.daily_only:
+            return False
+        bar = nh.last_bar.get(day)
+        if day in set(nh.days.index) and bar is not None and bar >= self.last_bar_at:
+            return False
+        close = self.clock.window_for(day).close_at
+        return now < close + dt.timedelta(minutes=60)
 
     def _past_close(self, day: dt.date, now: dt.datetime) -> bool:
         if day < now.date():
@@ -492,6 +522,9 @@ class DeliveryDesk:
                     day,
                 )
                 continue
+            short = self._short_sessions(dates, t.entry_session, day, h)
+            if short:
+                self.book.warn(t.id, f"session count short by {short}", now)
             r = exit_reading(c, dates.index(t.entry_session), t.entry_paise / 100, len(c) - 1, p)
             exits.append({"trade": t.id, "sessions": r.sessions, "reasons": list(r.reasons)})
             if r.hit:
@@ -519,7 +552,21 @@ class DeliveryDesk:
                     None if newest else "missed: the desk was not running after that close",
                 )
         self.book.record_evaluation(stock.series_key, day, record, now, entry)
-        self._last_eval[stock.series_key] = day
+        if self.book.evaluation(stock.series_key, day) is not None:  # really written
+            self._last_eval[stock.series_key] = day
+
+    def _short_sessions(
+        self, dates: list[dt.date], entry: dt.date, day: dt.date, h: RuleHistory
+    ) -> int:
+        """Calendar sessions from the entry to `day` missing from the stock's bars (in the
+        years the holiday calendar covers): the trade's session count is short by that many."""
+        have = set(dates)
+        n, d = 0, entry
+        while d <= day:
+            if self.calendar.has_year(d.year) and self.calendar.is_trading_day(d) and d not in have:
+                n += 1
+            d += dt.timedelta(days=1)
+        return n
 
     def _note(self, key: str, why: str, day: dt.date | None = None) -> None:
         self.notes[key] = why
@@ -599,22 +646,31 @@ class DeliveryDesk:
             if mark in self._retell_at and self._retell_at[mark] > now:
                 continue
             n = self.notification(t, which, now)
+            key = f"delivery:{n.signal_id}"
+            asks = getattr(self.notifier, "suppresses", None)
+            repeat = bool(asks(key)) if callable(asks) else None
             try:
-                result = self.notifier.send(n, dedup_key=f"delivery:{n.signal_id}")
+                result = self.notifier.send(n, dedup_key=key)
             except Exception:  # noqa: BLE001 - the notifier itself broke: tried at the next poll
                 self.errors += 1
                 broke = True
                 log.exception("delivery: the %s alert of %s could not be sent", which, n.signal_id)
                 continue
-            # told when a channel accepted it, or the repeat window answered (an empty result);
-            # every channel refusing it is tried again after RETELL, not at every poll
-            accepted = isinstance(result, Mapping) and (not result or any(result.values()))
+            # told when a channel accepted it; an empty result is told only when it is the
+            # repeat window answering for a first send that was accepted (round 2, item 3).
+            # A notifier that cannot say (`suppresses` absent) answers {} for "sent" (fakes).
+            # Every channel refusing it is tried again after RETELL, not at every poll.
+            took = isinstance(result, Mapping) and any(result.values())
+            if isinstance(result, Mapping) and not result:
+                took = mark in self._accepted if repeat else repeat is None
+            accepted = took
             if not accepted:
                 self.errors += 1
                 self._retell_at[mark] = now + RETELL
                 log.warning("delivery: no channel took the %s alert of %s", which, n.signal_id)
                 continue
             self._retell_at.pop(mark, None)
+            self._accepted.add(mark)
             self.book.mark_told(t.id, which, now)
         self._told_version = -1 if broke else self.book.version
 

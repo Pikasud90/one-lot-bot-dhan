@@ -53,6 +53,7 @@ class DeliveryCfg:
     settle_minutes: int = 10  # ... and the clock is this long past the session's close
     min_bars: int = 201  # daily bars an entry reads at least (D8; the rule's own 201)
     gap_warn_pct: float = 20.0  # D15: a first bar this far from the previous close is flagged
+    special_min_bars: int = 30  # a non-calendar day is a special session from this many 1m bars
 
 
 @dataclass(frozen=True)
@@ -249,6 +250,7 @@ def _delivery(raw: object) -> DeliveryCfg:
         settle_minutes=int(raw.get("settle_minutes", 10)),
         min_bars=int(raw.get("min_bars", 201)),
         gap_warn_pct=float(raw.get("gap_warn_pct", 20.0)),
+        special_min_bars=int(raw.get("special_min_bars", 30)),
     )
     parse_hhmm(cfg.last_bar_at)  # a bad time is a config error now, not at the close
     return cfg

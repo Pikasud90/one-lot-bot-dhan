@@ -60,6 +60,11 @@ class DedupWindow:
     def reset(self, key: str) -> None:
         self._seen.pop(key, None)
 
+    def holds(self, key: str, now: dt.datetime) -> bool:
+        """Whether `key` would be suppressed now (read-only: nothing is recorded)."""
+        last = self._seen.get(key)
+        return last is not None and (now - last).total_seconds() < self.seconds
+
 
 class Notifier:
     def __init__(
@@ -124,6 +129,11 @@ class Notifier:
             return list(self.channels)
 
     # ── sending ───────────────────────────────────────────────────────────
+    def suppresses(self, dedup_key: str) -> bool:
+        """Whether `send(..., dedup_key)` would be suppressed by the repeat window now, so a
+        caller can tell an empty result for a repeat from one that no channel took."""
+        return self._dedup.holds(dedup_key, now_ist())
+
     def send(self, n: Notification, dedup_key: str | None = None) -> dict[str, bool]:
         """Deliver to every channel that accepts `n`. One failure never blocks the others.
 

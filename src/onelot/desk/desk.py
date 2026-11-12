@@ -25,6 +25,7 @@ import logging
 import math
 import threading
 import uuid
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -557,15 +558,18 @@ class Desk:
             log.exception("delivery: the delivery desk could not be built; it is off")
             return None
 
-    def _top_up_bars(self, keys: list[str]) -> Any:
+    def _top_up_bars(self, keys: list[str], stop: Callable[[], bool] | None = None) -> Any:
         """The delivery top-up (US-067 D8): the incremental one-minute backfill from Dhan for
-        `keys`. Never an order: a read of the broker's history, written to the store."""
-        from ..data.backfill import backfill, choose_provider
+        `keys`, stopped when `stop()` turns true (09:00 IST). Never an order: a read of the
+        broker's history, written to the store. Returns the backfill's result (its errors)."""
+        from ..data import backfill as bf
 
         adapter = self._adapter_getter()
         if adapter is None:
             raise RuntimeError("no Dhan adapter")
-        return backfill(self.engine, choose_provider("dhan", adapter), keys, ["1m"])
+        return bf.backfill(
+            self.engine, bf.choose_provider("dhan", adapter), keys, ["1m"], stop_flag=stop
+        )
 
     def _delivery_history(self, now: dt.datetime) -> None:
         """Outside the desk lock: the delivery rule's stored days and the top-up."""

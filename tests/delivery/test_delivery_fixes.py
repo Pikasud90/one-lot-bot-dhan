@@ -115,6 +115,11 @@ def test_a_missing_nifty_bar_means_no_entry_that_day_and_the_day_is_evaluated(tm
     w = World(tmp_path, dict(FULL, NIFTY=nifty[nifty.index.date != L[3]]))
     w.start(at(L[3], "15:00"))
     w.poll(at(L[3], "15:45"))
+    # round 2, item 7: within an hour of the close the desk waits for NIFTY's bar
+    assert w.desk.book.last_evaluated("SBIN") is None
+    assert w.desk.notes["SBIN"].startswith("waiting for NIFTY")
+    w.poll(at(L[3], "16:31"))  # an hour after the close: read as it is, no entry
+    assert w.desk.book.last_evaluated("SBIN") == L[3]
     w.poll(at(L[4], "15:45"))
     assert w.trades() == {}
     reading = w.desk.book.evaluation("SBIN", L[3])

@@ -4,7 +4,8 @@ The stored days (`desk.history.rule_daily`: built like the research's from the c
 one-minute bars) are joined with the days of the desk's own fine bars. A stored day stands
 where the store has its one-minute bars to at least `last_bar_at`; a live day is used where
 the store lacks the day or has it short (not the first live day, which may begin mid-session).
-A day with a missing or non-positive open or close is left out and noted.
+A day with a missing or non-positive open or close is left out and noted, and so is a day off
+the calendar with fewer than `special_min` one-minute bars (a stray bar, not a Muhurat).
 
 A session t is COMPLETE for a series when the clock is `settle` past the session's close and
 t's last fine bar is at or after `last_bar_at` (15:10 by default: F&O stocks stop continuous
@@ -23,6 +24,7 @@ hole never stops the exit tests of an open trade (lead's rulings after the revie
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -59,10 +61,10 @@ def _by_date(frame: pd.DataFrame) -> pd.DataFrame:
     idx = pd.DatetimeIndex(frame.index)
     if idx.tz is not None:
         idx = idx.tz_convert(IST)
-    out = pd.DataFrame(
-        {"open": frame["open"].to_numpy(float), "close": frame["close"].to_numpy(float)},
-        index=list(idx.date),
-    )
+    cols = {"open": frame["open"].to_numpy(float), "close": frame["close"].to_numpy(float)}
+    if "minutes" in frame.columns:  # one-minute bars per day, when known
+        cols["minutes"] = frame["minutes"].to_numpy(float)
+    out = pd.DataFrame(cols, index=list(idx.date))
     return out[~out.index.duplicated(keep="last")]
 
 
@@ -72,6 +74,8 @@ def join_live(
     stored_last_bar: dict[dt.date, dt.time],
     live_fine: pd.DataFrame | None,
     last_bar_at: dt.time = dt.time(15, 10),
+    is_session: Callable[[dt.date], bool] | None = None,
+    special_min: int = 30,
 ) -> RuleHistory:
     """The stored days with the desk's live days laid on top (see the module docstring).
 
@@ -87,6 +91,8 @@ def join_live(
         fine = clean_intraday(series_key, live_fine)
         idx = pd.DatetimeIndex(fine.index).tz_convert(IST)
         live = _by_date(resample_bars(fine, "1d"))
+        counts = pd.Series(1, index=idx).groupby(idx.date).sum()
+        live["minutes"] = [float(counts.get(d, np.nan)) for d in live.index]
         first = min(idx.date)
         stamps = pd.Series(idx, index=idx).groupby(idx.date).max()
         have = set(days.index)
@@ -110,6 +116,14 @@ def join_live(
         for d, g in zip(days.index, good, strict=True)
         if not g
     }
+    if is_session is not None and "minutes" in days.columns:
+        # a day that is not a calendar session counts as a special session (Muhurat) only
+        # with at least `special_min` one-minute bars: a stray bar is ignored with a note
+        mins = pd.to_numeric(days["minutes"], errors="coerce").to_numpy(float)
+        for i, d in enumerate(days.index):
+            if good[i] and not is_session(d) and np.isfinite(mins[i]) and mins[i] < special_min:
+                good[i] = False
+                bad[d] = f"{int(mins[i])} one-minute bar(s) on a day that is not a session"
     days = days[good]
     daily_only = frozenset(d for d in days.index if d not in last)
     return RuleHistory(days, last, stored_to, daily_only, bad)

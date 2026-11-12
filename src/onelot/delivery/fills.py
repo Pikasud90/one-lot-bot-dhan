@@ -4,6 +4,9 @@ The next session is read from the bars, not the calendar: the first date in the 
 signal date. So a holiday is skipped and a special session (a Muhurat or Budget day) is a
 session, as in the research's daily bars.
 
+Both "start" times below are the later of the process start and the order's own time (an
+order is never filled on a bar that opened before it was given).
+
 - The desk ran at that session's open (its process started at or before the first bar): the
   fill is that bar's open, late only when that bar is more than two minutes after the
   session's opening minute (a feed gap).
@@ -67,10 +70,10 @@ def decide(
     dates = idx.date
     first = int(next(i for i, d in enumerate(dates) if d == s1))
     start = pd.Timestamp(started_at).tz_convert(IST)
-    if given_at is not None and start <= idx[first] < pd.Timestamp(given_at).tz_convert(IST):
-        # the desk ran at that open but the order was given after it (a day read late): the
-        # first bar after the order, late; never an open already past
-        start = pd.Timestamp(given_at).tz_convert(IST)
+    if given_at is not None:
+        # never a bar earlier than the order itself: an order given after the open (a day
+        # read late, a catch-up) fills at the first bar after it, and is late
+        start = max(start, pd.Timestamp(given_at).tz_convert(IST))
     if start <= idx[first]:
         ts = idx[first].to_pydatetime()
         return Fill(ts, s1, float(bars["open"].iloc[first]), _gap(ts, s1, opening))

@@ -54,6 +54,7 @@ delivery:                 # the delivery slots (US-067 pullback)
   settle_minutes: 10      # ... and the clock is 10 minutes past the session's close
   min_bars: 201           # daily bars an entry reads at least (the rule's own minimum)
   gap_warn_pct: 20        # a first bar this far from the previous close: "possible corporate action"
+  special_min_bars: 30    # a day off the calendar counts as a special session (Muhurat) from 30 1m bars
 
 defaults:
   index_strategies:       # 5 index options, long only (BUY CE): passed tuning + choosing, lost the test year

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime as dt
 
+import numpy as np
 import pandas as pd  # type: ignore[import-untyped]
 from sqlalchemy import Engine
 
@@ -74,8 +75,15 @@ def rule_daily(
     clean = clean_intraday(series_key, fine)
     daily = consistent_daily(stored, clean)
     last: dict[dt.date, dt.time] = {}
+    if daily is None:
+        daily = pd.DataFrame()
     if clean is not None and not clean.empty:
         idx = pd.DatetimeIndex(clean.index).tz_convert("Asia/Kolkata")
         stamps = pd.Series(idx, index=idx).groupby(idx.date).max()
         last = {d: ts.time() for d, ts in stamps.items()}
-    return (daily if daily is not None else pd.DataFrame()), last
+        if not daily.empty:  # how many one-minute bars made each day (a stray bar shows)
+            counts = pd.Series(1, index=idx).groupby(idx.date).sum()
+            didx = pd.DatetimeIndex(daily.index)
+            days = (didx.tz_convert("Asia/Kolkata") if didx.tz is not None else didx).date
+            daily = daily.assign(minutes=[float(counts.get(d, np.nan)) for d in days])
+    return daily, last

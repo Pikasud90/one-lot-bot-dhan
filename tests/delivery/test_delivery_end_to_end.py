@@ -228,14 +228,17 @@ def _scoreboard(desk):
 
 def test_a_first_start_after_the_signal_session_raises_it_and_fills_late(world):
     """D1 catch-up: the desk was off at L3's close and starts during L4: L3 is evaluated at
-    start, the alert goes out, and the trade opens late at the first bar after the start."""
+    start, the alert goes out, and the trade opens late at the first bar that opens after the
+    alert (round 2, item 2: never a bar earlier than its alert, so not the 10:30 bar)."""
     start, sent = world
     desk = start(at(L[4], "10:30"))
     poll(desk, at(L[4], "10:31"))
     assert [n.title.split()[0] for n in sent] == ["BUY", "BUY"]
+    assert trades(desk)["SBIN"].status == PENDING_ENTRY  # its bar has not closed yet
+    poll(desk, at(L[4], "10:32"))
     sbin = trades(desk)["SBIN"]
     assert sbin.signal_date == L[3] and sbin.status == OPEN and sbin.entry_late
-    assert sbin.entry_ts == at(L[4], "10:30")
+    assert sbin.entry_ts == at(L[4], "10:31")
 
 
 def test_d3_a_desk_down_for_the_whole_next_session_misses_the_entry(world):
