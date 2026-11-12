@@ -257,6 +257,7 @@ tr.sel{background:var(--bad-bg)}
 .schip.long{background:var(--ok-bg);color:var(--ok);border-color:transparent}
 .schip.short{background:var(--bad-bg);color:var(--bad);border-color:transparent}
 .schip.err{background:var(--warn-bg);color:var(--warn)}
+.schip.paused{opacity:.5}
 .state-badge{position:relative;isolation:isolate;text-align:center;font:800 12px/1 var(--ui);letter-spacing:.1em;padding:7px 6px;color:var(--muted)}
 .state-badge::before{content:"";position:absolute;inset:0;z-index:-1;transform:skew(-12deg);background:var(--panel3)}
 .state-badge.st-BUY{color:#fff} .state-badge.st-BUY::before{background:var(--ok)}

@@ -110,3 +110,19 @@ def test_other_warnings_are_compared_whole(tmp_path):
     longer = f"{L[5]} read from incomplete data, again"
     assert book.warn(t.id, longer, now)  # contains the first, but is another warning
     assert book.get(t.id).warning == f"{L[5]} read from incomplete data; {longer}"
+
+
+# ── 4 and 5: what the page's row chip and unit line read from the card ─────────────────────
+
+
+def test_the_card_carries_the_unit_the_session_limit_and_the_trades_count(tmp_path):
+    w = World(tmp_path)
+    w.start(at(L[3], "15:00"))
+    w.poll(at(L[3], "15:45"))
+    w.start(at(L[4], "09:00"))
+    w.poll(at(L[4], "09:20"))
+    w.poll(at(L[5], "12:00"))
+    card = w.desk.card("SBIN")
+    assert card["unit_inr"] == 10000 and card["max_sessions"] == 30
+    assert card["trade"]["status"] == "OPEN" and card["trade"]["sessions"] == 2
+    assert w.desk.view()["unit_inr"] == 10000

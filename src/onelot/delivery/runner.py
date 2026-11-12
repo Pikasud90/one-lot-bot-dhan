@@ -767,6 +767,7 @@ class DeliveryDesk:
             "top_up": self.top_up_note,
             "errors": self.errors,
             "evidence": next((s.evidence for s in self.stocks.values() if s.evidence), ""),
+            "unit_inr": next((s.params.unit_inr for s in self.stocks.values()), None),
         }
         self._rebuilt_on = sig
 
@@ -802,8 +803,10 @@ class DeliveryDesk:
             r = entry_reading(frame["close"].to_numpy(float), ok, len(frame) - 1, stock.params)
             card["session"], card["reading"] = to.isoformat(), r.as_dict()
         mine = [t for t in active if t.series_key == key]
-        card["trade"] = mine[0].as_dict() if mine else None
         rows = [(t, self._trade_row(t, stock, h, last_price(key))) for t in mine]
+        card["trade"] = rows[0][1] if rows else None  # with "sessions" for the row's chip
+        card["unit_inr"] = stock.params.unit_inr
+        card["max_sessions"] = stock.params.max_sessions
         return card, rows
 
     def _refresh_prices(self, last_price: Callable[[str], float | None]) -> None:

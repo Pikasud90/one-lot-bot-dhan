@@ -20,8 +20,8 @@ from typing import Any
 import pytest
 
 APP_JS = Path(__file__).resolve().parents[2] / "src" / "onelot" / "ui" / "app.js"
-HELPERS = ["fmt", "rup2", "cls", "esc", "kv", "spct", "pbTick", "pbBlock", "dlvRow", "dlvAlert",
-           "dlvHome", "dlvArchive"]  # fmt: skip
+HELPERS = ["fmt", "rup", "rup2", "cls", "esc", "kv", "spct", "pbTick", "pbBlock", "dlvRow",
+           "dlvAlert", "dlvHome", "dlvArchive", "pbChip", "pbUnit"]  # fmt: skip
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 
@@ -104,3 +104,50 @@ def test_the_archive_lists_delivery_alerts_with_their_result():
     assert "closed" in html and "1100.00 (late)" in html and "₹950.50" in html
     assert "missed: the desk was not running" in html
     assert js("dlvArchive(P)", []) == ""
+
+
+# ── round 3: the collapsed stock row and the unit wording ──────────────────────────────────
+
+
+def test_the_row_chip_shows_the_distance_against_what_is_needed():
+    html = js("pbChip(P)", CARD)
+    assert "pullback 1d · 5.3% of 8%" in html and 'class="schip "' in html
+
+
+def test_the_row_chip_is_highlighted_when_the_signal_is_on():
+    card = {**CARD, "reading": {**CARD["reading"], "signal": True}}
+    assert 'class="schip long"' in js("pbChip(P)", card)
+    assert "BUY at the next open" in js("pbChip(P)", card)
+    pending = {**CARD, "trade": {"status": "PENDING_ENTRY"}}
+    assert "BUY at the next open" in js("pbChip(P)", pending)
+
+
+def test_the_row_chip_shows_an_open_trade_and_a_pending_exit():
+    open_ = {**CARD, "trade": {"status": "OPEN", "sessions": 3, "max_sessions": 30}}
+    assert "pullback 1d · open 3 of 30" in js("pbChip(P)", open_)
+    leaving = {**CARD, "trade": {"status": "EXIT_PENDING", "exit_reason": "STOP"}}
+    assert "exit at the next open" in js("pbChip(P)", leaving)
+
+
+def test_the_row_chip_says_no_reading_with_the_note_as_its_title():
+    html = js("pbChip(P)", {**CARD, "reading": None, "note": "only 150 daily bars, 201 needed"})
+    assert "pullback 1d · no reading" in html
+    assert 'title="only 150 daily bars, 201 needed"' in html
+    assert js("pbChip(P)", None) == ""
+
+
+def test_the_unit_line_names_the_delivery_amount_from_the_settings():
+    assert js("pbUnit(P)", {**CARD, "unit_inr": 10000}) == "delivery: shares nearest ₹10,000"
+    assert js("pbUnit(P)", {**CARD, "unit_inr": 25000}) == "delivery: shares nearest ₹25,000"
+
+
+def test_paused_slots_show_dimmed_and_the_pullback_chip_comes_first():
+    source = APP_JS.read_text(encoding="utf-8")
+    line = next(
+        x
+        for x in source.splitlines()
+        if x.strip().startswith("const chips = (r.pullback ? pbChip(")
+    )
+    assert "s.enabled === false" in line and 'class="schip paused" title="paused"' in line
+    css = (APP_JS.parent / "styles.css").read_text(encoding="utf-8")
+    assert ".schip.paused{opacity:.5}" in css
