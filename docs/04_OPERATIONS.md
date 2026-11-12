@@ -89,3 +89,37 @@ current conditions.
 | Monthly | Re-check `config/costs.yaml` against a fresh contract note |
 | Each January | Refresh `config/nse_holidays.yaml` from the NSE circular |
 | Before any config change | Run `python -m onelot.replay` to confirm you have not silently zeroed the signal rate |
+
+## Delivery pullback trades (US-067)
+Since 2026-11-12 the desk runs one rule: the pullback rule on the 18 stocks, as delivery
+trades of about Rs 10,000 carried for days. Every other slot is paused. These are alerts and
+paper trades only: the system never places an order.
+
+- Entry alert: after a session's close, for a stock whose close is above its SMA200, with
+  NIFTY above its SMA200, on the first close 8% or more below its 20-session closing high:
+  "BUY q shares of S at the next open". It comes about 10 minutes after the close (15:40),
+  stays pending until the next session and does not expire after ten minutes.
+- Exit alert: after the first close above the SMA20, after 30 sessions, or after a close 15%
+  below the entry fill: "SELL q shares of S at the next open" with the reason.
+- The paper book fills at the first one-minute bar of the next session: the open plus 0.03%
+  to buy, minus 0.03% to sell. Charges are the delivery charges plus Rs 14.75 depository
+  charge per sale (`config/costs.yaml`).
+- Late: if the desk starts during that session, the fill is the first bar after the start,
+  marked late. Missed: if the desk was off for the whole next session, the entry alert is
+  closed as "missed: the desk was not running" and no trade opens. An exit is never missed:
+  it sells at the first bar after the desk starts, marked late.
+- A restart at any moment resumes where it was: one alert and one trade per stock and signal
+  date, never two. A desk started after a close it missed reads that session at start.
+- A first bar more than 20% from the previous close puts "possible corporate action" on a
+  pending or open trade in that stock. Check the figures by hand.
+- Pause or resume a slot: in `config/desk.yaml` set `enabled: false` (or `true`) on the slot
+  and reload the desk. A paused slot raises no alert; a trade it already opened is still
+  managed to its close; its scoreboard row stays and says "paused".
+- Is the daily history fresh? Home's Delivery block and each stock card say "daily history
+  complete to <date>" and the store's last day. A session counts once its last one-minute bar
+  is at or after 15:10 and the clock is 10 minutes past the close (`delivery:` in
+  `config/desk.yaml`). A short history, a missing session or a day that stops early shows on
+  the card in place of a reading, and no alert is raised until it is fixed.
+- With the Dhan Data API on, the desk tops up the store's one-minute bars once a day outside
+  09:00 to 15:35 when the store is behind (`delivery.top_up`, on by default). Otherwise run a
+  backfill from the Data tab.

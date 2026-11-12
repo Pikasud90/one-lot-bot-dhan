@@ -350,13 +350,14 @@ async function loadAlerts(force) {
     if (latest && latest.desk) renderHomePositions(latest.desk);  // the snapshot in hand still lists them
     return;
   }
+  alerts.delivery = r.delivery_alerts || [];
   alerts.rows = r.signals || []; alerts.scoreboard = r.scoreboard || {}; alerts.paper = r.paper_scoreboard || null; alerts.primary = r.primary_strategies || [];
   const rows = alerts.rows.filter(s => !filt || s.status === filt || (filt === "TAKEN" && s.status === "CLOSED"));
   const pend = rows.filter(s => s.status === "PENDING");
   alerts.rest = rows.filter(s => s.status !== "PENDING");
   const exited = alerts.rows.filter(s => s.exit).length;
   $("alerts-meta").textContent = `${alerts.rows.length} alerts · ${pend.length} pending · ${alerts.rows.filter(s => s.status === "TAKEN" || s.status === "CLOSED").length} taken · ${exited} exited`;
-  $("home-signals").innerHTML = (pend.length ? `<h3>Pending — take it or let it expire · its paper trade is already open</h3>` + pend.map(alertRow).join("") : `<div class="card"><div class="empty-inline"><svg class="mascot sm"><use href="#m-cow"/></svg> No pending alert. The desk is tracking ${latest && latest.desk ? latest.desk.counts.instruments : "the watchlist"} instruments.</div></div>`);
+  $("home-signals").innerHTML = dlvHome(latest && latest.desk ? latest.desk.delivery : null) + (pend.length ? `<h3>Pending — take it or let it expire · its paper trade is already open</h3>` + pend.map(alertRow).join("") : `<div class="card"><div class="empty-inline"><svg class="mascot sm"><use href="#m-cow"/></svg> No pending alert. The desk is tracking ${latest && latest.desk ? latest.desk.counts.instruments : "the watchlist"} instruments.</div></div>`);
   wireAlerts($("home-signals"));
   drawArchive();
   drawScoreboard();
@@ -365,7 +366,7 @@ async function loadAlerts(force) {
 // The archive shows the newest 10; "Load 10 more" adds a page without asking the server again.
 function drawArchive() {
   const rest = alerts.rest, page = rest.slice(0, alerts.shown), left = rest.length - page.length;
-  $("home-archive").innerHTML = page.length ? page.map(alertRow).join("") : `<div class="muted">Nothing archived in this window.</div>`;
+  $("home-archive").innerHTML = dlvArchive(alerts.delivery) + (page.length ? page.map(alertRow).join("") : `<div class="muted">Nothing archived in this window.</div>`);
   wireAlerts($("home-archive"));
   $("home-archive-more").innerHTML = left > 0
     ? `<button class="btn small" id="archive-more">Load ${Math.min(10, left)} more</button><span class="muted">${page.length} of ${rest.length} shown</span>`
@@ -388,7 +389,7 @@ function drawScoreboard() {
   const slot = x => [x.timeframe, market(x)].filter(Boolean).join(" · ");
   const prim = ps.filter(x => x.primary), others = ps.filter(x => !x.primary && x.trades);
   $("home-scoreboard").innerHTML = table([
-    { l: "Strategy", f: x => `<b>${esc(x.strategy)}</b>` + (slot(x) ? ` <span class="muted">${esc(slot(x))}</span>` : "") },
+    { l: "Strategy", f: x => `<b>${esc(x.strategy)}</b>` + (slot(x) ? ` <span class="muted">${esc(slot(x))}</span>` : "") + (x.paused ? ` <span class="muted">· paused</span>` : "") },
     { l: "Trades", n: 1, k: "trades" },
     { l: "Win %", n: 1, f: x => x.win_rate != null ? pct(x.win_rate) : "–" },
     { l: "Net ₹", n: 1, f: x => esc(inr(x.net)), c: x => x.net == null ? "" : cls(Number(x.net)) },
@@ -779,12 +780,20 @@ const trendBlock = (t, price) => { const rows = trendRows(t), v = trendVerdict(t
 const slotTrail = (s) => { const t = s && s.trail, p = (s && s.params) || {}; return t ? `${esc(t.timeframe)} line` : Number(p.trail_atr_mult) > 0 ? `ATR × ${esc(p.trail_atr_mult)}` : "–"; };
 // Under that table, for a slot that trails along its own line: where the line lets a stop stand now, for the sides the slot trades. `kind` INDEX names the sides CE / PE.
 const slotTrailNote = (s, kind) => { const t = s && s.trail, p = (s && s.params) || {}; if (!t) return ""; const side = (k, word) => p["allow_" + k] === false ? "" : t[k] != null ? ` · ${word} stop level now <b>${fmt(t[k])}</b>` : ` · no ${word} stop level now (the line is on the other side)`; return `<div class="hint"><b>${esc(s.name)} ${esc(s.timeframe)}</b> trails its stop along the ${esc(t.timeframe)} Supertrend line${side("long", kind === "INDEX" ? "CE" : "long")}${side("short", kind === "INDEX" ? "PE" : "short")}</div>`; };
+// ── US-067: the pullback delivery trades (alerts and paper only; the system never places an order) ──
+const pbTick = (ok) => ok ? `<span class="pos">yes</span>` : `<span class="neg">no</span>`;
+const pbBlock = (pb) => { if (!pb || typeof pb !== "object") return ""; const r = pb.reading, t = pb.trade, hist = pb.history_to ? `daily history complete to ${esc(pb.history_to)}` : "no complete daily history"; const body = r ? `${kv("Session", esc(pb.session))}${kv("Below the 20-session closing high", `${fmt(r.below_high_pct, 2)}% of ${fmt(r.needed_pct, 0)}% needed`, r.deep ? "pos" : "")}${kv("Close above SMA200", `${pbTick(r.above_sma200)} (${fmt(r.close)} vs ${fmt(r.sma200)})`)}${kv("NIFTY above its SMA200", pbTick(r.nifty_above_sma200))}${kv("Signal", r.signal ? `<b class="pos">BUY at the next open</b>` : esc(r.why))}` : ""; return `<h4>Pullback (delivery, daily)</h4>${body}${t ? `<div class="hint">${esc(String(t.status).replace(/_/g, " ").toLowerCase())}: ${esc(t.qty)} shares, signal ${esc(t.signal_date)}${t.warning ? ` · <span class="warn">${esc(t.warning)}</span>` : ""}</div>` : ""}${pb.note ? `<div class="hint warn">${esc(pb.note)}</div>` : ""}<div class="hint">${hist}${pb.stored_to ? ` · store to ${esc(pb.stored_to)}` : ""}</div>${pb.evidence ? `<div class="hint">${esc(pb.evidence)}</div>` : ""}`; };
+const dlvRow = (t) => `<tr><td><b>${esc(t.label || t.series_key)}</b> <span class="dim">${esc(t.qty)} sh · signal ${esc(t.signal_date)}</span>${t.warning ? `<div class="warn">${esc(t.warning)}</div>` : ""}</td> <td>${esc(String(t.status).replace(/_/g, " ").toLowerCase())}${t.entry_late ? " (late)" : ""}</td> <td class="n">${fmt(t.entry)}</td> <td class="n">${fmt(t.last)}</td> <td class="n ${cls(t.unrealised)}">${rup2(t.unrealised)} <span class="dim">${spct(t.unrealised_pct)}</span></td> <td class="n">${t.sessions == null ? "–" : `${esc(t.sessions)} of ${esc(t.max_sessions)}`}</td> <td class="n">${fmt(t.sma_exit)}</td> <td class="n">${fmt(t.stop)}</td></tr>`;
+const dlvAlert = (t) => `<div class="card"><b>${esc(t.status === "EXIT_PENDING" ? "SELL" : "BUY")} ${esc(t.qty)} ${esc(t.label || t.series_key)}</b> <span class="dim">pullback 1d · delivery · ${esc(t.status === "EXIT_PENDING" ? `exit signal ${t.exit_signal_date}` : `signal ${t.signal_date}`)}</span><div class="hint">${esc(t.alert || "")}</div>${t.warning ? `<div class="hint warn">${esc(t.warning)}</div>` : ""}</div>`;
+const dlvHome = (d) => { if (!d || typeof d !== "object") return ""; const pend = Array.isArray(d.pending) ? d.pending : [], open = Array.isArray(d.open) ? d.open : []; const head = `<h3>Delivery (pullback) <small class="muted">${d.history_to ? `daily history complete to ${esc(d.history_to)}` : "daily history not complete"}${(d.stale || []).length ? ` · <span class="warn">not fresh: ${esc(d.stale.join(", "))}</span>` : ""}${d.top_up ? ` · ${esc(d.top_up)}` : ""}</small></h3>`; const table = open.length ? `<div class="scroll"><table><thead><tr><th>Stock</th> <th>Status</th> <th class="n">Entry</th> <th class="n">Last</th> <th class="n">Unrealised</th> <th class="n">Sessions</th> <th class="n" title="a close above this exits">SMA20 exit</th> <th class="n" title="a close at or below this exits">Stop</th></tr></thead><tbody>${open.map(dlvRow).join("")}</tbody></table></div>` : `<div class="muted">No open delivery trade.</div>`; return head + pend.map(dlvAlert).join("") + table; };
+const dlvArchive = (list) => !Array.isArray(list) || !list.length ? "" : `<h4>Delivery alerts</h4><div class="scroll"><table><thead><tr><th>Stock</th> <th>Signal</th> <th>Status</th> <th class="n">Entry</th> <th class="n">Exit</th> <th>Reason</th> <th class="n">Net</th></tr></thead><tbody>${list.map((t) => `<tr><td><b>${esc(t.label || t.series_key)}</b> <span class="dim">${esc(t.qty)} sh</span></td> <td>${esc(t.signal_date)}</td> <td>${esc(String(t.status).replace(/_/g, " ").toLowerCase())}${t.note ? ` <span class="dim">${esc(t.note)}</span>` : ""}</td> <td class="n">${fmt(t.entry)}${t.entry_late ? " (late)" : ""}</td> <td class="n">${fmt(t.exit)}${t.exit_late ? " (late)" : ""}</td> <td>${esc(t.exit_reason || "–")}</td> <td class="n ${cls(t.net)}">${rup2(t.net)}${t.net_pct == null ? "" : ` <span class="dim">${spct(t.net_pct)}</span>`}</td></tr>`).join("")}</tbody></table></div>`;
 function accRow(r, isOpen) {
   const L = r.last || {}, R = r.regime || {}, H = r.health || {}, K = r.risk || {};
   const chips = (r.strategies || []).map(s => `<span class="schip ${s.verdict !== "none" ? s.verdict : ""} ${s.error ? "err" : ""}" title="${esc(s.reason || "")}">${esc(s.name)}@${esc(s.timeframe)}</span>`).join("");
   const risk = (latest && latest.risk) || {}, LM = risk.limits || {};
   const body = `
     ${trendBlock(r.trend, L.price)}
+    ${r.kind === "STOCK" ? pbBlock(r.pullback) : ""}
     <div class="grid4">
       <div><h4>Market</h4>${kv("Last", fmt(L.price))}${kv("Day change", spct(L.change_pct), cls(L.change_pct))}${kv("Prev close", fmt(L.prev_close))}
         ${kv("Last bar", hhmm(L.bar_ts))}${kv("Tracked as", esc(r.tracked))}${kv("Unit", esc(r.unit))}${r.note ? `<div class="hint">${esc(r.note)}</div>` : ""}</div>
