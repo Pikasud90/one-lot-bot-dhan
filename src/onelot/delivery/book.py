@@ -80,7 +80,7 @@ class DeliveryTrade:
     plan: dict[str, Any]
 
     @classmethod
-    def from_row(cls, r: Mapping[str, Any]) -> DeliveryTrade:
+    def from_row(cls, r: Mapping[Any, Any]) -> DeliveryTrade:
         def day(v: object) -> dt.date | None:
             return dt.date.fromisoformat(str(v)) if v else None
 
@@ -265,7 +265,7 @@ class DeliveryBook:
                 )
                 if entry is None:
                     return None
-                new_id = conn.execute(
+                key = conn.execute(
                     delivery_trades.insert().values(
                         series_key=series_key,
                         instrument_key=entry.instrument_key,
@@ -282,10 +282,11 @@ class DeliveryBook:
                         plan=dict(entry.plan),
                         updated_at=now,
                     )
-                ).inserted_primary_key[0]
+                ).inserted_primary_key
+                new_id = int(key[0]) if key is not None else None
         except IntegrityError:
             return None  # evaluated already (another poll or desk): nothing written twice
-        return self.get(int(new_id))
+        return None if new_id is None else self.get(new_id)
 
     def _cas(self, trade_id: int, expected: Iterable[str], now: dt.datetime, **values: Any) -> bool:
         with self.engine.begin() as conn:

@@ -48,6 +48,13 @@ primary_strategies: [pullback, supertrend_vol, supertrend_adx, supertrend_mtf]
 option_expiry: monthly    # monthly (the Lab's contract) | nearest (the weekly where one exists)
 option_roll_days: 3       # a monthly contract with fewer days left than this is skipped
 
+delivery:                 # the delivery slots (US-067 pullback)
+  top_up: true            # top the store's 1m bars up from Dhan (Data API on, outside 09:00 to 15:35)
+  last_bar_at: "15:10"    # a session is complete once its last 1m bar is at or after this ...
+  settle_minutes: 10      # ... and the clock is 10 minutes past the session's close
+  min_bars: 221           # daily bars the rule reads at least
+  gap_warn_pct: 20        # a first bar this far from the previous close: "possible corporate action"
+
 defaults:
   index_strategies:       # 5 index options, long only (BUY CE): passed tuning + choosing, lost the test year
     - name: supertrend_vol

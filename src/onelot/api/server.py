@@ -204,13 +204,21 @@ def _paper_scoreboard(desk: object) -> list[dict[str, Any]] | None:
     from ..paper.view import slot_scoreboard_view
 
     book = getattr(desk, "paper", None)
-    if book is None:
+    delivery = getattr(desk, "delivery", None)
+    if book is None and delivery is None:
         return None
     try:
-        totals = PaperLedger(book.engine).by_slot()
+        totals = PaperLedger(book.engine).by_slot() if book is not None else {}
         opened = Counter(
-            Slot(str(t.strategy), str(t.timeframe), str(t.kind)) for t in book.open_trades()
+            Slot(str(t.strategy), str(t.timeframe), str(t.kind))
+            for t in (book.open_trades() if book is not None else [])
         )
+        if delivery is not None:  # US-067: the delivery pullback trades, a slot of their own
+            for slot, row in delivery.book.by_slot().items():
+                totals[slot] = row
+            opened[Slot(delivery.book.strategy, delivery.book.timeframe, "STOCK")] = (
+                delivery.book.open_count()
+            )
     except (SQLAlchemyError, OSError) as exc:
         log.warning("the paper scoreboard could not be read: %s", type(exc).__name__)
         return None

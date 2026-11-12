@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import yaml
 
+from ..clock import parse_hhmm
 from ..settings import PROJECT_ROOT
 
 if TYPE_CHECKING:
@@ -44,6 +45,17 @@ class DeskInstrumentCfg:
 
 
 @dataclass(frozen=True)
+class DeliveryCfg:
+    """desk.yaml `delivery:` (US-067): how the delivery slots read their days and top them up."""
+
+    top_up: bool = True  # top the store's one-minute bars up from Dhan outside market hours
+    last_bar_at: str = "15:10"  # a session is complete once its last fine bar is at/after this
+    settle_minutes: int = 10  # ... and the clock is this long past the session's close
+    min_bars: int = 221  # daily bars the rule reads at least (D8)
+    gap_warn_pct: float = 20.0  # D15: a first bar this far from the previous close is flagged
+
+
+@dataclass(frozen=True)
 class DeskConfig:
     poll_seconds: int = 60
     history_days: int = 15
@@ -64,6 +76,7 @@ class DeskConfig:
     # "nearest" = the first listed expiry (a weekly where one exists).
     option_expiry: str = "monthly"
     option_roll_days: int = 3
+    delivery: DeliveryCfg = field(default_factory=DeliveryCfg)
 
     def _owner_order(self) -> tuple[str, ...]:
         """desk.yaml `primary_strategies` in the owner's order, then every other configured
@@ -216,7 +229,29 @@ def load_desk_config(path: str | Path | None = None) -> DeskConfig:
         tuple(dict.fromkeys(str(n) for n in raw.get("primary_strategies") or ())),
         _expiry_mode(raw.get("option_expiry", "monthly")),
         int(raw.get("option_roll_days", 3)),
+        _delivery(raw.get("delivery")),
     )
+
+
+def _delivery(raw: object) -> DeliveryCfg:
+    """desk.yaml `delivery:`; an unknown key is an error, never silently ignored."""
+    if raw is None:
+        return DeliveryCfg()
+    if not isinstance(raw, dict):
+        raise ValueError(f"desk.yaml delivery must be a mapping, not {raw!r}")
+    known = {f.name for f in fields(DeliveryCfg)}
+    extra = sorted(set(raw) - known)
+    if extra:
+        raise ValueError(f"desk.yaml delivery: unknown key(s) {extra}")
+    cfg = DeliveryCfg(
+        top_up=_flag(raw.get("top_up", True), "delivery.top_up"),
+        last_bar_at=str(raw.get("last_bar_at", "15:10")),
+        settle_minutes=int(raw.get("settle_minutes", 10)),
+        min_bars=int(raw.get("min_bars", 221)),
+        gap_warn_pct=float(raw.get("gap_warn_pct", 20.0)),
+    )
+    parse_hhmm(cfg.last_bar_at)  # a bad time is a config error now, not at the close
+    return cfg
 
 
 def _expiry_mode(value: object) -> str:

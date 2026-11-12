@@ -124,6 +124,10 @@ def trade_values(
 def unit_qty(kind: str, eco: Mapping[str, Any], spec: InstrumentSpec | None, alert_id: str) -> int:
     """One share for a stock; one lot of the alerted option for an index. Never sized.
 
+    The intraday paper book only. The owner's decision of 2026-11-12 (US-067) changed the unit
+    on purpose for the pullback DELIVERY trades alone: they buy the number of shares nearest
+    Rs 10,000 (`onelot.delivery.rule.quantity`) in their own book; this stays one unit.
+
     The alerted option's lot is the unit (Manager decision 12). A lot that disagrees with
     spec.lot_size (an exchange lot revision the specs missed) is kept and logged.
     """

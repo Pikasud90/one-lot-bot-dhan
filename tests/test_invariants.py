@@ -157,6 +157,16 @@ class TestDefaults:
     def test_one_lot_is_the_shipped_rule(self, cfg):
         assert cfg.risk.lots_per_trade == 1
 
+    def test_only_delivery_trades_are_sized_to_the_unit(self):
+        """US-067 D10: the owner's decision of 2026-11-12 changed the one-unit rule ON PURPOSE
+        for the pullback delivery trades only (the shares nearest Rs 10,000). The intraday
+        paper book still trades one share or one option lot, whatever the price."""
+        from onelot.delivery.rule import quantity
+        from onelot.paper.alert import unit_qty
+
+        assert quantity(1017.5, 10000) == 10 and quantity(15000.0, 10000) == 1
+        assert unit_qty("STOCK", {"qty": 10}, None, "A1") == 1
+
     def test_risk_limits_are_absolute_rupees(self, cfg):
         """Rupee limits mean the engine never needs the account size."""
         assert cfg.risk.daily_loss_limit_inr > 0

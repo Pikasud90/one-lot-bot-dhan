@@ -44,3 +44,38 @@ def daily_history(
     stored = _read_bars(engine, series_key, "1d", start=at - pd.Timedelta(days=DAILY_DAYS), end=at)
     daily = consistent_daily(stored, clean_intraday(series_key, fine))
     return daily if daily is not None else pd.DataFrame()
+
+
+#: calendar days of stored one-minute bars the pullback rule's days are built from (US-067):
+#: about 245 sessions, so the last 221 days are derived from one-minute bars wherever the
+#: store has them, exactly as the research's `DataCache` built them
+RULE_FINE_DAYS = 365
+#: calendar days of stored daily bars read as the warm-up before them
+RULE_DAILY_DAYS = 600
+
+
+def rule_daily(
+    engine: Engine,
+    series_key: str,
+    now: dt.datetime,
+    fine_days: int = RULE_FINE_DAYS,
+    daily_days: int = RULE_DAILY_DAYS,
+) -> tuple[pd.DataFrame, dict[dt.date, dt.time]]:
+    """The pullback rule's daily bars of `series_key` up to `now` from the store, and the time
+    of each derived day's last one-minute bar (the freshness test reads it). Read-only.
+
+    The same construction as `daily_history` (and the Lab's `DataCache`) with a longer
+    one-minute window; the trend ladder's `daily_history` is unchanged."""
+    at = pd.Timestamp(now)
+    fine = _read_bars(
+        engine, series_key, FINE_RESOLUTION, start=at - pd.Timedelta(days=fine_days), end=at
+    )
+    stored = _read_bars(engine, series_key, "1d", start=at - pd.Timedelta(days=daily_days), end=at)
+    clean = clean_intraday(series_key, fine)
+    daily = consistent_daily(stored, clean)
+    last: dict[dt.date, dt.time] = {}
+    if clean is not None and not clean.empty:
+        idx = pd.DatetimeIndex(clean.index).tz_convert("Asia/Kolkata")
+        stamps = pd.Series(idx, index=idx).groupby(idx.date).max()
+        last = {d: ts.time() for d, ts in stamps.items()}
+    return (daily if daily is not None else pd.DataFrame()), last

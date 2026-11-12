@@ -253,6 +253,10 @@ class Desk:
         # gave nothing, and the series whose failure is already in the log
         self._history_retry: dict[str, dt.datetime] = {}
         self._history_failed: set[str] = set()
+        # when this process started: a delivery fill at an open the desk did not see is late,
+        # or missed (US-067 D3)
+        self.started_at = now_ist()
+        self.delivery = self._build_delivery()
         self._recover()
         self._restore_slot_counters(now_ist())
         self._tell_paper_tracked()
@@ -472,6 +476,7 @@ class Desk:
         now = now_ist()
         self._maybe_switch_source()
         self._load_daily_history(now)
+        self._delivery_history(now)
         specs = self._all_specs()
         since = {k: t.bars.index[-1] for k, t in self.trackers.items() if not t.bars.empty}
         got = self.source.fetch(specs, self.cfg.history_days, since)
@@ -509,12 +514,89 @@ class Desk:
             # Every poll, even with the market shut: a waiting paper trade must still be
             # able to close NO_FILL once its data reaches the session end.
             self._step_paper(now)
+            self._step_delivery(now)
             self._audit_archive(now)
             self._rebuild_snapshot(now, window)
         try:
             self.pulse.maybe_record(now, market_ok)
         except Exception:  # noqa: BLE001
             log.exception("pulse failed")
+
+    # ── the delivery pullback trades (US-067) ──────────────────────────────
+    def _build_delivery(self) -> Any:
+        """The delivery desk of the configured delivery slots, or None without one. A delivery
+        desk that cannot be built is logged and the rest of the desk runs without it."""
+        if not self.cfg.delivery_slots():
+            return None
+        try:
+            from ..clock import TradingCalendar
+            from ..config import CostConfig
+            from ..delivery.runner import DeliveryDesk
+
+            root = self.app_cfg.project_root
+            calendar = self.calendar or TradingCalendar.from_yaml(
+                root / "config" / "nse_holidays.yaml"
+            )
+            names = {
+                k: (t.series.label, str(t.series.extra.get("trading_symbol") or t.series.key))
+                for k, t in self.trackers.items()
+            }
+            return DeliveryDesk(
+                self.engine,
+                self.cfg,
+                CostConfig.load(root / "config" / "costs.yaml"),
+                self.app_cfg.session,
+                calendar,
+                self.notifier,
+                self.started_at,
+                names=names,
+                top_up=self._top_up_bars,
+                data_api_active=lambda: bool(self._data_api_active()),
+            )
+        except Exception:  # noqa: BLE001 - the intraday desk runs whatever this does
+            log.exception("delivery: the delivery desk could not be built; it is off")
+            return None
+
+    def _top_up_bars(self, keys: list[str]) -> Any:
+        """The delivery top-up (US-067 D8): the incremental one-minute backfill from Dhan for
+        `keys`. Never an order: a read of the broker's history, written to the store."""
+        from ..data.backfill import backfill, choose_provider
+
+        adapter = self._adapter_getter()
+        if adapter is None:
+            raise RuntimeError("no Dhan adapter")
+        return backfill(self.engine, choose_provider("dhan", adapter), keys, ["1m"])
+
+    def _delivery_history(self, now: dt.datetime) -> None:
+        """Outside the desk lock: the delivery rule's stored days and the top-up."""
+        if self.delivery is None:
+            return
+        try:
+            self.delivery.load_history(now)
+            self.delivery.maybe_top_up(now)
+        except Exception:  # noqa: BLE001 - never stops the poll
+            self.hook_errors += 1
+            log.exception("delivery: loading the daily history failed")
+
+    def _step_delivery(self, now: dt.datetime) -> None:
+        if self.delivery is None:
+            return
+
+        def bars(key: str) -> pd.DataFrame | None:
+            t = self.trackers.get(key)
+            if t is not None:
+                return t.bars
+            return self.context_bars.get(key)
+
+        def last(key: str) -> float | None:
+            t = self.trackers.get(key)
+            return t.last_price() if t is not None else None
+
+        try:
+            self.delivery.on_poll(now, bars, last)
+        except Exception:  # noqa: BLE001 - the poll carries on whatever this does
+            self.hook_errors += 1
+            log.exception("delivery: the poll step failed")
 
     def _active_slots(self) -> dict[str, set[tuple[str, str]]]:
         """series key -> (strategy, timeframe) of every trade still active on it: a paper trade
@@ -1646,11 +1728,18 @@ class Desk:
     def signals_view(self, days: int = 7) -> dict:
         cutoff = now_ist() - dt.timedelta(days=days)
         rows = [s for s in self.archive if dt.datetime.fromisoformat(s["created_at"]) >= cutoff]
+        delivery: list[dict] = []
+        if self.delivery is not None:
+            try:
+                delivery = self.delivery.alerts(cutoff)
+            except Exception:  # noqa: BLE001 - the intraday alerts still answer
+                log.exception("delivery: the alert archive could not be read")
         return {
             "signals": rows,
             "scoreboard": self.scoreboard,
             "days": days,
             "pending": [s["id"] for s in self.signals.values()],
+            "delivery_alerts": delivery,
         }
 
     def bars_view(self, key: str, timeframe: str | None = None, n: int = 300) -> dict:
@@ -2085,6 +2174,8 @@ class Desk:
         pending = {s["instrument_key"]: s for s in self.signals.values()}
         open_by = {p["instrument_key"]: p for p in self.positions.values()}
         for d in trackers:
+            if self.delivery is not None and d["kind"] == "STOCK":
+                d["pullback"] = self.delivery.card(d["key"])  # US-067 D11, D14
             d["signal"] = pending.get(d["tracked"])
             d["position"] = open_by.get(d["tracked"])
             d["state"] = (
@@ -2159,6 +2250,8 @@ class Desk:
             "stocks": [d for d in trackers if d["kind"] == "STOCK"],
             "risk": risk,
             "paper": paper,
+            # US-067: pending delivery alerts and carried delivery trades (None: no slot)
+            "delivery": self.delivery.view() if self.delivery is not None else None,
             "scoreboard": self.scoreboard,
             "counts": {
                 "instruments": len(trackers),
