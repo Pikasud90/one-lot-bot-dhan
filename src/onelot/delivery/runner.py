@@ -170,6 +170,9 @@ class DeliveryDesk:
         self._told_version = -1
         self._retell_at: dict[tuple[int, str], dt.datetime] = {}
         self._accepted: set[tuple[int, str]] = set()  # alerts a channel took in this process
+        # the exits step's result per (stock, session), the latest only: run once each
+        self._exits_done: dict[tuple[str, dt.date], list[dict[str, Any]]] = {}
+        self._record_warned: set[tuple[str, dt.date]] = set()
         self._rebuilt_on: tuple[Any, ...] | None = None
         self.calls: Counter[str] = Counter()  # join_live, rebuild, untold: for the tests
 
@@ -451,10 +454,12 @@ class DeliveryDesk:
             return
         newest = todo[-1][0]
         for day, whole in todo:
+            # exits read only the stock's own bars: never held back by NIFTY (round 3, item 1)
+            exits = self._exits_step(now, stock, h, day, whole)
             if whole and self._nifty_pending(nh, day, now):
                 self._note(key, f"waiting for NIFTY's session of {day}", day)
-                return  # not recorded: read again at the next poll
-            self._evaluate_session(now, stock, h, nh, day, whole, day == newest)
+                return  # the entry step waits; not recorded: read again at the next poll
+            self._entry_step(now, stock, h, nh, day, whole, day == newest, exits)
 
     def _nifty_pending(self, nh: RuleHistory, day: dt.date, now: dt.datetime) -> bool:
         """NIFTY's bar of a calendar session is missing or ends before `last_bar_at` while
@@ -490,16 +495,14 @@ class DeliveryDesk:
                 self._note(stock.series_key, f"bar of {bad[-1]} left out: {h.bad[bad[-1]]}", day)
         return why
 
-    def _evaluate_session(
-        self,
-        now: dt.datetime,
-        stock: Stock,
-        h: RuleHistory,
-        nh: RuleHistory,
-        day: dt.date,
-        whole: bool,
-        newest: bool,
-    ) -> None:
+    def _exits_step(
+        self, now: dt.datetime, stock: Stock, h: RuleHistory, day: dt.date, whole: bool
+    ) -> list[dict[str, Any]]:
+        """R3 on the close of `day` for the stock's open trades, once per (stock, session):
+        a repeat (the entry step waiting for NIFTY) answers what the first run found."""
+        mark = (stock.series_key, day)
+        if mark in self._exits_done:
+            return self._exits_done[mark]
         p = stock.params
         frame = h.upto(day)
         dates = list(frame.index)
@@ -529,6 +532,27 @@ class DeliveryDesk:
             exits.append({"trade": t.id, "sessions": r.sessions, "reasons": list(r.reasons)})
             if r.hit:
                 self.book.signal_exit(t.id, day, r.reasons, r.sessions, now)
+        self._exits_done = {k: v for k, v in self._exits_done.items() if k[0] != mark[0]}
+        self._exits_done[mark] = exits
+        return exits
+
+    def _entry_step(
+        self,
+        now: dt.datetime,
+        stock: Stock,
+        h: RuleHistory,
+        nh: RuleHistory,
+        day: dt.date,
+        whole: bool,
+        newest: bool,
+        exits: list[dict[str, Any]],
+    ) -> None:
+        """R1 on the close of `day`, then the session's record (it holds the exits too)."""
+        p = stock.params
+        frame = h.upto(day)
+        dates = list(frame.index)
+        c = frame["close"].to_numpy(float)
+        partial = None if whole else f"{day.isoformat()} read from incomplete data"
         entry = None
         record: dict[str, Any] = {"session": day.isoformat(), "exits": exits, "whole": whole}
         why = partial or self._entry_problem(stock, h, nh, day, now)
@@ -554,6 +578,9 @@ class DeliveryDesk:
         self.book.record_evaluation(stock.series_key, day, record, now, entry)
         if self.book.evaluation(stock.series_key, day) is not None:  # really written
             self._last_eval[stock.series_key] = day
+        elif (stock.series_key, day) not in self._record_warned:  # once per (stock, session)
+            self._record_warned.add((stock.series_key, day))
+            log.warning("delivery: %s %s could not be recorded", stock.series_key, day)
 
     def _short_sessions(
         self, dates: list[dt.date], entry: dt.date, day: dt.date, h: RuleHistory

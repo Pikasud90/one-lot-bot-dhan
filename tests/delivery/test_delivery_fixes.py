@@ -150,7 +150,8 @@ def test_one_stock_failing_never_stops_another_stocks_fill_and_evaluation(tmp_pa
     w.poll(at(L[3], "15:45"))  # both entries raised
     w.start(at(L[4], "09:00"))
     desk = w.desk
-    real_fill, real_eval = desk._fill_one, desk._evaluate_session
+    # round 3 split the session's reading into `_exits_step` and `_entry_step`
+    real_fill, real_eval = desk._fill_one, desk._exits_step
 
     def fill(now, t, hist, bars):
         if t.series_key == "SBIN":
@@ -163,7 +164,7 @@ def test_one_stock_failing_never_stops_another_stocks_fill_and_evaluation(tmp_pa
         return real_eval(now, stock, *a, **k)
 
     monkeypatch.setattr(desk, "_fill_one", fill)
-    monkeypatch.setattr(desk, "_evaluate_session", evaluate)
+    monkeypatch.setattr(desk, "_exits_step", evaluate)
     for when in (at(L[4], "09:20"), at(L[4], "15:45"), at(L[5], "15:45")):
         w.poll(when)
     trades = w.trades()

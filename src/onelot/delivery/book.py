@@ -35,6 +35,8 @@ PENDING_ENTRY, OPEN, EXIT_PENDING, CLOSED, MISSED = (
     "MISSED",
 )
 ACTIVE = (PENDING_ENTRY, OPEN, EXIT_PENDING)
+SEP = "; "  # between the warnings of one trade
+SHORT = "session count short by "  # a newer count replaces the older one
 
 
 def _ist(v: dt.datetime | None) -> dt.datetime | None:
@@ -297,8 +299,9 @@ class DeliveryBook:
                 new_id = int(key[0]) if key is not None else None
         except IntegrityError as exc:
             self._changed()
-            if self.evaluation(series_key, session) is None:  # not the duplicate: say so
-                log.warning("delivery: %s %s could not be recorded: %s", series_key, session, exc)
+            if self.evaluation(series_key, session) is None:  # not the duplicate
+                # the desk says so once per (stock, session); here only for a debug trace
+                log.debug("delivery: %s %s could not be recorded: %s", series_key, session, exc)
             return None  # evaluated already (another poll or desk): nothing written twice
         self._changed()
         return None if new_id is None else self.get(new_id)
@@ -393,13 +396,18 @@ class DeliveryBook:
         )
 
     def warn(self, trade_id: int, warning: str, now: dt.datetime) -> bool:
-        """A visible warning on an active trade (D15, and "<date> read from incomplete data"):
-        each different warning is added once; the same one again changes nothing."""
+        """A visible warning on an active trade (D15, "<date> read from incomplete data",
+        "session count short by N"): each different warning is added once, compared whole;
+        a newer "session count short by N" replaces the older one."""
         t = self.get(trade_id)
-        if t is None or t.status not in ACTIVE or warning in (t.warning or ""):
+        if t is None or t.status not in ACTIVE:
             return False
-        text = warning if not t.warning else f"{t.warning}; {warning}"
-        return self._cas(trade_id, ACTIVE, now, warning=text)
+        parts = [w for w in (t.warning or "").split(SEP) if w]
+        if warning in parts:
+            return False
+        if warning.startswith(SHORT):
+            parts = [w for w in parts if not w.startswith(SHORT)]
+        return self._cas(trade_id, ACTIVE, now, warning=SEP.join([*parts, warning]))
 
     # ── the scoreboard ────────────────────────────────────────────────────
     def by_slot(self) -> dict[Slot, StrategyTotals]:
