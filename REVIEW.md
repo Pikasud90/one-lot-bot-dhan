@@ -50,10 +50,10 @@ written on 11 November 2026; search for the heading if the file has changed sinc
 | 13. Tests | 1912 |
 | 14. The work plan | 2039 |
 | 15. Decisions only the owner can make | 2813 |
-| Appendix A. Research outputs of 11 November 2026 | 3056 |
-| Appendix B. Interface and API measurements | 3090 |
-| Appendix C. Sources | 3193 |
-| Appendix D. Index of findings | 3270 |
+| Appendix A. Research outputs of 11 November 2026 | 3064 |
+| Appendix B. Interface and API measurements | 3098 |
+| Appendix C. Sources | 3201 |
+| Appendix D. Index of findings | 3278 |
 
 **Severity.** P0: the app shows or uses something wrong today in a way that can mislead a trading
 decision. P1: must be fixed before the paper test can be trusted or the app can run unattended.
@@ -2827,6 +2827,14 @@ since then come first; the questions below them are kept as written.
   intraday options. The search of 12 November is in
   `docs/research/ALPHA_SEARCH_2026-11-12.md`: no intraday option rule was found, and one
   stock rule (a pullback in an uptrend) is the candidate for the paper test.
+- **Built on 12 November (the board's story 067).** The pullback rule runs in the paper
+  test as delivery stock trades of about ₹10,000 (the number of shares nearest that
+  amount, by the owner's decision): a rule read on daily closes, paper trades carried over
+  sessions and restarts, and every other slot paused with the new slot key
+  `enabled: false`. Its contract and design are the two files numbered 067 in
+  `.agile/stories/`; the operator notes are in `docs/04_OPERATIONS.md`. It replaces the
+  backlog's story on stock carry (section 14.9). Every strategy tested so far, with the
+  figures that ruled it out, is listed in `docs/research/STRATEGIES_TESTED_2026-11-12.md`.
 
 Each question gives the options, what each one changes and
 a recommendation with its reason. A story that depends on an answer names the question in its
