@@ -162,6 +162,7 @@ def my_trades(o, c, ok, p=P):
     out = []
     t = 200
     while t < n - 1:
+
         def deep(i):
             return c[i] <= 0.92 * max(c[i - 19 : i + 1])
 
@@ -327,11 +328,32 @@ def test_book_dp_only_on_closed_trades_and_one_row_per_identity(costs, tmp_path)
     # a duplicate identity cannot be inserted even bypassing the evaluation table
     with eng.begin() as conn:
         with pytest.raises(Exception):
-            conn.execute(delivery_trades.insert().values(**{
-                k: getattr(c, k) for k in ("series_key", "instrument_key", "strategy", "timeframe", "qty", "status", "created_at")
-            }, signal_date=d0.isoformat(), signal_close=1.0, entry_late=False, exit_late=False, plan={}, updated_at=NOW))
+            conn.execute(
+                delivery_trades.insert().values(
+                    **{
+                        k: getattr(c, k)
+                        for k in (
+                            "series_key",
+                            "instrument_key",
+                            "strategy",
+                            "timeframe",
+                            "qty",
+                            "status",
+                            "created_at",
+                        )
+                    },
+                    signal_date=d0.isoformat(),
+                    signal_close=1.0,
+                    entry_late=False,
+                    exit_late=False,
+                    plan={},
+                    updated_at=NOW,
+                )
+            )
     with eng.connect() as conn:
-        rows = conn.execute(select(delivery_trades.c.series_key, delivery_trades.c.signal_date)).all()
+        rows = conn.execute(
+            select(delivery_trades.c.series_key, delivery_trades.c.signal_date)
+        ).all()
     assert len(rows) == len(set(rows)) == 2
     assert MISSED
 

@@ -24,7 +24,7 @@ from desk_harness import small_cfg  # noqa: E402
 from onelot.clock import IST, TradingCalendar  # noqa: E402
 from onelot.config import CostConfig, SessionCfg  # noqa: E402
 from onelot.delivery.runner import DeliveryDesk  # noqa: E402
-from onelot.desk.config import DeliveryCfg, DeskInstrumentCfg, StrategySlotCfg, load_desk_config  # noqa: E402
+from onelot.desk.config import DeliveryCfg, DeskInstrumentCfg, StrategySlotCfg  # noqa: E402
 from onelot.store.schema import delivery_evaluations, delivery_trades  # noqa: E402
 
 ROOT = HERE.parents[1]
@@ -32,8 +32,10 @@ EVID = "Backtest: test line. Not proven: this is the paper test."
 SLOT = StrategySlotCfg("pullback", "1d", {"unit_inr": 10000, "evidence": EVID}, True, "delivery")
 CFG = small_cfg(
     indices=(),
-    stocks=(DeskInstrumentCfg("SBIN", "SBIN", "STOCK", (SLOT,)),
-            DeskInstrumentCfg("ITC", "ITC", "STOCK", (SLOT,))),
+    stocks=(
+        DeskInstrumentCfg("SBIN", "SBIN", "STOCK", (SLOT,)),
+        DeskInstrumentCfg("ITC", "ITC", "STOCK", (SLOT,)),
+    ),
     delivery=DeliveryCfg(top_up=False),
 )
 START = dt.date(2026, 1, 5)
@@ -55,8 +57,10 @@ ITC = {1: (415.2, 415.5), 2: (415.5, 416.0), 3: (415.0, 374.4), 4: (375.0, 380.0
 def stored(base: float) -> pd.DataFrame:
     close = base + 0.5 * np.arange(len(STORED), dtype=float)
     idx = pd.DatetimeIndex([pd.Timestamp(d).tz_localize(IST) for d in STORED])
-    return pd.DataFrame({"open": close - 0.2, "high": close + 1, "low": close - 1, "close": close,
-                         "volume": 1e6}, index=idx)
+    return pd.DataFrame(
+        {"open": close - 0.2, "high": close + 1, "low": close - 1, "close": close, "volume": 1e6},
+        index=idx,
+    )
 
 
 def live(path, last):
@@ -64,8 +68,11 @@ def live(path, last):
     return pd.concat([session_bars(d, *path.get(i, (flat, flat)), last=last) for i, d in L.items()])
 
 
-FULL = {"SBIN": live(SBIN, "15:14"), "ITC": live(ITC, "15:14"),
-        "NIFTY": live({i: (25000.0 + 10 * i, 25005.0 + 10 * i) for i in L}, "15:29")}
+FULL = {
+    "SBIN": live(SBIN, "15:14"),
+    "ITC": live(ITC, "15:14"),
+    "NIFTY": live({i: (25000.0 + 10 * i, 25005.0 + 10 * i) for i in L}, "15:29"),
+}
 STORE = {"SBIN": stored(100.0), "ITC": stored(300.0), "NIFTY": stored(20000.0)}
 
 
@@ -88,8 +95,9 @@ class World:
         self.desk = None
 
     def start(self, when):
-        self.desk = DeliveryDesk(self.engine, CFG, COSTS, SessionCfg(), self.cal, self.notifier, when,
-                                 background=False)
+        self.desk = DeliveryDesk(
+            self.engine, CFG, COSTS, SessionCfg(), self.cal, self.notifier, when, background=False
+        )
         for k, v in self.store.items():
             self.desk._stored[k] = (v, {})
         self.desk._history_day = when.date()
@@ -109,7 +117,9 @@ class World:
     def counts(self):
         with self.engine.connect() as c:
             t = c.execute(select(func.count()).select_from(delivery_trades)).scalar()
-            ids = c.execute(select(delivery_trades.c.series_key, delivery_trades.c.signal_date)).all()
+            ids = c.execute(
+                select(delivery_trades.c.series_key, delivery_trades.c.signal_date)
+            ).all()
             e = c.execute(select(func.count()).select_from(delivery_evaluations)).scalar()
         assert len(ids) == len(set(ids))
         return t, e, len(self.notifier.sent)
@@ -293,18 +303,45 @@ def test_special_weekend_session_is_complete_the_next_day_and_fills_on_monday(tm
     """Budget Sunday 2026-02-01 (a real special session in the hygiene list): a 10% fall
     on it signals only once the day after has begun; the fill is Monday's open."""
     hol = dt.date(2026, 1, 26)
-    pre = [d for d in weekdays(dt.date(2025, 1, 1), 700) if d <= dt.date(2026, 1, 28) and d != hol][-230:]
-    sun, thu, fri, mon = dt.date(2026, 2, 1), dt.date(2026, 1, 29), dt.date(2026, 1, 30), dt.date(2026, 2, 2)
+    pre = [d for d in weekdays(dt.date(2025, 1, 1), 700) if d <= dt.date(2026, 1, 28) and d != hol][
+        -230:
+    ]
+    sun, thu, fri, mon = (
+        dt.date(2026, 2, 1),
+        dt.date(2026, 1, 29),
+        dt.date(2026, 1, 30),
+        dt.date(2026, 2, 2),
+    )
+
     def st(base):
         close = base + 0.5 * np.arange(len(pre), dtype=float)
         idx = pd.DatetimeIndex([pd.Timestamp(d).tz_localize(IST) for d in pre])
-        return pd.DataFrame({"open": close - 0.2, "high": close + 1, "low": close - 1, "close": close, "volume": 1e6}, index=idx)
+        return pd.DataFrame(
+            {
+                "open": close - 0.2,
+                "high": close + 1,
+                "low": close - 1,
+                "close": close,
+                "volume": 1e6,
+            },
+            index=idx,
+        )
+
     full = {}
-    for k, last, base in (("SBIN", "15:14", 216.0), ("ITC", "15:14", 416.0), ("NIFTY", "15:29", 25010.0)):
+    for k, last, base in (
+        ("SBIN", "15:14", 216.0),
+        ("ITC", "15:14", 416.0),
+        ("NIFTY", "15:29", 25010.0),
+    ):
         drop = 0.9 if k != "NIFTY" else 1.0
-        full[k] = pd.concat([session_bars(thu, base, base, last), session_bars(fri, base, base, last),
-                             session_bars(sun, base, base * drop, last),
-                             session_bars(mon, base * drop, base * drop, last)])
+        full[k] = pd.concat(
+            [
+                session_bars(thu, base, base, last),
+                session_bars(fri, base, base, last),
+                session_bars(sun, base, base * drop, last),
+                session_bars(mon, base * drop, base * drop, last),
+            ]
+        )
     store = {"SBIN": st(100.0), "ITC": st(300.0), "NIFTY": st(20000.0)}
     w = World(tmp_path, full, store, cal=TradingCalendar({hol: "Republic Day"}, verified=True))
     w.start(at(thu, "08:00"))
@@ -389,11 +426,11 @@ def test_a_store_that_ends_ten_sessions_ago_is_noted_and_raises_nothing(tmp_path
     st = dict(STORE)
     for k in ("SBIN", "ITC", "NIFTY"):
         st[k] = st[k].iloc[:-10]
-    w = World(tmp_path, store=st, cal=TradingCalendar({dt.date(2026, 1, 10): 'x'}, verified=True))
+    w = World(tmp_path, store=st, cal=TradingCalendar({dt.date(2026, 1, 10): "x"}, verified=True))
     w.start(at(L[3], "15:00"))
     w.poll(at(L[3], "15:45"))
     assert w.counts()[0] == 0 and w.desk.notes
-    assert 'missing' in w.desk.notes['SBIN']
+    assert "missing" in w.desk.notes["SBIN"]
     jsonable(w.desk)
 
 

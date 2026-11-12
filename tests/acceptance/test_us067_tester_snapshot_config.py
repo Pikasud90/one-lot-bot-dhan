@@ -7,8 +7,6 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
-
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "delivery"))
 sys.path.insert(0, str(HERE.parent / "desk"))
@@ -44,7 +42,15 @@ def test_snapshot_serialises_in_every_state_and_has_the_d7_fields(world):
     poll(desk, at(L[4], "12:00"))
     s = snap_ok(desk)  # open
     row = next(r for r in s["delivery"]["open"] if r["series_key"] == "SBIN")
-    for f in ("last", "unrealised", "unrealised_pct", "sessions", "max_sessions", "sma_exit", "stop"):
+    for f in (
+        "last",
+        "unrealised",
+        "unrealised_pct",
+        "sessions",
+        "max_sessions",
+        "sma_exit",
+        "stop",
+    ):
         assert f in row and row[f] is not None, f
     assert row["max_sessions"] == 30 and row["sessions"] == 1
     poll(desk, at(L[5], "15:45"))
