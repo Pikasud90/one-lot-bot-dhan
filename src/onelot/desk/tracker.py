@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -116,6 +117,7 @@ class StrategySlot:
             "error": self.error,
             "features": self.last_features,
             "trail": self.trail_view(),
+            "enabled": self.cfg.enabled,
         }
 
 
@@ -134,6 +136,8 @@ class InstrumentTracker:
         self.bars: pd.DataFrame = pd.DataFrame()
         self.slots: list[StrategySlot] = []
         for s in cfg.strategies:
+            if s.product != "intraday":
+                continue  # a delivery slot (US-067) is the delivery desk's, not a strategy here
             if s.name not in REGISTRY:
                 log.warning("desk %s: unknown strategy %s skipped", cfg.key, s.name)
                 continue
@@ -310,15 +314,28 @@ class InstrumentTracker:
 
     # ── evaluation ────────────────────────────────────────────────────────
     def evaluate(
-        self, now: dt.datetime, market_bars: pd.DataFrame | None, entries_allowed: bool
+        self,
+        now: dt.datetime,
+        market_bars: pd.DataFrame | None,
+        entries_allowed: bool,
+        keep: Collection[tuple[str, str]] = (),
     ) -> list[tuple[StrategySlot, Verdict]]:
-        """Run every slot on its closed bars; return the slots whose LAST bar fired."""
+        """Run every slot on its closed bars; return the slots whose LAST bar fired.
+
+        A paused slot (`enabled: false`, US-067 D9) is not evaluated and never fires, except
+        that one named in `keep` (name, timeframe), a slot with a trade still active, is
+        evaluated so the trade keeps its strategy exit and trail (D16); it still never fires."""
         fired: list[tuple[StrategySlot, Verdict]] = []
         if self.bars.empty:
             return fired
         latest_close_at = self.bars.index[-1] + pd.Timedelta(minutes=self.fine_minutes)
         self._read_trend(latest_close_at)
         for slot in self.slots:
+            paused = not slot.cfg.enabled
+            if paused and (slot.cfg.name, slot.cfg.timeframe) not in keep:
+                slot.last_verdict = Verdict("none", "paused")
+                slot.error = None
+                continue
             try:
                 v = self._evaluate_slot(slot, latest_close_at, market_bars, now)
             except Exception as exc:  # noqa: BLE001
@@ -332,7 +349,7 @@ class InstrumentTracker:
                     v = Verdict("none", held, v.bar_ts, None, v.close, v.strength, [], v.fresh)
             slot.last_verdict = v
             slot.last_eval_at = now
-            if v.direction != "none" and v.fresh and entries_allowed:
+            if v.direction != "none" and v.fresh and entries_allowed and not paused:
                 fired.append((slot, v))
         return fired
 

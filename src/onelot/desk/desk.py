@@ -497,8 +497,11 @@ class Desk:
             nifty = self.trackers.get("NIFTY")
             market_bars = nifty.bars if nifty is not None else self.context_bars.get("NIFTY")
             self._expire_signals(now)
+            keep = self._active_slots()
             for t in self.trackers.values():
-                fired = t.evaluate(now, market_bars, entries_ok and market_ok)
+                fired = t.evaluate(
+                    now, market_bars, entries_ok and market_ok, keep.get(t.series.key, ())
+                )
                 for slot, v in fired:
                     self._raise_signal(t, slot, v, now)
             if market_ok or self.positions:
@@ -512,6 +515,24 @@ class Desk:
             self.pulse.maybe_record(now, market_ok)
         except Exception:  # noqa: BLE001
             log.exception("pulse failed")
+
+    def _active_slots(self) -> dict[str, set[tuple[str, str]]]:
+        """series key -> (strategy, timeframe) of every trade still active on it: a paper trade
+        waiting or open, or a taken position. A paused slot stays evaluated for these, so its
+        trade is managed and closed as before (US-067 D16); no paused slot raises an alert."""
+        out: dict[str, set[tuple[str, str]]] = {}
+        open_trades = getattr(self.paper, "open_trades", None)
+        if callable(open_trades):
+            try:
+                for tr in open_trades():
+                    out.setdefault(tr.series_key, set()).add((tr.strategy, tr.timeframe))
+            except Exception:  # noqa: BLE001 - the book never stops the poll
+                self.hook_errors += 1
+                log.exception("paper: open_trades() failed")
+        for p in self.positions.values():
+            key = str(p.get("series_key") or "")
+            out.setdefault(key, set()).add((str(p.get("strategy")), str(p.get("timeframe"))))
+        return out
 
     def _load_daily_history(self, now: dt.datetime) -> None:
         """Give every tracker the stored daily bars the 1d rung of its trend ladder needs

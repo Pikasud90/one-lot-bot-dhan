@@ -19,6 +19,11 @@ class StrategySlotCfg:
     name: str
     timeframe: str = "5m"
     params: dict = field(default_factory=dict)
+    # US-067 D9: a paused slot (enabled: false) raises no alert and is not evaluated, except
+    # while a trade it opened is still active (D16); its scoreboard row stays, shown as paused.
+    enabled: bool = True
+    # "intraday" (the tracker's strategies) or "delivery" (the pullback rule, `onelot.delivery`)
+    product: str = "intraday"
 
 
 @dataclass(frozen=True)
@@ -60,15 +65,28 @@ class DeskConfig:
     option_expiry: str = "monthly"
     option_roll_days: int = 3
 
-    def primary_strategies(self) -> tuple[str, ...]:
-        """The owner's primary strategies: desk.yaml `primary_strategies` in the owner's
-        order, else every strategy the desk runs, in configuration order, each once. The
-        Home scoreboard and the Lab's 'primary strategies' filter show them."""
+    def _owner_order(self) -> tuple[str, ...]:
+        """desk.yaml `primary_strategies` in the owner's order, then every other configured
+        strategy in configuration order, each once."""
         seen: dict[str, None] = dict.fromkeys(self.primary)
         for inst in self.instruments:
             for slot in inst.strategies:
                 seen.setdefault(slot.name, None)
         return tuple(seen)
+
+    def primary_strategies(self) -> tuple[str, ...]:
+        """The owner's primary strategies that are Lab strategies: desk.yaml
+        `primary_strategies` in the owner's order, else every strategy the desk runs, in
+        configuration order, each once. The Lab's 'primary strategies' filter shows them. A
+        delivery rule (US-067 `pullback`) is not a Lab strategy and is left out here; the Home
+        scoreboard lists it through `primary_slots`."""
+        delivery = {
+            s.name for i in self.instruments for s in i.strategies if s.product == "delivery"
+        }
+        intraday = {
+            s.name for i in self.instruments for s in i.strategies if s.product != "delivery"
+        }
+        return tuple(n for n in self._owner_order() if n not in delivery - intraday)
 
     def primary_slots(self) -> tuple[Slot, ...]:
         """The primary strategies as the desk runs them (the paper test, 2026-11-08): one
@@ -77,13 +95,33 @@ class DeskConfig:
         apart, so an earlier timeframe of the same strategy never counts toward it."""
         from ..paper.ledger import Slot  # here: the paper layer stays out of config imports
 
-        order = {name: i for i, name in enumerate(self.primary_strategies())}
+        order = {name: i for i, name in enumerate(self._owner_order())}
         seen: dict[Slot, None] = {}
         for inst in self.instruments:
             for slot in inst.strategies:
                 if slot.name in order:
                     seen.setdefault(Slot(slot.name, slot.timeframe, inst.kind), None)
         return tuple(sorted(seen, key=lambda s: order[s.strategy]))  # stable: config order
+
+    def paused_slots(self) -> frozenset[Slot]:
+        """The slots configured with `enabled: false` (US-067 D9), as (name, timeframe, market)."""
+        from ..paper.ledger import Slot
+
+        return frozenset(
+            Slot(s.name, s.timeframe, inst.kind)
+            for inst in self.instruments
+            for s in inst.strategies
+            if not s.enabled
+        )
+
+    def delivery_slots(self) -> tuple[tuple[DeskInstrumentCfg, StrategySlotCfg], ...]:
+        """(stock, slot) for every enabled delivery slot (US-067), in configuration order."""
+        return tuple(
+            (inst, s)
+            for inst in self.stocks
+            for s in inst.strategies
+            if s.product == "delivery" and s.enabled
+        )
 
     @property
     def instruments(self) -> tuple[DeskInstrumentCfg, ...]:
@@ -98,10 +136,31 @@ def _slots(raw: list | None) -> tuple[StrategySlotCfg, ...]:
         else:
             out.append(
                 StrategySlotCfg(
-                    str(r["name"]), str(r.get("timeframe", "5m")), dict(r.get("params") or {})
+                    str(r["name"]),
+                    str(r.get("timeframe", "5m")),
+                    dict(r.get("params") or {}),
+                    _flag(r.get("enabled", True), "enabled"),
+                    _product(r.get("product", "intraday")),
                 )
             )
     return tuple(out)
+
+
+def _flag(value: object, name: str) -> bool:
+    """A yes/no key: true or false only (a quoted "false" would read as true otherwise)."""
+    if not isinstance(value, bool):
+        raise ValueError(f"desk.yaml slot key {name} must be true or false, not {value!r}")
+    return value
+
+
+def _product(value: object) -> str:
+    if value not in PRODUCTS:
+        raise ValueError(f"desk.yaml slot product must be one of {PRODUCTS}, not {value!r}")
+    return str(value)
+
+
+#: a slot's product: the tracker's intraday strategies, or the delivery pullback rule
+PRODUCTS = ("intraday", "delivery")
 
 
 def load_desk_config(path: str | Path | None = None) -> DeskConfig:

@@ -267,6 +267,8 @@ class TestSlotScoreboardView:
         (row,) = slot_view(
             by_slot(engine), [("ema_cross", "15m", "STOCK")], {("ema_cross", "15m", "STOCK"): 1}
         )
+        # US-067 D9 added `paused` to a slot row (False here: no slot is paused)
+        assert row.pop("paused") is False
         assert {k: v for k, v in row.items() if k not in ("timeframe", "kind")} == by_name
 
     def test_open_trades_count_per_slot_and_a_slot_listed_twice_is_shown_once(self):

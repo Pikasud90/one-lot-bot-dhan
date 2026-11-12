@@ -12,6 +12,7 @@ from onelot.strategies.registry import REGISTRY, get_strategy
 def test_the_paper_test_has_its_candidates_as_primary_slots():
     cfg = load_desk_config()  # the real config/desk.yaml
     assert cfg.primary_slots() == (
+        Slot("pullback", "1d", "STOCK"),  # the delivery pullback rule, US-067 (2026-11-12)
         Slot("supertrend_vol", "30m", "INDEX"),
         Slot("supertrend_vol", "60m", "STOCK"),
         Slot("supertrend_adx", "30m", "STOCK"),
@@ -50,10 +51,15 @@ def test_every_configured_setting_is_one_its_strategy_knows():
     """A mistyped setting name is dropped without a word (the strategies' settings ignore
     names they do not know), and the slot would run on the default instead. The real config
     must not have one, and every slot must build."""
+    from onelot.delivery.rule import PullbackParams
+
     cfg = load_desk_config()
     seen = 0
     for inst in cfg.instruments:
         for slot in inst.strategies:
+            if slot.product == "delivery":  # US-067: the pullback rule, not a REGISTRY strategy
+                PullbackParams.from_mapping(slot.params)  # an unknown name raises
+                continue
             known = set(REGISTRY[slot.name].Params.model_fields)
             unknown = sorted(set(slot.params) - known)
             assert not unknown, (inst.key, slot.name, slot.timeframe, unknown)

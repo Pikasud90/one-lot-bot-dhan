@@ -367,7 +367,14 @@ class TestThePrimaryStrategies:
         assert len(cfg.indices) == 5
         assert cfg.option_expiry == "monthly" and cfg.option_roll_days == 3
         for inst in cfg.instruments:
-            got = {(inst.kind, s.name, s.timeframe): dict(s.params) for s in inst.strategies}
+            # US-067 D9 (2026-11-12): these settings stay configured but are paused, and the
+            # delivery pullback slot is the one the desk runs (tests/delivery cover it).
+            assert all(not s.enabled for s in inst.strategies if s.product == "intraday")
+            got = {
+                (inst.kind, s.name, s.timeframe): dict(s.params)
+                for s in inst.strategies
+                if s.product == "intraday"
+            }
             want = {k: v for k, v in PAPER_TEST.items() if k[0] == inst.kind}
             assert got == want, inst.key
         assert set(OWNERS_PRIMARY) <= set(REGISTRY)

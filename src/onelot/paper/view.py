@@ -9,7 +9,7 @@ nothing is ever invented for display.
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import TYPE_CHECKING, Any, TypedDict
 
@@ -163,6 +163,7 @@ def slot_scoreboard_view(
     totals: Mapping[Slot, StrategyTotals],
     primary: Sequence[tuple[str, str, str]] = (),
     open_counts: Mapping[Slot, int] | None = None,
+    paused: Collection[Slot] = (),
 ) -> list[dict[str, Any]]:
     """The Home scoreboard of the paper test (2026-11-08): `scoreboard_view`'s rows, one per
     slot (strategy, timeframe, market), each row with the slot's `timeframe` and `kind`
@@ -182,6 +183,7 @@ def slot_scoreboard_view(
             "timeframe": slot.timeframe,
             "kind": slot.kind,
             "primary": slot in slots,
+            "paused": slot in paused,  # US-067 D9: configured `enabled: false`
             **_score(totals.get(slot), opened, slot),
         }
         for slot in [*slots, *others]

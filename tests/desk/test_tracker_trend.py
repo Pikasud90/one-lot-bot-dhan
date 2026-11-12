@@ -7,6 +7,7 @@ a backtest runs it, and against the ladder built directly from the same bars."""
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import json
 import logging
@@ -265,6 +266,11 @@ def test_the_configured_index_slots_on_a_tracker(specs, rising):
     minute, history = rising
     series, instruments = specs
     nifty = next(i for i in load_desk_config().indices if i.key == "NIFTY")
+    # US-067 D9 paused these slots in the shipped desk.yaml (2026-11-12); their settings are
+    # what this test checks, so they are switched back on here.
+    nifty = dataclasses.replace(
+        nifty, strategies=tuple(dataclasses.replace(s, enabled=True) for s in nifty.strategies)
+    )
     t = InstrumentTracker(nifty, series["NIFTY"], instruments[nifty.tracked], 1)
     t.bars, t.daily_history = before(minute, CUT), history
     run(t)

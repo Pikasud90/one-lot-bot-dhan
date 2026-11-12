@@ -215,7 +215,8 @@ def _paper_scoreboard(desk: object) -> list[dict[str, Any]] | None:
         log.warning("the paper scoreboard could not be read: %s", type(exc).__name__)
         return None
     primary = desk.cfg.primary_slots() if hasattr(desk, "cfg") else ()
-    return slot_scoreboard_view(totals, primary, opened)
+    paused = desk.cfg.paused_slots() if hasattr(desk, "cfg") else frozenset()
+    return slot_scoreboard_view(totals, primary, opened, paused)
 
 
 def create_app(engine, api_token: str) -> FastAPI:

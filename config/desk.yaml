@@ -39,7 +39,11 @@ context:                  # the strip above the two panels
 # contract at delta ~0.65, rolled to the next month inside its last 3 days, like the Lab.
 # 2026-11-11: `supertrend_mtf` (the owner's multi-timeframe rule) joined the index list as a
 # second paper slot; the three slots above it are unchanged.
-primary_strategies: [supertrend_vol, supertrend_adx, supertrend_mtf]
+# 2026-11-12 (owner, US-067): the sole focus is the pullback rule on the 18 stocks as delivery
+# trades of about Rs 10,000 carried for days. Every other slot is PAUSED (`enabled: false`): it
+# is not evaluated and raises no alert, its scoreboard row stays and shows "paused". To resume
+# one, set `enabled: true` (or delete the key) and reload the desk.
+primary_strategies: [pullback, supertrend_vol, supertrend_adx, supertrend_mtf]
 
 option_expiry: monthly    # monthly (the Lab's contract) | nearest (the weekly where one exists)
 option_roll_days: 3       # a monthly contract with fewer days left than this is skipped
@@ -48,6 +52,7 @@ defaults:
   index_strategies:       # 5 index options, long only (BUY CE): passed tuning + choosing, lost the test year
     - name: supertrend_vol
       timeframe: 30m
+      enabled: false          # paused 2026-11-12 (US-067)
       params: {allow_long: true, allow_short: false, adx_min: 12, entry_end: "13:00",
                flip_window: 2, max_bars: 12, max_trades_per_day: 1, min_strength: 40,
                partial_r: 0.0, regime_filter: false, rsi_long_min: 55, st_mult: 2.0,
@@ -68,18 +73,35 @@ defaults:
     # it: delete this entry and its name from primary_strategies.
     - name: supertrend_mtf
       timeframe: 5m
+      enabled: false          # paused 2026-11-12 (US-067)
       params: {allow_long: true, allow_short: false, st_period: 14, st_mult: 1.7, gate: all,
                trend_tf: 30m, flip_window: 4, trend_adx_min: 25, trend_rsi_min: 60,
                entry_end: "13:00", trail_tf: 60m, stop_buffer_atr: 2.0, max_trades_per_day: 1}
-  stock_strategies:       # 18 stocks, one share, short only: lost the choosing year
+  stock_strategies:       # 18 stocks
+    # PULLBACK, delivery (owner's decision 2026-11-12, US-067; docs/research/ALPHA_SEARCH_2026-11-12.md
+    # 5.2 and 5.3). After the close: the close is above its SMA200, NIFTY is above its SMA200,
+    # and the close is for the first day 8% or more below the highest close of 20 sessions.
+    # Buy the number of shares nearest Rs 10,000 at the next open; sell at the open after the
+    # first close above SMA20, after 30 sessions (the entry session counts as 1), or after a
+    # close 15% below the entry fill. Delivery charges plus the depository charge. Alerts and
+    # paper trades only: the system never places an order.
+    - name: pullback
+      timeframe: 1d
+      product: delivery
+      params: {depth: 0.08, high_lookback: 20, trend_sma: 200, exit_sma: 20, max_sessions: 30,
+               stop: 0.15, slippage: 0.0003, unit_inr: 10000,
+               evidence: "Backtest: +1.2% to +1.4% a trade after charges, about 7 winners in 10, two samples. Not proven: this is the paper test."}
+    # The two below: one share, short only: lost the choosing year.
     - name: supertrend_vol
       timeframe: 60m
+      enabled: false          # paused 2026-11-12 (US-067)
       params: {allow_long: false, allow_short: true, adx_min: 12, entry_end: "11:30",
                flip_window: 4, max_bars: 12, max_trades_per_day: 2, min_strength: 55,
                partial_r: 0.0, regime_filter: true, rsi_long_min: 50, st_mult: 2.0,
                st_period: 7, target_r: 1.5, trail_atr_mult: 2.5}
     - name: supertrend_adx
       timeframe: 30m
+      enabled: false          # paused 2026-11-12 (US-067)
       params: {allow_long: false, allow_short: true, adx_min: 25, entry_end: "11:30",
                flip_window: 4, max_bars: 24, max_trades_per_day: 1, max_vwap_dist_atr: 3.0,
                min_strength: 0, partial_r: 0.0, regime_filter: true, st_mult: 2.5,
