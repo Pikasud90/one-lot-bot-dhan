@@ -75,6 +75,9 @@ products:
     taxes: {stt_buy_pct: 0.0010, stt_sell_pct: 0.0010, stt_exercise_pct: 0.0,
             exchange_txn_pct: 0.0000297, sebi_turnover_pct: 0.0000010, ipft_pct: 0.0000010,
             stamp_duty_pct: 0.00015, gst_pct: 0.18}
+    # Dhan's depository charge: Rs 12.50 + GST once per stock sold from the demat account in a
+    # day (REVIEW C.2; to be confirmed on a contract note). US-067 R6.
+    depository_per_sale_inr: 14.75
   currency_futures:
     brokerage: {mode: flat, per_order_inr: 20.0, pct_of_turnover: 0.0003, cap_inr: 20.0}
     taxes: {stt_buy_pct: 0.0, stt_sell_pct: 0.0, stt_exercise_pct: 0.0,

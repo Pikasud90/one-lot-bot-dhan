@@ -58,6 +58,9 @@ class ProductCostCfg(Strict):
 
     brokerage: BrokerageCfg = BrokerageCfg()
     taxes: TaxCfg
+    # The depository charge, once per sale of a delivery holding (US-067 R6). Not a share of
+    # turnover, so `CostModel.leg` never adds it; 0 for every product that holds nothing.
+    depository_per_sale_inr: float = Field(default=0.0, ge=0.0)
 
 
 # Cost product used for each tradeable category in the Backtest Lab.
