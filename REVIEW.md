@@ -45,15 +45,15 @@ written on 11 November 2026; search for the heading if the file has changed sinc
 | 8. API and security | 924 |
 | 9. The legacy Bank Nifty option engine | 1017 |
 | 10. Operations and documents | 1087 |
-| 11. The user interface | 1188 |
-| 12. Code structure | 1717 |
-| 13. Tests | 1896 |
-| 14. The work plan | 2023 |
-| 15. Decisions only the owner can make | 2797 |
-| Appendix A. Research outputs of 11 November 2026 | 3024 |
-| Appendix B. Interface and API measurements | 3058 |
-| Appendix C. Sources | 3161 |
-| Appendix D. Index of findings | 3238 |
+| 11. The user interface | 1204 |
+| 12. Code structure | 1733 |
+| 13. Tests | 1912 |
+| 14. The work plan | 2039 |
+| 15. Decisions only the owner can make | 2813 |
+| Appendix A. Research outputs of 11 November 2026 | 3056 |
+| Appendix B. Interface and API measurements | 3090 |
+| Appendix C. Sources | 3193 |
+| Appendix D. Index of findings | 3270 |
 
 **Severity.** P0: the app shows or uses something wrong today in a way that can mislead a trading
 decision. P1: must be fixed before the paper test can be trusted or the app can run unattended.
@@ -1183,6 +1183,22 @@ file; remove the rest at start when older than 30 days.
   command and the port; `python -m onelot --port 8787` and
   `python -m onelot --log-level DEBUG` both start the desk.
 
+**O-11 (P1). A token renewed in Settings does not reach the desk's bar source.**
+- Where: a save in Settings runs `Engine._apply_credentials` (`engine.py:409`), which builds a
+  new account adapter and gives the engine's own broker the new token. The desk's bar source
+  (`DhanBars`, `desk/data.py:132`) keeps the adapter object it was built with, and
+  `Desk._maybe_switch_source` (`desk/desk.py:560`) builds a source only when there is none.
+- What happens: seen live on 12 November 2026. The owner renewed the token at 06:34. The
+  socket feed and the option chain recovered at once. The desk's bar requests kept failing
+  with HTTP 401 (06:40, 06:45, 06:50, 07:19), the desk showed delayed data, and only the
+  restart at 07:30 cleared it. A renewal during a session would leave the desk on delayed
+  bars until someone restarts it, with a valid token in `.env`.
+- Fix: with US-040. The bar source asks for the current adapter at each fetch (a getter, as
+  the option-chain reads already do), or `_apply_credentials` tells the desk to rebuild its
+  source.
+- Done when: a test builds the desk with one fake adapter, saves new credentials, and sees
+  the next bar fetch go through the new adapter; `source.last_error` is empty after it.
+
 ---
 
 ## 11. The user interface
@@ -2191,7 +2207,7 @@ four of the seven badges, the false alarms and the legacy state in the stream th
 - Accept: the "Done when" of U-1.
 
 **US-040 (2 points, new). The end of the token is warned before the session.**
-- Covers: O-2.
+- Covers: O-2, O-11 (a renewed token must reach the desk's bar source; see the finding).
 - Build: a check at start and once before the pre-open of every trading day (08:45 as in O-2;
   the time comes from the calendar of US-034 and a setting, not from a literal). If the token
   ends before the end of today's session: a red banner and one notification with the time in
@@ -2796,7 +2812,23 @@ waits for the owner.
 
 ## 15. Decisions only the owner can make
 
-Nothing in this section is decided. Each question gives the options, what each one changes and
+Nothing in this section was decided when it was written on 11 November. The answers received
+since then come first; the questions below them are kept as written.
+
+**Answers received on 12 November 2026.**
+- **Q-1, answered.** The work of 11 November is committed and pushed (`c47c9fc`). Standing
+  instruction: when the weekly usage limit is near, commit and push everything verified.
+- **Q-6, answered: no carry.** Options are intraday only. Whatever happens, every option
+  trade ends the same day, calls or puts. US-041 is not to be built.
+- **Q-2 and Q-10 change.** A stock trade may be delivery and may be held for as many
+  sessions as its strategy asks; it need not be intraday. The paper book must then carry
+  stock trades (US-027), and a delivery trade at one share pays a fixed ₹14.75 a sale.
+- **The owner's first need** is a strategy with a real edge for delivery stocks and for
+  intraday options. The search of 12 November is in
+  `docs/research/ALPHA_SEARCH_2026-11-12.md`: no intraday option rule was found, and one
+  stock rule (a pullback in an uptrend) is the candidate for the paper test.
+
+Each question gives the options, what each one changes and
 a recommendation with its reason. A story that depends on an answer names the question in its
 "Needs" line. Until the owner answers, the plan keeps today's behaviour or adds a label, and it
 never stops an alert (rule 5). The table at the end says what is built without an answer.
@@ -3322,6 +3354,7 @@ finding that two stories share names both, in the order of the plan.
 | O-8 | P2 | Start-up is noisy and close to the broker's rate limit | 10 | US-051 |
 | O-9 | P3 | Old log files are never removed | 10 | US-007 |
 | O-10 | P1 | The macOS start script cannot start the app | 10 | US-006 |
+| O-11 | P1 | A token renewed in Settings does not reach the desk's bar source | 10 | US-040 |
 | U-1 | P1 | Old notifications are replayed as toasts and beeps every time the page loads | 11 | US-039 |
 | U-2 | P1 | The header takes a quarter of the screen, and most of its badges describe the legacy engine | 11 | US-038 |
 | U-3 | P1 | One status pill and a "System" panel | 11 | US-038 |
@@ -3370,6 +3403,6 @@ finding that two stories share names both, in the order of the plan.
 | T-7 | P2 | The trail is tested by example, not by property | 13 | US-045 |
 | T-8 | P2 | The gate takes 8 minutes 45 seconds, and what is slow is not known | 13 | US-065 |
 
-126 findings: 4 at P0, 51 at P1, 63 at P2 and 8 at P3.
+127 findings: 4 at P0, 52 at P1, 63 at P2 and 8 at P3.
 
 ---
