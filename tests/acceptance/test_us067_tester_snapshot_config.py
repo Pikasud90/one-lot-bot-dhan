@@ -25,7 +25,7 @@ def snap_ok(desk):
     return s
 
 
-def test_snapshot_serialises_in_every_state_and_has_the_d7_fields(world):
+def test_snapshot_serialises_in_every_state_and_has_the_d7_fields(world):  # noqa: F811
     start, sent = world
     desk = start(at(L[1], "08:00"))
     s = snap_ok(desk)  # before anything

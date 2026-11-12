@@ -327,7 +327,7 @@ def test_book_dp_only_on_closed_trades_and_one_row_per_identity(costs, tmp_path)
     assert tot.trades == 1 and tot.no_fill == 1 and tot.costs_paise == c.charges_paise + 1475
     # a duplicate identity cannot be inserted even bypassing the evaluation table
     with eng.begin() as conn:
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 - any refusal by the database
             conn.execute(
                 delivery_trades.insert().values(
                     **{
