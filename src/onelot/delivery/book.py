@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -23,6 +24,8 @@ from ..costs import CostModel
 from ..paper.ledger import Slot, StrategyTotals
 from ..store.schema import METADATA, delivery_evaluations, delivery_trades
 from .money import rupees_to_paise, trade_result
+
+log = logging.getLogger(__name__)
 
 PENDING_ENTRY, OPEN, EXIT_PENDING, CLOSED, MISSED = (
     "PENDING_ENTRY",
@@ -66,6 +69,7 @@ class DeliveryTrade:
     entry_paise: int | None
     entry_late: bool
     exit_signal_date: dt.date | None
+    exit_signalled_at: dt.datetime | None
     exit_reason: str | None
     sessions_held: int | None
     exit_told_at: dt.datetime | None
@@ -104,6 +108,7 @@ class DeliveryTrade:
             entry_paise=_paise(r["entry_paise"]),
             entry_late=bool(r["entry_late"]),
             exit_signal_date=day(r["exit_signal_date"]),
+            exit_signalled_at=_ist(r["exit_signalled_at"]),
             exit_reason=r["exit_reason"],
             sessions_held=None if r["sessions_held"] is None else int(r["sessions_held"]),
             exit_told_at=_ist(r["exit_told_at"]),
@@ -196,6 +201,8 @@ class DeliveryBook:
         self.dp_paise = int(dp_paise)
         self.strategy, self.timeframe = strategy, timeframe
         METADATA.create_all(engine, tables=[delivery_trades, delivery_evaluations])
+        self.version = 0  # moves at every write of this book: the desk rebuilds its views then
+        self._active: list[DeliveryTrade] | None = None
 
     # ── reads ─────────────────────────────────────────────────────────────
     def _select(self, *where: Any) -> list[DeliveryTrade]:
@@ -204,7 +211,11 @@ class DeliveryBook:
             return [DeliveryTrade.from_row(r) for r in conn.execute(stmt).mappings()]
 
     def active(self) -> list[DeliveryTrade]:
-        return self._select(delivery_trades.c.status.in_(ACTIVE))
+        """The trades not yet over. Kept in memory between this book's own writes, so a poll
+        with nothing new reads nothing (one desk writes this book)."""
+        if self._active is None:
+            self._active = self._select(delivery_trades.c.status.in_(ACTIVE))
+        return list(self._active)
 
     def get(self, trade_id: int) -> DeliveryTrade | None:
         rows = self._select(delivery_trades.c.id == trade_id)
@@ -284,8 +295,12 @@ class DeliveryBook:
                     )
                 ).inserted_primary_key
                 new_id = int(key[0]) if key is not None else None
-        except IntegrityError:
+        except IntegrityError as exc:
+            self._changed()
+            if self.evaluation(series_key, session) is None:  # not the duplicate: say so
+                log.warning("delivery: %s %s could not be recorded: %s", series_key, session, exc)
             return None  # evaluated already (another poll or desk): nothing written twice
+        self._changed()
         return None if new_id is None else self.get(new_id)
 
     def _cas(self, trade_id: int, expected: Iterable[str], now: dt.datetime, **values: Any) -> bool:
@@ -297,7 +312,12 @@ class DeliveryBook:
                 )
                 .values(updated_at=now, **values)
             )
+        self._changed()
         return bool(res.rowcount == 1)
+
+    def _changed(self) -> None:
+        self.version += 1
+        self._active = None
 
     def mark_told(self, trade_id: int, which: str, now: dt.datetime) -> None:
         col = {"entry": "entry_told_at", "exit": "exit_told_at"}[which]
@@ -305,6 +325,7 @@ class DeliveryBook:
             conn.execute(
                 update(delivery_trades).where(delivery_trades.c.id == trade_id).values({col: now})
             )
+        self._changed()
 
     def fill_entry(
         self,
@@ -343,6 +364,7 @@ class DeliveryBook:
             now,
             status=EXIT_PENDING,
             exit_signal_date=session.isoformat(),
+            exit_signalled_at=now,
             exit_reason=",".join(reasons),
             sessions_held=int(sessions_held),
         )
@@ -371,20 +393,13 @@ class DeliveryBook:
         )
 
     def warn(self, trade_id: int, warning: str, now: dt.datetime) -> bool:
-        """D15: a visible warning on an active trade, written once (the first one stays)."""
-        with self.engine.begin() as conn:
-            res = conn.execute(
-                update(delivery_trades)
-                .where(
-                    and_(
-                        delivery_trades.c.id == trade_id,
-                        delivery_trades.c.status.in_(ACTIVE),
-                        delivery_trades.c.warning.is_(None),
-                    )
-                )
-                .values(warning=warning, updated_at=now)
-            )
-        return bool(res.rowcount == 1)
+        """A visible warning on an active trade (D15, and "<date> read from incomplete data"):
+        each different warning is added once; the same one again changes nothing."""
+        t = self.get(trade_id)
+        if t is None or t.status not in ACTIVE or warning in (t.warning or ""):
+            return False
+        text = warning if not t.warning else f"{t.warning}; {warning}"
+        return self._cas(trade_id, ACTIVE, now, warning=text)
 
     # ── the scoreboard ────────────────────────────────────────────────────
     def by_slot(self) -> dict[Slot, StrategyTotals]:

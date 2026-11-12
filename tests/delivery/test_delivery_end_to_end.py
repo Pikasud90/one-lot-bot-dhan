@@ -118,6 +118,9 @@ def world(cfg, tmp_path, monkeypatch):
             cfg, db, desk_cfg=desk_cfg, calendar=TradingCalendar({}, verified=True)
         )
         desk.source = Source()
+        # the history loads on the poll thread here: in market hours the desk loads it in the
+        # background, which a test would race (that path has its own test)
+        desk.delivery._background = False
         desk.fine_minutes = 1
         for t in desk.trackers.values():
             t.fine_minutes = 1

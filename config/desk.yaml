@@ -52,7 +52,7 @@ delivery:                 # the delivery slots (US-067 pullback)
   top_up: true            # top the store's 1m bars up from Dhan (Data API on, outside 09:00 to 15:35)
   last_bar_at: "15:10"    # a session is complete once its last 1m bar is at or after this ...
   settle_minutes: 10      # ... and the clock is 10 minutes past the session's close
-  min_bars: 221           # daily bars the rule reads at least
+  min_bars: 201           # daily bars an entry reads at least (the rule's own minimum)
   gap_warn_pct: 20        # a first bar this far from the previous close: "possible corporate action"
 
 defaults:

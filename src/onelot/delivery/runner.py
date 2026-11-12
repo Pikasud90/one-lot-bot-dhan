@@ -1,17 +1,24 @@
 """The desk side of the pullback delivery trades (US-067 D1 to D15). Alerts and paper only.
 
 `Desk.poll` calls `load_history` outside its lock (a database read, once a day and after a
-top-up) and `on_poll` under it. Each poll, in this order:
+top-up; between 09:00 and 15:35 it runs in the background and is swapped in when done) and
+`on_poll` under it. Each poll, in this order:
 
 1. Fills (D3, D5): a pending entry or exit fills on the desk's fine bars (`fills.decide`).
 2. Warnings (D15): a first bar more than `gap_warn_pct` from the previous close flags any
    pending or open trade in that stock.
 3. Evaluation (D1): every completed session not yet evaluated, in date order, at most
-   `CATCH_UP` of them (only the newest one on a first start). Exits (D5) are read on each of
-   them; an entry (D2) is raised on the newest only, an older entry signal is recorded MISSED.
-   A session whose history is short or has a hole is not evaluated: the card says why, a
-   warning is logged once, and the next poll tries again.
-4. Alerts: every entry and exit alert written and not yet sent is sent, then marked sent.
+   `CATCH_UP` of them (only the newest one on a first start). Exits (D5) read the stock's own
+   bars on each of them; an entry (D2) is raised on the newest only, an older entry signal is
+   recorded MISSED. A hole or a short history stops the ENTRY of that day only (the card says
+   why); NIFTY missing that day means no entry that day. A stock's day still incomplete when a
+   later session of it is complete is read as it is for the exit tests only, with a warning.
+4. Alerts: every entry and exit alert written and not yet sent is sent, and marked sent once a
+   channel accepted it; otherwise it is tried again, at most every `RETELL` .
+
+An error in one stock or one trade is logged (once a day per stock and kind), counted in
+`errors` and skipped: the other stocks are still filled and evaluated. A poll with no new bar
+and no change in the book reads nothing from the database and rebuilds nothing.
 
 Every write is a compare-and-set in `DeliveryBook`, so a restart at any moment resumes with no
 duplicate alert and no duplicate trade (D12). Nothing here can place an order.
@@ -22,6 +29,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import threading
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -62,17 +70,23 @@ log = logging.getLogger(__name__)
 
 #: completed sessions evaluated at most in one catch-up (D1, design Q2)
 CATCH_UP = 10
-#: the top-up never runs between these times (IST): the market and its close (ruling 3)
+#: the top-up and the history load stay off the poll thread between these times (IST)
 NO_TOP_UP = (dt.time(9, 0), dt.time(15, 35))
+#: the top-up: at most this many tries in a window, this far apart (lead's ruling)
+TOP_UP_TRIES = 3
+TOP_UP_GAP = dt.timedelta(minutes=20)
+#: an alert no channel accepted is tried again after this long
+RETELL = dt.timedelta(minutes=5)
 REASON_WORDS = {
     "SMA20": "the close is above its 20-session average",
-    "TIME": "30 sessions held",
-    "STOP": "the close is 15% or more below the entry fill",
+    "TIME": "the holding limit of sessions is reached",
+    "STOP": "the close is at or below the stop",
 }
 
 BarsFor = Callable[[str], pd.DataFrame | None]
-#: the top-up: given the series keys, fetch and store their recent one-minute bars
-TopUp = Callable[[list[str]], Any]
+#: the top-up: given the series keys and a stop flag, fetch and store recent one-minute bars;
+#: it may answer an object with `errors` (a `BackfillResult`)
+TopUp = Callable[..., Any]
 
 
 @dataclass(frozen=True)
@@ -83,6 +97,15 @@ class Stock:
     symbol: str  # what to type into Dhan
     params: PullbackParams
     evidence: str
+
+
+def _frame_key(frame: pd.DataFrame | None) -> tuple[Any, ...]:
+    """What identifies a frame's content cheaply: its length, first and last stamp and last
+    open and close (a bar revised in place changes its close)."""
+    if frame is None or len(frame) == 0:
+        return (0, None, None, None, None)
+    last = frame.iloc[-1]
+    return (len(frame), frame.index[0], frame.index[-1], last.get("open"), last.get("close"))
 
 
 class DeliveryDesk:
@@ -104,6 +127,7 @@ class DeliveryDesk:
         self.engine = engine
         self.cfg = desk_cfg.delivery
         self.calendar = calendar
+        self.session = session
         self.clock = SessionClock(session, calendar)
         self.notifier = notifier
         self.started_at = started_at
@@ -129,14 +153,24 @@ class DeliveryDesk:
         self._stored: dict[str, tuple[pd.DataFrame, dict[dt.date, dt.time]]] = {}
         self._history_day: dt.date | None = None
         self._reload = threading.Event()
-        self._top_up_day: dt.date | None = None
+        self._loader: threading.Thread | None = None
+        self._top_up_tries: list[dt.datetime] = []
         self._top_up_thread: threading.Thread | None = None
         self.top_up_note: str | None = None
-        self.notes: dict[str, str] = {}  # series key -> why the rule cannot read it now
+        self.notes: dict[str, str] = {}  # series key -> why an entry cannot be read now
         self._warned: set[tuple[str, str]] = set()
+        self._errors_logged: set[tuple[str, str, dt.date]] = set()
         self._cards: dict[str, dict[str, Any]] = {}
         self._view: dict[str, Any] = {"enabled": True, "pending": [], "open": []}
         self.errors = 0
+        # in memory between polls (cost of a poll, reviewer 4)
+        self._hist: dict[str, tuple[tuple[Any, ...], RuleHistory]] = {}
+        self._last_eval: dict[str, dt.date | None] = {}
+        self._gap_seen: dict[tuple[int, tuple[Any, ...]], None] = {}
+        self._told_version = -1
+        self._retell_at: dict[tuple[int, str], dt.datetime] = {}
+        self._rebuilt_on: tuple[Any, ...] | None = None
+        self.calls: Counter[str] = Counter()  # join_live, rebuild, untold: for the tests
 
     @property
     def series(self) -> list[str]:
@@ -144,31 +178,49 @@ class DeliveryDesk:
 
     # ── the stored days (outside the desk lock) ──────────────────────────────
     def load_history(self, now: dt.datetime) -> None:
-        """Read every series' stored days once a calendar day, and again after a top-up."""
-        today = now.astimezone(IST).date()
+        """Read every series' stored days once a calendar day, and again after a top-up. In
+        market hours (09:00 to 15:35) the read runs in the background and is swapped in when
+        done (about 6 s for 19 series on the owner's store), never on the poll thread."""
+        now = now.astimezone(IST)
+        today = now.date()
         if self._history_day == today and not self._reload.is_set():
             return
+        if self._loader is not None and self._loader.is_alive():
+            return
         self._reload.clear()
-        stored: dict[str, tuple[pd.DataFrame, dict[dt.date, dt.time]]] = {}
-        for key in self.series:
-            try:
-                stored[key] = rule_daily(self.engine, key, now)
-            except Exception:  # noqa: BLE001 - a missing history is a note, never a crash
-                log.exception("delivery: the stored daily history of %s could not be read", key)
-                stored[key] = (pd.DataFrame(), {})
-        self._stored = stored
-        self._history_day = today
+
+        def load() -> None:
+            stored: dict[str, tuple[pd.DataFrame, dict[dt.date, dt.time]]] = {}
+            for key in self.series:
+                try:
+                    stored[key] = rule_daily(self.engine, key, now)
+                except Exception:  # noqa: BLE001 - a missing history is a note, never a crash
+                    log.exception("delivery: the stored daily history of %s could not be read", key)
+                    stored[key] = (pd.DataFrame(), {})
+            self._stored = stored  # one assignment: the poll sees the old or the new, whole
+            self._history_day = today
+
+        if self._background and NO_TOP_UP[0] <= now.time() <= NO_TOP_UP[1]:
+            self._loader = threading.Thread(target=load, name="delivery-history", daemon=True)
+            self._loader.start()
+        else:
+            load()
 
     def maybe_top_up(self, now: dt.datetime) -> None:
-        """Top the store's one-minute bars up from the broker (D8, ruling 3): only with the
-        switch on, the Data API on and a top-up given, outside 09:00 to 15:35, once a day,
-        and only when a stored history ends before the last completed session."""
+        """Top the store's one-minute bars up from the broker (D8, lead's rulings): only with
+        the switch on, the Data API on and a top-up given, outside 09:00 to 15:35, only when a
+        stored history ends before the last completed session, at most `TOP_UP_TRIES` tries
+        in a window, `TOP_UP_GAP` apart. The top-up gets a stop flag that turns true at 09:00."""
         if self._top_up is None or not self.cfg.top_up or not self._data_api_active():
             return
         now = now.astimezone(IST)
-        if NO_TOP_UP[0] <= now.time() <= NO_TOP_UP[1] or self._top_up_day == now.date():
+        if NO_TOP_UP[0] <= now.time() <= NO_TOP_UP[1]:
             return
         if self._top_up_thread is not None and self._top_up_thread.is_alive():
+            return
+        window = self._window_start(now)
+        tries = [t for t in self._top_up_tries if t >= window]
+        if len(tries) >= TOP_UP_TRIES or (tries and now - tries[-1] < TOP_UP_GAP):
             return
         last = self._last_trading_day(now)
         behind = [
@@ -178,13 +230,30 @@ class DeliveryDesk:
         ]
         if not behind:
             return
-        self._top_up_day = now.date()
+        self._top_up_tries = [*tries, now]
         keys = list(self.series)
+        stop_at = dt.datetime.combine(
+            now.date() + (dt.timedelta(days=1) if now.time() > NO_TOP_UP[0] else dt.timedelta()),
+            NO_TOP_UP[0],
+            tzinfo=IST,
+        )
+
+        def stop() -> bool:
+            return type(self)._wall() >= stop_at
 
         def run() -> None:
             try:
-                self._top_up(keys)  # type: ignore[misc]
-                self.top_up_note = f"topped up {now:%d %b %H:%M}"
+                result = self._top_up(keys, stop)  # type: ignore[misc]
+                errors = list(getattr(result, "errors", None) or [])
+                if errors:
+                    shown = "; ".join(str(e) for e in errors[:3])
+                    more = f" and {len(errors) - 3} more" if len(errors) > 3 else ""
+                    self.top_up_note = (
+                        f"top-up {now:%d %b %H:%M}: {len(errors)} error(s): {shown}{more}"
+                    )
+                    log.warning("delivery: the top-up reported errors: %s", errors)
+                else:
+                    self.top_up_note = f"topped up {now:%d %b %H:%M}"
             except Exception as exc:  # noqa: BLE001 - the freshness test is the safety net
                 self.top_up_note = f"top-up failed {now:%d %b %H:%M}: {type(exc).__name__}"
                 log.warning("delivery: the top-up of the daily history failed: %s", exc)
@@ -195,6 +264,16 @@ class DeliveryDesk:
             self._top_up_thread.start()
         else:
             run()
+
+    @staticmethod
+    def _wall() -> dt.datetime:
+        return dt.datetime.now(IST)
+
+    @staticmethod
+    def _window_start(now: dt.datetime) -> dt.datetime:
+        """The start of the top-up window `now` is in: 15:35 today, or yesterday's."""
+        today = dt.datetime.combine(now.date(), NO_TOP_UP[1], tzinfo=IST)
+        return today if now >= today else today - dt.timedelta(days=1)
 
     def _stored_to(self, key: str) -> dt.date | None:
         frame, _ = self._stored.get(key, (pd.DataFrame(), {}))
@@ -220,17 +299,27 @@ class DeliveryDesk:
         self, now: dt.datetime, bars_for: BarsFor, last_price: Callable[[str], float | None]
     ) -> None:
         now = now.astimezone(IST)
-        hist = {k: self._history(k, bars_for(k)) for k in self.series}
-        self._fills(now, hist, bars_for)  # a fill before the evaluation of its session's exit
-        self._evaluate(now, hist)
+        bars = {k: bars_for(k) for k in self.series}
+        hist = {k: self._history(k, bars[k]) for k in self.series}
+        self._fills(now, hist, bars)  # a fill before the evaluation of its session's exit
+        loading = self._loader is not None and self._loader.is_alive() and not self._stored
+        if not loading:  # no stored history yet: nothing is evaluated on a half history
+            self._evaluate(now, hist)
         self._tell(now)  # told before anything else can change the alert
-        self._fills(now, hist, bars_for)  # an alert raised late fills in the same poll
+        self._fills(now, hist, bars)  # an alert raised late fills in the same poll
         self._tell(now)
         self._rebuild(now, hist, last_price)
 
     def _history(self, key: str, live: pd.DataFrame | None) -> RuleHistory:
         stored, last = self._stored.get(key, (pd.DataFrame(), {}))
-        return join_live(key, stored, last, live)
+        sig = (*_frame_key(stored), *_frame_key(live))
+        hit = self._hist.get(key)
+        if hit is not None and hit[0] == sig:
+            return hit[1]
+        self.calls["join_live"] += 1
+        h = join_live(key, stored, last, live, self.last_bar_at)
+        self._hist[key] = (sig, h)
+        return h
 
     def _complete(self, h: RuleHistory, now: dt.datetime) -> Callable[[dt.date], bool]:
         def f(day: dt.date) -> bool:
@@ -241,84 +330,113 @@ class DeliveryDesk:
 
         return f
 
-    def _fills(self, now: dt.datetime, hist: Mapping[str, RuleHistory], bars_for: BarsFor) -> None:
+    def _opening(self, day: dt.date) -> dt.datetime | None:
+        """The session's opening minute, for the late flag; None for a special session."""
+        if not self.calendar.is_trading_day(day):
+            return None
+        return self.clock.window_for(day).open_at
+
+    def _failed(self, key: str, kind: str, now: dt.datetime) -> None:
+        """One stock's or one trade's error: counted, logged once a day per (stock, kind)."""
+        self.errors += 1
+        mark = (key, kind, now.date())
+        if mark not in self._errors_logged:
+            self._errors_logged.add(mark)
+            log.exception("delivery: %s failed for %s (skipped; the others go on)", kind, key)
+
+    def _fills(
+        self,
+        now: dt.datetime,
+        hist: Mapping[str, RuleHistory],
+        bars: Mapping[str, pd.DataFrame | None],
+    ) -> None:
         for t in self.book.active():
-            stock = self.stocks.get(t.series_key)
-            bars = bars_for(t.series_key)
-            h = hist.get(t.series_key)
-            if stock is None or h is None:
-                continue
-            done = self._complete(h, now)
-            if t.status == PENDING_ENTRY:
-                got = decide(bars, t.signal_date, self.started_at, done, may_miss=True)
-                if isinstance(got, Fill):
-                    self.book.fill_entry(
-                        t.id,
-                        got.ts,
-                        got.session,
-                        entry_fill(got.open_, stock.params),
-                        got.late,
-                        now,
-                    )
-                elif isinstance(got, Missed):
-                    self.book.miss_entry(t.id, got.why, now)
-            elif t.status == EXIT_PENDING and t.exit_signal_date is not None:
-                got = decide(bars, t.exit_signal_date, self.started_at, done, may_miss=False)
-                if isinstance(got, Fill):
-                    self.book.fill_exit(
-                        t.id, got.ts, exit_fill(got.open_, stock.params), got.late, now
-                    )
-            limit = self.cfg.gap_warn_pct / 100.0
-            warning = gap_warning(bars, t.signal_date, limit)
-            if warning is not None and t.warning is None:
+            try:
+                self._fill_one(now, t, hist, bars)
+            except Exception:  # noqa: BLE001 - one trade never stops the others
+                self._failed(t.series_key, "fill", now)
+
+    def _fill_one(
+        self,
+        now: dt.datetime,
+        t: DeliveryTrade,
+        hist: Mapping[str, RuleHistory],
+        bars_of: Mapping[str, pd.DataFrame | None],
+    ) -> None:
+        stock = self.stocks.get(t.series_key)
+        bars = bars_of.get(t.series_key)
+        h = hist.get(t.series_key)
+        if stock is None or h is None:
+            return
+        done = self._complete(h, now)
+        if t.status == PENDING_ENTRY:
+            got = decide(
+                bars, t.signal_date, self.started_at, done, may_miss=True, opening=self._opening
+            )
+            if isinstance(got, Fill):
+                self.book.fill_entry(
+                    t.id, got.ts, got.session, entry_fill(got.open_, stock.params), got.late, now
+                )
+            elif isinstance(got, Missed):
+                self.book.miss_entry(t.id, got.why, now)
+        elif t.status == EXIT_PENDING and t.exit_signal_date is not None:
+            got = decide(
+                bars, t.exit_signal_date, self.started_at, done, may_miss=False,
+                opening=self._opening, given_at=t.exit_signalled_at,
+            )  # fmt: skip
+            if isinstance(got, Fill):
+                self.book.fill_exit(t.id, got.ts, exit_fill(got.open_, stock.params), got.late, now)
+        seen = (t.id, _frame_key(bars))
+        if seen not in self._gap_seen:
+            self._gap_seen[seen] = None
+            warning = gap_warning(bars, t.signal_date, self.cfg.gap_warn_pct / 100.0)
+            if warning is not None:
                 self.book.warn(t.id, warning, now)
 
     def _evaluate(self, now: dt.datetime, hist: Mapping[str, RuleHistory]) -> None:
         nh = hist[self.nifty_key]
-        n_done = self._complete(nh, now)
-        n_days = set(nh.days.index)
         for key, stock in self.stocks.items():
-            h = hist[key]
-            done = self._complete(h, now)
-            last = self.book.last_evaluated(key)
-            todo: list[dt.date] = []
-            for d in h.days.index:
-                if last is not None and d <= last:
-                    continue
-                if not done(d):
-                    if self._past_close(d, now):
-                        bar = h.last_bar.get(d)
-                        at = bar.strftime("%H:%M") if bar else "none"
-                        self._note(key, f"the session of {d} is incomplete (last bar {at})", d)
-                        todo.append(d)  # marks the stop: nothing after it is read
-                    break
-                todo.append(d)
-            if todo and not done(todo[-1]):
-                todo = todo[:-1]
-                stalled = True
+            try:
+                self._evaluate_stock(now, stock, hist[key], nh)
+            except Exception:  # noqa: BLE001 - one stock never stops the others
+                self._failed(key, "evaluation", now)
+
+    def _evaluated(self, key: str) -> dt.date | None:
+        if key not in self._last_eval:
+            self._last_eval[key] = self.book.last_evaluated(key)
+        return self._last_eval[key]
+
+    def _evaluate_stock(
+        self, now: dt.datetime, stock: Stock, h: RuleHistory, nh: RuleHistory
+    ) -> None:
+        """The sessions of one stock not yet read (see the module docstring, step 3)."""
+        key = stock.series_key
+        done = self._complete(h, now)
+        last = self._evaluated(key)
+        days = [d for d in h.days.index if last is None or d > last]
+        if days:
+            self.notes.pop(key, None)  # what this reading finds is noted again below
+        complete = [done(d) for d in days]
+        todo: list[tuple[dt.date, bool]] = []  # (day, complete)
+        for i, d in enumerate(days):
+            if complete[i]:
+                todo.append((d, True))
+            elif any(complete[i + 1 :]):  # a later session is complete: read it as it is
+                todo.append((d, False))
             else:
-                stalled = False
-            if last is None:
-                todo = todo[-1:]  # a first start reads the newest completed session only
-            todo = todo[-CATCH_UP:]
-            if not todo:
-                if not stalled:
-                    self.notes.pop(key, None)
-                continue
-            newest = todo[-1]
-            for day in todo:
-                why = problem(h, day, self.calendar, self.cfg.min_bars)
-                if why is None and (self.calendar.is_trading_day(day) or day in n_days):
-                    if not n_done(day):
-                        why = f"NIFTY's session of {day.isoformat()} is not complete yet"
-                    elif (nwhy := problem(nh, day, self.calendar, self.cfg.min_bars)) is not None:
-                        why = f"NIFTY: {nwhy}"
-                if why is not None:
-                    self._note(key, why, day)
-                    break
-                if not stalled:
-                    self.notes.pop(key, None)
-                self._evaluate_session(now, stock, h, nh, day, day == newest and not stalled)
+                if self._past_close(d, now):
+                    bar = h.last_bar.get(d)
+                    at = bar.strftime("%H:%M") if bar else "none"
+                    self._note(key, f"the session of {d} is incomplete (last bar {at})", d)
+                break
+        if last is None:
+            todo = todo[-1:]  # a first start reads the newest completed session only
+        todo = todo[-CATCH_UP:]
+        if not todo:
+            return
+        newest = todo[-1][0]
+        for day, whole in todo:
+            self._evaluate_session(now, stock, h, nh, day, whole, day == newest)
 
     def _past_close(self, day: dt.date, now: dt.datetime) -> bool:
         if day < now.date():
@@ -327,6 +445,21 @@ class DeliveryDesk:
             self.clock.window_for(day).close_at + self.settle
         )
 
+    def _entry_problem(
+        self, stock: Stock, h: RuleHistory, nh: RuleHistory, day: dt.date, now: dt.datetime
+    ) -> str | None:
+        """Why no entry can be read on `day` (a hole, a short history, a bad bar), or None.
+        NIFTY missing that day is not a problem: R1(b) then gives no signal."""
+        floor = max(self.cfg.min_bars, stock.params.min_bars)
+        why = problem(h, day, self.calendar, floor)
+        if day in h.bad:
+            why = f"{day}: {h.bad[day]}"
+        if why is None:
+            bad = [d for d in h.bad if d <= day]
+            if bad:
+                self._note(stock.series_key, f"bar of {bad[-1]} left out: {h.bad[bad[-1]]}", day)
+        return why
+
     def _evaluate_session(
         self,
         now: dt.datetime,
@@ -334,21 +467,24 @@ class DeliveryDesk:
         h: RuleHistory,
         nh: RuleHistory,
         day: dt.date,
+        whole: bool,
         newest: bool,
     ) -> None:
         p = stock.params
         frame = h.upto(day)
         dates = list(frame.index)
         c = frame["close"].to_numpy(float)
-        nf = nh.upto(day)
-        ok = nifty_ok(dates, list(nf.index), nf["close"].to_numpy(float), p)
-        reading = entry_reading(c, ok, len(c) - 1, p)
         exits: list[dict[str, Any]] = []
+        partial = None if whole else f"{day.isoformat()} read from incomplete data"
+        if partial:
+            self._note(stock.series_key, partial, day)
         for t in self.book.active():
             if t.series_key != stock.series_key or t.status != OPEN or t.entry_session is None:
                 continue
             if t.entry_session > day or t.entry_paise is None:
                 continue
+            if partial:
+                self.book.warn(t.id, partial, now)
             if t.entry_session not in dates:
                 self._note(
                     stock.series_key,
@@ -360,26 +496,37 @@ class DeliveryDesk:
             exits.append({"trade": t.id, "sessions": r.sessions, "reasons": list(r.reasons)})
             if r.hit:
                 self.book.signal_exit(t.id, day, r.reasons, r.sessions, now)
-        busy = any(t.series_key == stock.series_key for t in self.book.active())
         entry = None
-        if reading.signal and not busy:
-            entry = NewEntry(
-                stock.instrument_key,
-                float(c[-1]),
-                quantity(float(c[-1]), p.unit_inr),
-                {"rule": p.__dict__, "reading": reading.as_dict(), "evidence": stock.evidence},
-                PENDING_ENTRY if newest else MISSED,
-                None if newest else "missed: the desk was not running after that close",
-            )
-        record = {**reading.as_dict(), "session": day.isoformat(), "exits": exits, "busy": busy}
+        record: dict[str, Any] = {"session": day.isoformat(), "exits": exits, "whole": whole}
+        why = partial or self._entry_problem(stock, h, nh, day, now)
+        if why is not None:
+            self._note(stock.series_key, why, day)
+            record["entry_blocked"] = why
+        else:
+            nf = nh.upto(day)
+            ok = nifty_ok(dates, list(nf.index), nf["close"].to_numpy(float), p)
+            reading = entry_reading(c, ok, len(c) - 1, p)
+            record.update(reading.as_dict())
+            busy = any(t.series_key == stock.series_key for t in self.book.active())
+            record["busy"] = busy
+            if reading.signal and not busy:
+                entry = NewEntry(
+                    stock.instrument_key,
+                    float(c[-1]),
+                    quantity(float(c[-1]), p.unit_inr),
+                    {"rule": p.__dict__, "reading": reading.as_dict(), "evidence": stock.evidence},
+                    PENDING_ENTRY if newest else MISSED,
+                    None if newest else "missed: the desk was not running after that close",
+                )
         self.book.record_evaluation(stock.series_key, day, record, now, entry)
+        self._last_eval[stock.series_key] = day
 
     def _note(self, key: str, why: str, day: dt.date | None = None) -> None:
         self.notes[key] = why
         mark = (key, f"{day}:{why}")
         if mark not in self._warned:
             self._warned.add(mark)
-            log.warning("delivery: %s not evaluated%s: %s", key, f" for {day}" if day else "", why)
+            log.warning("delivery: %s%s: %s", key, f" {day}" if day else "", why)
 
     # ── alerts (D2, D5, D14) ─────────────────────────────────────────────────
     def alert_text(self, t: DeliveryTrade, which: str) -> tuple[str, str]:
@@ -387,49 +534,89 @@ class DeliveryDesk:
         label = stock.label if stock else t.series_key
         symbol = stock.symbol if stock else t.series_key
         evidence = (stock.evidence if stock else "") or str(t.plan.get("evidence") or "")
+        p = stock.params if stock else PullbackParams()
         if which == "entry":
             title = f"BUY {t.qty} shares of {label} at the next open · pullback 1d (delivery)"
             body = (
-                f"BUY {t.qty} shares of {symbol} at the next open (last close Rs {t.signal_close:,.2f}).\n"
-                f"Pullback: the close of {t.signal_date:%d %b %Y} is 8% or more below its 20-session "
-                f"closing high, above its SMA200, with NIFTY above its SMA200. Delivery, carried "
-                f"for days: the exit alert says when to sell. Paper test: no order is placed."
+                f"BUY {t.qty} shares of {symbol} at the next open "
+                f"(last close Rs {t.signal_close:,.2f}).\n"
+                f"Pullback: the close of {t.signal_date:%d %b %Y} is {p.depth * 100:g}% or more "
+                f"below its {p.high_lookback}-session closing high, above its SMA{p.trend_sma}, "
+                f"with NIFTY above its SMA{p.trend_sma}. Delivery, carried for days: the exit "
+                f"alert says when to sell. Paper test: no order is placed."
             )
         else:
             reasons = [r for r in (t.exit_reason or "").split(",") if r]
-            why = "; ".join(REASON_WORDS.get(r, r) for r in reasons)
-            title = f"SELL {t.qty} shares of {label} at the next open · pullback exit ({', '.join(reasons)})"
+            words = {
+                "SMA20": f"the close is above its {p.exit_sma}-session average",
+                "TIME": f"{p.max_sessions} sessions held",
+                "STOP": f"the close is {p.stop * 100:g}% or more below the entry fill",
+            }
+            why = "; ".join(words.get(r, REASON_WORDS.get(r, r)) for r in reasons)
+            title = (
+                f"SELL {t.qty} shares of {label} at the next open · pullback exit "
+                f"({', '.join(reasons)})"
+            )
             body = (
                 f"SELL {t.qty} shares of {symbol} at the next open: {why} "
-                f"(close of {t.exit_signal_date:%d %b %Y}, {t.sessions_held} of {stock.params.max_sessions if stock else 30} sessions). "
-                f"Paper test: no order is placed."
+                f"(close of {t.exit_signal_date:%d %b %Y}, "
+                f"{t.sessions_held} of {p.max_sessions} sessions). Paper test: no order is placed."
             )
         if evidence:
             body += f"\n{evidence}"
         return title, body
 
+    def notification(self, t: DeliveryTrade, which: str, now: dt.datetime) -> Notification:
+        """The alert as every channel gets it: its own title and text. The payload names no
+        symbol or side, so a channel never formats it as an intraday desk alert."""
+        title, body = self.alert_text(t, which)
+        sid = f"pb-{t.series_key}-{t.signal_date.isoformat()}-{which}"
+        return Notification(
+            title=title,
+            body=body,
+            level=NotificationLevel.SIGNAL,
+            signal_id=sid,
+            ttl_seconds=self._ttl(now),
+            payload={
+                "id": sid,
+                "delivery": which,
+                "signal_date": t.signal_date.isoformat(),
+                "qty": t.qty,
+                "status": t.status,
+                "title": title,
+                "text": body,
+            },
+        )
+
     def _tell(self, now: dt.datetime) -> None:
+        due = any(at <= now for at in self._retell_at.values())
+        if self.book.version == self._told_version and not due:
+            return
+        self.calls["untold"] += 1
+        broke = False
         for t, which in self.book.untold():
-            title, body = self.alert_text(t, which)
-            sid = f"pb-{t.series_key}-{t.signal_date.isoformat()}-{which}"
-            payload = {**t.as_dict(), "alert": which, "text": body}
-            try:
-                self.notifier.send(
-                    Notification(
-                        title=title,
-                        body=body,
-                        level=NotificationLevel.SIGNAL,
-                        signal_id=sid,
-                        ttl_seconds=self._ttl(now),
-                        payload=payload,
-                    ),
-                    dedup_key=f"delivery:{sid}",
-                )
-            except Exception:  # noqa: BLE001 - retried at the next poll
-                self.errors += 1
-                log.exception("delivery: the %s alert of %s could not be sent", which, sid)
+            mark = (t.id, which)
+            if mark in self._retell_at and self._retell_at[mark] > now:
                 continue
+            n = self.notification(t, which, now)
+            try:
+                result = self.notifier.send(n, dedup_key=f"delivery:{n.signal_id}")
+            except Exception:  # noqa: BLE001 - the notifier itself broke: tried at the next poll
+                self.errors += 1
+                broke = True
+                log.exception("delivery: the %s alert of %s could not be sent", which, n.signal_id)
+                continue
+            # told when a channel accepted it, or the repeat window answered (an empty result);
+            # every channel refusing it is tried again after RETELL, not at every poll
+            accepted = isinstance(result, Mapping) and (not result or any(result.values()))
+            if not accepted:
+                self.errors += 1
+                self._retell_at[mark] = now + RETELL
+                log.warning("delivery: no channel took the %s alert of %s", which, n.signal_id)
+                continue
+            self._retell_at.pop(mark, None)
             self.book.mark_told(t.id, which, now)
+        self._told_version = -1 if broke else self.book.version
 
     def _ttl(self, now: dt.datetime) -> int:
         """Pending until the next session's close: seconds to the next trading day's close."""
@@ -447,6 +634,19 @@ class DeliveryDesk:
         hist: Mapping[str, RuleHistory],
         last_price: Callable[[str], float | None],
     ) -> None:
+        sig = (
+            tuple(self._hist[k][0] for k in self.series if k in self._hist),
+            self.book.version,
+            tuple(sorted(self.notes.items())),
+            self.top_up_note,
+            self.errors,
+            now.date(),
+            self._past_close(now.date(), now),
+        )
+        if sig == self._rebuilt_on:
+            self._refresh_prices(last_price)
+            return
+        self.calls["rebuild"] += 1
         nh = hist[self.nifty_key]
         n_done = self._complete(nh, now)
         n_to = max((d for d in nh.days.index if n_done(d)), default=None)
@@ -455,36 +655,21 @@ class DeliveryDesk:
         opened: list[dict[str, Any]] = []
         pending: list[dict[str, Any]] = []
         for key, stock in self.stocks.items():
-            h = hist[key]
-            done = self._complete(h, now)
-            complete = [d for d in h.days.index if done(d)]
-            to = complete[-1] if complete else None
-            card: dict[str, Any] = {
-                "evidence": stock.evidence,
-                "history_to": to.isoformat() if to else None,
-                "stored_to": stored.isoformat() if (stored := self._stored_to(key)) else None,
-                "note": self.notes.get(key),
-                "session": None,
-                "reading": None,
-            }
-            if to is not None and problem(h, to, self.calendar, self.cfg.min_bars) is None:
-                frame = h.upto(to)
-                nf = nh.upto(to)
-                ok = nifty_ok(
-                    list(frame.index), list(nf.index), nf["close"].to_numpy(float), stock.params
+            try:
+                card, rows = self._rebuild_one(now, stock, hist[key], nh, active, last_price)
+            except Exception:  # noqa: BLE001 - one card never stops the others
+                self._failed(key, "view", now)
+                card, rows = (
+                    {"evidence": stock.evidence, "note": "this card failed: see the log"},
+                    [],
                 )
-                r = entry_reading(frame["close"].to_numpy(float), ok, len(frame) - 1, stock.params)
-                card["session"], card["reading"] = to.isoformat(), r.as_dict()
-            mine = [t for t in active if t.series_key == key]
-            card["trade"] = mine[0].as_dict() if mine else None
             cards[key] = card
-            for t in mine:
-                row = self._trade_row(t, stock, h, last_price(key))
+            for t, row in rows:
                 (pending if t.status in (PENDING_ENTRY, EXIT_PENDING) else opened).append(row)
                 if t.status == EXIT_PENDING:
                     opened.append(row)
         self._cards = cards
-        tos = [c["history_to"] for c in cards.values() if c["history_to"]]
+        tos = [str(c["history_to"]) for c in cards.values() if c.get("history_to")]
         self._view = {
             "enabled": True,
             "strategy": self.book.strategy,
@@ -493,11 +678,64 @@ class DeliveryDesk:
             "open": opened,
             "history_to": min(tos) if tos and len(tos) == len(cards) else None,
             "nifty_history_to": n_to.isoformat() if n_to else None,
-            "stale": sorted(k for k, c in cards.items() if not c["history_to"] or c["note"]),
+            "stale": sorted(
+                k for k, c in cards.items() if not c.get("history_to") or c.get("note")
+            ),
             "top_up": self.top_up_note,
             "errors": self.errors,
             "evidence": next((s.evidence for s in self.stocks.values() if s.evidence), ""),
         }
+        self._rebuilt_on = sig
+
+    def _rebuild_one(
+        self,
+        now: dt.datetime,
+        stock: Stock,
+        h: RuleHistory,
+        nh: RuleHistory,
+        active: list[DeliveryTrade],
+        last_price: Callable[[str], float | None],
+    ) -> tuple[dict[str, Any], list[tuple[DeliveryTrade, dict[str, Any]]]]:
+        key = stock.series_key
+        done = self._complete(h, now)
+        complete = [d for d in h.days.index if done(d)]
+        to = complete[-1] if complete else None
+        stored = self._stored_to(key)
+        card: dict[str, Any] = {
+            "evidence": stock.evidence,
+            "history_to": to.isoformat() if to else None,
+            "stored_to": stored.isoformat() if stored else None,
+            "note": self.notes.get(key),
+            "session": None,
+            "reading": None,
+        }
+        floor = max(self.cfg.min_bars, stock.params.min_bars)
+        if to is not None and problem(h, to, self.calendar, floor) is None:
+            frame = h.upto(to)
+            nf = nh.upto(to)
+            ok = nifty_ok(
+                list(frame.index), list(nf.index), nf["close"].to_numpy(float), stock.params
+            )
+            r = entry_reading(frame["close"].to_numpy(float), ok, len(frame) - 1, stock.params)
+            card["session"], card["reading"] = to.isoformat(), r.as_dict()
+        mine = [t for t in active if t.series_key == key]
+        card["trade"] = mine[0].as_dict() if mine else None
+        rows = [(t, self._trade_row(t, stock, h, last_price(key))) for t in mine]
+        return card, rows
+
+    def _refresh_prices(self, last_price: Callable[[str], float | None]) -> None:
+        """Between rebuilds only the last price moves: the open rows' marks follow it."""
+        for row in self._view.get("open", []):
+            try:
+                last = last_price(str(row.get("series_key")))
+            except Exception:  # noqa: BLE001
+                continue
+            entry = row.get("entry")
+            if last is None or not entry:
+                continue
+            row["last"] = last
+            row["unrealised"] = round((last - entry) * row["qty"], 2)
+            row["unrealised_pct"] = round((last / entry - 1) * 100, 3)
 
     def _trade_row(
         self, t: DeliveryTrade, stock: Stock, h: RuleHistory, last: float | None

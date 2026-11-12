@@ -176,11 +176,16 @@ def test_d4_d5_d6_a_trade_is_carried_then_closed_with_every_figure(book, costs):
     assert not book.fill_exit(t.id, at(D3, "09:21"), 1.0, True, NOW)
 
 
-def test_d15_the_first_warning_stays_and_only_active_trades_take_one(book):
+def test_d15_each_warning_is_added_once_and_only_active_trades_take_one(book):
+    """Lead's rulings after the review: a D15 warning and "<date> read from incomplete data"
+    must both stay visible, so a different warning is added; the same one is not repeated."""
     t = book.record_evaluation("SBIN", D0, {}, NOW, entry())
     assert book.warn(t.id, "possible corporate action on X", NOW)
-    assert not book.warn(t.id, "another", NOW)
-    assert book.get(t.id).warning == "possible corporate action on X"
+    assert not book.warn(t.id, "possible corporate action on X", NOW)
+    assert book.warn(t.id, "another", NOW)
+    assert book.get(t.id).warning == "possible corporate action on X; another"
+    book.miss_entry(t.id, "missed", NOW)
+    assert not book.warn(t.id, "a third", NOW)
 
 
 def test_the_scoreboard_row_counts_closed_trades_and_missed_entries(book):

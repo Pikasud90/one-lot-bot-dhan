@@ -680,6 +680,7 @@ delivery_trades = Table(
     Column("entry_paise", BigInteger),
     Column("entry_late", Boolean),
     Column("exit_signal_date", String(10)),
+    Column("exit_signalled_at", TZDateTime),  # when the exit alert was raised (its fill is after)
     Column("exit_reason", String(48)),  # R3 reasons, comma-separated in R3's order
     Column("sessions_held", Integer),  # at the exit signal; the entry session counts as 1
     Column("exit_told_at", TZDateTime),

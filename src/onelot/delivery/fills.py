@@ -5,7 +5,8 @@ signal date. So a holiday is skipped and a special session (a Muhurat or Budget 
 session, as in the research's daily bars.
 
 - The desk ran at that session's open (its process started at or before the first bar): the
-  fill is that bar's open.
+  fill is that bar's open, late only when that bar is more than two minutes after the
+  session's opening minute (a feed gap).
 - It started during that session: the first bar that opens at or after the start, marked late.
 - It started after that session was over: an entry is MISSED ("the desk was not running"); an
   exit is never missed, it sells at the first bar after the start, marked late.
@@ -47,6 +48,8 @@ def decide(
     complete: Callable[[dt.date], bool],
     *,
     may_miss: bool,
+    opening: Callable[[dt.date], dt.datetime | None] | None = None,
+    given_at: dt.datetime | None = None,
 ) -> Fill | Missed | None:
     """The fill of an order "at the next open" after the close of session `after`, or Missed,
     or None (wait). `bars`: the desk's fine bars (tz-aware index, an `open` column).
@@ -64,8 +67,13 @@ def decide(
     dates = idx.date
     first = int(next(i for i, d in enumerate(dates) if d == s1))
     start = pd.Timestamp(started_at).tz_convert(IST)
+    if given_at is not None and start <= idx[first] < pd.Timestamp(given_at).tz_convert(IST):
+        # the desk ran at that open but the order was given after it (a day read late): the
+        # first bar after the order, late; never an open already past
+        start = pd.Timestamp(given_at).tz_convert(IST)
     if start <= idx[first]:
-        return Fill(idx[first].to_pydatetime(), s1, float(bars["open"].iloc[first]), False)
+        ts = idx[first].to_pydatetime()
+        return Fill(ts, s1, float(bars["open"].iloc[first]), _gap(ts, s1, opening))
     after_start = [i for i in range(first, len(idx)) if idx[i] >= start]
     in_s1 = [i for i in after_start if dates[i] == s1]
     if in_s1:
@@ -80,6 +88,19 @@ def decide(
         i = after_start[0]
         return Fill(idx[i].to_pydatetime(), dates[i], float(bars["open"].iloc[i]), True)
     return None
+
+
+#: a fill bar more than this after the session's opening minute is late, whatever the cause
+LATE_AFTER = dt.timedelta(minutes=2)
+
+
+def _gap(
+    ts: dt.datetime, session: dt.date, opening: Callable[[dt.date], dt.datetime | None] | None
+) -> bool:
+    """True when the session's first bar the desk has is more than `LATE_AFTER` after the
+    session's opening minute (a feed gap): late as surely as a late start."""
+    at = opening(session) if opening is not None else None
+    return at is not None and ts > at + LATE_AFTER
 
 
 def gap_warning(bars: pd.DataFrame | None, since: dt.date, limit: float = 0.20) -> str | None:

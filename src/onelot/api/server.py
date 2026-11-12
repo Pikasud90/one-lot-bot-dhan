@@ -214,11 +214,14 @@ def _paper_scoreboard(desk: object) -> list[dict[str, Any]] | None:
             for t in (book.open_trades() if book is not None else [])
         )
         if delivery is not None:  # US-067: the delivery pullback trades, a slot of their own
-            for slot, row in delivery.book.by_slot().items():
-                totals[slot] = row
-            opened[Slot(delivery.book.strategy, delivery.book.timeframe, "STOCK")] = (
-                delivery.book.open_count()
-            )
+            try:
+                for slot, row in delivery.book.by_slot().items():
+                    totals[slot] = row
+                opened[Slot(delivery.book.strategy, delivery.book.timeframe, "STOCK")] = (
+                    delivery.book.open_count()
+                )
+            except Exception as exc:  # noqa: BLE001 - the intraday rows still show
+                log.warning("the delivery scoreboard row could not be read: %s", type(exc).__name__)
     except (SQLAlchemyError, OSError) as exc:
         log.warning("the paper scoreboard could not be read: %s", type(exc).__name__)
         return None

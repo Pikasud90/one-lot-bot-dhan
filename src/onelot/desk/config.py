@@ -51,7 +51,7 @@ class DeliveryCfg:
     top_up: bool = True  # top the store's one-minute bars up from Dhan outside market hours
     last_bar_at: str = "15:10"  # a session is complete once its last fine bar is at/after this
     settle_minutes: int = 10  # ... and the clock is this long past the session's close
-    min_bars: int = 221  # daily bars the rule reads at least (D8)
+    min_bars: int = 201  # daily bars an entry reads at least (D8; the rule's own 201)
     gap_warn_pct: float = 20.0  # D15: a first bar this far from the previous close is flagged
 
 
@@ -247,7 +247,7 @@ def _delivery(raw: object) -> DeliveryCfg:
         top_up=_flag(raw.get("top_up", True), "delivery.top_up"),
         last_bar_at=str(raw.get("last_bar_at", "15:10")),
         settle_minutes=int(raw.get("settle_minutes", 10)),
-        min_bars=int(raw.get("min_bars", 221)),
+        min_bars=int(raw.get("min_bars", 201)),
         gap_warn_pct=float(raw.get("gap_warn_pct", 20.0)),
     )
     parse_hhmm(cfg.last_bar_at)  # a bad time is a config error now, not at the close
