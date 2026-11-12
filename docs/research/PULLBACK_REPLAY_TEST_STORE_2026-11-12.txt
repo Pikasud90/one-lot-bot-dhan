@@ -1,8 +1,14 @@
 US-067 D13: scripts/pullback_replay.py on a TEMPORARY store built from the test fixtures
 (--make-test-store, one-minute bars for the last 260 sessions made from each day's open and
-close), --sessions 255, run 2026-11-12. Not the owner's store: the lead runs that one.
+close), --sessions 255, rerun after the review fixes on 2026-11-12 (40 s in all).
+Not the owner's store: the lead runs that one.
 
-rule_daily for 19 series: 4.52 s (0.238 s each)
+rule_daily for 19 series: 4.82 s (0.253 s each)
 window: 2025-10-28 to 2026-11-06 (255 sessions)
 reference trades signalled in the window: 8; matched: 8
 RESULT: PASS
+
+scripts/pullback_parity_full.py (whole fixture window, shipped settings):
+reference trades: 247; matched: 247
+
+DIFFS: 0; 226 s for 2430 sessions

@@ -118,8 +118,14 @@ paper trades only: the system never places an order.
 - Is the daily history fresh? Home's Delivery block and each stock card say "daily history
   complete to <date>" and the store's last day. A session counts once its last one-minute bar
   is at or after 15:10 and the clock is 10 minutes past the close (`delivery:` in
-  `config/desk.yaml`). A short history, a missing session or a day that stops early shows on
-  the card in place of a reading, and no alert is raised until it is fixed.
+  `config/desk.yaml`). A short history (under 201 days) or a missing session stops the entry
+  alerts of that stock and shows on the card; it never stops the exit tests of an open trade.
+  A day whose bars stop early is read as it is for exits only once a later session is
+  complete, with "<date> read from incomplete data" on the card and the trade. A Muhurat
+  session counts the next day; a bar with a bad price is left out with a note.
+- Known limit: after a catch-up over several sessions, an entry signal on the day after an exit
+  signal can be dropped, because that exit is still pending. The reference would take it.
 - With the Dhan Data API on, the desk tops up the store's one-minute bars once a day outside
-  09:00 to 15:35 when the store is behind (`delivery.top_up`, on by default). Otherwise run a
-  backfill from the Data tab.
+  09:00 to 15:35 when the store is behind (`delivery.top_up`, on by default): at most three
+  tries in a window, 20 minutes apart, stopped at 09:00; its errors show on Home. Otherwise run
+  a backfill from the Data tab.

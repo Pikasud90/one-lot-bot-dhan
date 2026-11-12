@@ -81,17 +81,27 @@ def replay(store: Path, sessions: int, expected: Path) -> int:
         calendar, notifier=_Quiet(), started_at=dt.datetime(2000, 1, 1, tzinfo=IST),
         background=False,
     )  # fmt: skip
-    by_day = {}
-    for k, frame in minutes.items():
-        idx = pd.DatetimeIndex(frame.index).tz_convert(IST) if len(frame) else frame.index
-        by_day[k] = {d: frame[idx.date == d] for d in window} if len(frame) else {}
+    by_day: dict[str, dict[dt.date, pd.DataFrame]] = {}
+    for k, frame in minutes.items():  # grouped once by date, never a mask per day
+        if not len(frame):
+            by_day[k] = {}
+            continue
+        idx = pd.DatetimeIndex(frame.index).tz_convert(IST)
+        by_day[k] = dict(list(frame.groupby(idx.date)))  # a GroupBy is not a mapping
+    starts = {}
+    for k in keys:
+        didx = np.array(pd.DatetimeIndex(full[k][0].index).tz_convert(IST).date)
+        starts[k] = didx
+    t0 = time.perf_counter()
     for i, day in enumerate(window):
         prev = window[i - 1] if i else None
         for k in keys:
             daily, last = full[k]
-            didx = pd.DatetimeIndex(daily.index).tz_convert(IST).date
-            desk._stored[k] = (daily[didx < day], {d: t for d, t in last.items() if d < day})
+            cut = int(np.searchsorted(starts[k], day))  # the stored days before `day`
+            desk._stored[k] = (daily.iloc[:cut], last)
         desk._history_day = day
+        if i % 50 == 0:
+            print(f"session {i} of {len(window)}: {day} ({time.perf_counter() - t0:.0f} s)")
 
         def bars(key: str, day: dt.date = day, prev: dt.date | None = prev) -> pd.DataFrame:
             parts = [by_day[key].get(d) for d in (prev, day) if d is not None]
@@ -197,6 +207,7 @@ def make_test_store(path: Path, minute_sessions: int) -> None:
 
 
 def main() -> int:
+    sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]  # progress shows at once
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
