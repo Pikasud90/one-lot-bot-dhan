@@ -11,8 +11,11 @@ import numpy as np
 import pandas as pd
 
 from ..clock import IST
+from ..data.hygiene import clean_intraday, consistent_daily
 from ..data.resample import minutes_of, resample_bars
 from ..data.universe import InstrumentSpec, SeriesSpec
+from ..indicators import mtf
+from ..strategies import mtf_support as ms
 from ..strategies.base import Context
 from ..strategies.registry import REGISTRY, get_strategy
 from .config import DeskInstrumentCfg, StrategySlotCfg
@@ -21,6 +24,11 @@ from .rules import lab_entry_risk
 log = logging.getLogger(__name__)
 
 MIN_BARS = 60
+#: calendar days between the last stored daily bar and the first live one before the daily
+#: trend is flagged (a long weekend with a holiday is five)
+HISTORY_GAP_DAYS = 5
+#: bars of a timeframe before its Supertrend has a reading
+_WARM_BARS = mtf.WARMUP_FACTOR * mtf.ST_PERIOD
 
 
 @dataclass
@@ -51,7 +59,21 @@ class StrategySlot:
     last_flags: dict = field(
         default_factory=dict
     )  # long_entry/short_entry/long_exit/short_exit of the last bar
+    #: the strategy trails the stop along its own line (it gives long_trail / short_trail)
+    line_trail: bool = False
+    #: side -> the level that line allows the stop to stand at after the last closed bar
+    last_trail: dict = field(default_factory=dict)
     error: str | None = None
+
+    def trail_level(self, side: str) -> float | None:
+        """Where the strategy's own line lets the stop of an OPEN `side` position stand after
+        its latest closed bar. None: no line trail, or the line is not on that side now (the
+        stop then stays where it is). The level only ever tightens a stop: whoever follows it
+        takes it when it is nearer the price than the stop in force, never otherwise."""
+        if not self.line_trail:
+            return None
+        level = self.last_trail.get(side)
+        return float(level) if level is not None else None
 
     def exit_advice(self, side: str) -> str | None:
         """What the strategy says about an OPEN position on its latest closed bar."""
@@ -63,6 +85,19 @@ class StrategySlot:
         if f.get("short_entry" if side == "long" else "long_entry"):
             return "OPPOSITE_SIGNAL"
         return None
+
+    def trail_view(self) -> dict | None:
+        """The strategy's own trail as a card shows it: the timeframe of the line and where it
+        lets a stop stand after the last closed bar, per side (None on a side the line is not
+        on now). None for a slot that trails by ATR or not at all."""
+        if not self.line_trail:
+            return None
+        tf = getattr(self.strategy, "trail_timeframe", None)
+        return {
+            "timeframe": str(tf) if tf else self.cfg.timeframe,
+            "long": self.trail_level("long"),
+            "short": self.trail_level("short"),
+        }
 
     def as_dict(self) -> dict:
         v = self.last_verdict
@@ -80,6 +115,7 @@ class StrategySlot:
             "signals_today": self.signals_today,
             "error": self.error,
             "features": self.last_features,
+            "trail": self.trail_view(),
         }
 
 
@@ -114,6 +150,9 @@ class InstrumentTracker:
             self.slots.append(
                 StrategySlot(s, strat, REGISTRY[s.name].label, minutes_of(s.timeframe))
             )
+        # the card's regime comes from the single-timeframe slots when there is one: a
+        # multi-timeframe slot looks every few minutes and would overwrite it with its own
+        self._plain_slots = any(not _multi(s) for s in self.slots)
         self.trades_today = 0
         self.consecutive_losses = 0
         self.pnl_today = 0.0
@@ -122,6 +161,17 @@ class InstrumentTracker:
         self.live_quote: dict | None = (
             None  # last WS tick (ltp, bid, ask, ts) when the Dhan socket is on
         )
+        # ── the trend ladder: Supertrend(14, 1.7) on 1m, 5m, 15m, 30m, 60m and 1d ──
+        #: stored daily bars up to the last poll's day (`desk/history.py`); None until loaded
+        self.daily_history: pd.DataFrame | None = None
+        self.history_day: dt.date | None = None  # the day `daily_history` was read on
+        self.history_note: str | None = None  # why there is none, when there is none
+        #: the ladder at the last closed fine bar, as the card shows it ({} before any bars)
+        self.trend: dict = {}
+        self._ladders = ms.LadderCache()  # shared by the card and every multi-timeframe slot
+        self._fine_memo: tuple[tuple, pd.DataFrame] | None = None
+        self._daily_memo: tuple[tuple, pd.DataFrame, str | None] | None = None
+        self._trend_failed = False
 
     # ── bars ──────────────────────────────────────────────────────────────
     def update_bars(self, df: pd.DataFrame) -> None:
@@ -169,6 +219,95 @@ class InstrumentTracker:
             return None
         return (now - (ts + dt.timedelta(minutes=self.fine_minutes))).total_seconds()
 
+    # ── the trend ladder ──────────────────────────────────────────────────
+    def fine_bars(self) -> pd.DataFrame:
+        """The fine bars as the trend ladder reads them: without mock sessions and on one
+        price scale (`data/hygiene.clean_intraday`, what the Lab loads). Nearly always the
+        very frame the desk polled; kept until the bars change."""
+        key = ms.fingerprint(self.bars)
+        if self._fine_memo is None or self._fine_memo[0] != key:
+            self._fine_memo = (key, clean_intraday(self.series.key, self.bars))
+        return self._fine_memo[1]
+
+    def daily_bars(self) -> pd.DataFrame | None:
+        """The days of the ladder's daily rung: the stored history with the live days laid on
+        top, on the live bars' price scale (`data/hygiene.consistent_daily`, the way the Lab
+        builds them). None without stored history: the live days alone are too few for a
+        daily Supertrend.
+
+        Today's unfinished day is in it and does no harm: a day counts only from the
+        following midnight (`indicators/mtf.nominal_close_ns`)."""
+        history = self.daily_history
+        if history is None or history.empty:
+            return None
+        fine = self.fine_bars()
+        key = (*ms.fingerprint(history), *ms.fingerprint(fine))
+        if self._daily_memo is None or self._daily_memo[0] != key:
+            self._daily_memo = (key, consistent_daily(history, fine), _history_gap(history, fine))
+        return self._daily_memo[1]
+
+    def _ladder_context(self, fine: pd.DataFrame, market: pd.DataFrame | None = None) -> Context:
+        """What a multi-timeframe reading needs: the fine bars, the days and the shared ladders."""
+        return Context(
+            symbol=self.series.key,
+            daily=self.daily_bars(),
+            market=market,
+            extras={
+                "has_volume": bool(self.series.has_volume),
+                "minute_bars": fine,
+                "minute_resolution": f"{self.fine_minutes}m",
+                "mtf_cache": self._ladders,
+            },
+        )
+
+    def _read_trend(self, at: pd.Timestamp) -> None:
+        """The Supertrend(14, 1.7) ladder at the close of the last fine bar: the micro trend
+        the card shows. Read at the DATA time, never the wall clock, so a late poll says what
+        a backtest of that minute would. A failure leaves the card without a ladder and never
+        stops a strategy."""
+        try:
+            fine = self.fine_bars()
+            ladder = ms.ladder_for(
+                fine,
+                self._ladder_context(fine),
+                f"{self.fine_minutes}m",
+                mtf.ST_PERIOD,
+                mtf.ST_MULT,
+            )
+            trend = ms.snapshot(ladder, at)
+            trend["at"] = at.isoformat()
+            trend["note"] = self._trend_note(trend)
+            self.trend = trend
+            self._trend_failed = False
+        except Exception:  # noqa: BLE001 - the ladder is a reading, never a dependency
+            if not self._trend_failed:
+                log.exception("desk %s: the trend ladder failed", self.cfg.key)
+            self._trend_failed = True
+            self.trend = {}
+
+    def _trend_note(self, trend: dict) -> str | None:
+        """Why a timeframe has no reading, or why the daily one may be off (None: all read)."""
+        notes: list[str] = []
+        missing = list(trend.get("unavailable") or [])
+        if missing:
+            notes.append(
+                f"{', '.join(missing)} cannot be built from {self.fine_minutes}-minute bars"
+            )
+        quiet = [r["timeframe"] for r in trend.get("rows", ()) if r["direction"] == 0]
+        warming = [tf for tf in quiet if tf not in missing and tf != "1d"]
+        if warming:
+            notes.append(f"{', '.join(warming)} warming up ({_WARM_BARS} bars needed)")
+        history = self.daily_history
+        if history is None or history.empty:
+            notes.append(
+                self.history_note or "no stored daily history: the 1d trend has no reading"
+            )
+        elif self._daily_memo is not None and self._daily_memo[2]:
+            notes.append(self._daily_memo[2])
+        elif "1d" in quiet:
+            notes.append(f"too few stored days for the 1d trend ({_WARM_BARS} needed)")
+        return "; ".join(notes) or None
+
     # ── evaluation ────────────────────────────────────────────────────────
     def evaluate(
         self, now: dt.datetime, market_bars: pd.DataFrame | None, entries_allowed: bool
@@ -178,6 +317,7 @@ class InstrumentTracker:
         if self.bars.empty:
             return fired
         latest_close_at = self.bars.index[-1] + pd.Timedelta(minutes=self.fine_minutes)
+        self._read_trend(latest_close_at)
         for slot in self.slots:
             try:
                 v = self._evaluate_slot(slot, latest_close_at, market_bars, now)
@@ -203,7 +343,12 @@ class InstrumentTracker:
         market_bars: pd.DataFrame | None,
         now: dt.datetime,
     ) -> Verdict:
-        df = self.bars
+        # A multi-timeframe strategy reads what the Lab gives it: the fine bars without mock
+        # sessions and on one price scale, the days, and the ladder built from them. Every
+        # other strategy keeps the polled bars exactly as they are.
+        multi = _multi(slot)
+        fine = self.fine_bars() if multi else self.bars
+        df = fine
         if slot.tf_min != self.fine_minutes:
             df = resample_bars(df, slot.cfg.timeframe)
             if not df.empty and df.index[-1] + pd.Timedelta(minutes=slot.tf_min) > latest_close_at:
@@ -221,12 +366,15 @@ class InstrumentTracker:
                 if slot.tf_min == self.fine_minutes
                 else resample_bars(market_bars, slot.cfg.timeframe)
             )
-        ctx = Context(
-            symbol=self.series.key,
-            daily=None,
-            market=mkt,
-            extras={"has_volume": bool(self.series.has_volume)},
-        )
+        if multi:
+            ctx = self._ladder_context(fine, mkt)
+        else:
+            ctx = Context(
+                symbol=self.series.key,
+                daily=None,
+                market=mkt,
+                extras={"has_volume": bool(self.series.has_volume)},
+            )
         f = slot.strategy.generate(df, ctx)
         last = f.iloc[-1]
         slot.last_bar_ts = bar_ts
@@ -235,7 +383,8 @@ class InstrumentTracker:
         # equality test (the Bank Nifty engine's rule on 1-minute data) would never fire.
         lag = latest_close_at - (df.index[-1] + pd.Timedelta(minutes=slot.tf_min))
         fresh = pd.Timedelta(0) <= lag <= pd.Timedelta(minutes=self.fine_minutes)
-        self.regime = _regime_dict(last)
+        if not multi or not self._plain_slots:
+            self.regime = _regime_dict(last)
         slot.last_features = {
             k: _num(last.get(k))
             for k in (
@@ -257,6 +406,14 @@ class InstrumentTracker:
         slot.last_flags = {
             k: bool(last.get(k)) for k in ("long_entry", "short_entry", "long_exit", "short_exit")
         }
+        # the stop of an open trade follows the strategy's own line when it gives one: the
+        # level after this close (None while the line is on the other side)
+        slot.line_trail = "long_trail" in f.columns or "short_trail" in f.columns
+        slot.last_trail = (
+            {side: _num(last.get(f"{side}_trail")) for side in ("long", "short")}
+            if slot.line_trail
+            else {}
+        )
         long_e, short_e = bool(last.get("long_entry")), bool(last.get("short_entry"))
         close = float(last["close"])
         if long_e or short_e:
@@ -364,6 +521,7 @@ class InstrumentTracker:
             },
             "strategies": [s.as_dict() for s in self.slots],
             "regime": self.regime,
+            "trend": self.trend,
             "risk": {
                 "trades_today": self.trades_today,
                 "consecutive_losses": self.consecutive_losses,
@@ -384,6 +542,29 @@ class InstrumentTracker:
 def _params(slot: StrategySlot) -> Any:
     """The slot strategy's parameters (StrategySlot types the strategy as `object`)."""
     return cast(Any, slot.strategy).p
+
+
+def _multi(slot: StrategySlot) -> bool:
+    """True for a strategy that reads the trend ladder: it is given the fine bars and the days."""
+    return bool(getattr(slot.strategy, "multi_timeframe", False))
+
+
+def _history_gap(history: pd.DataFrame, fine: pd.DataFrame) -> str | None:
+    """A note when the stored days end well before the live bars begin: the sessions between
+    are in neither, so the daily trend is built without them. None when the two meet."""
+    if history is None or history.empty or fine is None or fine.empty:
+        return None
+    first_live = pd.Timestamp(fine.index[0]).date()
+    older = [d for d in pd.DatetimeIndex(history.index).date if d < first_live]
+    if not older:
+        return None
+    gap = (first_live - older[-1]).days
+    if gap <= HISTORY_GAP_DAYS:
+        return None
+    return (
+        f"stored daily history ends {older[-1]:%d %b %Y}, {gap} days before the live bars "
+        "begin: the 1d trend is built without the sessions between (run a backfill)"
+    )
 
 
 def _strategy_limit(slot: StrategySlot, v: Verdict) -> str | None:

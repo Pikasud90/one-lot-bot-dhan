@@ -37,7 +37,9 @@ context:                  # the strip above the two panels
 #                        ema_pullback, cpr_breakout]  (every slot `timeframe: 15m`, defaults)
 # `allow_long` / `allow_short` are the Lab's `direction`. Index alerts name the MONTHLY
 # contract at delta ~0.65, rolled to the next month inside its last 3 days, like the Lab.
-primary_strategies: [supertrend_vol, supertrend_adx]
+# 2026-11-11: `supertrend_mtf` (the owner's multi-timeframe rule) joined the index list as a
+# second paper slot; the three slots above it are unchanged.
+primary_strategies: [supertrend_vol, supertrend_adx, supertrend_mtf]
 
 option_expiry: monthly    # monthly (the Lab's contract) | nearest (the weekly where one exists)
 option_roll_days: 3       # a monthly contract with fewer days left than this is skipped
@@ -50,6 +52,25 @@ defaults:
                flip_window: 2, max_bars: 12, max_trades_per_day: 1, min_strength: 40,
                partial_r: 0.0, regime_filter: false, rsi_long_min: 55, st_mult: 2.0,
                st_period: 14, target_r: 2.5, trail_atr_mult: 1.5}
+    # MULTI-TIMEFRAME SUPERTREND (owner's rule, 2026-11-11). Supertrend(14, 1.7) on 1m, 5m, 15m,
+    # 30m, 60m and 1d must ALL point up. The entry is taken within 4 bars of a fresh 30m turn
+    # with 30m ADX >= 25 and RSI >= 60, before 13:00, once a day. The 60m Supertrend line is the
+    # stop and the trail: the trade ends when a 60m bar closes below the line; the stop itself
+    # stands 2 ATR(60m) under the line as the backstop, moves at every 60m close and only up.
+    # Evidence, not advice (docs/research/SUPERTREND_MTF_2026-11-11.md): the plain rule (all six
+    # aligned, any time of day) LOST after costs over five years, so it is not alerted; every
+    # card shows the six trends instead. This filtered form made +2.6% of premium a trade on
+    # modelled premiums (202 trades, t 1.8) but about +0.7% (t 0.3) on the real premiums that
+    # could be checked: unproven. 95% of its trades end at the session close, so the trail
+    # rarely acts until an index-option trade can be carried overnight (story US-041 in
+    # REVIEW.md; US-027 covers stocks only). While its paper trade is open the slot above is
+    # silent on that index (one live idea per instrument), and the other way round. To drop
+    # it: delete this entry and its name from primary_strategies.
+    - name: supertrend_mtf
+      timeframe: 5m
+      params: {allow_long: true, allow_short: false, st_period: 14, st_mult: 1.7, gate: all,
+               trend_tf: 30m, flip_window: 4, trend_adx_min: 25, trend_rsi_min: 60,
+               entry_end: "13:00", trail_tf: 60m, stop_buffer_atr: 2.0, max_trades_per_day: 1}
   stock_strategies:       # 18 stocks, one share, short only: lost the choosing year
     - name: supertrend_vol
       timeframe: 60m

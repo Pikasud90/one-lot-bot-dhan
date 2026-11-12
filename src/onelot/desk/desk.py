@@ -47,6 +47,7 @@ from .economics import (
     stock_economics,
 )
 from .fillcost import FillCostRecorder, Watched, charges_check
+from .history import daily_history
 from .rules import pick_expiry
 from .tracker import InstrumentTracker, StrategySlot, Verdict
 
@@ -68,6 +69,10 @@ UNREADABLE = object()
 # A price the owner types is a price per share or per option unit: anything at or above this
 # is a typo (1e308 made the journal unserialisable, QA cycle 1 BUG-11).
 MAX_REPORTED_PRICE = 1e7
+# The stored daily bars of the trend ladder are read once a calendar day. A read that failed
+# is tried again after the first delay, a store with no history for the series after the second.
+HISTORY_RETRY = dt.timedelta(minutes=10)
+HISTORY_EMPTY_RETRY = dt.timedelta(hours=1)
 
 
 def _reported(value: object) -> float | None:
@@ -79,6 +84,14 @@ def _reported(value: object) -> float | None:
     except (TypeError, ValueError):
         return None
     return price if math.isfinite(price) and 0 < price < MAX_REPORTED_PRICE else None
+
+
+def _slot_of(tracker: InstrumentTracker, strategy: str, timeframe: str) -> StrategySlot | None:
+    """The tracker's slot that runs `strategy` on `timeframe` (an alert names both), or None."""
+    return next(
+        (s for s in tracker.slots if s.cfg.name == strategy and s.cfg.timeframe == timeframe),
+        None,
+    )
 
 
 def _rupees(paise: object) -> float | None:
@@ -236,9 +249,14 @@ class Desk:
         self.last_fetch_at: dt.datetime | None = None
         self.last_error: str | None = None
         self.polls = 0
+        # stored days for the trend ladder: when a series is next tried after a read that
+        # gave nothing, and the series whose failure is already in the log
+        self._history_retry: dict[str, dt.datetime] = {}
+        self._history_failed: set[str] = set()
         self._recover()
         self._restore_slot_counters(now_ist())
         self._tell_paper_tracked()
+        self._tell_paper_trail()
         from .pulse import MarketPulse
 
         self.pulse = MarketPulse(engine, self, self._adapter_getter, self._data_api_active)
@@ -317,12 +335,16 @@ class Desk:
     def reload(self) -> dict:
         with self._lock:
             self.cfg = load_desk_config()
-            old = {k: t.bars for k, t in self.trackers.items()}
+            old = dict(self.trackers)
             self._build_trackers()
             for k, t in self.trackers.items():
                 t.fine_minutes = self.fine_minutes
                 if k in old:
-                    t.bars = old[k]
+                    t.bars = old[k].bars
+                    # the stored days stay until the next poll reads them again (history_day
+                    # is left unset, so a reload also picks up a backfill run meanwhile)
+                    t.daily_history, t.history_note = old[k].daily_history, old[k].history_note
+            self._history_retry.clear()
             self._tell_paper_tracked()
             self._wake.set()
         return {"instruments": len(self.trackers), "path": self.cfg.path}
@@ -449,6 +471,7 @@ class Desk:
     def poll(self) -> None:
         now = now_ist()
         self._maybe_switch_source()
+        self._load_daily_history(now)
         specs = self._all_specs()
         since = {k: t.bars.index[-1] for k, t in self.trackers.items() if not t.bars.empty}
         got = self.source.fetch(specs, self.cfg.history_days, since)
@@ -489,6 +512,50 @@ class Desk:
             self.pulse.maybe_record(now, market_ok)
         except Exception:  # noqa: BLE001
             log.exception("pulse failed")
+
+    def _load_daily_history(self, now: dt.datetime) -> None:
+        """Give every tracker the stored daily bars the 1d rung of its trend ladder needs
+        (`desk/history.py`): once a calendar day, read-only, outside the desk lock.
+
+        The polled bars cover about 25 days; a daily Supertrend(14) wants 70. A read that
+        fails, or a store without history for the series, is tried again later and never
+        stops the poll: the ladder then shows the 1d rung without a reading and says why."""
+        today = now.date()
+        due = [
+            (key, t.series.key)
+            for key, t in list(self.trackers.items())
+            if t.history_day != today and self._history_retry.get(key, now) <= now
+        ]
+        for key, series_key in due:
+            daily: pd.DataFrame | None = None
+            try:
+                daily = daily_history(self.engine, series_key, now)
+            except Exception:  # noqa: BLE001 - a reading for the card, never a dependency
+                if key not in self._history_failed:
+                    log.exception("desk: the stored daily history of %s could not be read", key)
+                self._history_failed.add(key)
+            with self._lock:
+                t = self.trackers.get(key)
+                if t is None:
+                    continue
+                if daily is None:
+                    self._history_retry[key] = now + HISTORY_RETRY
+                    if t.daily_history is None:
+                        t.history_note = (
+                            "the stored daily history could not be read: no 1d trend reading"
+                        )
+                    continue
+                self._history_failed.discard(key)
+                t.daily_history = daily
+                if daily.empty:
+                    self._history_retry[key] = now + HISTORY_EMPTY_RETRY
+                    t.history_note = (
+                        "the store has no daily history for it: no 1d trend reading "
+                        "(run a backfill)"
+                    )
+                else:
+                    self._history_retry.pop(key, None)
+                    t.history_day, t.history_note = today, None
 
     def _maybe_switch_source(self) -> None:
         want_dhan = self.cfg.source == "dhan" or (
@@ -606,6 +673,23 @@ class Desk:
         )
         src = self._served_by(t.cfg.key)
         delayed = is_delayed_source(src)
+        manage: dict[str, Any] = {
+            "target_r": float(getattr(slot.strategy.p, "target_r", 0) or 0),
+            "trail_atr_mult": float(getattr(slot.strategy.p, "trail_atr_mult", 0) or 0),
+            "trail_activate_r": float(getattr(slot.strategy.p, "trail_activate_r", 1.0) or 1.0),
+            "max_bars": int(getattr(slot.strategy.p, "max_bars", 0) or 0),
+            "exit_time": exit_time,
+            "atr": (slot.last_features or {}).get("atr"),
+            # the trail's own ATR, frozen for the paper book (US-002 review 1 MAJOR-1)
+            "atr_trail": (slot.last_features or {}).get("atr_trail"),
+            "tf_min": slot.tf_min,
+            "horizon": horizon,
+        }
+        if slot.line_trail:
+            # The strategy trails the stop along its own line: the paper trade (and a position
+            # the owner takes on this alert) follows the level the slot reports after each of
+            # its closed bars. Absent on every other alert, so those stay exactly as they were.
+            manage["line_trail"] = True
         sig = {
             "id": sid,
             "created_at": _iso(now),
@@ -643,18 +727,7 @@ class Desk:
             "risk_allowed": True,
             "risk_reason": None,
             "outcome": None,
-            "manage": {
-                "target_r": float(getattr(slot.strategy.p, "target_r", 0) or 0),
-                "trail_atr_mult": float(getattr(slot.strategy.p, "trail_atr_mult", 0) or 0),
-                "trail_activate_r": float(getattr(slot.strategy.p, "trail_activate_r", 1.0) or 1.0),
-                "max_bars": int(getattr(slot.strategy.p, "max_bars", 0) or 0),
-                "exit_time": exit_time,
-                "atr": (slot.last_features or {}).get("atr"),
-                # the trail's own ATR, frozen for the paper book (US-002 review 1 MAJOR-1)
-                "atr_trail": (slot.last_features or {}).get("atr_trail"),
-                "tf_min": slot.tf_min,
-                "horizon": horizon,
-            },
+            "manage": manage,
         }
         slot.signals_today += 1
         self.signals[sid] = sig
@@ -1013,6 +1086,19 @@ class Desk:
                     ):
                         p["stop_underlying"], p["trail_active"] = round(new_stop, 2), True
             opened = dt.datetime.fromisoformat(p["opened_at"])
+            slot = _slot_of(t, p["strategy"], p["timeframe"])
+            if m.get("line_trail") and slot is not None and slot.last_bar_ts is not None:
+                # The strategy's own line (its Supertrend) is the trail: after each closed
+                # strategy bar the stop moves to the level the line allows, and never back. A
+                # level from a bar that closed before the position was opened is its first stop.
+                level = slot.trail_level(p["direction"])
+                closed_at = slot.last_bar_ts + dt.timedelta(minutes=slot.tf_min)
+                if (
+                    level is not None
+                    and closed_at > opened
+                    and sign * (level - p["stop_underlying"]) > 0
+                ):
+                    p["stop_underlying"], p["trail_active"] = round(level, 2), True
             p["bars_held"] = int(
                 max(0, (now - opened).total_seconds() // 60) // max(1, int(m.get("tf_min", 5)))
             )
@@ -1022,14 +1108,6 @@ class Desk:
                     for d in t.bars.index.normalize().unique()
                     if d.to_pydatetime() >= opened.replace(hour=0, minute=0)
                 }
-            )
-            slot = next(
-                (
-                    s
-                    for s in t.slots
-                    if s.cfg.name == p["strategy"] and s.cfg.timeframe == p["timeframe"]
-                ),
-                None,
             )
             strat_exit = slot.exit_advice(p["direction"]) if slot else None
             advice = None
@@ -1693,20 +1771,45 @@ class Desk:
         tracker = self.trackers.get(trade.series_key)
         if tracker is None:
             return None
-        slot = next(
-            (
-                s
-                for s in tracker.slots
-                if s.cfg.name == trade.strategy and s.cfg.timeframe == trade.timeframe
-            ),
-            None,
-        )
+        slot = _slot_of(tracker, trade.strategy, trade.timeframe)
         if slot is None or slot.last_bar_ts is None:
             return None
         reason = slot.exit_advice(trade.direction)
         if reason is None:
             return None
         return reason, slot.last_bar_ts + dt.timedelta(minutes=slot.tf_min)
+
+    def _tell_paper_trail(self) -> None:
+        """Let the book's open trades follow a strategy's own line (its Supertrend): the book
+        asks `_paper_trail_level` about every trade whose alert said `manage.line_trail`.
+        A duck-typed book without follow_trail is left alone."""
+        follow = getattr(self.paper, "follow_trail", None)
+        if not callable(follow):
+            return
+        try:
+            follow(self._paper_trail_level)
+        except Exception:  # noqa: BLE001 - the desk runs whatever the book does
+            self.hook_errors += 1
+            log.exception("paper: follow_trail failed")
+
+    def _paper_trail_level(self, trade: Any, now: dt.datetime) -> tuple[float, dt.datetime] | None:
+        """For the paper book: where the trade's own strategy lets its stop stand after its
+        last CLOSED bar, as (level in rupees of the underlying, that bar's close time), or
+        None while the line gives no level (it is on the other side, or the slot is gone).
+
+        The book moves the stop there from the first fine bar that opens at or after that
+        close, and only ever towards the price: the Lab simulator's rule. Read-only, and a
+        plain tuple: the desk never imports the paper package."""
+        tracker = self.trackers.get(trade.series_key)
+        if tracker is None:
+            return None
+        slot = _slot_of(tracker, trade.strategy, trade.timeframe)
+        if slot is None or slot.last_bar_ts is None:
+            return None
+        level = slot.trail_level(trade.direction)
+        if level is None:
+            return None
+        return level, slot.last_bar_ts + dt.timedelta(minutes=slot.tf_min)
 
     def _step_paper(self, now: dt.datetime) -> None:
         """Step the paper book; each trade it closes (or that never filled) is its alert's

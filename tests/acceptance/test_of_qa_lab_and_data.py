@@ -318,7 +318,9 @@ class TestJobsAreRecoveredOnceNotRepeatedly:
 # Until 2026-11-07 the desk ran the owner's seven on 15-minute bars. The owner then approved a
 # paper test of the cross-instrument retune's closest candidates, with the retune's exact
 # settings (docs/research/CROSS_RETUNE_2026-11-07.md): this list replaced the seven.
-OWNERS_PRIMARY = ("supertrend_vol", "supertrend_adx")
+# On 2026-11-11 the owner's multi-timeframe Supertrend rule joined it as a second index slot
+# (data/research/mtf_2026-11-11/NOTES.md); the retune's three slots are unchanged.
+OWNERS_PRIMARY = ("supertrend_vol", "supertrend_adx", "supertrend_mtf")
 RESEARCH_STOCKS = {
     "RELIANCE", "MM", "SBIN", "HDFCBANK", "ITC", "TMPV", "MARUTI", "ICICIBANK", "HEROMOTOCO",
     "INFY", "TCS", "AXISBANK", "KOTAKBANK", "LT", "BAJFINANCE", "BHARTIARTL", "TATASTEEL",
@@ -331,6 +333,13 @@ PAPER_TEST = {
         "flip_window": 2, "max_bars": 12, "max_trades_per_day": 1, "min_strength": 40,
         "partial_r": 0.0, "regime_filter": False, "rsi_long_min": 55, "st_mult": 2.0,
         "st_period": 14, "target_r": 2.5, "trail_atr_mult": 1.5,
+    },
+    # the owner's rule: Supertrend(14, 1.7) up on all six timeframes, the 60m line as the trail
+    ("INDEX", "supertrend_mtf", "5m"): {
+        "allow_long": True, "allow_short": False, "st_period": 14, "st_mult": 1.7,
+        "gate": "all", "trend_tf": "30m", "flip_window": 4, "trend_adx_min": 25,
+        "trend_rsi_min": 60, "entry_end": "13:00", "trail_tf": "60m", "stop_buffer_atr": 2.0,
+        "max_trades_per_day": 1,
     },
     ("STOCK", "supertrend_vol", "60m"): {
         "allow_long": False, "allow_short": True, "adx_min": 12, "entry_end": "11:30",

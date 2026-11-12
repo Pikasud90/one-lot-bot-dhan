@@ -137,6 +137,9 @@ class Strategy(ABC):
     description: ClassVar[str]
     regimes: ClassVar[tuple[str, ...]] = (TREND, NEUTRAL, RANGE, VOLATILE)
     Params: ClassVar[type[StrategyParams]] = StrategyParams
+    #: True for a strategy that reads other timeframes than its own. Whoever runs it then puts
+    #: the instrument's finest bars in `ctx.extras["minute_bars"]` (see strategies/mtf_support.py)
+    multi_timeframe: ClassVar[bool] = False
     # pillar weights for the strength score
     weights: ClassVar[dict[str, float]] = {
         "price": 0.3,

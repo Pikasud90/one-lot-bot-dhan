@@ -34,6 +34,18 @@ still gets it. The session end (the first open at or after `exit_time` on the op
 and the time stop (the first open once `max_bars` strategy bars have passed) are due at an
 open in the same way (AC5).
 
+The strategy's own trail (`ManageRules.line_trail`, frozen at the alert; off for every alert
+without it, which then ignores any level reported): a `TrailLevel` is the level the
+strategy's line (its Supertrend line, less the strategy's buffer) allowed on its closed bar
+ending at `bar_close_ts`. From the first fine bar opening at or after that time the stop
+stands at that level when it is tighter: snapped to the tick against the trader, never
+loosened, with no profit needed first. It is booked as a STOP_MOVED event (detail
+`source: "strategy_line"`) stamped with that bar's OPEN, the moment it takes effect, and
+that same bar is then judged against the moved stop: an open at or through it closes
+TRAIL_STOP at the open, as in the Lab, where a stop the line has carried past the price is a
+gap at the next open. A level whose bar closed at or before the fill is stale (the entry
+stop was built from it already). Reporting the same level at every poll moves the stop once.
+
 No position outlives its session (until US-027): a bar of a later date is never managed,
 and once the session is over (`now` at or past 15:30 IST on the opening date) a position
 with no bar at or after `exit_time` closes SESSION_END at the close of the last bar it
@@ -46,7 +58,9 @@ the strategy-bar close, not on the best price so far; the trail's ATR is FROZEN 
 alert (the strategy's ATR(trail_atr_period), `manage.atr_trail`) while the Lab re-reads its
 evolving ATR at every strategy bar; a trailed stop snaps to the tick against the trader;
 a strategy bar whose last fine bar is missing from the feed does not move the trail; no
-forced end-of-day close in swing (US-027).
+forced end-of-day close in swing (US-027); the line trail follows only the LATEST level the
+desk reports, so after an outage longer than a strategy bar the levels in between are
+skipped and the stop catches up with the latest one (the Lab applies every bar's level).
 """
 
 from __future__ import annotations
@@ -131,6 +145,25 @@ class StrategyExit:
 
 
 @dataclass(frozen=True)
+class TrailLevel:
+    """The strategy's own trail on its closed bar ending at `bar_close_ts`: the level, in
+    integer paise on the managed series, that its line (a Supertrend line, less the
+    strategy's buffer) allows the stop to stand at. The stop follows it from the first
+    fine-bar open at or after that time, only ever in the trade's favour, and only for a
+    trade whose alert froze `ManageRules.line_trail`."""
+
+    level_paise: int
+    bar_close_ts: dt.datetime
+
+    def __post_init__(self) -> None:
+        if not _is_int(self.level_paise) or self.level_paise <= 0:
+            raise ValueError(
+                f"TrailLevel.level_paise={self.level_paise!r} must be positive integer paise"
+            )
+        _require_aware(self.bar_close_ts, "TrailLevel.bar_close_ts")
+
+
+@dataclass(frozen=True)
 class PaperClose:
     """How a position closed: the reason, the level on the managed series, when, and
     whether the bar opened beyond the level (a gap).
@@ -187,7 +220,10 @@ class ManageRules:
     `atr` is in RUPEES, exactly as the alert recorded it (manage.atr); None, 0 or NaN
     disables the trail, with no fallback to a live ATR. `tick_paise` is the instrument's
     tick in paise. `resolution_min` is the fine-bar spacing; None infers it from the bars
-    (the book always passes the trade's own).
+    (the book always passes the trade's own). `line_trail` lets the stop follow the
+    strategy's own line (a reported `TrailLevel`); False, the value of every alert without
+    `manage.line_trail`, ignores any level reported. Both trails may be on: the tighter
+    stop stands.
     """
 
     target_r: float
@@ -199,6 +235,7 @@ class ManageRules:
     exit_time: dt.time
     tick_paise: int
     resolution_min: int | None = None
+    line_trail: bool = False
 
 
 @dataclass(frozen=True)
@@ -287,6 +324,7 @@ def manage_step(
     rules: ManageRules,
     now: dt.datetime,
     strategy_exit: StrategyExit | None = None,
+    trail: TrailLevel | None = None,
 ) -> tuple[PositionState, list[PaperEvent]]:
     """Manage `state` over the bars of its series that have closed by `now`.
 
@@ -294,14 +332,16 @@ def manage_step(
     opening date, and its open plus the resolution is not later than `now`. Stepping again
     with the same (now, bars) books nothing. `strategy_exit` reports the strategy's exit
     seen on a bar that closed by `now`; one whose bar closed at or before `opened_at` is
-    stale and ignored. Raises ValueError for a naive `now`, a malformed frame, a strategy
-    exit from after `now` (look-ahead), malformed rules or an inconsistent state (float
-    paise, a stop on the wrong side of the entry, a stop looser than the initial one).
+    stale and ignored. `trail` reports the level the strategy's own line allows on a bar
+    that closed by `now` (used only when `rules.line_trail`; stale in the same way).
+    Raises ValueError for a naive `now`, a malformed frame, a strategy exit or a trail level
+    from after `now` (look-ahead), malformed rules or an inconsistent state (float paise, a
+    stop on the wrong side of the entry, a stop looser than the initial one).
     """
-    _check_call(state, rules, now, strategy_exit)
+    _check_call(state, rules, now, strategy_exit, trail)
     if state.closed is not None:
         return state, []
-    return _manage(state, normalise_ohlc(bars), rules, now.astimezone(IST), strategy_exit)
+    return _manage(state, normalise_ohlc(bars), rules, now.astimezone(IST), strategy_exit, trail)
 
 
 def manage_view(
@@ -310,13 +350,14 @@ def manage_view(
     rules: ManageRules,
     now: dt.datetime,
     strategy_exit: StrategyExit | None = None,
+    trail: TrailLevel | None = None,
 ) -> tuple[PositionState, list[PaperEvent]]:
     """`manage_step` over bars already normalised by `normalise_ohlc`: the book normalises
     each series once per step and manages every trade on it from that one view (AC8)."""
-    _check_call(state, rules, now, strategy_exit)
+    _check_call(state, rules, now, strategy_exit, trail)
     if state.closed is not None:
         return state, []
-    return _manage(state, view, rules, now.astimezone(IST), strategy_exit)
+    return _manage(state, view, rules, now.astimezone(IST), strategy_exit, trail)
 
 
 def _manage(
@@ -325,6 +366,7 @@ def _manage(
     rules: ManageRules,
     now: dt.datetime,
     strategy_exit: StrategyExit | None,
+    trail: TrailLevel | None = None,
 ) -> tuple[PositionState, list[PaperEvent]]:
     pending = _earliest_exit(state, strategy_exit)
     res_min = rules.resolution_min or infer_resolution_min(Bars(ns=view.ns, opens=view.open))
@@ -361,6 +403,10 @@ def _manage(
         bar = BarPaise(
             *(to_paise(float(col[i])) for col in (view.open, view.high, view.low, view.close))
         )
+        lined = _line_stop(state, stop, bar_ts, rules, trail)
+        if trail is not None and lined != stop:  # the strategy's line: from this open on
+            events.append(_line_moved_event(state, stop, lined, trail, bar_ts))
+            stop, trail_active = lined, True
         due_at_open = _exits_due_at_open(bar_ts, pending, state.opened_at, session_date, rules)
         closed = _close_on_bar(sign, bar, bar_ts, stop, state, rules.tick_paise, due_at_open)
         if closed is not None:
@@ -534,6 +580,28 @@ def _trailed_stop(
     return int(ratchet_stop(state.direction, stop, close, atr_paise, mult, tick=tick))
 
 
+def _line_stop(
+    state: PositionState,
+    stop: int,
+    bar_ts: dt.datetime,
+    rules: ManageRules,
+    trail: TrailLevel | None,
+) -> int:
+    """The stop at the open of the bar at `bar_ts`, after the strategy's own trail: the
+    reported level once the strategy bar that gave it has closed, snapped to the tick against
+    the trader (a long's stop down, a short's up, as `ratchet_stop` snaps), never loosened.
+    `stop` itself when the alert froze no line trail, nothing is reported, the level is not
+    due yet, or it is stale (its bar closed at or before the fill)."""
+    if trail is None or not rules.line_trail:
+        return stop
+    if trail.bar_close_ts <= state.opened_at or bar_ts < trail.bar_close_ts:
+        return stop
+    tick = rules.tick_paise
+    if state.direction == "long":
+        return max(stop, trail.level_paise // tick * tick)
+    return min(stop, -(-trail.level_paise // tick) * tick)
+
+
 def _closed_event(
     state: PositionState, close: PaperClose, bar: BarPaise, stop: int, res_min: int
 ) -> PaperEvent:
@@ -597,20 +665,47 @@ def _stop_moved_event(
     return PaperEvent(state.trade_id, effective_at, STOP_MOVED, detail)
 
 
+def _line_moved_event(
+    state: PositionState, old: int, new: int, trail: TrailLevel, bar_ts: dt.datetime
+) -> PaperEvent:
+    """The STOP_MOVED event of the strategy's own trail, stamped with the OPEN of the first
+    bar the moved stop acts on: the moment it takes effect (decision 4 stamps the ATR trail
+    the same way, with the close that moved it). It stores the level the strategy reported,
+    before the tick snap, and the close of the strategy bar that gave it."""
+    detail: dict[str, Any] = {
+        "from_paise": old,
+        "to_paise": new,
+        "initial_stop_paise": state.initial_stop_paise,
+        "bar_ts": bar_ts.isoformat(),
+        "source": "strategy_line",
+        "line_paise": trail.level_paise,
+        "line_bar_close_ts": trail.bar_close_ts.isoformat(),
+    }
+    return PaperEvent(state.trade_id, bar_ts, STOP_MOVED, detail)
+
+
 # ── validation ────────────────────────────────────────────────────────────────
 
 
 def _check_call(
-    state: PositionState, rules: ManageRules, now: dt.datetime, exit_: StrategyExit | None
+    state: PositionState,
+    rules: ManageRules,
+    now: dt.datetime,
+    exit_: StrategyExit | None,
+    trail: TrailLevel | None = None,
 ) -> None:
     _require_aware(now, "now")
     _check_rules(rules)
     _check_state(state)
     if exit_ is not None:
         _check_strategy_exit(exit_, now)
+    if trail is not None:
+        _check_trail(trail, now)
 
 
 def _check_rules(rules: ManageRules) -> None:
+    if not isinstance(rules.line_trail, bool):
+        raise ValueError(f"ManageRules.line_trail={rules.line_trail!r} must be a bool")
     if not _is_int(rules.max_bars) or rules.max_bars < 0:
         raise ValueError(f"ManageRules.max_bars={rules.max_bars!r} must be an int >= 0")
     if not isinstance(rules.exit_time, dt.time):
@@ -672,6 +767,16 @@ def _check_strategy_exit(strategy_exit: StrategyExit, now: dt.datetime) -> None:
         raise ValueError(
             f"StrategyExit.bar_close_ts={strategy_exit.bar_close_ts.isoformat()} is after "
             f"now={now.isoformat()}: a signal bar that has not closed is look-ahead"
+        )
+
+
+def _check_trail(trail: TrailLevel, now: dt.datetime) -> None:
+    if not isinstance(trail, TrailLevel):
+        raise ValueError(f"trail={trail!r} must be a TrailLevel or None")
+    if trail.bar_close_ts > now:
+        raise ValueError(
+            f"TrailLevel.bar_close_ts={trail.bar_close_ts.isoformat()} is after "
+            f"now={now.isoformat()}: a level from a bar that has not closed is look-ahead"
         )
 
 

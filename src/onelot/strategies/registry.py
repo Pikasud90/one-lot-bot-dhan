@@ -15,6 +15,7 @@ from .nr7_breakout import NR7Breakout
 from .orb import OpeningRangeBreakout
 from .squeeze import SqueezeBreakout
 from .supertrend_adx import SupertrendADX
+from .supertrend_mtf import SupertrendMTF
 from .supertrend_vol import SupertrendVol
 from .turtle_soup import TurtleSoup
 from .vwap_pullback import VWAPPullback
@@ -27,6 +28,7 @@ REGISTRY: dict[str, type[Strategy]] = {
         EMACross,
         SupertrendVol,  # operator theses
         SupertrendADX,
+        SupertrendMTF,
         OpeningRangeBreakout,
         VWAPPullback,  # classic intraday setups
         SqueezeBreakout,
@@ -47,6 +49,7 @@ SUITABLE: dict[str, tuple[str, ...]] = {
     "ema_cross": ("OPTIONS", "FUTURES", "STOCK", "CURRENCY"),
     "supertrend_vol": ("OPTIONS", "FUTURES", "STOCK", "CURRENCY"),
     "supertrend_adx": ("FUTURES", "STOCK", "OPTIONS"),
+    "supertrend_mtf": ("OPTIONS", "FUTURES", "STOCK", "CURRENCY"),
     "orb": ("FUTURES", "OPTIONS", "STOCK"),
     "vwap_pullback": ("STOCK", "FUTURES"),
     "squeeze": ("STOCK", "FUTURES", "CURRENCY"),
@@ -70,6 +73,12 @@ INDICATORS: dict[str, tuple[str, ...]] = {
         "MACD",
         "session VWAP",
         "ATR(14)",
+        "relative volume",
+    ),
+    "supertrend_mtf": (
+        "Supertrend on 1m, 5m, 15m, 30m, 60m and 1d",
+        "ADX(14)",
+        "RSI(14)",
         "relative volume",
     ),
     "orb": ("opening range", "session VWAP", "daily ATR", "relative volume", "RSI(14)"),

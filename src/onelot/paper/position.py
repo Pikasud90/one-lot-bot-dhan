@@ -1,5 +1,5 @@
 """The paper book's side of `manage_step` (US-002): rules from the alert, the position
-state as JSON, and the strategy-exit answer. Pure: no I/O.
+state as JSON, and the strategy's answers (its exit, its trail level). Pure: no I/O.
 
 The state a restart must not lose (a trailed stop, a pending strategy exit, the cursor,
 the last close seen) lives in the trade's `plan["position"]`, written in the same
@@ -18,7 +18,8 @@ from numbers import Real
 from typing import Any, cast
 
 from .alert import resolution_min
-from .manage import Direction, Kind, ManageRules, PositionState, StrategyExit
+from .manage import Direction, Kind, ManageRules, PositionState, StrategyExit, TrailLevel
+from .money import to_paise
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +39,9 @@ def rules_from_alert(
     or non-finite ATR or multiple leaves the trail off: never another ATR, never a live one.
     A missing or unreadable value takes the desk's default and is logged, never guessed
     silently: exit_time 15:15, max_bars 0, trail_activate_r 1.0, tf_min from the timeframe.
+    `manage.line_trail` (the stop follows the strategy's own line) counts only when it is
+    exactly True: an alert without it, i.e. every alert of a strategy with no line, never
+    follows a reported level.
     """
     manage = alert.get("manage")
     manage = manage if isinstance(manage, Mapping) else {}
@@ -53,12 +57,15 @@ def rules_from_alert(
         exit_time=_exit_time(manage.get("exit_time")),
         tick_paise=int(tick_paise),
         resolution_min=resolution,
+        line_trail=manage.get("line_trail") is True,
     )
 
 
 def rules_to_json(rules: ManageRules) -> dict[str, Any]:
-    """The rules as the plan stores them, JSON-safe (the resolution is the trade's own)."""
-    return {
+    """The rules as the plan stores them, JSON-safe (the resolution is the trade's own).
+    `line_trail` is written only when it is on, so a plan without the strategy's own trail
+    reads exactly as it did before that rule existed."""
+    stored: dict[str, Any] = {
         "version": RULES_VERSION,
         "target_r": rules.target_r,
         "trail_atr_mult": rules.trail_atr_mult,
@@ -69,10 +76,14 @@ def rules_to_json(rules: ManageRules) -> dict[str, Any]:
         "exit_time": rules.exit_time.strftime("%H:%M"),
         "tick_paise": rules.tick_paise,
     }
+    if rules.line_trail:
+        stored["line_trail"] = True
+    return stored
 
 
 def rules_from_json(data: Mapping[str, Any], *, resolution: int | None) -> ManageRules:
-    """`rules_to_json` read back: values already checked at the open, so no defaults here."""
+    """`rules_to_json` read back: values already checked at the open, so no defaults here
+    (`line_trail` is off for a plan stored without it)."""
     if data.get("version") != RULES_VERSION:
         raise ValueError(f"paper rules version {data.get('version')!r} is not supported")
     atr = data["atr"]
@@ -86,6 +97,7 @@ def rules_from_json(data: Mapping[str, Any], *, resolution: int | None) -> Manag
         exit_time=dt.time.fromisoformat(str(data["exit_time"])),
         tick_paise=int(data["tick_paise"]),
         resolution_min=resolution,
+        line_trail=data.get("line_trail") is True,
     )
 
 
@@ -191,6 +203,19 @@ def strategy_exit_of(answer: object) -> StrategyExit | None:
         reason, bar_close_ts = answer
         return StrategyExit(reason, bar_close_ts)
     raise ValueError(f"strategy exit answer {answer!r} is not a StrategyExit, a tuple or None")
+
+
+def trail_level_of(answer: object) -> TrailLevel | None:
+    """The trail callback's answer: None, a TrailLevel, or the desk's plain
+    (level in rupees, bar_close_ts) tuple (the desk does not import the paper package, so
+    the level becomes paise here, once). Anything else raises ValueError, as does a level
+    that is not a positive finite price or a time TrailLevel itself rejects."""
+    if answer is None or isinstance(answer, TrailLevel):
+        return answer
+    if isinstance(answer, tuple) and len(answer) == 2:
+        level, bar_close_ts = answer
+        return TrailLevel(to_paise(level), bar_close_ts)
+    raise ValueError(f"trail level answer {answer!r} is not a TrailLevel, a tuple or None")
 
 
 # ── parsing ───────────────────────────────────────────────────────────────────

@@ -8,6 +8,11 @@ Rules (shared with the live Guardian so research matches what you will be told l
   available; otherwise the stop is assumed first (conservative).
 * Trailing stop: after the trade is `trail_activate_r` R in profit, stop = max(stop, close - k*ATR(n))
   updated at each bar CLOSE (effective from the next bar - no look-ahead).
+* Line trail: a strategy may give `long_trail` / `short_trail` columns, the level its own line
+  (a Supertrend line, say) allows the stop to stand at, known at each bar's CLOSE. The stop follows
+  it from the next bar, only ever in the trade's favour (a long's stop never comes down), from the
+  entry bar on and with no profit needed first. NaN means "no level on this bar". A stop the line
+  has carried past the price is a gap through the stop at the next open.
 * Strategy exit signals and time stops exit at the next bar open; everything is flat by square-off.
 """
 
@@ -127,6 +132,9 @@ def simulate(
     ls, ss = f["long_stop"].to_numpy(float), f["short_stop"].to_numpy(float)
     lsc, ssc = f["long_score"].to_numpy(float), f["short_score"].to_numpy(float)
     lx, sx = f["long_exit"].to_numpy(bool), f["short_exit"].to_numpy(bool)
+    # the strategy's own line trail (optional): the level the stop may stand at after each close
+    ltr = f["long_trail"].to_numpy(float) if "long_trail" in f.columns else None
+    strl = f["short_trail"].to_numpy(float) if "short_trail" in f.columns else None
     dkey = ind.session_key(idx)
     tmin = np.array([_minutes(t) for t in idx.time])
     last_of_day = np.r_[dkey[1:] != dkey[:-1], True]
@@ -276,6 +284,10 @@ def simulate(
                 ):
                     cand = c[i] - side * p.trail_atr_mult * atr_tr[i]
                     stop = max(stop, cand) if side == 1 else min(stop, cand)
+                # the strategy's line trail: the stop follows the line, never back (next bar on)
+                line = ltr if side == 1 else strl
+                if line is not None and not np.isnan(line[i]):
+                    stop = max(stop, line[i]) if side == 1 else min(stop, line[i])
                 if (side == 1 and lx[i]) or (side == -1 and sx[i]):
                     pending_exit = "signal"
                 elif p.max_bars and (i - entry_i + 1) >= p.max_bars:

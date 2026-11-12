@@ -7,7 +7,8 @@ removed by a momentum and volume check.
 Unlike `supertrend_adx` (which also demands a MACD agreement and a VWAP
 no-chase), this is the lean version: flip + RSI + relative volume + a
 minimum ADX, so the optimizer can see what the Supertrend settings alone are
-worth. Stop at the Supertrend line; exit on the opposite flip.
+worth. Stop at the Supertrend line; exit on the opposite flip. With `line_trail`
+the stop also follows the line while the trade is open (see lab/simulator.py).
 """
 
 from __future__ import annotations
@@ -50,6 +51,11 @@ class STVolParams(StrategyParams):
         8.0, description="Supertrend stops are ~mult x ATR away by construction"
     )
     exit_on_flip: bool = Field(True, description="Exit when Supertrend flips against the position")
+    line_trail: bool = Field(
+        False,
+        description="Trail the stop along the Supertrend line: after every bar the stop moves to "
+        "the line (less the buffer), only ever in the trade's favour",
+    )
     target_r: float = Field(
         0.0,
         description="Profit target in R (0 = ride the flip)",
@@ -57,7 +63,8 @@ class STVolParams(StrategyParams):
     )
     trail_atr_mult: float = Field(
         0.0,
-        description="ATR trail (0 = the Supertrend line is the trail)",
+        description="ATR trailing stop, k in k x ATR(n) (0 = off; the Supertrend line trails "
+        "only with line_trail)",
         json_schema_extra=opt(0.0, 3.0, 0.5),
     )
     min_risk_pct: float = Field(0.15, description="Friction floor on the initial risk, % of price")
@@ -95,6 +102,9 @@ class SupertrendVol(Strategy):
         out["short_stop"] = st["st_line"] + buf
         out["long_exit"] = (d == -1) if p.exit_on_flip else False
         out["short_exit"] = (d == 1) if p.exit_on_flip else False
+        if p.line_trail:  # the level the stop may stand at after each close (NaN: no level)
+            out["long_trail"] = out["long_stop"].where(d == 1)
+            out["short_trail"] = out["short_stop"].where(d == -1)
         out["st_line"], out["st_dir"] = st["st_line"], d
         dist = ((c - st["st_line"]).abs() / f["atr"]).fillna(0)
         out["pl_price_long"] = out["pl_price_short"] = (1 - (dist - 1.0).abs() / 2.0).clip(0, 1)
@@ -124,8 +134,10 @@ class SupertrendVol(Strategy):
         )
 
     def implies(self, side: str) -> str:
+        word = "Trend flip" if side == "long" else "Trend flip down"
+        if self.p.line_trail:  # type: ignore[attr-defined]
+            return f"{word} with confirmation; the Supertrend line is the stop and the trail."
         return (
-            "Trend flip with confirmation; the Supertrend line is the stop and the trail."
-            if side == "long"
-            else "Trend flip down with confirmation; the Supertrend line is the stop and the trail."
+            f"{word} with confirmation; the stop starts at the Supertrend line and the trade "
+            "ends when the Supertrend flips back."
         )

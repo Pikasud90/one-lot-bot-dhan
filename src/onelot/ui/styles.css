@@ -245,8 +245,9 @@ tr.sel{background:var(--bad-bg)}
 .acc{display:flex;flex-direction:column;gap:8px}
 .acc-row{border:1px solid var(--line);background:var(--panel2)}
 .acc-row.open{background:var(--panel);box-shadow:var(--shadow)}
-.acc-head{display:grid;grid-template-columns:minmax(150px,1.3fr) minmax(110px,.9fr) minmax(160px,1.6fr) 96px 22px;gap:10px;align-items:center;padding:10px 12px;cursor:pointer;user-select:none}
-.acc-head:hover{background:var(--panel3)}
+.acc-top{cursor:pointer;user-select:none}
+.acc-top:hover{background:var(--panel3)}
+.acc-head{display:grid;grid-template-columns:minmax(150px,1.3fr) minmax(110px,.9fr) minmax(160px,1.6fr) 96px 22px;gap:10px;align-items:center;padding:10px 12px}
 .acc-name b{font:21px/1 var(--display);letter-spacing:.05em;display:block}
 .acc-name .dim{font-size:12px}
 .acc-price{font-family:var(--mono);font-size:15px;font-weight:700;text-align:right}
@@ -269,6 +270,20 @@ tr.sel{background:var(--bad-bg)}
 .acc-body h4{font:16px/1 var(--display);letter-spacing:.07em;color:var(--accent2);margin:12px 0 6px}
 .acc-body .grid4{gap:10px 16px;margin-bottom:6px}
 .acc-body .kv{font-size:13.5px;padding:4px 0}
+/* micro trend: Supertrend(14, 1.7) on six timeframes. The strip is a row of its own under a card's head (inside .acc-top, so a click on it opens the card too) and wraps to the card's width; the table sits in the open card and in the focus panel */
+.trend-strip{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;padding:0 12px 10px}
+.trend-strip .lbl{color:var(--muted);font-size:12.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-right:2px}
+.tpip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border:1px solid var(--line);background:var(--panel);font:600 13.5px/1.35 var(--mono);color:var(--dim);white-space:nowrap}
+.tpip.up{color:var(--ok);background:var(--ok-bg);border-color:transparent}
+.tpip.down{color:var(--bad);background:var(--bad-bg);border-color:transparent}
+.tverdict{font-weight:700;font-size:14px;color:var(--muted);margin-left:4px}
+.tverdict.up{color:var(--ok)} .tverdict.down{color:var(--bad)}
+.hint .tverdict{margin-left:0;font-size:inherit}
+table.trend{font-size:14.5px}
+table.trend td.tdir{font-weight:700;color:var(--dim);white-space:nowrap}
+table.trend td.tdir.up{color:var(--ok)} table.trend td.tdir.down{color:var(--bad)}
+/* a short cell that must stay on one line inside the wrapping card and focus tables (the Trail column) */
+.acc-body table td.nw,.focus-body table td.nw{white-space:nowrap}
 .hs{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--dim);margin-right:6px;vertical-align:middle}
 .hs.ok{background:var(--ok)} .hs.warn{background:var(--warn)} .hs.bad{background:var(--bad)}
 .sigcard{border-left:5px solid var(--ok);margin-bottom:14px}
@@ -402,6 +417,8 @@ tr.jedit td{background:var(--panel2);white-space:normal}
 .focus-body .grid4{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 14px}
 .focus-body h4{font:16px/1 var(--display);letter-spacing:.07em;color:var(--accent2);margin:10px 0 6px}
 .focus-body .kv{font-size:13.5px;padding:4px 0}
+.focus-body .tbl{overflow-x:auto}
+.focus-body table td,.focus-body table th{white-space:normal}
 
 /* ── matrix ─────────────────────────────────────────────────────────── */
 .mx-strat{border:1px solid var(--line);margin-bottom:10px;background:var(--panel)}

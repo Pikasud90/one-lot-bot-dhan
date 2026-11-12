@@ -71,6 +71,7 @@ from .manage import (
     PaperClose,
     PositionState,
     StrategyExit,
+    TrailLevel,
     manage_view,
     normalise_ohlc,
     remember_exit,
@@ -84,6 +85,7 @@ from .position import (
     rules_from_json,
     rules_to_json,
     strategy_exit_of,
+    trail_level_of,
 )
 from .pricing import frozen_iv, implied_iv
 from .view import DayTotals, trade_view
@@ -114,6 +116,8 @@ CostFor = Callable[[str], CostModel]
 BarsFor = Callable[[str], pd.DataFrame | None]
 # Answers a `manage.StrategyExit`, the desk's plain (reason, bar_close_ts) tuple, or None.
 StrategyExitFor = Callable[["PaperTrade", dt.datetime], Any]
+# Answers a `manage.TrailLevel`, the desk's plain (level in rupees, bar_close_ts) tuple, or None.
+TrailLevelFor = Callable[["PaperTrade", dt.datetime], Any]
 
 
 Booked = tuple[str, dt.datetime, dict[str, Any]]  # (event kind, data time, detail)
@@ -262,6 +266,9 @@ class PaperBook:
         self._retry_logged: set[str] = set()  # retries whose traceback was already logged
         self._tracked: frozenset[str] | None = None  # the desk's series (retire_untracked)
         self._callback_failed: set[int] = set()  # trades whose strategy_exit traceback is logged
+        # the strategy's own trail (its Supertrend line), asked for by `follow_trail`
+        self._trail_level_for: TrailLevelFor | None = None
+        self._trail_failed: set[int] = set()  # trades whose trail traceback is logged
         # options whose premium_at is failing now: warned once per streak (review 1 NIT)
         self._pricer_failing: set[tuple[str, str, str]] = set()
         # (trade id, reason) a read already warned about: the panel polls every few seconds,
@@ -303,6 +310,16 @@ class PaperBook:
         self._forget_retry(alert_id)
         return trade
 
+    def follow_trail(self, trail_level: TrailLevelFor | None) -> None:
+        """Let OPEN trades whose alert froze `manage.line_trail` follow the strategy's own
+        line. `trail_level(trade, now)` answers a `TrailLevel`, the desk's plain
+        `(level in rupees, bar_close_ts)` tuple, or None; it is asked at every step, and only
+        about such trades. The Desk registers it once, after it is built; a later call takes
+        the earlier one's place and None switches it off. (It is registered here and not
+        handed to `step`, whose signature is the US-001 public contract.)"""
+        with self._lock:
+            self._trail_level_for = trail_level
+
     def step(
         self,
         now: dt.datetime,
@@ -317,7 +334,9 @@ class PaperBook:
         normalised once for every trade on it (AC8). `strategy_exit(trade, now)` is asked only
         about OPEN trades; it answers a `StrategyExit`, the desk's plain
         `(reason, bar_close_ts)` tuple, or None, and an answer that raises or makes no sense
-        is logged and counted, never escapes. A delayed-grade trade is managed on DATA time
+        is logged and counted, never escapes. The callback given to `follow_trail` is asked
+        in the same guarded way, only about OPEN trades whose alert froze
+        `manage.line_trail`. A delayed-grade trade is managed on DATA time
         (`now` - paper.feed_delay_minutes), like its fill deadline.
 
         Each change commits with its paper_events rows in one transaction; a step with
@@ -339,6 +358,7 @@ class PaperBook:
             events.extend(self._retire_overdue_untracked(now))
             with self._lock:
                 active = sorted(self._active.values(), key=lambda t: (t.created_at, t.id))
+                trail = self._trail_level_for
             by_series: dict[str, list[PaperTrade]] = {}
             for trade in active:
                 by_series.setdefault(trade.series_key, []).append(trade)
@@ -347,7 +367,9 @@ class PaperBook:
                 # session-over close on the last close it saw (no overnight carry, AC5)
                 views = _SeriesViews.read(bars, series_key) or _SeriesViews.empty(series_key)
                 for trade in trades:
-                    events.extend(self._step_trade(trade.alert_id, views, now, strategy_exit))
+                    events.extend(
+                        self._step_trade(trade.alert_id, views, now, strategy_exit, trail)
+                    )
         except _StepStopped:
             pass  # logged and counted once; every untouched trade is retried next poll
         return events
@@ -358,6 +380,7 @@ class PaperBook:
         views: _SeriesViews,
         now: dt.datetime,
         strategy_exit: StrategyExitFor | None,
+        trail_level: TrailLevelFor | None = None,
     ) -> list[PaperEvent]:
         """One trade: fill it if it waits, then manage it if it is (or just became) OPEN.
         The fill and the management are guarded apart, so a failed management never
@@ -371,7 +394,7 @@ class PaperBook:
             events += self._guarded(trade, partial(self._step_waiting, trade, waiting, now))
             trade = self._current(alert_id)
         if trade is not None and trade.status == "OPEN":
-            work = partial(self._step_open, trade, views.ohlc, now, strategy_exit)
+            work = partial(self._step_open, trade, views.ohlc, now, strategy_exit, trail_level)
             events += self._guarded(trade, work)
         return events
 
@@ -1210,6 +1233,7 @@ class PaperBook:
         view: OhlcBars,
         now: dt.datetime,
         strategy_exit: StrategyExitFor | None,
+        trail_level: TrailLevelFor | None = None,
     ) -> list[PaperEvent]:
         """Manage one OPEN trade over the bars closed by its data time; book what changed."""
         plan = trade.plan
@@ -1222,7 +1246,12 @@ class PaperBook:
             # ahead of the trade's data time (a delayed feed fresher than feed_delay): kept
             # as pending, never dropped; it closes only at an open data time has reached
             start, reported = remember_exit(state, reported), None
-        new, managed = manage_view(start, view, rules, data_now, reported)
+        line = self._ask_trail(trade, now, trail_level) if rules.line_trail else None
+        if line is not None and line.bar_close_ts > data_now:
+            # ahead of the trade's data time: not due yet. Nothing is remembered: the desk
+            # reports the strategy's latest level again at every poll.
+            line = None
+        new, managed = manage_view(start, view, rules, data_now, reported, line)
         if new == state and not managed and "rules" in plan:
             return []  # nothing new: no write at all
         before = plan.get("position")
@@ -1447,6 +1476,33 @@ class PaperBook:
                 )
             else:
                 log.debug("paper: strategy_exit failed again for trade %s", trade.id)
+            return None
+
+    def _ask_trail(
+        self, trade: PaperTrade, now: dt.datetime, ask: TrailLevelFor | None
+    ) -> TrailLevel | None:
+        """The level the strategy's own line allows for an OPEN trade, or None. Guarded as
+        `_ask_strategy` is: a callback that raises or answers nonsense is counted every time,
+        logged with its traceback once per trade, and the trade is still managed (on the
+        stop it has)."""
+        if ask is None:
+            return None
+        try:
+            return trail_level_of(ask(trade, now))
+        except Exception:
+            with self._lock:
+                self._counts["hook_errors"] += 1
+                first = trade.id not in self._trail_failed
+                self._trail_failed.add(trade.id)
+            if first:
+                log.exception(
+                    "paper: trail_level failed for trade %s (alert %s); further failures "
+                    "for it are logged at debug",
+                    trade.id,
+                    trade.alert_id,
+                )
+            else:
+                log.debug("paper: trail_level failed again for trade %s", trade.id)
             return None
 
     def _price_exit(

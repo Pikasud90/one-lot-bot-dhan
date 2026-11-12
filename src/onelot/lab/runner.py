@@ -22,10 +22,13 @@ from ..clock import IST
 from ..config import CostConfig
 from ..costs import CostModel
 from ..data.db import get_engine
-from ..data.store import load_bars
+from ..data.hygiene import clean_intraday, consistent_daily
+from ..data.resample import normalize_resolution
+from ..data.store import _read_bars, available_resolutions, load_bars
 from ..data.universe import InstrumentSpec, load_specs, market_index_key
 from ..settings import current_settings
 from ..strategies.base import Context
+from ..strategies.mtf_support import LadderCache
 from ..strategies.registry import get_strategy
 from .execution import (
     OptionPricer,
@@ -123,16 +126,34 @@ class BacktestResult:
 class DataCache:
     """Loads bars once per (series, resolution) per process."""
 
-    def __init__(self, engine: Engine | None = None) -> None:
+    def __init__(self, engine: Engine | None = None, clean: bool = True) -> None:
         self.engine = engine or get_engine()
+        #: repair the known defects of the stored history (data/hygiene.py); False loads the
+        #: store as it is, to measure what the repair changes
+        self.clean = clean
         self._bars: dict[tuple[str, str], pd.DataFrame] = {}
         self.features: dict[tuple, pd.DataFrame] = {}
+        #: multi-timeframe Supertrend ladders (strategies/mtf_support.py), a few at a time
+        self.ladders = LadderCache()
         self.series, self.instruments = load_specs()
+
+    def _load(self, series_key: str, res: str) -> pd.DataFrame:
+        if not self.clean:
+            return load_bars(self.engine, series_key, res)
+        if normalize_resolution(res) != "1d":
+            return clean_intraday(series_key, load_bars(self.engine, series_key, res))
+        avail = available_resolutions(self.engine, series_key)
+        if "1m" not in avail:
+            return load_bars(self.engine, series_key, res)
+        # Daily bars from the cleaned one-minute bars, so a daily level is on the same price
+        # scale as the intraday bars; the older stored daily history is the warm-up.
+        stored = _read_bars(self.engine, series_key, "1d") if "1d" in avail else pd.DataFrame()
+        return consistent_daily(stored, self.bars(series_key, "1m"))
 
     def bars(self, series_key: str, res: str) -> pd.DataFrame:
         k = (series_key, res)
         if k not in self._bars:
-            df = load_bars(self.engine, series_key, res)
+            df = self._load(series_key, res)
             spec = self.series.get(series_key)
             if spec is not None and not spec.has_volume and "volume" in df.columns:
                 # An index or spot FX has no traded volume, and the live desk drops whatever
@@ -216,6 +237,10 @@ def generate_for_instrument(cfg: BacktestConfig, cache: DataCache, strategy=None
             else True,
         },
     )
+    if strategy.multi_timeframe:
+        # the whole one-minute history, not the window: a slow timeframe needs months to warm up
+        ctx.extras["minute_bars"] = cache.bars(spec.series_key, "1m")
+        ctx.extras["mtf_cache"] = cache.ladders
     f = strategy.generate(win, ctx)
     fine = None
     if cfg.use_fine_path and cfg.timeframe != "1m":

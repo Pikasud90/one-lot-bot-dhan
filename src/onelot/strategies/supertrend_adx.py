@@ -51,6 +51,11 @@ class STParams(StrategyParams):
         8.0, description="Supertrend stops are ~mult x ATR away by construction"
     )
     exit_on_flip: bool = Field(True, description="Exit when Supertrend flips against the position")
+    line_trail: bool = Field(
+        False,
+        description="Trail the stop along the Supertrend line: after every bar the stop moves to "
+        "the line (less the buffer), only ever in the trade's favour",
+    )
     target_r: float = Field(
         0.0,
         description="Profit target in R (0 = ride the trend with the trailing stop)",
@@ -114,6 +119,9 @@ class SupertrendADX(Strategy):
         out["short_stop"] = st["st_line"] + buf
         out["long_exit"] = (d == -1) if p.exit_on_flip else False
         out["short_exit"] = (d == 1) if p.exit_on_flip else False
+        if p.line_trail:  # the level the stop may stand at after each close (NaN: no level)
+            out["long_trail"] = out["long_stop"].where(d == 1)
+            out["short_trail"] = out["short_stop"].where(d == -1)
         out["st_line"], out["st_dir"], out["macd_hist"] = st["st_line"], d, hist
         di_spread = (f["plus_di"] - f["minus_di"]) / 30
         out["pl_price_long"] = 0.5 * (1 - (dist - 0.6).abs() / 1.2).clip(0, 1) + 0.5 * (
