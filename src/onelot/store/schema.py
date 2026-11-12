@@ -651,3 +651,59 @@ telegram_outbox = Table(
     UniqueConstraint("alert_id", "kind", name="uq_telegram_outbox_alert_kind"),
     Index("ix_telegram_outbox_status_sent", "status", "sent_at"),
 )
+
+
+# ── Delivery trades of the pullback rule (US-067) ─────────────────────────
+# One row per (stock, signal date): the entry alert, its paper trade and its exit alert are
+# states of the same row (PENDING_ENTRY -> OPEN -> EXIT_PENDING -> CLOSED, or MISSED), so a
+# restart can never duplicate one. Every change is a compare-and-set on `status`. Apart from
+# the intraday `desk_signals` / `paper_trades` on purpose: those expire after minutes and close
+# at the session end. Dates are ISO strings (an exchange date, never a time), money paise.
+delivery_trades = Table(
+    "delivery_trades",
+    METADATA,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("series_key", String(32), nullable=False),
+    Column("instrument_key", String(48), nullable=False),
+    Column("strategy", String(48), nullable=False),  # pullback
+    Column("timeframe", String(6), nullable=False),  # 1d
+    Column("signal_date", String(10), nullable=False),  # the session whose close signalled
+    Column("signal_close", Float, nullable=False),
+    Column("qty", Integer, nullable=False),  # R5: shares nearest unit_inr, fixed at the signal
+    Column("status", String(16), nullable=False),
+    Column("note", Text),  # MISSED: why; any later remark
+    Column("warning", Text),  # D15: possible corporate action
+    Column("created_at", TZDateTime, nullable=False),
+    Column("entry_told_at", TZDateTime),
+    Column("entry_ts", TZDateTime),  # the bar the entry filled on
+    Column("entry_session", String(10)),
+    Column("entry_paise", BigInteger),
+    Column("entry_late", Boolean),
+    Column("exit_signal_date", String(10)),
+    Column("exit_reason", String(48)),  # R3 reasons, comma-separated in R3's order
+    Column("sessions_held", Integer),  # at the exit signal; the entry session counts as 1
+    Column("exit_told_at", TZDateTime),
+    Column("exit_ts", TZDateTime),
+    Column("exit_paise", BigInteger),
+    Column("exit_late", Boolean),
+    Column("gross_paise", BigInteger),
+    Column("charges_paise", BigInteger),  # both legs, delivery product
+    Column("dp_paise", BigInteger),  # the depository charge of the sale
+    Column("net_paise", BigInteger),
+    Column("net_pct", Float),  # of the entry value
+    Column("plan", JSON, nullable=False),  # the rule's settings and the signal's reading
+    Column("updated_at", TZDateTime, nullable=False),
+    UniqueConstraint("series_key", "signal_date", name="uq_delivery_trades_stock_signal"),
+    Index("ix_delivery_trades_status", "status"),
+)
+
+# One row per (stock, completed session) the rule has read: the start-up catch-up (D1) reads
+# what is missing from here, and a session is never evaluated twice.
+delivery_evaluations = Table(
+    "delivery_evaluations",
+    METADATA,
+    Column("series_key", String(32), primary_key=True),
+    Column("session_date", String(10), primary_key=True),
+    Column("reading", JSON, nullable=False),
+    Column("evaluated_at", TZDateTime, nullable=False),
+)
