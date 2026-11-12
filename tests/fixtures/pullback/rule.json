@@ -1,0 +1,11 @@
+{
+ "depth": 0.08,
+ "high_lookback": 20,
+ "trend_sma": 200,
+ "exit_sma": 20,
+ "max_sessions": 30,
+ "stop": 0.15,
+ "market_filter": "NIFTY close above its SMA200 on the signal day",
+ "slippage_per_side": 0.0003,
+ "source": "scripts/alpha_pullback_check.py (independent reference), store daily bars as cleaned on 2026-11-12"
+}
