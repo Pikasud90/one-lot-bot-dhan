@@ -789,6 +789,7 @@ const dlvHome = (d) => { if (!d || typeof d !== "object") return ""; const pend 
 const dlvArchive = (list) => !Array.isArray(list) || !list.length ? "" : `<h4>Delivery alerts</h4><div class="scroll"><table><thead><tr><th>Stock</th> <th>Signal</th> <th>Status</th> <th class="n">Entry</th> <th class="n">Exit</th> <th>Reason</th> <th class="n">Net</th></tr></thead><tbody>${list.map((t) => `<tr><td><b>${esc(t.label || t.series_key)}</b> <span class="dim">${esc(t.qty)} sh</span></td> <td>${esc(t.signal_date)}</td> <td>${esc(String(t.status).replace(/_/g, " ").toLowerCase())}${t.note ? ` <span class="dim">${esc(t.note)}</span>` : ""}</td> <td class="n">${fmt(t.entry)}${t.entry_late ? " (late)" : ""}</td> <td class="n">${fmt(t.exit)}${t.exit_late ? " (late)" : ""}</td> <td>${esc(t.exit_reason || "–")}</td> <td class="n ${cls(t.net)}">${rup2(t.net)}${t.net_pct == null ? "" : ` <span class="dim">${spct(t.net_pct)}</span>`}</td></tr>`).join("")}</tbody></table></div>`;
 const pbChip = (pb) => { if (!pb || typeof pb !== "object") return ""; const r = pb.reading, t = pb.trade, chip = (text, c = "", title = "") => `<span class="schip ${c}" title="${esc(title)}">${esc(text)}</span>`; if (t && t.status === "EXIT_PENDING") return chip("pullback 1d · exit at the next open", "short", t.exit_reason || ""); if (t && t.status === "OPEN") return chip(`pullback 1d · open ${t.sessions ?? "?"} of ${t.max_sessions ?? pb.max_sessions ?? "?"}`, "", t.warning || ""); if ((t && t.status === "PENDING_ENTRY") || (r && r.signal)) return chip("pullback 1d · BUY at the next open", "long", pb.evidence || ""); if (r) return chip(`pullback 1d · ${fmt(r.below_high_pct, 1)}% of ${fmt(r.needed_pct, 0)}%`, "", r.why || ""); return chip("pullback 1d · no reading", "err", pb.note || "no complete daily history"); };
 const pbUnit = (pb) => `delivery: shares nearest ${rup(pb && pb.unit_inr != null ? pb.unit_inr : 10000)}`;
+const pbUnitShort = (pb) => `delivery · about ${rup(pb && pb.unit_inr != null ? pb.unit_inr : 10000)}`;
 function accRow(r, isOpen) {
   const L = r.last || {}, R = r.regime || {}, H = r.health || {}, K = r.risk || {};
   const chips = (r.pullback ? pbChip(r.pullback) : "") + (r.strategies || []).map(s => s.enabled === false ? `<span class="schip paused" title="paused">${esc(s.name)}@${esc(s.timeframe)}</span>` : `<span class="schip ${s.verdict !== "none" ? s.verdict : ""} ${s.error ? "err" : ""}" title="${esc(s.reason || "")}">${esc(s.name)}@${esc(s.timeframe)}</span>`).join("");
@@ -818,7 +819,7 @@ function accRow(r, isOpen) {
   return `<div class="acc-row ${isOpen ? "open" : ""}" data-key="${esc(r.key)}">
     <div class="acc-top" data-toggle="${esc(r.key)}">
       <div class="acc-head">
-        <div class="acc-name"><b>${esc(r.label)}</b><span class="dim">${r.kind === "INDEX" ? "index · options" : "stock"} · ${esc(r.unit)}</span></div>
+        <div class="acc-name"><b>${esc(r.label)}</b><span class="dim">${r.kind === "INDEX" ? "index · options" : "stock"} · ${r.pullback ? esc(pbUnitShort(r.pullback)) : esc(r.unit)}</span></div>
         <div class="acc-price">${fmt(L.price)}<span class="${cls(L.change_pct)}">${spct(L.change_pct)}</span></div>
         <div class="acc-strats">${chips}</div>
         <div class="state-badge st-${esc(r.state)}">${esc(r.state)}</div>
@@ -874,8 +875,13 @@ function renderDesk(d) {
     });
   };
   draw($("desk-indices"), d.indices || []); draw($("desk-stocks"), d.stocks || []);
-  $("desk-idx-count").textContent = `${(d.indices || []).length} tracked · ${(d.indices || []).reduce((a, r) => a + (r.strategies || []).length, 0)} strategies`;
-  $("desk-stk-count").textContent = `${(d.stocks || []).length} tracked · ${(d.stocks || []).reduce((a, r) => a + (r.strategies || []).length, 0)} strategies`;
+  // US-067: say how many slots are live and how many are paused; the delivery rule counts as one live slot a stock
+  const dlv = d.delivery && d.delivery.enabled ? d.delivery : null;
+  const slotCount = (rows, live) => { const all = rows.reduce((a, r) => a + (r.strategies || []).length, 0), paused = rows.reduce((a, r) => a + (r.strategies || []).filter(s => s.enabled === false).length, 0); return `${rows.length} tracked · ${all - paused + live} active${paused ? ` · ${paused} paused` : ""}`; };
+  $("desk-idx-count").textContent = slotCount(d.indices || [], 0);
+  $("desk-stk-count").textContent = slotCount(d.stocks || [], dlv ? (d.stocks || []).filter(r => r.pullback).length : 0);
+  const stkSub = $("desk-stk-sub");
+  if (stkSub) stkSub.textContent = dlv ? `delivery · pullback rule · about ${rup(dlv.unit_inr != null ? dlv.unit_inr : 10000)} a trade` : "buy / sell · 1 share · intraday";
 }
 document.addEventListener("click", (e) => {
   const h = e.target.closest("[data-toggle]"); if (!h) return;
@@ -925,7 +931,7 @@ function renderFocus(d) {
   const r = rows.find(x => x.key === focus.key) || rows[0]; if (!r) return;
   const L = r.last || {}, R = r.regime || {}, H = r.health || {}, K = r.risk || {}, risk = d.risk || {}, LM = risk.limits || {};
   $("focus-body").innerHTML = `
-    <div class="row between"><div class="acc-name"><b>${esc(r.label)}</b><span class="dim">${r.kind === "INDEX" ? "index · options" : "stock"} · ${esc(r.unit)} · tracked as ${esc(r.tracked)}</span></div><div class="state-badge st-${esc(r.state)}">${esc(r.state)}</div></div>
+    <div class="row between"><div class="acc-name"><b>${esc(r.label)}</b><span class="dim">${r.kind === "INDEX" ? "index · options" : "stock"} · ${r.pullback ? esc(pbUnitShort(r.pullback)) : esc(r.unit)} · tracked as ${esc(r.tracked)}</span></div><div class="state-badge st-${esc(r.state)}">${esc(r.state)}</div></div>
     ${trendBlock(r.trend, L.price)}
     <div class="grid4">
       <div><h4>Market</h4>${kv("Last", fmt(L.price) + (L.live ? " <span class='pos'>●</span>" : ""))}${kv("Day change", spct(L.change_pct), cls(L.change_pct))}${kv("Prev close", fmt(L.prev_close))}${kv("Last bar", hhmm(L.bar_ts))}${L.live ? kv("Bid / ask", `${fmt(L.live.bid)} / ${fmt(L.live.ask)}`) : ""}</div>
