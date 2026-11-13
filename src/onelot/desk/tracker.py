@@ -186,7 +186,7 @@ class InstrumentTracker:
         #: the ladder the card shows: the micro-trend ladder when a slot runs one
         self.ladder_timeframes: tuple[str, ...] = next(
             (
-                tuple(s.strategy.ladder_timeframes)
+                tuple(getattr(s.strategy, "ladder_timeframes", ()))
                 for s in self.slots
                 if getattr(s.strategy, "ladder_timeframes", None)
             ),

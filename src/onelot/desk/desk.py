@@ -631,7 +631,7 @@ class Desk:
             return
         sign = 1 if trades[0].direction == "long" else -1
         k = sum(1 for r in rows if r.get("direction") == -sign)
-        exit_at = int(getattr(slot.strategy.p, "exit_count", 3))
+        exit_at = int(getattr(getattr(slot.strategy, "p", None), "exit_count", 3))
         d["trend"] = {**trend, "reversal": {"reversed": k, "of": len(rows), "exit_at": exit_at}}
 
     def _active_slots(self) -> dict[str, set[tuple[str, str]]]:
@@ -760,8 +760,9 @@ class Desk:
             # a token renewed in Settings builds a new adapter (REVIEW O-11): the bar source
             # reads through it from the next fetch on; the bars held are kept
             rest = getattr(self.source.primary, "rest", self.source.primary)
-            if getattr(rest, "adapter", adapter) is not adapter and hasattr(rest, "use_adapter"):
-                rest.use_adapter(adapter)
+            swap = getattr(rest, "use_adapter", None)
+            if getattr(rest, "adapter", adapter) is not adapter and callable(swap):
+                swap(adapter)
                 log.info("desk: the bar source now reads through the renewed adapter")
 
     def _reset_bars(self) -> None:
@@ -960,7 +961,7 @@ class Desk:
         self.notifier.send(
             Notification(
                 title=title,
-                body=sig["text"],
+                body=str(sig["text"]),
                 level=NotificationLevel.SIGNAL,
                 signal_id=sid,
                 ttl_seconds=self.cfg.signal_valid_minutes * 60,
