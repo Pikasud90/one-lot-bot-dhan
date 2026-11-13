@@ -13,9 +13,8 @@ research. Read-only on the store.
 
 from __future__ import annotations
 
-import numpy as np
-
 import mtf_bruteforce as h
+import numpy as np
 
 TFS = ("3m", "5m", "10m", "15m", "30m", "60m", "240m")
 PERIOD = np.array([0, 0, 0, 1, 2])
