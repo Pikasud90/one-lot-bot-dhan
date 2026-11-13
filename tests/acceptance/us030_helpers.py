@@ -937,7 +937,8 @@ def colour_literals_in_values(declarations: str) -> list[str]:
     return found
 
 
-THEME_SELECTORS = (":root", ':root[data-theme="night"]')
+THEME_SELECTORS = (":root", ':root[data-theme="night"]', ':root[data-theme="laxmi"]',
+                   ':root[data-theme="ramayana"]', ':root[data-theme="batman"]')
 
 
 def colour_literal_count_outside_themes(css: str) -> int:

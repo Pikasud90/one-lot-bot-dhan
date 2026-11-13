@@ -53,13 +53,17 @@ function table(cols, rows, opts = {}) {
 }
 
 /* ── theme ────────────────────────────────────────────────────────────── */
+// Five themes, one block of CSS variables each; an unknown stored value falls back to Day, a stored "night" stays Night.
+const THEMES = ["day", "night", "laxmi", "ramayana", "batman"];
+const themeOf = (t) => THEMES.includes(t) ? t : "day";
 function applyTheme(t) {
+  t = themeOf(t);
   document.documentElement.dataset.theme = t; store.set("theme", t);
-  $("theme-toggle").textContent = t === "night" ? "☀ Day" : "☾ Night";
+  $("theme-toggle").value = t;
   if (C()) C().retheme();
 }
-$("theme-toggle").onclick = () => applyTheme(document.documentElement.dataset.theme === "night" ? "day" : "night");
-applyTheme(store.get("theme", "day") === "night" ? "night" : "day");
+$("theme-toggle").onchange = (e) => applyTheme(e.target.value);
+applyTheme(store.get("theme", "day"));
 
 /* ── IST clock (system time, never the network) + exchange calendar ──── */
 const IST_FMT = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit", weekday: "short", day: "2-digit", month: "short", year: "numeric" });

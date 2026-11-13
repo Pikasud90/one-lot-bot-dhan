@@ -1,5 +1,5 @@
 /* One Lot Desk — quant terminal with a shōnen edge.
-   Two themes: DAY (default: bright paper desk under a dark brand bar) and NIGHT.
+   Themes: DAY (default: bright paper desk under a dark brand bar), NIGHT, and three palettes (laxmi, ramayana, batman).
    The type scale is deliberately large — this is read at arm's length all session. */
 
 :root{
@@ -30,6 +30,46 @@
   --head:#090e1c; --head2:#131c33;
   --shadow:0 10px 30px -16px rgba(0,0,0,.7);
   --grid:#2a3650; --plot-font:#a9b6d0;
+  color-scheme:dark;
+}
+/* Three more palettes (US-070), colours only: the same variable names as Day; fonts and the cut come from :root. */
+:root[data-theme="laxmi"]{
+  --bg:#fff6e5; --bg2:#fdebc8; --panel:#fffdf7; --panel2:#fff3dc; --panel3:#fbe4bd;
+  --line:#ecd0a0; --line2:#d9b273;
+  --text:#2a0a0f; --muted:#6b3a2c; --dim:#8f6250;
+  --accent:#b3122e; --accent-deep:#7d0a1f; --accent2:#a86f00; --cyan:#c2185b; --violet:#8e2c6b;
+  --ok:#11703d; --bad:#c4122f; --warn:#9a5b00;
+  --ok-bg:rgba(17,112,61,.12); --bad-bg:rgba(196,18,47,.10); --warn-bg:rgba(201,138,0,.15); --cyan-bg:rgba(194,24,91,.10);
+  --warn-ink:#7a4700; --cyan-ink:#9c1249;
+  --head:#6e0b1d; --head2:#9c1430; --head-text:#fff4d6; --head-muted:#f2c9a0;
+  --shadow:0 1px 2px rgba(110,11,29,.08),0 10px 26px -14px rgba(110,11,29,.25);
+  --grid:#f0dcb6; --plot-font:#6b3a2c;
+  color-scheme:light;
+}
+:root[data-theme="ramayana"]{
+  --bg:#fdf3e3; --bg2:#f8e6c8; --panel:#fffaf1; --panel2:#fbefd9; --panel3:#f3e0bd;
+  --line:#e6cfa6; --line2:#cfae78;
+  --text:#1c1a0e; --muted:#4f4a2a; --dim:#7c7450;
+  --accent:#d1420a; --accent-deep:#9e2f05; --accent2:#a8770b; --cyan:#1f5f3a; --violet:#8a3b12;
+  --ok:#17663a; --bad:#c42a12; --warn:#9a5d00;
+  --ok-bg:rgba(23,102,58,.13); --bad-bg:rgba(196,42,18,.10); --warn-bg:rgba(201,138,11,.15); --cyan-bg:rgba(31,95,58,.10);
+  --warn-ink:#7a4800; --cyan-ink:#17492c;
+  --head:#173d26; --head2:#225536; --head-text:#fff1d6; --head-muted:#e8c98f;
+  --shadow:0 1px 2px rgba(23,61,38,.08),0 10px 26px -14px rgba(23,61,38,.25);
+  --grid:#efdcb9; --plot-font:#4f4a2a;
+  color-scheme:light;
+}
+:root[data-theme="batman"]{
+  --bg:#0b0c0e; --bg2:#121418; --panel:#1a1c21; --panel2:#22252b; --panel3:#2b2f36;
+  --line:#33373f; --line2:#474c56;
+  --text:#e6e9ee; --muted:#a9b0bb; --dim:#7b828d;
+  --accent:#ffd400; --accent-deep:#b39500; --accent2:#ffd400; --cyan:#8fb3d9; --violet:#a59bd6;
+  --ok:#3fd68a; --bad:#ff5f6d; --warn:#ffc233;
+  --ok-bg:rgba(63,214,138,.15); --bad-bg:rgba(255,95,109,.15); --warn-bg:rgba(255,194,51,.14); --cyan-bg:rgba(143,179,217,.12);
+  --warn-ink:#ffc233; --cyan-ink:#9fc1e4;
+  --head:#050506; --head2:#15171b; --head-text:#f2f3f5; --head-muted:#a9b0bb;
+  --shadow:0 10px 30px -16px rgba(0,0,0,.8);
+  --grid:#2a2d33; --plot-font:#a9b0bb;
   color-scheme:dark;
 }
 *{box-sizing:border-box}
@@ -456,3 +496,4 @@ td.best-row{color:var(--ok);font-weight:800}
 .trend-legend .up{color:var(--ok)} .trend-legend .down{color:var(--bad)}
 .updated-line{text-align:right;margin:-6px 0 8px}
 a:focus-visible,button:focus-visible,select:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.theme-pick{display:inline-flex;align-items:center;gap:8px;font:600 15px/1 var(--ui);letter-spacing:.06em;color:var(--head-muted)}
