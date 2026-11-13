@@ -61,7 +61,9 @@ def test_the_top_up_goes_through_the_real_desk_method_with_the_19_series_and_a_s
     d.delivery.load_history(now)
     d.delivery.maybe_top_up(now)
     (call,) = fake.calls
-    assert len(call["keys"]) == 19 and "NIFTY" in call["keys"] and call["res"] == ["1m"]
+    # US-068: every tracked series (18 stocks and 5 indices), not only the 19 the rule reads
+    assert len(call["keys"]) == 23 and "NIFTY" in call["keys"] and call["res"] == ["1m"]
+    assert {"BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX"} <= set(call["keys"])
     assert callable(call["stop_flag"]) and call["stop_flag"]() in (True, False)
     assert "1 error(s): SBIN 1m: timeout" in d.delivery.top_up_note
     assert "TypeError" not in d.delivery.top_up_note

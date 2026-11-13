@@ -217,6 +217,9 @@ def rig(cfg, tmp_path, monkeypatch):
     desk.fine_minutes = 1
     for t in desk.trackers.values():
         t.fine_minutes = 1
+    # before the open the stored minute bars load on this thread (in market hours they load
+    # in the background, which a test would race; that path has its own test)
+    desk._load_minute_history(dt.datetime.combine(DAY, dt.time(8, 30), tzinfo=IST))
     return desk, notifier, book, db
 
 
@@ -269,3 +272,19 @@ def test_the_card_counts_the_reversal_while_the_trade_is_open(rig):
     card = next(d for d in desk.snapshot()["indices"] if d["key"] == "NIFTY")
     rev = card["trend"]["reversal"]
     assert rev["of"] == 7 and rev["exit_at"] == 3 and 0 <= rev["reversed"] < 3
+
+
+def test_in_market_hours_the_minute_history_loads_in_the_background(cfg, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "onelot.desk.desk.minute_history", lambda e, k, now: calls.append(k) or BARS.iloc[:10]
+    )
+    db = init_database(f"sqlite:///{tmp_path / 'bg.db'}")
+    slot = StrategySlotCfg("microtrend", "3m", {})
+    desk_cfg = small_cfg(indices=(DeskInstrumentCfg("NIFTY", "NIFTY_OPT", "INDEX", (slot,)),),
+                         stocks=())  # fmt: skip
+    desk, _, _ = new_desk(cfg, db, desk_cfg=desk_cfg)
+    desk._load_minute_history(dt.datetime.combine(DAY, dt.time(10, 0), tzinfo=IST))
+    assert desk._minute_loader.name == "minute-history"
+    desk._minute_loader.join(5)
+    assert calls == ["NIFTY"] and len(desk.trackers["NIFTY"].minute_history) == 10
