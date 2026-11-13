@@ -65,7 +65,7 @@ TOKEN_OK = "13/11/2026 20:00"  # ten hours after NOW
 
 @needs_node
 def test_the_strip_has_a_line_for_each_thing_the_owner_needs():
-    lines = dict((k, [v, c]) for k, v, c in js("todayLines(P[0], P[1], NOW)", [SNAP, TOKEN_OK]))
+    lines = {k: [v, c] for k, v, c in js("todayLines(P[0], P[1], NOW)", [SNAP, TOKEN_OK])}
     assert lines["Session"][0] == "open · closes 15:30"
     assert lines["Feed"] == ["live (dhan)", "ok"]
     assert lines["Dhan token"] == ["10 h 0 min left", "ok"]
@@ -84,9 +84,7 @@ def test_a_short_token_a_stale_history_and_a_delayed_feed_say_what_to_do():
             "source": {"name": "yahoo", "delayed": True, "delayed_keys": ["NIFTY"], "last_error": None},
             "indices": [{"key": "NIFTY", "label": "NIFTY", "trend": trend(1, -1, 0, 1, 1, 1, 1)}], "positions": [],
             "delivery": {**SNAP["delivery"], "stale": ["SBIN", "TCS"]}}  # fmt: skip
-    lines = dict(
-        (k, [v, c]) for k, v, c in js("todayLines(P[0], P[1], NOW)", [snap, "13/11/2026 11:00"])
-    )
+    lines = {k: [v, c] for k, v, c in js("todayLines(P[0], P[1], NOW)", [snap, "13/11/2026 11:00"])}
     assert lines["Session"][0] == "closed · opens at 11:15"
     assert lines["Feed"] == ["delayed ~15 min: NIFTY (yahoo bars)", "warn"]
     assert lines["Dhan token"] == ["1 h 0 min left", "bad"]
@@ -95,9 +93,9 @@ def test_a_short_token_a_stale_history_and_a_delayed_feed_say_what_to_do():
         "Renew the Dhan token" in lines["Next"][0]
         and "daily history is stale (SBIN, TCS)" in lines["Next"][0]
     )
-    expired = dict(
-        (k, [v, c]) for k, v, c in js("todayLines(P[0], P[1], NOW)", [SNAP, "13/11/2026 09:00"])
-    )
+    expired = {
+        k: [v, c] for k, v, c in js("todayLines(P[0], P[1], NOW)", [SNAP, "13/11/2026 09:00"])
+    }
     assert expired["Dhan token"] == ["EXPIRED", "bad"]
 
 
