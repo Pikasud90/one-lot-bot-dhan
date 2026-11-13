@@ -995,6 +995,29 @@ def create_app(engine, api_token: str) -> FastAPI:
         )
         return {"received": True}
 
+    # ── Machine Learning Lab (read-only statistical forecasts; never an alert) ──
+    mllab: dict[str, Any] = {}  # the MlLab of the running desk, built on first use
+
+    @app.get("/api/mllab")
+    def mllab_matrix(timeframe: str = Query("15m")) -> Any:
+        from fastapi.responses import Response
+
+        from ..mllab import service as ml
+
+        if timeframe not in ml.TIMEFRAMES:
+            raise HTTPException(400, f"timeframe must be one of {', '.join(ml.TIMEFRAMES)}")
+        desk = _desk()
+        if mllab.get("desk") is not desk:
+            mllab["desk"] = desk
+            mllab["lab"] = ml.MlLab(
+                ml.desk_bars_getter(desk),
+                lambda: ml.desk_instruments(desk),
+                lambda: dt.datetime.now(IST),
+                ml.desk_stored_reader(desk),
+            )
+        body = json.dumps(mllab["lab"].matrix(timeframe), allow_nan=False)  # strict JSON
+        return Response(body, media_type="application/json")
+
     # ── UI ────────────────────────────────────────────────────────────────
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
