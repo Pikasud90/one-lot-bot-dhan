@@ -153,11 +153,17 @@ def gate_timeframes(gate: str, trend_tf: str) -> tuple[str, ...]:
     raise ValueError(f"gate {gate!r} is not one of {', '.join(GATES)}")
 
 
-def rung_frames(base_bars: pd.DataFrame, base: str, daily: pd.DataFrame | None) -> Frames:
-    """The bars of every ladder timeframe from bars of resolution `base` (None: unavailable)."""
+def rung_frames(
+    base_bars: pd.DataFrame,
+    base: str,
+    daily: pd.DataFrame | None,
+    timeframes: tuple[str, ...] = mtf.LADDER_TIMEFRAMES,
+) -> Frames:
+    """The bars of every ladder timeframe from bars of resolution `base` (None: unavailable).
+    `timeframes` is the owner's ladder unless a strategy names its own (US-068 microtrend)."""
     base = normalize_resolution(base)
     frames: Frames = {}
-    for tf in mtf.LADDER_TIMEFRAMES:
+    for tf in (normalize_resolution(t) for t in timeframes):
         if tf == "1d":
             given = daily is not None and not daily.empty
             frames[tf] = daily if given else resample_bars(base_bars, "1d")
@@ -177,13 +183,22 @@ def build(
     period: int = mtf.ST_PERIOD,
     mult: float = mtf.ST_MULT,
     has_volume: bool = True,
+    timeframes: tuple[str, ...] = mtf.LADDER_TIMEFRAMES,
 ) -> Ladder:
     """The ladder of `base_bars`, which are bars of resolution `base`."""
     base = normalize_resolution(base)
-    return Ladder(base, rung_frames(base_bars, base, daily), period, mult, has_volume)
+    frames = rung_frames(base_bars, base, daily, timeframes)
+    return Ladder(base, frames, period, mult, has_volume)
 
 
-def ladder_for(df: pd.DataFrame, ctx: Context, timeframe: str, period: int, mult: float) -> Ladder:
+def ladder_for(
+    df: pd.DataFrame,
+    ctx: Context,
+    timeframe: str,
+    period: int,
+    mult: float,
+    timeframes: tuple[str, ...] = mtf.LADDER_TIMEFRAMES,
+) -> Ladder:
     """The ladder a strategy on `df` (bars of `timeframe`) reads, from `ctx` or `df` itself."""
     extras = ctx.extras
     fine = extras.get("minute_bars")
@@ -196,8 +211,11 @@ def ladder_for(df: pd.DataFrame, ctx: Context, timeframe: str, period: int, mult
     has_volume = bool(extras.get("has_volume", True))
     store = extras.get("mtf_cache")
     if store is None:
-        return build(base_bars, base, daily, period, mult, has_volume)
-    data_key = (ctx.symbol, base, has_volume, *fingerprint(base_bars), *fingerprint(daily))
+        return build(base_bars, base, daily, period, mult, has_volume, timeframes)
+    data_key = (
+        ctx.symbol, base, has_volume, tuple(timeframes), *fingerprint(base_bars),
+        *fingerprint(daily),
+    )  # fmt: skip
     key = (*data_key, int(period), round(float(mult), 6))
     hit = store.pop(key, None)
     if hit is None:
@@ -205,7 +223,7 @@ def ladder_for(df: pd.DataFrame, ctx: Context, timeframe: str, period: int, mult
         if kept is not None and kept[0] == data_key:
             frames = kept[1]
         else:
-            frames = rung_frames(base_bars, base, daily)
+            frames = rung_frames(base_bars, base, daily, timeframes)
             if isinstance(store, LadderCache):
                 store.frames = (data_key, frames)
         hit = Ladder(base, frames, period, mult, has_volume)

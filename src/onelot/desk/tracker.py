@@ -65,6 +65,8 @@ class StrategySlot:
     #: side -> the level that line allows the stop to stand at after the last closed bar
     last_trail: dict = field(default_factory=dict)
     error: str | None = None
+    #: the slot's evidence line, shown on every alert it raises (US-068, as US-067 D14)
+    evidence: str = ""
 
     def trail_level(self, side: str) -> float | None:
         """Where the strategy's own line lets the stop of an OPEN `side` position stand after
@@ -141,7 +143,9 @@ class InstrumentTracker:
             if s.name not in REGISTRY:
                 log.warning("desk %s: unknown strategy %s skipped", cfg.key, s.name)
                 continue
-            params = {**s.params, "timeframe": s.timeframe}
+            # `evidence` is the slot's evidence line for its alerts (US-068), not a setting
+            params = {k: v for k, v in s.params.items() if k != "evidence"}
+            params["timeframe"] = s.timeframe
             sess = instrument.session
             params.setdefault("entry_start", sess.get("first_entry", "09:30"))
             params.setdefault("entry_end", sess.get("last_entry", "14:45"))
@@ -152,7 +156,13 @@ class InstrumentTracker:
                 log.warning("desk %s: strategy %s rejected params: %s", cfg.key, s.name, exc)
                 continue
             self.slots.append(
-                StrategySlot(s, strat, REGISTRY[s.name].label, minutes_of(s.timeframe))
+                StrategySlot(
+                    s,
+                    strat,
+                    REGISTRY[s.name].label,
+                    minutes_of(s.timeframe),
+                    evidence=str(s.params.get("evidence") or ""),
+                )  # fmt: skip
             )
         # the card's regime comes from the single-timeframe slots when there is one: a
         # multi-timeframe slot looks every few minutes and would overwrite it with its own
@@ -170,10 +180,23 @@ class InstrumentTracker:
         self.daily_history: pd.DataFrame | None = None
         self.history_day: dt.date | None = None  # the day `daily_history` was read on
         self.history_note: str | None = None  # why there is none, when there is none
+        #: stored one-minute bars before the live ones, for a ladder with a 4-hour rung
+        #: (US-068 microtrend); None: the live bars alone
+        self.minute_history: pd.DataFrame | None = None
+        #: the ladder the card shows: the micro-trend ladder when a slot runs one
+        self.ladder_timeframes: tuple[str, ...] = next(
+            (
+                tuple(s.strategy.ladder_timeframes)
+                for s in self.slots
+                if getattr(s.strategy, "ladder_timeframes", None)
+            ),
+            mtf.LADDER_TIMEFRAMES,
+        )
         #: the ladder at the last closed fine bar, as the card shows it ({} before any bars)
         self.trend: dict = {}
         self._ladders = ms.LadderCache()  # shared by the card and every multi-timeframe slot
         self._fine_memo: tuple[tuple, pd.DataFrame] | None = None
+        self._ladder_memo: tuple[tuple, pd.DataFrame] | None = None
         self._daily_memo: tuple[tuple, pd.DataFrame, str | None] | None = None
         self._trend_failed = False
 
@@ -250,6 +273,18 @@ class InstrumentTracker:
             self._daily_memo = (key, consistent_daily(history, fine), _history_gap(history, fine))
         return self._daily_memo[1]
 
+    def ladder_bars(self, fine: pd.DataFrame) -> pd.DataFrame:
+        """The fine bars, with the stored one-minute bars before them when there are any (a
+        4-hour rung needs about 35 sessions; the desk polls about 17)."""
+        history = self.minute_history
+        if history is None or history.empty or fine is None or fine.empty:
+            return fine
+        key = (*ms.fingerprint(history), *ms.fingerprint(fine))
+        if self._ladder_memo is None or self._ladder_memo[0] != key:
+            older = history[history.index < fine.index[0]]
+            self._ladder_memo = (key, pd.concat([older, fine]) if len(older) else fine)
+        return self._ladder_memo[1]
+
     def _ladder_context(self, fine: pd.DataFrame, market: pd.DataFrame | None = None) -> Context:
         """What a multi-timeframe reading needs: the fine bars, the days and the shared ladders."""
         return Context(
@@ -258,7 +293,7 @@ class InstrumentTracker:
             market=market,
             extras={
                 "has_volume": bool(self.series.has_volume),
-                "minute_bars": fine,
+                "minute_bars": self.ladder_bars(fine),
                 "minute_resolution": f"{self.fine_minutes}m",
                 "mtf_cache": self._ladders,
             },
@@ -277,8 +312,13 @@ class InstrumentTracker:
                 f"{self.fine_minutes}m",
                 mtf.ST_PERIOD,
                 mtf.ST_MULT,
+                self.ladder_timeframes,
             )
             trend = ms.snapshot(ladder, at)
+            if self.ladder_timeframes != mtf.LADDER_TIMEFRAMES:  # US-068: the micro trend
+                for row in trend["rows"]:
+                    row["timeframe"] = "4h" if row["timeframe"] == "240m" else row["timeframe"]
+                trend["rows"][0]["trigger"] = True
             trend["at"] = at.isoformat()
             trend["note"] = self._trend_note(trend)
             self.trend = trend
@@ -302,7 +342,10 @@ class InstrumentTracker:
         if warming:
             notes.append(f"{', '.join(warming)} warming up ({_WARM_BARS} bars needed)")
         history = self.daily_history
-        if history is None or history.empty:
+        if "1d" not in self.ladder_timeframes:  # US-068: no daily rung on the micro ladder
+            if "4h" in quiet and (self.minute_history is None or self.minute_history.empty):
+                notes.append("no stored one-minute history: the 4h trend needs about 35 sessions")
+        elif history is None or history.empty:
             notes.append(
                 self.history_note or "no stored daily history: the 1d trend has no reading"
             )

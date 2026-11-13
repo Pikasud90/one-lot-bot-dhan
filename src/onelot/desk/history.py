@@ -87,3 +87,20 @@ def rule_daily(
             days = (didx.tz_convert("Asia/Kolkata") if didx.tz is not None else didx).date
             daily = daily.assign(minutes=[float(counts.get(d, np.nan)) for d in days])
     return daily, last
+
+
+#: calendar days of stored one-minute bars a micro-trend ladder reads (US-068): about 50
+#: sessions, so the 4-hour Supertrend (70 bars, two a session) has a reading from the start
+MICRO_DAYS = 75
+
+
+def minute_history(
+    engine: Engine, series_key: str, now: dt.datetime, days: int = MICRO_DAYS
+) -> pd.DataFrame:
+    """The cleaned stored one-minute bars of `series_key` for the last `days` days up to `now`
+    (empty when the store has none). Read-only."""
+    at = pd.Timestamp(now)
+    fine = _read_bars(
+        engine, series_key, FINE_RESOLUTION, start=at - pd.Timedelta(days=days), end=at
+    )
+    return clean_intraday(series_key, fine) if fine is not None else pd.DataFrame()

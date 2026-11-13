@@ -7,7 +7,6 @@ a backtest runs it, and against the ladder built directly from the same bars."""
 
 from __future__ import annotations
 
-import dataclasses
 import datetime as dt
 import json
 import logging
@@ -260,30 +259,22 @@ def test_a_plain_supertrend_slot_trails_its_line_only_when_asked(specs, rising):
     assert slot.trail_view() == {"timeframe": "30m", "long": round(expected, 4), "short": None}
 
 
-def test_the_configured_index_slots_on_a_tracker(specs, rising):
-    """The paper test as configured: the older Supertrend slot keeps its ATR trail, the new
-    one follows the 60-minute line."""
+def test_the_configured_index_slot_on_a_tracker(specs, rising):
+    """US-068 (2026-11-13): the index slot is the micro-trend rule only (the older Supertrend
+    slots left desk.yaml). Its card shows the seven micro-trend timeframes, 3m first as the
+    trigger, the 4-hour one as 4h; the slot evaluates without an error."""
     minute, history = rising
     series, instruments = specs
     nifty = next(i for i in load_desk_config().indices if i.key == "NIFTY")
-    # US-067 D9 paused these slots in the shipped desk.yaml (2026-11-12); their settings are
-    # what this test checks, so they are switched back on here.
-    nifty = dataclasses.replace(
-        nifty, strategies=tuple(dataclasses.replace(s, enabled=True) for s in nifty.strategies)
-    )
     t = InstrumentTracker(nifty, series["NIFTY"], instruments[nifty.tracked], 1)
     t.bars, t.daily_history = before(minute, CUT), history
     run(t)
-    older, multi = t.slots
-    assert (older.cfg.name, older.cfg.timeframe) == ("supertrend_vol", "30m")
-    assert older.line_trail is False and older.trail_view() is None
-    assert (multi.cfg.name, multi.cfg.timeframe) == ("supertrend_mtf", "5m")
-    view = multi.trail_view()
-    assert view["timeframe"] == "60m" and view["short"] is None
-    hour = mtf.snapshot(mtf.build_ladder(t.bars, consistent_daily(history, t.bars)), CUT)[
-        LADDER.index("60m")
-    ]
-    assert hour["direction"] == 1 and view["long"] < hour["line"]  # 2 ATR beyond the line
+    (slot,) = t.slots
+    assert (slot.cfg.name, slot.cfg.timeframe) == ("microtrend", "3m")
+    assert "Not an edge" in slot.evidence
+    rows = t.trend["rows"]
+    assert [r["timeframe"] for r in rows] == ["3m", "5m", "10m", "15m", "30m", "60m", "4h"]
+    assert rows[0].get("trigger") is True and not any(r.get("trigger") for r in rows[1:])
     assert all(s.error is None for s in t.slots)
 
 

@@ -75,10 +75,11 @@ def test_an_unknown_product_is_an_error(tmp_path):
         )
 
 
-def test_the_shipped_desk_pauses_every_slot_but_pullback_on_the_18_stocks():
-    cfg = load_desk_config()
+def test_the_shipped_desk_runs_pullback_on_the_18_stocks_and_microtrend_on_the_indices():
+    cfg = load_desk_config()  # US-068 (2026-11-13): no paused slot is left in the file
     on = {(s.name, s.timeframe) for i in cfg.instruments for s in i.strategies if s.enabled}
-    assert on == {("pullback", "1d")}
+    assert on == {("pullback", "1d"), ("microtrend", "3m")}
+    assert cfg.paused_slots() == frozenset()
     assert len(cfg.delivery_slots()) == 18
     assert all(s.product == "intraday" for i in cfg.indices for s in i.strategies)
     (_, slot) = cfg.delivery_slots()[0]

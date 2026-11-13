@@ -11,40 +11,31 @@ from onelot.strategies.registry import REGISTRY, get_strategy
 
 def test_the_paper_test_has_its_candidates_as_primary_slots():
     cfg = load_desk_config()  # the real config/desk.yaml
+    # US-068 (owner, 2026-11-13): two rules, nothing else; the paused slots left the file
     assert cfg.primary_slots() == (
         Slot("pullback", "1d", "STOCK"),  # the delivery pullback rule, US-067 (2026-11-12)
-        Slot("supertrend_vol", "30m", "INDEX"),
-        Slot("supertrend_vol", "60m", "STOCK"),
-        Slot("supertrend_adx", "30m", "STOCK"),
-        Slot("supertrend_mtf", "5m", "INDEX"),  # the owner's multi-timeframe rule, 2026-11-11
+        Slot("microtrend", "3m", "INDEX"),  # the owner's options rule, US-068
     )
 
 
-def test_the_multi_timeframe_slot_runs_the_owners_setting():
-    """Supertrend(14, 1.7) on every timeframe, all six agreeing, the 60-minute line as the
-    stop and the trail (the form the research of 2026-11-11 settled on)."""
+def test_the_micro_trend_slot_runs_the_owners_setting():
+    """US-068: Supertrend(14, 1.7) on 3m, 5m, 10m, 15m, 30m, 60m and 4h; out at 3 of 7; the
+    backstop 3 ATR(60m) beyond the 60m line; the evidence line on every alert."""
     cfg = load_desk_config()
     for index in cfg.indices:
-        (slot,) = [s for s in index.strategies if s.name == "supertrend_mtf"]
-        assert slot.timeframe == "5m", index.key
-        assert slot.params == {
-            "allow_long": True,
-            "allow_short": False,  # an index is traded by buying an option: calls only here
-            "st_period": 14,
-            "st_mult": 1.7,
-            "gate": "all",
-            "trend_tf": "30m",
-            "flip_window": 4,
-            "trend_adx_min": 25,
-            "trend_rsi_min": 60,
-            "entry_end": "13:00",
-            "trail_tf": "60m",
-            "stop_buffer_atr": 2.0,
-            "max_trades_per_day": 1,
-        }, index.key
-        strategy = get_strategy(slot.name, {**slot.params, "timeframe": slot.timeframe})
-        assert strategy.multi_timeframe and strategy.trail_timeframe == "60m"
-    assert not any(s.name == "supertrend_mtf" for stock in cfg.stocks for s in stock.strategies)
+        (slot,) = index.strategies
+        assert (slot.name, slot.timeframe, slot.enabled) == ("microtrend", "3m", True), index.key
+        settings = {k: v for k, v in slot.params.items() if k != "evidence"}
+        assert settings == {"st_period": 14, "st_mult": 1.7, "exit_count": 3,
+                            "stop_buffer_atr": 3.0}, index.key  # fmt: skip
+        assert "Not an edge: this is the paper test." in slot.params["evidence"]
+        strategy = get_strategy(slot.name, {**settings, "timeframe": slot.timeframe})
+        assert strategy.multi_timeframe
+        assert strategy.ladder_timeframes == ("3m", "5m", "10m", "15m", "30m", "60m", "240m")
+    assert all(
+        [(s.name, s.product) for s in stock.strategies] == [("pullback", "delivery")]
+        for stock in cfg.stocks
+    )
 
 
 def test_every_configured_setting_is_one_its_strategy_knows():
@@ -60,12 +51,13 @@ def test_every_configured_setting_is_one_its_strategy_knows():
             if slot.product == "delivery":  # US-067: the pullback rule, not a REGISTRY strategy
                 PullbackParams.from_mapping(slot.params)  # an unknown name raises
                 continue
-            known = set(REGISTRY[slot.name].Params.model_fields)
+            known = set(REGISTRY[slot.name].Params.model_fields) | {"evidence"}  # US-068
             unknown = sorted(set(slot.params) - known)
             assert not unknown, (inst.key, slot.name, slot.timeframe, unknown)
-            get_strategy(slot.name, {**slot.params, "timeframe": slot.timeframe})
+            settings = {k: v for k, v in slot.params.items() if k != "evidence"}
+            get_strategy(slot.name, {**settings, "timeframe": slot.timeframe})
             seen += 1
-    assert seen == 5 * 2 + 18 * 2  # two slots on each of the five indices and eighteen stocks
+    assert seen == 5  # US-068: one intraday slot on each of the five indices
 
 
 def test_owner_order_first_then_configuration_order_each_slot_once(tmp_path):

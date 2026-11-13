@@ -35,6 +35,7 @@ from ..broker.base import Contract
 from ..clock import IST, now_ist, to_ist
 from ..data.schema import desk_positions, desk_signals
 from ..data.universe import load_specs
+from ..indicators import mtf
 from ..lab.real_options import premium_in_minute
 from ..notify.base import Notification, NotificationLevel, shown_confidence
 from .audit import audit_signal, confidence, strategy_scoreboard
@@ -48,7 +49,7 @@ from .economics import (
     stock_economics,
 )
 from .fillcost import FillCostRecorder, Watched, charges_check
-from .history import daily_history
+from .history import daily_history, minute_history
 from .rules import pick_expiry
 from .tracker import InstrumentTracker, StrategySlot, Verdict
 
@@ -349,6 +350,7 @@ class Desk:
                     # the stored days stay until the next poll reads them again (history_day
                     # is left unset, so a reload also picks up a backfill run meanwhile)
                     t.daily_history, t.history_note = old[k].daily_history, old[k].history_note
+                    t.minute_history = old[k].minute_history
             self._history_retry.clear()
             self._tell_paper_tracked()
             self._wake.set()
@@ -602,6 +604,33 @@ class Desk:
             self.hook_errors += 1
             log.exception("delivery: the poll step failed")
 
+    def _add_reversal(self, d: dict) -> None:
+        """For an index whose micro-trend paper trade is open: how many of the 7 trends point
+        against it, and at how many it exits (US-068). A copy of the card's trend is changed,
+        never the tracker's own."""
+        t = self.trackers.get(str(d.get("key")))
+        trend = d.get("trend") or {}
+        rows = trend.get("rows") or []
+        if t is None or not rows or self.paper is None:
+            return
+        slot = next((s for s in t.slots if getattr(s.strategy, "ladder_timeframes", None)), None)
+        if slot is None:
+            return
+        try:
+            trades = [
+                x
+                for x in self.paper.open_trades()
+                if x.series_key == t.series.key and x.strategy == slot.cfg.name
+            ]
+        except Exception:  # noqa: BLE001 - a reading for the card, never a dependency
+            return
+        if not trades or trades[0].status != "OPEN":
+            return
+        sign = 1 if trades[0].direction == "long" else -1
+        k = sum(1 for r in rows if r.get("direction") == -sign)
+        exit_at = int(getattr(slot.strategy.p, "exit_count", 3))
+        d["trend"] = {**trend, "reversal": {"reversed": k, "of": len(rows), "exit_at": exit_at}}
+
     def _active_slots(self) -> dict[str, set[tuple[str, str]]]:
         """series key -> (strategy, timeframe) of every trade still active on it: a paper trade
         waiting or open, or a taken position. A paused slot stays evaluated for these, so its
@@ -635,8 +664,12 @@ class Desk:
         ]
         for key, series_key in due:
             daily: pd.DataFrame | None = None
+            minutes: pd.DataFrame | None = None
             try:
                 daily = daily_history(self.engine, series_key, now)
+                t0 = self.trackers.get(key)
+                if t0 is not None and t0.ladder_timeframes != mtf.LADDER_TIMEFRAMES:
+                    minutes = minute_history(self.engine, series_key, now)  # US-068: 4h rung
             except Exception:  # noqa: BLE001 - a reading for the card, never a dependency
                 if key not in self._history_failed:
                     log.exception("desk: the stored daily history of %s could not be read", key)
@@ -654,6 +687,8 @@ class Desk:
                     continue
                 self._history_failed.discard(key)
                 t.daily_history = daily
+                if minutes is not None:
+                    t.minute_history = minutes
                 if daily.empty:
                     self._history_retry[key] = now + HISTORY_EMPTY_RETRY
                     t.history_note = (
@@ -828,7 +863,8 @@ class Desk:
             },
             "reasons": v.reasons,
             "economics": eco.as_dict(),
-            "text": text,
+            "text": f"{text}\n{slot.evidence}" if slot.evidence else text,
+            "evidence": slot.evidence or None,
             "status": "PENDING",
             # no risk governor on alerts or paper trades (owner, 2026-11-07): never blocked
             "risk_allowed": True,
@@ -883,7 +919,7 @@ class Desk:
         self.notifier.send(
             Notification(
                 title=title,
-                body=text,
+                body=sig["text"],
                 level=NotificationLevel.SIGNAL,
                 signal_id=sid,
                 ttl_seconds=self.cfg.signal_valid_minutes * 60,
@@ -2178,6 +2214,8 @@ class Desk:
         pending = {s["instrument_key"]: s for s in self.signals.values()}
         open_by = {p["instrument_key"]: p for p in self.positions.values()}
         for d in trackers:
+            if d["kind"] == "INDEX":
+                self._add_reversal(d)  # US-068: "reversed k of 7, exit at 3"
             if self.delivery is not None and d["kind"] == "STOCK":
                 d["pullback"] = self.delivery.card(d["key"])  # US-067 D11, D14
             d["signal"] = pending.get(d["tracked"])

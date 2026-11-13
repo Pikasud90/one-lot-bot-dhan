@@ -11,6 +11,7 @@ from .ema_pullback import EMAPullback
 from .gap_fade import GapFade
 from .intraday_momentum import IntradayMomentum
 from .mean_reversion import MeanReversion
+from .microtrend import Microtrend
 from .nr7_breakout import NR7Breakout
 from .orb import OpeningRangeBreakout
 from .squeeze import SqueezeBreakout
@@ -29,6 +30,7 @@ REGISTRY: dict[str, type[Strategy]] = {
         SupertrendVol,  # operator theses
         SupertrendADX,
         SupertrendMTF,
+        Microtrend,
         OpeningRangeBreakout,
         VWAPPullback,  # classic intraday setups
         SqueezeBreakout,
@@ -50,6 +52,7 @@ SUITABLE: dict[str, tuple[str, ...]] = {
     "supertrend_vol": ("OPTIONS", "FUTURES", "STOCK", "CURRENCY"),
     "supertrend_adx": ("FUTURES", "STOCK", "OPTIONS"),
     "supertrend_mtf": ("OPTIONS", "FUTURES", "STOCK", "CURRENCY"),
+    "microtrend": ("OPTIONS",),
     "orb": ("FUTURES", "OPTIONS", "STOCK"),
     "vwap_pullback": ("STOCK", "FUTURES"),
     "squeeze": ("STOCK", "FUTURES", "CURRENCY"),
@@ -75,6 +78,7 @@ INDICATORS: dict[str, tuple[str, ...]] = {
         "ATR(14)",
         "relative volume",
     ),
+    "microtrend": ("Supertrend(14, 1.7) on 3m, 5m, 10m, 15m, 30m, 60m and 4h",),
     "supertrend_mtf": (
         "Supertrend on 1m, 5m, 15m, 30m, 60m and 1d",
         "ADX(14)",

@@ -765,7 +765,7 @@ const trendCls = (d) => d > 0 ? "up" : (d < 0 ? "down" : "none");
 const trendWord = (d) => d > 0 ? "up" : (d < 0 ? "down" : "no reading");
 const trendMark = (d) => d > 0 ? "▲" : (d < 0 ? "▼" : "·");
 // [class, words]. "up" / "down" only when EVERY timeframe agrees: one without a reading breaks the agreement, as it keeps the strategy's gate shut.
-const trendVerdict = (t) => { const rows = trendRows(t), n = rows.length, up = rows.filter((x) => x.direction > 0).length, dn = rows.filter((x) => x.direction < 0).length; return !n || !(up + dn) ? ["none", "no trend reading"] : up === n ? ["up", `all ${n} up`] : dn === n ? ["down", `all ${n} down`] : ["mixed", `${up} up · ${dn} down${up + dn < n ? ` · ${n - up - dn} no reading` : ""}`]; };
+const trendVerdict = (t) => { const rows = trendRows(t), n = rows.length, up = rows.filter((x) => x.direction > 0).length, dn = rows.filter((x) => x.direction < 0).length; if (n && rows[0].trigger) return !(up + dn) ? ["none", "no trend reading"] : up === n ? ["up", "aligned up"] : dn === n ? ["down", "aligned down"] : ["mixed", "not aligned"]; return !n || !(up + dn) ? ["none", "no trend reading"] : up === n ? ["up", `all ${n} up`] : dn === n ? ["down", `all ${n} down`] : ["mixed", `${up} up · ${dn} down${up + dn < n ? ` · ${n - up - dn} no reading` : ""}`]; };
 const trendDay = (s) => { const m = /^\d{4}-(\d{2})-(\d{2})/.exec(String(s ?? "")); return m ? `${+m[2]} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][+m[1] - 1] ?? "?"}` : "–"; };
 // When a timeframe's trend began: the time if that was on the day of the reading, else the day (with the time for the intraday timeframes); "or earlier" when the bars held do not reach the turn.
 const trendSince = (x, at) => !x || !x.since ? "–" : (x.timeframe === "1d" ? trendDay(x.since) : String(x.since).slice(0, 10) === String(at ?? "").slice(0, 10) ? hhmm(x.since) : `${trendDay(x.since)} ${hhmm(x.since)}`) + (x.since_exact === false ? " or earlier" : "");
@@ -773,9 +773,10 @@ const trendSince = (x, at) => !x || !x.since ? "–" : (x.timeframe === "1d" ? t
 const trendGap = (x, price) => { const p = Number(price), l = Number(x && x.line); return !x || x.line == null || price == null || !Number.isFinite(p) || !Number.isFinite(l) || l === 0 ? "–" : `${Math.abs((p - l) / l * 100).toFixed(2)}% ${p >= l ? "above" : "below"}`; };
 const trendTitle = (t) => `Supertrend(${t.period}, ${t.mult}): ` + trendRows(t).map((x) => `${x.timeframe} ${trendWord(x.direction)}`).join(" · ");
 // The strip on a card's head: one pip per timeframe, fastest first, then the count. The direction is in the glyph as well as the colour.
-const trendPips = (t) => { const rows = trendRows(t), v = trendVerdict(t); return !rows.length ? `<div class="trend-strip"><span class="lbl">Micro trend</span><span class="tverdict none">no reading yet</span></div>` : `<div class="trend-strip" title="${esc(trendTitle(t))}"><span class="lbl">Micro trend</span>${rows.map((x) => `<span class="tpip ${trendCls(x.direction)}">${trendMark(x.direction)} ${esc(x.timeframe)}</span>`).join("")}<span class="tverdict ${v[0]}">${esc(v[1])}</span></div>`; };
+const trendReversal = (t) => { const r = t && t.reversal; return r ? ` · reversed ${esc(r.reversed)} of ${esc(r.of)}, exit at ${esc(r.exit_at)}` : ""; };
+const trendPips = (t) => { const rows = trendRows(t), v = trendVerdict(t); return !rows.length ? `<div class="trend-strip"><span class="lbl">Micro trend</span><span class="tverdict none">no reading yet</span></div>` : `<div class="trend-strip" title="${esc(trendTitle(t))}"><span class="lbl">Micro trend</span>${rows.map((x) => `<span class="tpip ${trendCls(x.direction)}"${x.trigger ? ' title="the trigger"' : ""}>${trendMark(x.direction)} ${esc(x.timeframe)}${x.trigger ? " trigger" : ""}</span>`).join("")}<span class="tverdict ${v[0]}">${esc(v[1])}${trendReversal(t)}</span></div>`; };
 // The table in an open card and in the focus panel: each timeframe's trend, its line, the room to it and since when.
-const trendBlock = (t, price) => { const rows = trendRows(t), v = trendVerdict(t); if (!rows.length) return `<h4>Micro trend</h4><div class="hint">No trend reading yet: it comes with the first bars.</div>`; const body = rows.map((x) => `<tr><td><b>${esc(x.timeframe)}</b></td> <td class="tdir ${trendCls(x.direction)}">${trendMark(x.direction)} ${trendWord(x.direction)}</td> <td class="n">${fmt(x.line)}</td> <td class="n">${esc(trendGap(x, price))}</td> <td class="n">${esc(trendSince(x, t.at))}</td></tr>`).join(""); return `<h4>Micro trend · Supertrend(${esc(t.period)}, ${esc(t.mult)})</h4><div class="tbl"><table class="trend"><thead><tr><th>Timeframe</th> <th>Trend</th> <th class="n" title="the Supertrend line: under the price in an up trend, over it in a down trend">Line</th> <th class="n" title="how far the last price stands from the line">Price vs line</th> <th class="n" title="when this trend began">Since</th></tr></thead><tbody>${body}</tbody></table></div><div class="hint"><b class="tverdict ${v[0]}">${esc(v[1])}</b> · a micro trend needs all ${rows.length} to agree · read at ${esc(hhmm(t.at))} from ${esc(t.base)} bars</div>${t.note ? `<div class="hint warn">${esc(t.note)}</div>` : ""}`; };
+const trendBlock = (t, price) => { const rows = trendRows(t), v = trendVerdict(t); if (!rows.length) return `<h4>Micro trend</h4><div class="hint">No trend reading yet: it comes with the first bars.</div>`; const body = rows.map((x) => `<tr><td><b>${esc(x.timeframe)}</b>${x.trigger ? " <span class=\"dim\">trigger</span>" : ""}</td> <td class="tdir ${trendCls(x.direction)}">${trendMark(x.direction)} ${trendWord(x.direction)}</td> <td class="n">${fmt(x.line)}</td> <td class="n">${esc(trendGap(x, price))}</td> <td class="n">${esc(trendSince(x, t.at))}</td></tr>`).join(""); return `<h4>Micro trend · Supertrend(${esc(t.period)}, ${esc(t.mult)})</h4><div class="tbl"><table class="trend"><thead><tr><th>Timeframe</th> <th>Trend</th> <th class="n" title="the Supertrend line: under the price in an up trend, over it in a down trend">Line</th> <th class="n" title="how far the last price stands from the line">Price vs line</th> <th class="n" title="when this trend began">Since</th></tr></thead><tbody>${body}</tbody></table></div><div class="hint"><b class="tverdict ${v[0]}">${esc(v[1])}</b>${trendReversal(t)} · a micro trend needs all ${rows.length} to agree · read at ${esc(hhmm(t.at))} from ${esc(t.base)} bars</div>${t.note ? `<div class="hint warn">${esc(t.note)}</div>` : ""}`; };
 // How a slot trails its stop, for the strategies table: along the strategy's own line or by ATR.
 const slotTrail = (s) => { const t = s && s.trail, p = (s && s.params) || {}; return t ? `${esc(t.timeframe)} line` : Number(p.trail_atr_mult) > 0 ? `ATR × ${esc(p.trail_atr_mult)}` : "–"; };
 // Under that table, for a slot that trails along its own line: where the line lets a stop stand now, for the sides the slot trades. `kind` INDEX names the sides CE / PE.
@@ -795,7 +796,7 @@ function accRow(r, isOpen) {
   const chips = (r.pullback ? pbChip(r.pullback) : "") + (r.strategies || []).map(s => s.enabled === false ? `<span class="schip paused" title="paused">${esc(s.name)}@${esc(s.timeframe)}</span>` : `<span class="schip ${s.verdict !== "none" ? s.verdict : ""} ${s.error ? "err" : ""}" title="${esc(s.reason || "")}">${esc(s.name)}@${esc(s.timeframe)}</span>`).join("");
   const risk = (latest && latest.risk) || {}, LM = risk.limits || {};
   const body = `
-    ${trendBlock(r.trend, L.price)}
+    ${r.kind === "STOCK" ? "" : trendBlock(r.trend, L.price)}
     ${r.kind === "STOCK" ? pbBlock(r.pullback) : ""}
     <div class="grid4">
       <div><h4>Market</h4>${kv("Last", fmt(L.price))}${kv("Day change", spct(L.change_pct), cls(L.change_pct))}${kv("Prev close", fmt(L.prev_close))}
@@ -825,7 +826,7 @@ function accRow(r, isOpen) {
         <div class="state-badge st-${esc(r.state)}">${esc(r.state)}</div>
         <div class="acc-caret">▾</div>
       </div>
-      ${trendPips(r.trend)}
+      ${r.kind === "STOCK" ? "" : trendPips(r.trend)}
     </div>
     <div class="acc-body">${body}</div></div>`;
 }
@@ -932,7 +933,7 @@ function renderFocus(d) {
   const L = r.last || {}, R = r.regime || {}, H = r.health || {}, K = r.risk || {}, risk = d.risk || {}, LM = risk.limits || {};
   $("focus-body").innerHTML = `
     <div class="row between"><div class="acc-name"><b>${esc(r.label)}</b><span class="dim">${r.kind === "INDEX" ? "index · options" : "stock"} · ${r.pullback ? esc(pbUnitShort(r.pullback)) : esc(r.unit)} · tracked as ${esc(r.tracked)}</span></div><div class="state-badge st-${esc(r.state)}">${esc(r.state)}</div></div>
-    ${trendBlock(r.trend, L.price)}
+    ${r.kind === "STOCK" ? "" : trendBlock(r.trend, L.price)}
     <div class="grid4">
       <div><h4>Market</h4>${kv("Last", fmt(L.price) + (L.live ? " <span class='pos'>●</span>" : ""))}${kv("Day change", spct(L.change_pct), cls(L.change_pct))}${kv("Prev close", fmt(L.prev_close))}${kv("Last bar", hhmm(L.bar_ts))}${L.live ? kv("Bid / ask", `${fmt(L.live.bid)} / ${fmt(L.live.ask)}`) : ""}</div>
       <div><h4>Regime &amp; volatility</h4>${kv("Regime", esc(R.regime || "–"))}${kv("Trend", esc(R.trend || "–"), R.trend === "up" ? "pos" : R.trend === "down" ? "neg" : "")}${kv("ADX(14)", fmt(R.adx, 1))}${kv("ATR(14)", fmt(R.atr))}${kv("ATR pct", fmt(R.atr_pct, 0))}${kv("RSI(14)", fmt(R.rsi, 1))}${kv("VWAP", fmt(R.vwap))}</div>

@@ -48,6 +48,7 @@ HELPERS = [
     "trendSince",
     "trendGap",
     "trendTitle",
+    "trendReversal",  # US-068: "reversed k of 7, exit at 3"
     "trendPips",
     "trendBlock",
     "slotTrail",

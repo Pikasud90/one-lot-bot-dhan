@@ -320,40 +320,23 @@ class TestJobsAreRecoveredOnceNotRepeatedly:
 # settings (docs/research/CROSS_RETUNE_2026-11-07.md): this list replaced the seven.
 # On 2026-11-11 the owner's multi-timeframe Supertrend rule joined it as a second index slot
 # (data/research/mtf_2026-11-11/NOTES.md); the retune's three slots are unchanged.
-OWNERS_PRIMARY = ("supertrend_vol", "supertrend_adx", "supertrend_mtf")
+# 2026-11-13 (owner, US-068): the desk runs two rules, the micro-trend rule on the index
+# options and the pullback rule on the stocks (a delivery rule, not a Lab strategy, so not on
+# the Lab's list). The retune's slots and supertrend_mtf left desk.yaml (git keeps them).
+OWNERS_PRIMARY = ("microtrend",)
 RESEARCH_STOCKS = {
     "RELIANCE", "MM", "SBIN", "HDFCBANK", "ITC", "TMPV", "MARUTI", "ICICIBANK", "HEROMOTOCO",
     "INFY", "TCS", "AXISBANK", "KOTAKBANK", "LT", "BAJFINANCE", "BHARTIARTL", "TATASTEEL",
     "SUNPHARMA",
 }  # fmt: skip
-# The retune's picks, verbatim (`direction` is the desk's allow_long / allow_short)
+# The owner's micro-trend rule as configured (US-068); `evidence` is the alert's line, not a
+# setting, and is compared apart
 PAPER_TEST = {
-    ("INDEX", "supertrend_vol", "30m"): {
-        "allow_long": True, "allow_short": False, "adx_min": 12, "entry_end": "13:00",
-        "flip_window": 2, "max_bars": 12, "max_trades_per_day": 1, "min_strength": 40,
-        "partial_r": 0.0, "regime_filter": False, "rsi_long_min": 55, "st_mult": 2.0,
-        "st_period": 14, "target_r": 2.5, "trail_atr_mult": 1.5,
-    },
-    # the owner's rule: Supertrend(14, 1.7) up on all six timeframes, the 60m line as the trail
-    ("INDEX", "supertrend_mtf", "5m"): {
-        "allow_long": True, "allow_short": False, "st_period": 14, "st_mult": 1.7,
-        "gate": "all", "trend_tf": "30m", "flip_window": 4, "trend_adx_min": 25,
-        "trend_rsi_min": 60, "entry_end": "13:00", "trail_tf": "60m", "stop_buffer_atr": 2.0,
-        "max_trades_per_day": 1,
-    },
-    ("STOCK", "supertrend_vol", "60m"): {
-        "allow_long": False, "allow_short": True, "adx_min": 12, "entry_end": "11:30",
-        "flip_window": 4, "max_bars": 12, "max_trades_per_day": 2, "min_strength": 55,
-        "partial_r": 0.0, "regime_filter": True, "rsi_long_min": 50, "st_mult": 2.0,
-        "st_period": 7, "target_r": 1.5, "trail_atr_mult": 2.5,
-    },
-    ("STOCK", "supertrend_adx", "30m"): {
-        "allow_long": False, "allow_short": True, "adx_min": 25, "entry_end": "11:30",
-        "flip_window": 4, "max_bars": 24, "max_trades_per_day": 1, "max_vwap_dist_atr": 3.0,
-        "min_strength": 0, "partial_r": 0.0, "regime_filter": True, "st_mult": 2.5,
-        "st_period": 14, "target_r": 1.5, "trail_atr_mult": 1.5,
+    ("INDEX", "microtrend", "3m"): {
+        "st_period": 14, "st_mult": 1.7, "exit_count": 3, "stop_buffer_atr": 3.0,
     },
 }  # fmt: skip
+# fmt: skip
 
 
 class TestThePrimaryStrategies:
@@ -367,11 +350,13 @@ class TestThePrimaryStrategies:
         assert len(cfg.indices) == 5
         assert cfg.option_expiry == "monthly" and cfg.option_roll_days == 3
         for inst in cfg.instruments:
-            # US-067 D9 (2026-11-12): these settings stay configured but are paused, and the
-            # delivery pullback slot is the one the desk runs (tests/delivery cover it).
-            assert all(not s.enabled for s in inst.strategies if s.product == "intraday")
+            # US-068 (2026-11-13): one live slot each, no paused ones; the delivery pullback
+            # slot is covered by tests/delivery.
+            assert all(s.enabled for s in inst.strategies)
             got = {
-                (inst.kind, s.name, s.timeframe): dict(s.params)
+                (inst.kind, s.name, s.timeframe): {
+                    k: v for k, v in s.params.items() if k != "evidence"
+                }
                 for s in inst.strategies
                 if s.product == "intraday"
             }

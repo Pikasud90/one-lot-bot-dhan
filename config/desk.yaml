@@ -1,23 +1,15 @@
-# Live Desk watchlist.
+# Live Desk watchlist (owner, 2026-11-13, US-068): two rules, nothing else.
 #
-# Indices are tracked through their OPTIONS: a bullish signal means BUY a CE, a bearish
-# signal means BUY a PE; the only exit is selling that option back. Stocks are traded as
-# ONE share, long or short, intraday. Every instrument runs several strategies at once;
-# each strategy decides on its own closed bars of its own timeframe.
-#
-# Edit, then press "Reload desk config" in Settings (or restart). Strategy names are the
-# Backtest Lab names; `params` overrides the strategy defaults (the Lab's "Apply best
-# params" writes the same keys).
+# Indices: the micro-trend rule on options (BUY a call or a put, one lot, intraday). Stocks:
+# the pullback rule as delivery trades of about Rs 10,000 (US-067). Alerts and paper trades
+# only: the system never places an order. Edit, then press "Reload desk config" in Settings
+# (or restart). The slots removed on 2026-11-13 are in git history.
 
 poll_seconds: 60          # how often fresh bars are pulled during the session
 history_days: 25          # fine bars kept in memory per instrument: ~17 sessions, so the daily ATR(14), NR7 and CPR warm up
 source: auto              # auto = Dhan 1-minute bars when the Data API is active, else Yahoo 2-minute (delayed ~15 min)
 signal_valid_minutes: 10  # a BUY/SELL alert expires if not acknowledged within this window
-# intraday until the paper book can carry a stock overnight (US-027): every alert's one exit
-# is its paper trade's close, which is the session end at the latest, so a "swing" alert would
-# promise a hold its own exit alert never gives (QA cycle 1, 2026-11-07). Set swing again
-# once US-027 lands.
-stock_horizon: intraday
+stock_horizon: intraday   # intraday stock alerts (none run now: stocks are delivery trades)
 
 context:                  # the strip above the two panels
   - {key: INDIAVIX, label: "India VIX"}
@@ -28,22 +20,7 @@ context:                  # the strip above the two panels
   - {key: GIFTNIFTY, label: "GIFT NIFTY", manual: true,
      note: "No free feed exists (NSE IX). Feed it from your own source: POST /api/desk/context {\"key\":\"GIFTNIFTY\",\"last\":25410,\"change_pct\":0.3}"}
 
-# PAPER TEST (owner's go-ahead, 2026-11-07): the desk runs ONLY the closest candidates of the
-# cross-instrument retune (docs/research/CROSS_RETUNE_2026-11-07.md), with the retune's exact
-# settings, so every alert and its paper trade is forward evidence for one setting tested
-# across the whole basket. None of them passed all three backtest years: this is a test, not
-# a recommendation. Before the test the desk ran the owner's seven on 15-minute bars:
-#   primary_strategies: [ema_cross, supertrend_vol, gap_fade, nr7_breakout, turtle_soup,
-#                        ema_pullback, cpr_breakout]  (every slot `timeframe: 15m`, defaults)
-# `allow_long` / `allow_short` are the Lab's `direction`. Index alerts name the MONTHLY
-# contract at delta ~0.65, rolled to the next month inside its last 3 days, like the Lab.
-# 2026-11-11: `supertrend_mtf` (the owner's multi-timeframe rule) joined the index list as a
-# second paper slot; the three slots above it are unchanged.
-# 2026-11-12 (owner, US-067): the sole focus is the pullback rule on the 18 stocks as delivery
-# trades of about Rs 10,000 carried for days. Every other slot is PAUSED (`enabled: false`): it
-# is not evaluated and raises no alert, its scoreboard row stays and shows "paused". To resume
-# one, set `enabled: true` (or delete the key) and reload the desk.
-primary_strategies: [pullback, supertrend_vol, supertrend_adx, supertrend_mtf]
+primary_strategies: [pullback, microtrend]
 
 option_expiry: monthly    # monthly (the Lab's contract) | nearest (the weekly where one exists)
 option_roll_days: 3       # a monthly contract with fewer days left than this is skipped
@@ -57,63 +34,29 @@ delivery:                 # the delivery slots (US-067 pullback)
   special_min_bars: 30    # a day off the calendar counts as a special session (Muhurat) from 30 1m bars
 
 defaults:
-  index_strategies:       # 5 index options, long only (BUY CE): passed tuning + choosing, lost the test year
-    - name: supertrend_vol
-      timeframe: 30m
-      enabled: false          # paused 2026-11-12 (US-067)
-      params: {allow_long: true, allow_short: false, adx_min: 12, entry_end: "13:00",
-               flip_window: 2, max_bars: 12, max_trades_per_day: 1, min_strength: 40,
-               partial_r: 0.0, regime_filter: false, rsi_long_min: 55, st_mult: 2.0,
-               st_period: 14, target_r: 2.5, trail_atr_mult: 1.5}
-    # MULTI-TIMEFRAME SUPERTREND (owner's rule, 2026-11-11). Supertrend(14, 1.7) on 1m, 5m, 15m,
-    # 30m, 60m and 1d must ALL point up. The entry is taken within 4 bars of a fresh 30m turn
-    # with 30m ADX >= 25 and RSI >= 60, before 13:00, once a day. The 60m Supertrend line is the
-    # stop and the trail: the trade ends when a 60m bar closes below the line; the stop itself
-    # stands 2 ATR(60m) under the line as the backstop, moves at every 60m close and only up.
-    # Evidence, not advice (docs/research/SUPERTREND_MTF_2026-11-11.md): the plain rule (all six
-    # aligned, any time of day) LOST after costs over five years, so it is not alerted; every
-    # card shows the six trends instead. This filtered form made +2.6% of premium a trade on
-    # modelled premiums (202 trades, t 1.8) but about +0.7% (t 0.3) on the real premiums that
-    # could be checked: unproven. 95% of its trades end at the session close, so the trail
-    # rarely acts until an index-option trade can be carried overnight (story US-041 in
-    # REVIEW.md; US-027 covers stocks only). While its paper trade is open the slot above is
-    # silent on that index (one live idea per instrument), and the other way round. To drop
-    # it: delete this entry and its name from primary_strategies.
-    - name: supertrend_mtf
-      timeframe: 5m
-      enabled: false          # paused 2026-11-12 (US-067)
-      params: {allow_long: true, allow_short: false, st_period: 14, st_mult: 1.7, gate: all,
-               trend_tf: 30m, flip_window: 4, trend_adx_min: 25, trend_rsi_min: 60,
-               entry_end: "13:00", trail_tf: 60m, stop_buffer_atr: 2.0, max_trades_per_day: 1}
+  index_strategies:       # 5 index options
+    # MICRO TREND (owner's rule, US-068). Supertrend(14, 1.7) on 3m, 5m, 10m, 15m, 30m, 60m and
+    # 4h, from the one-minute bars. At a 3-minute close where all seven newly point up: BUY a
+    # call; all down: BUY a put (monthly contract at delta ~0.65, one lot). Out at the first
+    # 3-minute close where 3 of the 7 point against the trade, else at the session end. The
+    # alert's stop is a backstop 3 ATR(60m) beyond the 60m line, not the rule's exit.
+    - name: microtrend
+      timeframe: 3m
+      params: {st_period: 14, st_mult: 1.7, exit_count: 3, stop_buffer_atr: 3.0,
+               evidence: "Backtest of this exact rule: 3,824 trades over five years on five indices, −0.2% of premium a trade on modelled premiums, 38% winners. Not an edge: this is the paper test."}
   stock_strategies:       # 18 stocks
     # PULLBACK, delivery (owner's decision 2026-11-12, US-067; docs/research/ALPHA_SEARCH_2026-11-12.md
     # 5.2 and 5.3). After the close: the close is above its SMA200, NIFTY is above its SMA200,
     # and the close is for the first day 8% or more below the highest close of 20 sessions.
     # Buy the number of shares nearest Rs 10,000 at the next open; sell at the open after the
     # first close above SMA20, after 30 sessions (the entry session counts as 1), or after a
-    # close 15% below the entry fill. Delivery charges plus the depository charge. Alerts and
-    # paper trades only: the system never places an order.
+    # close 15% below the entry fill. Delivery charges plus the depository charge.
     - name: pullback
       timeframe: 1d
       product: delivery
       params: {depth: 0.08, high_lookback: 20, trend_sma: 200, exit_sma: 20, max_sessions: 30,
                stop: 0.15, slippage: 0.0003, unit_inr: 10000,
                evidence: "Backtest: +1.2% to +1.4% a trade after charges, about 7 winners in 10, two samples. Not proven: this is the paper test."}
-    # The two below: one share, short only: lost the choosing year.
-    - name: supertrend_vol
-      timeframe: 60m
-      enabled: false          # paused 2026-11-12 (US-067)
-      params: {allow_long: false, allow_short: true, adx_min: 12, entry_end: "11:30",
-               flip_window: 4, max_bars: 12, max_trades_per_day: 2, min_strength: 55,
-               partial_r: 0.0, regime_filter: true, rsi_long_min: 50, st_mult: 2.0,
-               st_period: 7, target_r: 1.5, trail_atr_mult: 2.5}
-    - name: supertrend_adx
-      timeframe: 30m
-      enabled: false          # paused 2026-11-12 (US-067)
-      params: {allow_long: false, allow_short: true, adx_min: 25, entry_end: "11:30",
-               flip_window: 4, max_bars: 24, max_trades_per_day: 1, max_vwap_dist_atr: 3.0,
-               min_strength: 0, partial_r: 0.0, regime_filter: true, st_mult: 2.5,
-               st_period: 14, target_r: 1.5, trail_atr_mult: 1.5}
 
 indices:
   - {key: BANKNIFTY,  tracked: BANKNIFTY_OPT}
