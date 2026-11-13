@@ -146,3 +146,9 @@ agreement and the candle after an unusual close were all tested, and none beats 
 - **Not on offer either way:** a signal for the direction of the next candle. Five years of
   tests on these timeframes found none (STRATEGIES_TESTED_2026-11-12.md), and re-fitting
   ARIMA or GARCH does not change that; they model the size of moves, not their sign.
+
+**Built (US-072, 2026-11-13).** The retune of section 3 is in the Lab: each model gets two return
+series, the opening candles and the ordinary candles, and forecasts the next candle from the one
+it belongs to (every intraday timeframe now reads about 120 stored sessions). The cells lead with
+the range and both band hit rates, the up figure is marked "not a signal", and each instrument
+shows its "Move size" (calm, normal or active).

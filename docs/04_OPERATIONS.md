@@ -156,3 +156,11 @@ before it, so you can check by hand what moved. The newest opens after you press
 - While the desk is still starting and holds no price, the button answers 409 and saves nothing.
 - API: `POST /api/snapshots` (token, like every other POST) and `GET /api/snapshots?limit=30`.
 - Snapshots are kept; nothing deletes them. They are read-only records: no order is placed.
+
+## Machine Learning Lab (US-069, US-072)
+Read a cell from the top: the range first (the plus or minus figure and the 68% and 95% bands),
+then how often each band held in the last 100 candles. The up figure is not a signal: it is right
+no more often than a coin. An instrument marked "opening candle" has its own, wider band, because
+the day's first candle carries the overnight gap. "Move size" (calm, normal or active) ranks the
+band against its own history: after an active reading the next move was about 1.5 times that after
+a calm one. The Lab raises no alert and no trade.

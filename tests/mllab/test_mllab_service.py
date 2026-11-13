@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from types import SimpleNamespace
 
@@ -106,6 +107,12 @@ class TestMatrix:
         for row in out["rows"]:
             assert set(row["cells"]) == set(m.MODELS)
             for model, cell in row["cells"].items():
+                need = m.MIN_BARS_SIMPLE if model in ("ewma", "empirical") else m.MIN_BARS
+                if tf == "4h" and model not in ("ewma", "empirical"):
+                    # US-072: 48 sessions give 47 ordinary 4h returns, under the 60 the
+                    # fitted models need (the store gives about 120 sessions: see below)
+                    assert cell["note"].startswith("too few bars to trust"), cell["note"]
+                    continue
                 assert cell["note"] is None, (tf, model, cell["note"])
                 assert cell["lo95"] < cell["lo68"] < cell["mean"] < cell["hi68"] < cell["hi95"]
                 # 48 sessions give 94 closed four-hour bars: the backtest starts once a
@@ -276,7 +283,9 @@ class TestStoredHistory:
         for model, cell in row["cells"].items():
             assert cell["note"] is None, (model, cell["note"])
             assert cell["n"] >= 60
-        assert row["cells"]["garch"]["backtest"]["steps"] == 100
+        # US-072: about 130 sessions give about 130 ordinary 4h returns
+        garch = row["cells"]["garch"]
+        assert garch["backtest"]["steps"] == min(100, garch["n"] - m.MIN_BARS)
 
     def test_the_store_is_read_once(self):
         reads: list[str] = []
@@ -293,7 +302,9 @@ class TestStoredHistory:
         row = lab.matrix("4h")["rows"][0]
         assert row["note"] == "stored bars unreadable (OSError): live bars only"
         assert row["cells"]["garch"]["note"].startswith("too few bars to trust")
-        assert row["cells"]["ewma"]["note"] is None
+        assert row["cells"]["ewma"]["note"].startswith(
+            "too few bars to trust"
+        )  # US-072: 25 sessions
         json.dumps(row, allow_nan=False)
 
     def test_the_joined_series_is_sorted_without_duplicates_and_live_wins(self):
@@ -402,4 +413,126 @@ class TestSessionEnd:
 
     def test_the_row_says_how_many_bars_the_forecast_used(self):
         row = self.lab("2026-11-13 15:29", "2026-11-13 15:40").matrix("4h")["rows"][0]
-        assert row["bars"] == 60 and row["cells"]["ewma"]["n"] == 60
+        # US-072: after the close the next bar opens a session: the 29 returns into first bars
+        assert row["regime"] == "open" and row["bars"] == 30 and row["cells"]["ewma"]["n"] == 30
+
+
+def session_bars(n_days: int = 5, per_day: int = 25, seed: int = 3, sd=0.001, open_sd=0.008):
+    """15m bars over `n_days` sessions: ordinary returns `sd`, the return into a session's first
+    bar `open_sd` (the overnight gap); the days end on 2026-11-12."""
+    rng = np.random.default_rng(seed)
+    days = sessions("2026-11-12", n_days)
+    idx = pd.DatetimeIndex(
+        [
+            d + pd.Timedelta(hours=9, minutes=15) + pd.Timedelta(minutes=15 * i)
+            for d in days
+            for i in range(per_day)
+        ]
+    )
+    r = rng.normal(0, sd, len(idx))
+    r[::per_day] = rng.normal(0, open_sd, n_days)
+    close = 1000 * np.exp(np.cumsum(r))
+    return pd.DataFrame({"close": close}, index=idx), r
+
+
+class TestRegimeCloses:
+    def test_ordinary_keeps_only_the_returns_inside_the_session(self):
+        bars, r = session_bars(4)
+        nxt = bars.index[-1] + pd.Timedelta(minutes=15)  # the same day
+        closes, season, regime = svc.regime_closes(bars, "15m", nxt)
+        want = np.concatenate([r[1 + 25 * d : 25 * (d + 1)] for d in range(4)])
+        assert regime == "ordinary" and season == m.SEASON["15m"] - 1
+        assert np.allclose(np.diff(np.log(closes)), want)
+        assert closes[-1] == bars["close"].iloc[-1]
+
+    def test_open_keeps_only_the_returns_into_first_bars(self):
+        bars, r = session_bars(4)
+        nxt = ist("2026-11-13 09:15")
+        closes, season, regime = svc.regime_closes(bars, "15m", nxt)
+        assert regime == "open" and season == 5
+        assert np.allclose(np.diff(np.log(closes)), r[25::25])
+        assert closes[-1] == bars["close"].iloc[-1]
+
+    def test_the_daily_series_is_as_it_is(self):
+        bars = daily_bars(days=30)
+        closes, season, regime = svc.regime_closes(bars, "1d", ist("2026-11-13 09:15"))
+        assert regime == "daily" and season == m.SEASON["1d"]
+        assert np.array_equal(closes, bars["close"].to_numpy())
+
+    def test_non_finite_closes_are_dropped(self):
+        bars, _ = session_bars(3)
+        bars.iloc[7, 0] = np.nan
+        bars.iloc[30, 0] = -1.0
+        closes, _, _ = svc.regime_closes(bars, "15m", ist("2026-11-13 09:15"))
+        assert np.all(np.isfinite(closes)) and np.all(closes > 0)
+
+    def test_a_naive_index_counts_as_utc(self):
+        bars, _ = session_bars(3)
+        naive = bars.copy()
+        naive.index = bars.index.tz_convert("UTC").tz_localize(None)
+        a = svc.regime_closes(bars, "15m", ist("2026-11-13 09:15"))
+        b = svc.regime_closes(naive, "15m", ist("2026-11-13 09:15"))
+        assert a[2] == b[2] == "open" and np.allclose(a[0], b[0])
+
+    def test_one_bar_is_returned_plain(self):
+        bars, _ = session_bars(1, per_day=1)
+        closes, _, regime = svc.regime_closes(bars, "15m", ist("2026-11-13 09:15"))
+        assert regime == "ordinary" and len(closes) == 1
+
+    def test_matrix_rows_carry_regime_and_state(self, desk_bars):
+        lab = lab_for(desk_bars, Clock("2026-11-13 11:01"))
+        for row in lab.matrix("15m")["rows"]:
+            assert row["regime"] == "ordinary"
+            assert row["state"] is None or row["state"]["label"] in ("calm", "normal", "active")
+        assert all(r["regime"] == "daily" for r in lab.matrix("1d")["rows"])
+
+    def test_an_opening_row_with_few_opening_candles_gives_notes_not_errors(self):
+        fine = minute_bars("2026-11-12", days=12)
+        lab = svc.MlLab(lambda k: (fine, None), INSTRUMENTS[:2], Clock("2026-11-12 16:00"))
+        out = lab.matrix("15m")
+        for row in out["rows"]:
+            assert row["regime"] == "open"
+            for cell in row["cells"].values():
+                assert cell["note"] is not None and cell["backtest"] is None
+        json.dumps(out, allow_nan=False)
+
+
+class TestMoveState:
+    def test_under_80_returns_is_none(self):
+        assert svc.move_state(100 * np.exp(np.cumsum(np.full(79, 0.001)))) is None
+
+    def test_active_and_calm(self):
+        rng = np.random.default_rng(5)
+        base = rng.normal(0, 0.001, 300)
+        wide = np.r_[base, rng.normal(0, 0.01, 30)]
+        narrow = np.r_[rng.normal(0, 0.01, 300), rng.normal(0, 0.0005, 40)]
+        up = svc.move_state(100 * np.exp(np.cumsum(wide)))
+        down = svc.move_state(100 * np.exp(np.cumsum(narrow)))
+        assert up is not None and up["label"] == "active" and up["pct"] >= 2 / 3
+        assert down is not None and down["label"] == "calm" and down["pct"] <= 1 / 3
+        assert math.isfinite(up["sd_bp"])
+
+
+def test_the_fix_gives_each_kind_of_candle_a_band_that_holds():
+    """150 sessions x 25 bars: ordinary sd 10 bp, the return into a first bar sd 80 bp. The
+    two series each hold their 68% band; the old single series over-covers ordinary candles."""
+    bars, _ = session_bars(150, 25, seed=11, sd=0.001, open_sd=0.008)
+
+    def coverage(closes, last, mask=None):
+        steps = m.walk_forward(closes, "ewma", last, 1)
+        start = len(closes) - last
+        hits = [
+            f.lo68 <= x <= f.hi68
+            for k, (f, _, x) in enumerate(steps)
+            if f.note is None and (mask is None or mask[start + k])
+        ]
+        return float(np.mean(hits))
+
+    ordinary, _, _ = svc.regime_closes(bars, "15m", bars.index[-1] + pd.Timedelta(minutes=15))
+    opening, _, _ = svc.regime_closes(bars, "15m", ist("2026-11-13 09:15"))
+    assert 0.60 <= coverage(ordinary, 1000) <= 0.76
+    assert 0.55 <= coverage(opening, 110) <= 0.80
+    closes = bars["close"].to_numpy()
+    days = np.asarray(bars.index.date)
+    is_ordinary = np.r_[False, days[1:] == days[:-1]]
+    assert coverage(closes, 3000, is_ordinary) > 0.80

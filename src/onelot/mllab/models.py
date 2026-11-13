@@ -282,6 +282,15 @@ def ewma_variance(r: np.ndarray, lam: float = EWMA_LAMBDA) -> float:
     return float(y[-1])
 
 
+def ewma_sd_path(r: np.ndarray, lam: float = EWMA_LAMBDA) -> np.ndarray:
+    """The EWMA standard deviation after each return (same recursion and seed as
+    `ewma_variance`): element i is the forecast sd for the return after r[i]."""
+    r = np.asarray(r, dtype=float)
+    v0 = float(np.mean(r * r))
+    y, _ = signal.lfilter([1 - lam], [1.0, -lam], r * r, zi=[lam * v0])
+    return np.sqrt(y)
+
+
 def ewma(closes: Any) -> Forecast:
     """Zero mean, exponentially weighted variance (lambda 0.94)."""
     c, bad = _guard(closes, MIN_BARS_SIMPLE)

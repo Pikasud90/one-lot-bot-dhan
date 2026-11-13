@@ -21,7 +21,7 @@ with warnings.catch_warnings():  # starlette warns that its test client prefers 
 
 def tracker(key: str, kind: str, seed: int) -> SimpleNamespace:
     return SimpleNamespace(
-        bars=minute_bars(days=20, seed=seed),
+        bars=minute_bars(days=60, seed=seed),
         daily_history=daily_bars(days=300, seed=seed),
         series=SimpleNamespace(key=key, label=key.title()),
         cfg=SimpleNamespace(kind=kind),
@@ -64,11 +64,13 @@ def test_the_matrix_shape(client, tf):
             "last_bar_ts",
             "next_bar_ts",
             "bars",
+            "regime",
+            "state",
             "note",
             "cells",
         }
         assert set(row["cells"]) == set(m.MODELS)
-    nifty = body["rows"][0]["cells"]["ewma"]  # 20 sessions: 4h has 39 bars, too few for arima
+    nifty = body["rows"][0]["cells"]["ewma"]  # 60 sessions: enough returns of either kind for ewma
     assert {"mean", "sd", "p_up", "lo68", "hi68", "lo95", "hi95", "n", "note"} <= set(nifty)
     assert set(nifty["backtest"]) == {"steps", "in68", "in95", "direction"}
     assert body["rows"][2]["cells"]["garch"]["note"] == "no closed bars yet"

@@ -1595,23 +1595,23 @@ const mllabDetail = (d) => d == null || d === "" ? "" : typeof d === "string" ? 
 function mllabCell(c) {
   if (!c || c.note || c.p_up == null) return `<td class="ml-cell"><span class="muted">${esc((c && c.note) || "no forecast")}</span></td>`;
   const up = Math.min(100, Math.max(0, Number(c.p_up) * 100));
-  const tint = Math.min(0.35, Math.abs(up - 50) / 50 * 0.7).toFixed(2);
   const half = c.mean ? (Number(c.hi68) - Number(c.lo68)) / 2 / Number(c.mean) * 100 : null;
   const bt = c.backtest;
   const btLine = !bt || !bt.steps ? "no backtest yet"
-    : `last ${esc(bt.steps)}: 68% band held ${pct(bt.in68 == null ? null : bt.in68 * 100, 0)}, direction right ${bt.direction == null ? "n/a" : pct(bt.direction * 100, 0)}`;
-  return `<td class="ml-cell ${up >= 50 ? "up" : "down"}" style="--ml-a:${tint}" title="${esc(c.detail || "")}">` +
-    `<div class="ml-p"><b class="${up > 50 ? "pos" : up < 50 ? "neg" : ""}">${pct(up, 0)}</b> <span class="dim">up</span><div class="ml-bar"><i style="width:${up.toFixed(0)}%"></i></div></div>` +
-    `<div class="mono">${esc(fmt(c.lo68))} – ${esc(fmt(c.hi68))} <span class="dim">±${esc(pct(half, 2))}</span></div>` +
+    : `last ${esc(bt.steps)}: 68% band held ${pct(bt.in68 == null ? null : bt.in68 * 100, 0)}, 95% band held ${pct(bt.in95 == null ? null : bt.in95 * 100, 0)}`;
+  return `<td class="ml-cell" title="${esc(c.detail || "")}">` +
+    `<div class="ml-p"><b>±${esc(pct(half, 2))}</b> <span class="dim">68%</span></div>` +
+    `<div class="mono">${esc(fmt(c.lo68))} – ${esc(fmt(c.hi68))}</div>` +
     `<div class="ml-small mono">95%: ${esc(fmt(c.lo95))} – ${esc(fmt(c.hi95))}</div>` +
-    `<div class="ml-small">${btLine}</div></td>`;
+    `<div class="ml-small">${btLine}</div>` +
+    `<div class="ml-small">up ${pct(up, 0)} · not a signal</div></td>`;
 }
 function mllabTable(d) {
   const models = (d && d.models) || [];
   const rows = (d && d.rows) || [];
   if (!rows.length) return `<div class="muted">No instruments tracked yet.</div>`;
   const head = `<th>Instrument</th>` + models.map(m => `<th title="${esc(m.description)}">${esc(MLLAB_NAMES[m.key] || m.key)}</th>`).join("");
-  const body = rows.map(r => `<tr><td class="ml-inst"><b>${esc(r.label)}</b> <span class="dim">${esc(r.kind)}</span><br><span class="mono">${esc(fmt(r.last_close))}</span><br><small class="muted">next candle ${esc(tsf(r.next_bar_ts))}</small>${r.bars > 0 && r.bars < 100 ? `<br><small class="warn">${esc(r.bars)} bars</small>` : ""}${r.note ? `<br><small class="muted">${esc(r.note)}</small>` : ""}</td>` +
+  const body = rows.map(r => `<tr><td class="ml-inst"><b>${esc(r.label)}</b> <span class="dim">${esc(r.kind)}</span><br><span class="mono">${esc(fmt(r.last_close))}</span><br><small class="muted">next candle ${esc(tsf(r.next_bar_ts))}${r.regime === "open" ? " · opening candle" : ""}</small>${r.state ? `<br><small class="${r.state.label === "active" ? "warn" : r.state.label === "calm" ? "muted" : ""}">Move size: <b>${esc(r.state.label)}</b></small>` : ""}${r.bars > 0 && r.bars < 100 ? `<br><small class="warn">${esc(r.bars)} bars</small>` : ""}${r.note ? `<br><small class="muted">${esc(r.note)}</small>` : ""}</td>` +
     models.map(m => mllabCell((r.cells || {})[m.key])).join("") + `</tr>`).join("");
   return `<table class="ml-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }

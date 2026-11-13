@@ -160,3 +160,10 @@ def test_backtest_on_too_few_bars_has_no_steps():
         "in95": None,
         "direction": None,
     }
+
+
+def test_ewma_sd_path_ends_at_the_ewma_sd():
+    r = np.random.default_rng(4).normal(0, 0.01, 300)
+    path = m.ewma_sd_path(r)
+    assert len(path) == len(r)
+    assert path[-1] == pytest.approx(math.sqrt(m.ewma_variance(r)))

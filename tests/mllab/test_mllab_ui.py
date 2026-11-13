@@ -124,11 +124,11 @@ def test_the_table_is_23_rows_by_5_models():
     assert body.count("<tr>") == 23
     assert html.split("<tbody>")[0].count("</th>") == 6  # the instrument + five models
     assert body.count('class="ml-cell') == 23 * 5
-    assert "62%" in body and "99.00 – 101.00" in body and "95%: 98.00 – 102.00" in body
-    assert "±1.00%" in body
-    assert "last 100: 68% band held 70%, direction right 52%" in body
+    assert "99.00 – 101.00" in body and "95%: 98.00 – 102.00" in body
+    assert "±1.00%" in body and "up 62% · not a signal" in body
+    assert "last 100: 68% band held 70%, 95% band held 94%" in body
     assert "next candle 2026-11-13 09:15" in body
-    assert 'class="ml-cell up"' in body and "--ml-a:0.17" in body
+    assert "opening candle" not in body and "Move size" not in body
 
 
 def test_values_from_data_are_escaped():
@@ -138,14 +138,35 @@ def test_values_from_data_are_escaped():
     assert 'title="about arima &lt;i&gt;"' in html
 
 
-def test_a_down_cell_is_red_and_a_note_is_muted():
-    down = run("return mllabCell(PAYLOAD);", cell(0.3))
-    assert 'class="ml-cell down"' in down and '<b class="neg">30%</b>' in down
+def test_a_cell_leads_with_the_range_and_looks_like_no_direction():
+    for up in (0.3, 0.62):
+        got = run("return mllabCell(PAYLOAD);", cell(up))
+        assert got.startswith('<td class="ml-cell" title="phi=0.1"><div class="ml-p"><b>±1.00%</b>')
+        assert "not a signal" in got
+        assert "ml-bar" not in got and "--ml-a" not in got and "neg" not in got and "pos" not in got
+        assert 'class="ml-cell up"' not in got and 'class="ml-cell down"' not in got
+        assert "direction" not in got
     noted = run("return mllabCell(PAYLOAD);", cell(note="no closed bars yet"))
     assert '<span class="muted">no closed bars yet</span>' in noted
-    no_dir = cell()
-    no_dir["backtest"]["direction"] = None
-    assert "direction right n/a" in run("return mllabCell(PAYLOAD);", no_dir)
+    none = cell()
+    none["backtest"] = None
+    assert "no backtest yet" in run("return mllabCell(PAYLOAD);", none)
+
+
+def test_the_instrument_cell_flags_an_opening_candle_and_the_move_size():
+    p = payload()
+    p["rows"][0]["regime"] = "open"
+    p["rows"][0]["state"] = {"label": "active", "pct": 0.9, "sd_bp": 12.0}
+    p["rows"][1]["regime"] = "ordinary"
+    p["rows"][1]["state"] = {"label": "calm", "pct": 0.1, "sd_bp": 5.0}
+    p["rows"][2]["state"] = {"label": "normal", "pct": 0.5, "sd_bp": 8.0}
+    rows = run("return mllabTable(PAYLOAD);", p).split("<tbody>")[1].split("<tr>")[1:]
+    assert "next candle 2026-11-13 09:15 · opening candle" in rows[0]
+    assert "Move size: <b>active</b>" in rows[0] and '<small class="warn">Move size' in rows[0]
+    assert '<small class="muted">Move size: <b>calm</b>' in rows[1]
+    assert "opening candle" not in rows[1]
+    assert '<small class="">Move size: <b>normal</b>' in rows[2]
+    assert "Move size" not in rows[3]
 
 
 def test_an_error_payload_shows_the_error_in_the_card():

@@ -46,8 +46,9 @@ BarsGetter = Callable[[str], tuple[pd.DataFrame | None, pd.DataFrame | None]]
 #: (instrument key, now) -> the store's cleaned one-minute bars before the live ones
 StoredReader = Callable[[str, dt.datetime], pd.DataFrame | None]
 #: timeframes built from the stored one-minute bars joined with the live ones: the desk
-#: keeps about 25 sessions, too few 60m and 4h bars for the fitted models
-STORED_TIMEFRAMES: frozenset[str] = frozenset({"60m", "4h"})
+#: keeps about 25 sessions; the store gives every intraday timeframe about 120 sessions, so
+#: about 120 opening candles for the "open" series and enough bars for the fitted models
+STORED_TIMEFRAMES: frozenset[str] = frozenset({"15m", "30m", "60m", "4h"})
 #: calendar days of stored one-minute bars read for them
 STORED_DAYS = 180
 #: a failed stored read is tried again after this long (a good one is kept for the day)
@@ -184,6 +185,61 @@ def _cell(closes: Any, model: str, season: int) -> dict[str, Any]:
     return cell
 
 
+def _ist_dates(index: Any) -> np.ndarray:
+    idx = pd.DatetimeIndex(index)
+    idx = idx.tz_localize("UTC") if idx.tz is None else idx
+    return np.asarray(idx.tz_convert(IST).date)
+
+
+def regime_closes(bars: pd.DataFrame, timeframe: str, next_ts: Any) -> tuple[np.ndarray, int, str]:
+    """The closes the models are given for the NEXT bar, the seasonal lag, and the regime:
+    "daily" (1d: the closes as they are), "open" (the next bar is a session's first: only the
+    returns INTO first bars), "ordinary" (only the returns into the other bars)."""
+    closes = bars["close"].to_numpy(dtype=float)
+    ok = np.isfinite(closes) & (closes > 0)
+    closes = closes[ok]
+    if timeframe == "1d":
+        return closes[-MAX_BARS:], m.SEASON["1d"], "daily"
+    if len(closes) < 2:
+        return closes[-MAX_BARS:], max(m.SEASON[timeframe] - 1, 1), "ordinary"
+    days = _ist_dates(bars.index[ok])
+    r = np.diff(np.log(closes))
+    into_first = days[1:] != days[:-1]
+    nxt = pd.Timestamp(next_ts)
+    nxt = nxt.tz_localize("UTC") if nxt.tzinfo is None else nxt
+    opens = nxt.tz_convert(IST).date() != days[-1]
+    if opens:
+        sel, season, regime = r[into_first], 5, "open"
+    else:
+        sel, season, regime = r[~into_first], max(m.SEASON[timeframe] - 1, 1), "ordinary"
+    last = float(closes[-1])
+    synth = last * np.exp(np.r_[0.0, np.cumsum(sel)] - sel.sum())
+    synth[-1] = last
+    return synth[-MAX_BARS:], season, regime
+
+
+def move_state(closes: Any) -> dict[str, Any] | None:
+    """How big the next move is likely to be against this series' own history: the EWMA
+    sd now, ranked among its past values (calm: lowest third, active: highest third)."""
+    try:
+        c = np.asarray(closes, dtype=float)
+        r = np.diff(np.log(c))
+        r = r[np.isfinite(r)]
+        if len(r) < 80:
+            return None
+        path = m.ewma_sd_path(r)
+        cur = float(path[-1])
+        pct = float(np.mean(path[20:-1] <= cur))
+        label = "calm" if pct <= 1 / 3 else "active" if pct >= 2 / 3 else "normal"
+        sd_bp = cur * 1e4
+        if not (math.isfinite(pct) and math.isfinite(sd_bp)):
+            return None
+        return {"label": label, "pct": pct, "sd_bp": sd_bp}
+    except Exception:  # noqa: BLE001 - never the row
+        log.exception("mllab: move state failed")
+        return None
+
+
 class MlLab:
     """`matrix(timeframe)`: one row per instrument, one cell per model."""
 
@@ -248,16 +304,17 @@ class MlLab:
         hit = self._cache.get((key, timeframe))
         if hit is not None and hit[0] == stamp:
             return {**hit[1], **head, "note": note}
-        closes = bars["close"].to_numpy(dtype=float)[-MAX_BARS:]
-        season = m.SEASON[timeframe]
+        next_ts = next_bar_start(last_ts, timeframe, self.session_close, self.is_trading_day)
+        real = bars["close"].to_numpy(dtype=float)
+        closes, season, regime = regime_closes(bars, timeframe, next_ts)
         row = {
             **head,
-            "last_close": _num(closes[-1]),
+            "last_close": _num(real[-1]),
             "last_bar_ts": last_ts.isoformat(),
-            "next_bar_ts": next_bar_start(
-                last_ts, timeframe, self.session_close, self.is_trading_day
-            ).isoformat(),
+            "next_bar_ts": next_ts.isoformat(),
             "bars": len(closes),  # closes the forecasts used
+            "regime": regime,
+            "state": move_state(closes),
             "note": note,
             "cells": {model: _cell(closes, model, season) for model in m.MODELS},
         }
@@ -274,6 +331,8 @@ class MlLab:
             "last_bar_ts": None,
             "next_bar_ts": None,
             "bars": 0,
+            "regime": None,
+            "state": None,
             "note": None,
             "cells": {model: dict(cell) for model in m.MODELS},
         }
