@@ -63,6 +63,7 @@
       <a href="#lab" data-tab="lab">Backtest Lab</a>
       <a href="#data" data-tab="data">Data</a>
       <a href="#news" data-tab="news">News &amp; Sentiment</a>
+      <a href="#mllab" data-tab="mllab">Machine Learning Lab</a>
       <a href="#settings" data-tab="settings">Settings</a>
     </nav>
     <div class="badges"><span id="badges" class="row"></span>
@@ -383,6 +384,17 @@
           <div class="actions mt"><button class="btn primary" id="news-add">Add news</button></div></details>
         <details class="mt"><summary>API for your scorer</summary><pre class="code" id="news-curl"></pre></details>
       </div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────── MACHINE LEARNING LAB ─────────────────── -->
+  <section data-tab="mllab" class="tab">
+    <div class="card">
+      <div class="row between"><h2>Machine Learning Lab <small>the next candle's close, five statistical models</small></h2>
+        <div class="actions"><select id="mllab-tf"><option>15m</option><option>30m</option><option>60m</option><option>4h</option><option>1d</option></select>
+          <span class="muted" id="mllab-updated">not loaded yet</span></div></div>
+      <p class="hint">Statistical forecasts of the next candle's close. They inform; they raise no alert and no trade.</p>
+      <div class="scroll" id="mllab-table"><div class="muted">Loading forecasts…</div></div>
     </div>
   </section>
 
