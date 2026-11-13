@@ -632,7 +632,13 @@ class Desk:
         sign = 1 if trades[0].direction == "long" else -1
         k = sum(1 for r in rows if r.get("direction") == -sign)
         exit_at = int(getattr(getattr(slot.strategy, "p", None), "exit_count", 3))
-        d["trend"] = {**trend, "reversal": {"reversed": k, "of": len(rows), "exit_at": exit_at}}
+        reversal: dict[str, Any] = {"reversed": k, "of": len(rows), "exit_at": exit_at}
+        if t.micro_blocked:
+            reversal["warning"] = (
+                "reversal exit cannot be read on this feed: only the backstop stop and the "
+                "session end apply"
+            )
+        d["trend"] = {**trend, "reversal": reversal}
 
     def _active_slots(self) -> dict[str, set[tuple[str, str]]]:
         """series key -> (strategy, timeframe) of every trade still active on it: a paper trade
@@ -711,20 +717,24 @@ class Desk:
             for k, t in list(self.trackers.items())
             if t.ladder_timeframes != mtf.LADDER_TIMEFRAMES
         ]
-        self._minute_day = today
         if not keys:
+            self._minute_day = today
             return
 
         def load() -> None:
+            failed = False
             for key, series_key in keys:
                 try:
                     bars = minute_history(self.engine, series_key, now)
                 except Exception:  # noqa: BLE001 - a reading for the ladder, never a dependency
                     log.exception("desk: the stored minute bars of %s could not be read", key)
+                    failed = True
                     continue
                 t = self.trackers.get(key)
                 if t is not None:
                     t.minute_history = bars  # one assignment: the old or the new, whole
+            if not failed:  # a failed read is tried again at the next poll
+                self._minute_day = today
 
         at = now.astimezone(IST).time()
         if dt.time(9, 0) <= at <= dt.time(15, 35):

@@ -476,8 +476,8 @@ td.best-row{color:var(--ok);font-weight:800}
 .ml-table td{vertical-align:top;white-space:nowrap}
 .ml-inst{min-width:150px}
 .ml-cell{min-width:190px;--ml-a:0}
-.ml-cell.up{background:rgba(18,131,71,var(--ml-a))}
-.ml-cell.down{background:rgba(212,31,62,var(--ml-a))}
+.ml-cell.up{background:color-mix(in srgb,var(--ok) calc(var(--ml-a) * 100%),transparent)}
+.ml-cell.down{background:color-mix(in srgb,var(--bad) calc(var(--ml-a) * 100%),transparent)}
 .ml-p b{font-size:19px}
 .ml-bar{height:6px;background:var(--panel3);margin:3px 0 5px}
 .ml-bar i{display:block;height:100%;background:var(--cyan)}

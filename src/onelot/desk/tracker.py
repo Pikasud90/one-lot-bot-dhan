@@ -13,7 +13,7 @@ import pandas as pd
 
 from ..clock import IST
 from ..data.hygiene import clean_intraday, consistent_daily
-from ..data.resample import minutes_of, resample_bars
+from ..data.resample import can_derive, minutes_of, resample_bars
 from ..data.universe import InstrumentSpec, SeriesSpec
 from ..indicators import mtf
 from ..strategies import mtf_support as ms
@@ -25,6 +25,8 @@ from .rules import lab_entry_risk
 log = logging.getLogger(__name__)
 
 MIN_BARS = 60
+#: US-068 review: why the micro-trend rule cannot run on the failsafe feed
+MICRO_FEED = "micro trend needs one-minute bars: the feed is delayed 2-minute data"
 #: calendar days between the last stored daily bar and the first live one before the daily
 #: trend is flagged (a long weekend with a holiday is five)
 HISTORY_GAP_DAYS = 5
@@ -273,6 +275,12 @@ class InstrumentTracker:
             self._daily_memo = (key, consistent_daily(history, fine), _history_gap(history, fine))
         return self._daily_memo[1]
 
+    @property
+    def micro_blocked(self) -> bool:
+        """A micro-trend ladder whose 3m trigger cannot be built from the fine bars (the
+        delayed 2-minute failsafe feed)."""
+        return self.ladder_timeframes[0] == "3m" and not can_derive(f"{self.fine_minutes}m", "3m")
+
     def ladder_bars(self, fine: pd.DataFrame) -> pd.DataFrame:
         """The fine bars, with the stored one-minute bars before them when there are any (a
         4-hour rung needs about 35 sessions; the desk polls about 17)."""
@@ -332,6 +340,8 @@ class InstrumentTracker:
     def _trend_note(self, trend: dict) -> str | None:
         """Why a timeframe has no reading, or why the daily one may be off (None: all read)."""
         notes: list[str] = []
+        if self.micro_blocked:
+            notes.append(MICRO_FEED)
         missing = list(trend.get("unavailable") or [])
         if missing:
             notes.append(
@@ -374,6 +384,14 @@ class InstrumentTracker:
         latest_close_at = self.bars.index[-1] + pd.Timedelta(minutes=self.fine_minutes)
         self._read_trend(latest_close_at)
         for slot in self.slots:
+            if self.micro_blocked and getattr(slot.strategy, "ladder_timeframes", None):
+                # US-068 review: without one-minute bars the 3m trigger cannot be built
+                slot.last_verdict, slot.error, slot.last_flags = (
+                    Verdict("none", MICRO_FEED),
+                    None,
+                    {},
+                )
+                continue
             paused = not slot.cfg.enabled
             if paused and (slot.cfg.name, slot.cfg.timeframe) not in keep:
                 slot.last_verdict = Verdict("none", "paused")
@@ -437,6 +455,7 @@ class InstrumentTracker:
             )
         f = slot.strategy.generate(df, ctx)
         last = f.iloc[-1]
+        missed = f.iloc[0:0] if slot.last_bar_ts is None else f[f.index > slot.last_bar_ts]
         slot.last_bar_ts = bar_ts
         # "Fresh" = this strategy bar completed within the last fine bar. With 2-minute
         # Yahoo bars a 5/15-minute bar never closes on an exact fine-bar boundary, so an
@@ -466,6 +485,9 @@ class InstrumentTracker:
         slot.last_flags = {
             k: bool(last.get(k)) for k in ("long_entry", "short_entry", "long_exit", "short_exit")
         }
+        for k in ("long_exit", "short_exit"):  # a stalled poll: an exit on a bar since the last
+            if k in missed.columns and bool(missed[k].fillna(False).astype(bool).any()):
+                slot.last_flags[k] = True
         # the stop of an open trade follows the strategy's own line when it gives one: the
         # level after this close (None while the line is on the other side)
         slot.line_trail = "long_trail" in f.columns or "short_trail" in f.columns

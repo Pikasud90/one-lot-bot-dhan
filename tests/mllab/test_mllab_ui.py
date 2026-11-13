@@ -21,8 +21,8 @@ import pytest
 
 UI = Path(__file__).resolve().parents[2] / "src" / "onelot" / "ui"
 APP_JS = UI / "app.js"
-ONE_LINERS = ["fmt", "esc", "pct", "tsf", "MLLAB_NAMES", "mllab"]
-FUNCTIONS = ["mllabCell", "mllabTable", "loadMllab"]
+ONE_LINERS = ["fmt", "esc", "pct", "tsf", "MLLAB_NAMES", "mllab", "mllabDetail"]
+FUNCTIONS = ["mllabCell", "mllabTable", "loadMllab", "mllabTick"]
 MODELS = ["arima", "sarima", "garch", "ewma", "empirical"]
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -47,6 +47,8 @@ def run(body: str, payload: Any = None) -> Any:
         "const els = { 'mllab-tf': { value: '1d' }, 'mllab-table': { innerHTML: '' },"
         " 'mllab-updated': { textContent: '' } };\n"
         "const $ = (id) => els[id];\n"
+        "let shown = true; const tabShown = () => shown;\n"
+        "globalThis.document = { visibilityState: 'visible' };\n"
         f"const PAYLOAD = {json.dumps(payload)};\n"
         + lifted()
         + f"\n(async () => {{ const out = await (async () => {{ {body} }})();"
@@ -177,3 +179,50 @@ def test_a_network_failure_is_shown_too():
         "await loadMllab(); return els['mllab-table'].innerHTML;"
     )
     assert "Forecasts unavailable: Failed to fetch" in got
+
+
+def test_a_thin_history_shows_its_bar_count_and_the_row_note():
+    p = payload()
+    for r in p["rows"]:
+        r["bars"] = 1000
+    p["rows"][3]["bars"] = 62
+    p["rows"][3]["note"] = "stored bars unreadable (OSError): live bars only"
+    html = run("return mllabTable(PAYLOAD);", p)
+    assert html.count(" bars</small>") == 1 and '<small class="warn">62 bars</small>' in html
+    assert "stored bars unreadable (OSError): live bars only" in html
+
+
+def test_a_422_detail_list_reads_as_text():
+    detail = [
+        {"loc": ["query", "timeframe"], "msg": "Field required", "type": "missing"},
+        {"loc": ["query", "x"], "msg": "bad <value>", "type": "value_error"},
+    ]
+    got = run(
+        "globalThis.fetch = async () => ({ ok: false, status: 422,"
+        f" json: async () => ({{ detail: {json.dumps(detail)} }}) }});"
+        "await loadMllab(); return els['mllab-table'].innerHTML;"
+    )
+    assert "[object Object]" not in got
+    assert got == (
+        '<div class="warnbar">Forecasts unavailable: Field required; bad &lt;value&gt;</div>'
+    )
+    assert run("return [mllabDetail({a: 1}), mllabDetail(''), mllabDetail('x')];") == [
+        '{"a":1}',
+        "",
+        "x",
+    ]
+
+
+def test_the_timer_skips_a_tick_while_a_request_is_pending():
+    got = run(
+        "const calls = []; let answer;"
+        "globalThis.fetch = (url) => { calls.push(url);"
+        " return new Promise((res) => { answer = res; }); };"
+        "const ticks = [mllabTick(), mllabTick(), mllabTick()];"
+        "answer({ ok: true, status: 200, json: async () => PAYLOAD });"
+        "await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0));"
+        "ticks.push(mllabTick()); shown = false; const hidden = mllabTick();"
+        "return [ticks, calls.length, hidden];",
+        payload(),
+    )
+    assert got == [[True, False, False, True], 2, False]

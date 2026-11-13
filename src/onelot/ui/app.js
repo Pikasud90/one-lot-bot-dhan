@@ -787,7 +787,7 @@ const trendSince = (x, at) => !x || !x.since ? "–" : (x.timeframe === "1d" ? t
 const trendGap = (x, price) => { const p = Number(price), l = Number(x && x.line); return !x || x.line == null || price == null || !Number.isFinite(p) || !Number.isFinite(l) || l === 0 ? "–" : `${Math.abs((p - l) / l * 100).toFixed(2)}% ${p >= l ? "above" : "below"}`; };
 const trendTitle = (t) => `Supertrend(${t.period}, ${t.mult}): ` + trendRows(t).map((x) => `${x.timeframe} ${trendWord(x.direction)}`).join(" · ");
 // The strip on a card's head: one pip per timeframe, fastest first, then the count. The direction is in the glyph as well as the colour.
-const trendReversal = (t) => { const r = t && t.reversal; return r ? ` · reversed ${esc(r.reversed)} of ${esc(r.of)}, exit at ${esc(r.exit_at)}` : ""; };
+const trendReversal = (t) => { const r = t && t.reversal; return r ? ` · reversed ${esc(r.reversed)} of ${esc(r.of)}, exit at ${esc(r.exit_at)}${r.warning ? ` · ${esc(r.warning)}` : ""}` : ""; };
 const trendPips = (t) => { const rows = trendRows(t), v = trendVerdict(t); return !rows.length ? `<div class="trend-strip"><span class="lbl">Micro trend</span><span class="tverdict none">no reading yet</span></div>` : `<div class="trend-strip" title="${esc(trendTitle(t))}"><span class="lbl">Micro trend</span>${rows.map((x) => `<span class="tpip ${trendCls(x.direction)}"${x.trigger ? ' title="the trigger"' : ""}>${trendMark(x.direction)} ${esc(x.timeframe)}${x.trigger ? " trigger" : ""}</span>`).join("")}<span class="tverdict ${v[0]}">${esc(v[1])}${trendReversal(t)}</span></div>`; };
 // The table in an open card and in the focus panel: each timeframe's trend, its line, the room to it and since when.
 const trendBlock = (t, price) => { const rows = trendRows(t), v = trendVerdict(t); if (!rows.length) return `<h4>Micro trend</h4><div class="hint">No trend reading yet: it comes with the first bars.</div>`; const body = rows.map((x) => `<tr><td><b>${esc(x.timeframe)}</b>${x.trigger ? " <span class=\"dim\">trigger</span>" : ""}</td> <td class="tdir ${trendCls(x.direction)}">${trendMark(x.direction)} ${trendWord(x.direction)}</td> <td class="n">${fmt(x.line)}</td> <td class="n">${esc(trendGap(x, price))}</td> <td class="n">${esc(trendSince(x, t.at))}</td></tr>`).join(""); return `<h4>Micro trend · Supertrend(${esc(t.period)}, ${esc(t.mult)})</h4><div class="tbl"><table class="trend"><thead><tr><th>Timeframe</th> <th>Trend</th> <th class="n" title="the Supertrend line: under the price in an up trend, over it in a down trend">Line</th> <th class="n" title="how far the last price stands from the line">Price vs line</th> <th class="n" title="when this trend began">Since</th></tr></thead><tbody>${body}</tbody></table></div><div class="hint"><b class="tverdict ${v[0]}">${esc(v[1])}</b>${trendReversal(t)} · a micro trend needs all ${rows.length} to agree · read at ${esc(hhmm(t.at))} from ${esc(t.base)} bars</div>${t.note ? `<div class="hint warn">${esc(t.note)}</div>` : ""}`; };
@@ -1564,7 +1564,9 @@ showTab(location.hash.slice(1) || store.get("tab", "home"));
 
 /* ── Machine Learning Lab: statistical forecasts of the next candle (they inform; no alert, no trade) ── */
 const MLLAB_NAMES = { arima: "ARIMA", sarima: "SARIMA", garch: "GARCH", ewma: "EWMA", empirical: "Empirical" };
-const mllab = { seq: 0 };
+const mllab = { seq: 0, inflight: 0 };
+// An error's `detail` as text: FastAPI's 422 gives a list of {msg, loc}, other errors a string.
+const mllabDetail = (d) => d == null || d === "" ? "" : typeof d === "string" ? d : Array.isArray(d) ? d.map(x => (x && x.msg) || JSON.stringify(x)).join("; ") : JSON.stringify(d);
 function mllabCell(c) {
   if (!c || c.note || c.p_up == null) return `<td class="ml-cell"><span class="muted">${esc((c && c.note) || "no forecast")}</span></td>`;
   const up = Math.min(100, Math.max(0, Number(c.p_up) * 100));
@@ -1584,16 +1586,17 @@ function mllabTable(d) {
   const rows = (d && d.rows) || [];
   if (!rows.length) return `<div class="muted">No instruments tracked yet.</div>`;
   const head = `<th>Instrument</th>` + models.map(m => `<th title="${esc(m.description)}">${esc(MLLAB_NAMES[m.key] || m.key)}</th>`).join("");
-  const body = rows.map(r => `<tr><td class="ml-inst"><b>${esc(r.label)}</b> <span class="dim">${esc(r.kind)}</span><br><span class="mono">${esc(fmt(r.last_close))}</span><br><small class="muted">next candle ${esc(tsf(r.next_bar_ts))}</small></td>` +
+  const body = rows.map(r => `<tr><td class="ml-inst"><b>${esc(r.label)}</b> <span class="dim">${esc(r.kind)}</span><br><span class="mono">${esc(fmt(r.last_close))}</span><br><small class="muted">next candle ${esc(tsf(r.next_bar_ts))}</small>${r.bars > 0 && r.bars < 100 ? `<br><small class="warn">${esc(r.bars)} bars</small>` : ""}${r.note ? `<br><small class="muted">${esc(r.note)}</small>` : ""}</td>` +
     models.map(m => mllabCell((r.cells || {})[m.key])).join("") + `</tr>`).join("");
   return `<table class="ml-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 async function loadMllab() {
   const seq = ++mllab.seq, tf = $("mllab-tf").value;
+  mllab.inflight++;
   try {
     const r = await fetch(`/api/mllab?timeframe=${encodeURIComponent(tf)}`);  // a read: no token, no toast
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error((j && j.detail) || `${r.status} /api/mllab`);
+    if (!r.ok) throw new Error(mllabDetail(j && j.detail) || `${r.status} /api/mllab`);
     if (seq !== mllab.seq) return;  // a newer request (another timeframe) is on its way
     $("mllab-table").innerHTML = mllabTable(j);
     $("mllab-updated").textContent = `updated ${tsf(j.generated_at)} · ${j.timeframe}`;
@@ -1601,12 +1604,18 @@ async function loadMllab() {
     if (seq !== mllab.seq) return;
     $("mllab-table").innerHTML = `<div class="warnbar">Forecasts unavailable: ${esc(e.message)}</div>`;
     $("mllab-updated").textContent = "update failed";
-  }
+  } finally { mllab.inflight--; }
+}
+// The 60-second refresh: only while the tab is shown, and never over a request still running.
+function mllabTick() {
+  if (mllab.inflight || !tabShown("mllab") || document.visibilityState === "hidden") return false;
+  loadMllab();
+  return true;
 }
 $("mllab-tf").value = store.get("mllab.tf", "15m");
 if (!$("mllab-tf").value) $("mllab-tf").value = "15m";
 $("mllab-tf").onchange = () => { store.set("mllab.tf", $("mllab-tf").value); loadMllab(); };
 tabLoaders.mllab = () => { loadMllab(); };
-setInterval(() => { if (tabShown("mllab") && document.visibilityState !== "hidden") loadMllab(); }, 60000);
+setInterval(mllabTick, 60000);
 if (tabShown("mllab")) loadMllab();
 })();
