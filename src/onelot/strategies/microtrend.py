@@ -62,6 +62,9 @@ class MicrotrendParams(StrategyParams):
     max_risk_pct: float = Field(10.0, description="Skip a setup whose stop is further than this %")
     target_r: float = Field(0.0, description="No target: the reversal count exits")
     trail_atr_mult: float = Field(0.0, description="No ATR trail")
+    # the owner's rule has no daily cap and no wait after an exit: only one live idea per index
+    cooldown_bars: int = Field(0, description="Off: a new alignment may enter after an exit")
+    max_trades_per_day: int = Field(99, description="Off: no daily cap of its own")
     regime_filter: bool = Field(False, description="Off: the rule reads no regime")
     min_strength: float = Field(0.0, description="Off: the rule has no strength score")
 
