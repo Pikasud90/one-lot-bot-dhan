@@ -66,10 +66,12 @@ def test_snapshot_serialises_in_every_state_and_has_the_d7_fields(world):  # noq
 
 def test_the_shipped_configuration_d9_d14():
     cfg = load_desk_config()
-    on = [(i.key, s.name, s.timeframe) for i in cfg.instruments for s in i.strategies if s.enabled]
+    # US-068 (2026-11-13): the indices run `microtrend` (tests/desk/test_microtrend.py); the
+    # stocks still run `pullback` only, as below
+    on = [(i.key, s.name, s.timeframe) for i in cfg.stocks for s in i.strategies if s.enabled]
     assert {(n, t) for _, n, t in on} == {("pullback", "1d")}
     assert len(on) == 18 and len({k for k, _, _ in on}) == 18
-    assert {i.key for i in cfg.indices}.isdisjoint({k for k, _, _ in on})
+    assert all([s.name for s in i.strategies] == ["microtrend"] for i in cfg.indices)
     assert all(i.kind == "STOCK" for i in cfg.stocks)
     slots = cfg.delivery_slots()
     assert len(slots) == 18 and all(i.kind == "STOCK" for i, _ in slots)
@@ -82,7 +84,7 @@ def test_the_shipped_configuration_d9_d14():
     )
     assert all(s.params == slot.params for _, s in slots)
     paused = [(i.key, s.name) for i in cfg.instruments for s in i.strategies if not s.enabled]
-    assert paused  # the other slots are paused, not deleted
+    assert not paused  # US-068: the paused slots were deleted from desk.yaml (git keeps them)
 
 
 def test_config_paused_stocks_have_no_tracker_strategy_for_delivery_and_no_order_api():

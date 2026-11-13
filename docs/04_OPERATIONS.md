@@ -131,3 +131,18 @@ paper trades only: the system never places an order.
   09:00 to 15:35 when the store is behind (`delivery.top_up`, on by default): at most three
   tries in a window, 20 minutes apart, stopped at 09:00; its errors show on Home. Otherwise run
   a backfill from the Data tab.
+
+## Index options: the micro-trend rule (US-068)
+- The only rule on the five indices. Supertrend(14, 1.7) on 3m (the trigger), 5m, 10m, 15m,
+  30m, 60m and 4h, each read on its last closed bar; a 4h bar runs 09:15 to 13:15 and 13:15 to
+  the close, and the afternoon one is first read the next session.
+- Alert: at a 3-minute close where all seven newly point up (BUY a call) or down (BUY a put),
+  inside the option entry window, one lot of the monthly contract, one live idea per index.
+- Exit: the paper trade closes at the first one-minute bar at or after the 3-minute close where
+  3 of the 7 point against it, else at the session end. No target. The stop on the alert is a
+  backstop 3 ATR(60m) beyond the 60m line, not the rule's exit.
+- Each trend needs 70 of its own bars before it has a reading. The 4h trend needs about 35
+  sessions: the desk reads 75 days of stored one-minute bars for it, so keep the store topped up.
+  Without them, or on the delayed 2-minute Yahoo feed (no 3m, 5m or 15m bars), nothing fires.
+- The index card shows the seven trends, "aligned up", "aligned down" or "not aligned", and for
+  an open trade "reversed k of 7, exit at 3". The backtest of this exact rule lost a little.
