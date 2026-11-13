@@ -142,6 +142,15 @@ class DhanBars:
         self.pause_s = pause_s
         self.last_error: str | None = None
 
+    def use_adapter(self, adapter) -> None:
+        """Read through `adapter` from now on (a token renewed in Settings builds a new one,
+        REVIEW O-11); the bars already held stay."""
+        from ..data.providers.dhan import DhanHistoryProvider
+
+        self.adapter = adapter
+        self.provider = DhanHistoryProvider(adapter)
+        self.last_error = None
+
     def can_serve(self, spec: SeriesSpec) -> bool:
         return bool(spec.dhan_security_id) and spec.kind in ("INDEX", "STOCK")
 

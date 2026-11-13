@@ -163,6 +163,8 @@ class DeliveryDesk:
         self._cards: dict[str, dict[str, Any]] = {}
         self._view: dict[str, Any] = {"enabled": True, "pending": [], "open": []}
         self.errors = 0
+        #: other series the desk tracks, topped up with these (set by the desk)
+        self.also_top_up: list[str] = []
         # in memory between polls (cost of a poll, reviewer 4)
         self._hist: dict[str, tuple[tuple[Any, ...], RuleHistory]] = {}
         self._last_eval: dict[str, dt.date | None] = {}
@@ -179,6 +181,12 @@ class DeliveryDesk:
     @property
     def series(self) -> list[str]:
         return [*self.stocks, self.nifty_key]
+
+    @property
+    def top_up_series(self) -> list[str]:
+        """What the top-up keeps fresh: these series and every other one the desk tracks (the
+        micro-trend ladders of the indices read the stored one-minute bars, US-068)."""
+        return list(dict.fromkeys([*self.series, *self.also_top_up]))
 
     # ── the stored days (outside the desk lock) ──────────────────────────────
     def load_history(self, now: dt.datetime) -> None:
@@ -235,7 +243,7 @@ class DeliveryDesk:
         if not behind:
             return
         self._top_up_tries = [*tries, now]
-        keys = list(self.series)
+        keys = self.top_up_series
         stop_at = dt.datetime.combine(
             now.date() + (dt.timedelta(days=1) if now.time() > NO_TOP_UP[0] else dt.timedelta()),
             NO_TOP_UP[0],

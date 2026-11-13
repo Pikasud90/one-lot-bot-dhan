@@ -479,6 +479,7 @@ class Desk:
         now = now_ist()
         self._maybe_switch_source()
         self._load_daily_history(now)
+        self._load_minute_history(now)
         self._delivery_history(now)
         specs = self._all_specs()
         since = {k: t.bars.index[-1] for k, t in self.trackers.items() if not t.bars.empty}
@@ -544,7 +545,7 @@ class Desk:
                 k: (t.series.label, str(t.series.extra.get("trading_symbol") or t.series.key))
                 for k, t in self.trackers.items()
             }
-            return DeliveryDesk(
+            delivery = DeliveryDesk(
                 self.engine,
                 self.cfg,
                 CostConfig.load(root / "config" / "costs.yaml"),
@@ -556,6 +557,8 @@ class Desk:
                 top_up=self._top_up_bars,
                 data_api_active=lambda: bool(self._data_api_active()),
             )
+            delivery.also_top_up = list(self.trackers)  # all 23: the indices' 4h rungs too
+            return delivery
         except Exception:  # noqa: BLE001 - the intraday desk runs whatever this does
             log.exception("delivery: the delivery desk could not be built; it is off")
             return None
@@ -664,12 +667,8 @@ class Desk:
         ]
         for key, series_key in due:
             daily: pd.DataFrame | None = None
-            minutes: pd.DataFrame | None = None
             try:
                 daily = daily_history(self.engine, series_key, now)
-                t0 = self.trackers.get(key)
-                if t0 is not None and t0.ladder_timeframes != mtf.LADDER_TIMEFRAMES:
-                    minutes = minute_history(self.engine, series_key, now)  # US-068: 4h rung
             except Exception:  # noqa: BLE001 - a reading for the card, never a dependency
                 if key not in self._history_failed:
                     log.exception("desk: the stored daily history of %s could not be read", key)
@@ -687,8 +686,6 @@ class Desk:
                     continue
                 self._history_failed.discard(key)
                 t.daily_history = daily
-                if minutes is not None:
-                    t.minute_history = minutes
                 if daily.empty:
                     self._history_retry[key] = now + HISTORY_EMPTY_RETRY
                     t.history_note = (
@@ -698,6 +695,43 @@ class Desk:
                 else:
                     self._history_retry.pop(key, None)
                     t.history_day, t.history_note = today, None
+
+    def _load_minute_history(self, now: dt.datetime) -> None:
+        """The stored one-minute bars of every micro-trend ladder (US-068: its 4h rung needs
+        about 35 sessions), once a calendar day; between 09:00 and 15:35 IST in a background
+        thread whose result is swapped in, never on the poll thread."""
+        today = now.astimezone(IST).date()
+        if getattr(self, "_minute_day", None) == today:
+            return
+        loader = getattr(self, "_minute_loader", None)
+        if loader is not None and loader.is_alive():
+            return
+        keys = [
+            (k, t.series.key)
+            for k, t in list(self.trackers.items())
+            if t.ladder_timeframes != mtf.LADDER_TIMEFRAMES
+        ]
+        self._minute_day = today
+        if not keys:
+            return
+
+        def load() -> None:
+            for key, series_key in keys:
+                try:
+                    bars = minute_history(self.engine, series_key, now)
+                except Exception:  # noqa: BLE001 - a reading for the ladder, never a dependency
+                    log.exception("desk: the stored minute bars of %s could not be read", key)
+                    continue
+                t = self.trackers.get(key)
+                if t is not None:
+                    t.minute_history = bars  # one assignment: the old or the new, whole
+
+        at = now.astimezone(IST).time()
+        if dt.time(9, 0) <= at <= dt.time(15, 35):
+            self._minute_loader = threading.Thread(target=load, name="minute-history", daemon=True)
+            self._minute_loader.start()
+        else:
+            load()
 
     def _maybe_switch_source(self) -> None:
         want_dhan = self.cfg.source == "dhan" or (
@@ -722,6 +756,13 @@ class Desk:
             self.source = build_source("yahoo", None, False)
             self._reset_bars()
             log.info("desk: switched to Yahoo bars")
+        elif has_dhan and adapter is not None:
+            # a token renewed in Settings builds a new adapter (REVIEW O-11): the bar source
+            # reads through it from the next fetch on; the bars held are kept
+            rest = getattr(self.source.primary, "rest", self.source.primary)
+            if getattr(rest, "adapter", adapter) is not adapter and hasattr(rest, "use_adapter"):
+                rest.use_adapter(adapter)
+                log.info("desk: the bar source now reads through the renewed adapter")
 
     def _reset_bars(self) -> None:
         self.fine_minutes = int(self.source.resolution[:-1])
