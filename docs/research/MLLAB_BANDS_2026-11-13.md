@@ -122,7 +122,7 @@ What it can tell you:
 Readings a trader can take from it (what the numbers support, not advice):
 
 - A stop or a target nearer than one band half width of the timeframe traded is inside
-  ordinary noise: with a retuned band about one candle in four ends beyond it by chance.
+  ordinary noise: with a retuned band about three candles in ten end beyond it by chance.
 - An index option needs about 5 to 10 bp of index move to cover its costs
   (ALPHA_SEARCH_2026-11-12.md, section 4). The band of one 15m index candle is 16 bp or
   less, so a trade pays only through a run of candles one way, the part no model here
@@ -152,3 +152,18 @@ series, the opening candles and the ordinary candles, and forecasts the next can
 it belongs to (every intraday timeframe now reads about 120 stored sessions). The cells lead with
 the range and both band hit rates, the up figure is marked "not a signal", and each instrument
 shows its "Move size" (calm, normal or active).
+
+**Replayed on the real store before it was accepted.** The functions of the build were run
+on the stored bars the way the product reads them (180 calendar days, about 120 sessions).
+
+| Check | New | Old |
+|---|---|---|
+| 15m ordinary candles, ewma, last 30 sessions: inside 68 / 95 | 72.6 / 93.2 | 82.2 / 96.8 |
+| 60m ordinary candles, ewma, last 30 sessions: inside 68 / 95 | 69.8 / 93.0 | 83.8 / 98.0 |
+| 15m opening candles, five models, last 60 sessions: inside 68 / 95 | 69 to 76 / 92 to 95 | 19.4 / 38.7 (ewma) |
+| 60m opening candles, five models, last 60 sessions: inside 68 / 95 | 68 to 75 / 91 to 94 | 36.9 / 66.8 (ewma) |
+
+"Move size" as the page computes it (the EWMA width ranked in the series' own history), over
+166 to 314 days: the move after an active reading over the move after a calm one was 1.45
+(15m ordinary), 1.37 (60m ordinary), 1.61 (15m opening) and 1.55 (60m opening), and the order
+held inside every part of the day. About a third of the readings fall in each label.

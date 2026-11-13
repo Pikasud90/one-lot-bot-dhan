@@ -2846,19 +2846,19 @@ since then come first; the questions below them are kept as written.
   statistical forecasts of the next candle's close for every instrument on 15m, 30m, 60m,
   4h and 1d; it raises no alert. Finding O-11 is fixed: a renewed token now reaches the
   desk's bar source without a restart. The store is topped up for all 23 instruments.
-- **Three additions of 13 November 2026.** (1) Home has a "Take market snapshot" button: it
-  saves every tracked price with its date and time, and lists the past snapshots with the
-  change since the one before (`src/onelot/desk/snapshots.py`, table `market_snapshots`).
-  (2) The Machine Learning Lab was tested on its own forecasts. Its up probability is no
-  signal: after every model read above 50% the next candle closed up 47 to 52% of the
-  time, the same as any candle (`docs/research/MLLAB_CONFIDENCE_2026-11-13.md`). Its bands
-  measure the size of the next move but are mislabelled inside the day, because the first
-  candle carries the overnight gap; a retune that gives the opening candle a series of its
-  own was tested and is the next story (`docs/research/MLLAB_BANDS_2026-11-13.md`). The
-  tab's caption says both. (3) The options rule was priced on real premiums for NIFTY and
-  BANKNIFTY: about −1.2% of premium a trade, negative in all three periods, and no
-  situation known at entry makes it pay (`docs/research/MICROTREND_STUDY_2026-11-13.md`).
-  Its alerts now carry that figure.
+- **Three additions of 13 November 2026.** (1) Home has a "Take market snapshot" button: it saves
+  every tracked price with its date and time, and lists the past snapshots with the change since
+  the one before (`src/onelot/desk/snapshots.py`, table `market_snapshots`). (2) The Machine
+  Learning Lab was tested on its own forecasts. Its up probability is no signal: after every model
+  read above 50% the next candle closed up 47 to 52% of the time, the same as any candle
+  (`docs/research/MLLAB_CONFIDENCE_2026-11-13.md`). Its bands measure the size of the next move
+  but were mislabelled inside the day, because the first candle carries the overnight gap. The
+  retune was built the same day: the opening candle and the ordinary candles are two series, each
+  cell leads with the range, every instrument has a "Move size" label and the up figure is marked
+  "not a signal" (`docs/research/MLLAB_BANDS_2026-11-13.md`; replayed on the real store before
+  acceptance). (3) The options rule was priced on real premiums for NIFTY and BANKNIFTY: about
+  −1.2% of premium a trade, negative in all three periods, and no situation known at entry makes
+  it pay (`docs/research/MICROTREND_STUDY_2026-11-13.md`). Its alerts now carry that figure.
 
 Each question gives the options, what each one changes and
 a recommendation with its reason. A story that depends on an answer names the question in its
