@@ -1544,7 +1544,9 @@ showTab(location.hash.slice(1) || store.get("tab", "home"));
 
 /* ── Machine Learning Lab: statistical forecasts of the next candle (they inform; no alert, no trade) ── */
 const MLLAB_NAMES = { arima: "ARIMA", sarima: "SARIMA", garch: "GARCH", ewma: "EWMA", empirical: "Empirical" };
-const mllab = { seq: 0 };
+const mllab = { seq: 0, inflight: 0 };
+// An error's `detail` as text: FastAPI's 422 gives a list of {msg, loc}, other errors a string.
+const mllabDetail = (d) => d == null || d === "" ? "" : typeof d === "string" ? d : Array.isArray(d) ? d.map(x => (x && x.msg) || JSON.stringify(x)).join("; ") : JSON.stringify(d);
 function mllabCell(c) {
   if (!c || c.note || c.p_up == null) return `<td class="ml-cell"><span class="muted">${esc((c && c.note) || "no forecast")}</span></td>`;
   const up = Math.min(100, Math.max(0, Number(c.p_up) * 100));
@@ -1570,10 +1572,11 @@ function mllabTable(d) {
 }
 async function loadMllab() {
   const seq = ++mllab.seq, tf = $("mllab-tf").value;
+  mllab.inflight++;
   try {
     const r = await fetch(`/api/mllab?timeframe=${encodeURIComponent(tf)}`);  // a read: no token, no toast
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error((j && j.detail) || `${r.status} /api/mllab`);
+    if (!r.ok) throw new Error(mllabDetail(j && j.detail) || `${r.status} /api/mllab`);
     if (seq !== mllab.seq) return;  // a newer request (another timeframe) is on its way
     $("mllab-table").innerHTML = mllabTable(j);
     $("mllab-updated").textContent = `updated ${tsf(j.generated_at)} · ${j.timeframe}`;
@@ -1581,12 +1584,18 @@ async function loadMllab() {
     if (seq !== mllab.seq) return;
     $("mllab-table").innerHTML = `<div class="warnbar">Forecasts unavailable: ${esc(e.message)}</div>`;
     $("mllab-updated").textContent = "update failed";
-  }
+  } finally { mllab.inflight--; }
+}
+// The 60-second refresh: only while the tab is shown, and never over a request still running.
+function mllabTick() {
+  if (mllab.inflight || !tabShown("mllab") || document.visibilityState === "hidden") return false;
+  loadMllab();
+  return true;
 }
 $("mllab-tf").value = store.get("mllab.tf", "15m");
 if (!$("mllab-tf").value) $("mllab-tf").value = "15m";
 $("mllab-tf").onchange = () => { store.set("mllab.tf", $("mllab-tf").value); loadMllab(); };
 tabLoaders.mllab = () => { loadMllab(); };
-setInterval(() => { if (tabShown("mllab") && document.visibilityState !== "hidden") loadMllab(); }, 60000);
+setInterval(mllabTick, 60000);
 if (tabShown("mllab")) loadMllab();
 })();
