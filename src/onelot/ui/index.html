@@ -86,6 +86,11 @@
 
   <!-- ───────────────────────────── HOME ───────────────────────────── -->
   <section data-tab="home" class="tab">
+    <!-- 0. Today: the status strip (session, feed, token, the two rules, the next thing to do) -->
+    <div class="card today" id="today-card" aria-label="Today at a glance">
+      <div class="row between"><h2>Today <small>alerts and paper trades only · the system never places an order</small></h2><span class="muted" id="today-updated"></span></div>
+      <div id="today-strip" aria-live="polite"><div class="muted">Waiting for the desk…</div></div>
+    </div>
     <!-- 1. My portfolio -->
     <div class="row between">
       <h1 class="h1">My portfolio <small>free Trading API · cached — refreshed only when you ask or after a trade</small></h1>
@@ -100,14 +105,14 @@
     <div class="row between mt">
       <h1 class="h1">Alerts <small>every alert opens a paper trade · one exit alert closes it · click one for the full picture</small></h1>
       <div class="actions"><span class="muted" id="alerts-meta"></span>
-        <select id="alerts-days"><option value="1">today</option><option value="3">3 days</option><option value="7" selected>7 days</option><option value="30">30 days</option></select>
-        <select id="alerts-filter"><option value="">all</option><option value="PENDING">pending</option><option value="TAKEN">taken / monitoring</option><option value="EXPIRED">expired</option><option value="SKIPPED">skipped</option></select></div>
+        <select id="alerts-days" aria-label="How many days of alerts"><option value="1">today</option><option value="3">3 days</option><option value="7" selected>7 days</option><option value="30">30 days</option></select>
+        <select id="alerts-filter" aria-label="Which alerts to show"><option value="">all</option><option value="PENDING">pending</option><option value="TAKEN">taken / monitoring</option><option value="EXPIRED">expired</option><option value="SKIPPED">skipped</option></select></div>
     </div>
     <div id="home-signals"></div>
     <!-- 3. Monitoring | Strategy scoreboard -->
     <div class="grid2">
       <div class="card"><h2>Monitoring <small>alerts you took · each closes at its exit alert's price · scroll sideways for every column</small></h2><div class="scroll" id="home-positions"></div></div>
-      <div class="card"><h2>Strategy scoreboard <small>primary strategies · every alert's paper trade, net of costs</small></h2><div class="scroll" id="home-scoreboard"></div></div>
+      <div class="card"><h2>Strategy scoreboard <small>the two rules (micro-trend options · pullback delivery) · every alert's paper trade, net of costs</small></h2><div class="scroll" id="home-scoreboard"></div></div>
     </div>
     <!-- 4. Archive, 10 at a time -->
     <div class="card"><h2>Archive <small>newest first · 10 at a time · exit = the alert's one exit alert (its paper trade)</small></h2><div class="scroll" id="home-archive"></div><div class="actions mt" id="home-archive-more"></div></div>
@@ -128,13 +133,14 @@
 
   <!-- ──────────────────────────── LIVE DESK ────────────────────────── -->
   <section data-tab="live" class="tab">
+    <div class="updated-line"><span class="muted" id="desk-updated" aria-live="polite"></span></div>
     <div class="card strip" id="desk-positions-card">
-      <div class="row between"><h2>Open positions <small>alerts you took · one unit each · each closes at its exit alert's price</small></h2><span class="muted" id="desk-risk-line"></span></div>
+      <div class="row between"><h2>Open positions <small>alerts you took · one lot (index options) · each closes at its exit alert's price · delivery trades are on Home</small></h2><span class="muted" id="desk-risk-line"></span></div>
       <div id="desk-positions"><div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sleep"/></svg> Flat. Moo is napping until you take a signal.</div></div>
     </div>
     <div id="desk-signals"></div>
     <div class="card strip" id="desk-paper-card">
-      <div class="row between"><h2>Paper trades <small>every alert opens one · one unit · never an order</small></h2><span class="muted" id="desk-paper-meta"></span></div>
+      <div class="row between"><h2>Paper trades <small>every alert opens one · one lot, or shares worth about ₹10,000 for a delivery trade · never an order</small></h2><span class="muted" id="desk-paper-meta"></span></div>
       <div class="paper-views" role="radiogroup" aria-label="Which paper trades to show">
         <button type="button" role="radio" aria-checked="true" tabindex="0" data-paper-view="today">Today</button>
         <button type="button" role="radio" aria-checked="false" tabindex="-1" data-paper-view="last">Last session</button>
@@ -143,7 +149,7 @@
       <div class="scroll" id="desk-paper"><div class="muted">Loading paper trades…</div></div>
     </div>
     <div class="card strip" id="desk-fillcost-card">
-      <div class="row between"><h2>Fill costs <small>what one share / one lot costs to fill · bid/ask quotes every 5 min and at each alert · never an order</small></h2><span class="muted" id="desk-fillcost-meta"></span></div>
+      <div class="row between"><h2>Fill costs <small>what one lot, or one share of a delivery trade, costs to fill · bid/ask quotes every 5 min and at each alert · never an order</small></h2><span class="muted" id="desk-fillcost-meta"></span></div>
       <div class="scroll" id="desk-fillcost"><div class="muted">Loading fill costs…</div></div>
     </div>
     <div class="card strip">
@@ -151,14 +157,15 @@
       <div class="ctx" id="desk-context"></div>
     </div>
     <div class="desk-cols">
-      <div class="card"><div class="row between"><h2>Indices <small>bullish → buy CE · bearish → buy PE · 1 lot</small></h2><span class="muted" id="desk-idx-count"></span></div>
+      <div class="card"><div class="row between"><h2>Indices <small>micro-trend rule · all seven up → buy CE · all seven down → buy PE · 1 lot · intraday</small></h2><span class="muted" id="desk-idx-count"></span></div>
+        <div class="hint trend-legend" id="trend-legend">Micro-trend strip: <b class="up">▲</b> up · <b class="down">▼</b> down · <b>·</b> no reading · the first pip is the <b>3m trigger</b>, then 5m, 10m, 15m, 30m, 60m, 4h (Supertrend). Out when 3 of 7 reverse or at the session's exit.</div>
         <div class="acc" id="desk-indices"></div></div>
-      <div class="card"><div class="row between"><h2>Stocks <small id="desk-stk-sub">buy / sell · 1 share · intraday</small></h2><span class="muted" id="desk-stk-count"></span></div>
+      <div class="card"><div class="row between"><h2>Stocks <small id="desk-stk-sub">pullback rule · delivery · shares nearest ₹10,000 · carried for days</small></h2><span class="muted" id="desk-stk-count"></span></div>
         <div class="acc" id="desk-stocks"></div></div>
     </div>
     <div class="card" id="focus-card">
       <div class="row between"><h2>Instrument focus <small>everything the desk knows about one instrument</small></h2>
-        <div class="actions"><select id="focus-key"></select><select id="focus-tf"><option>2m</option><option>5m</option><option selected>15m</option><option>30m</option><option>60m</option></select></div></div>
+        <div class="actions"><select id="focus-key" aria-label="Instrument"></select><select id="focus-tf" aria-label="Chart timeframe"><option>2m</option><option>5m</option><option selected>15m</option><option>30m</option><option>60m</option></select></div></div>
       <div class="focus-grid">
         <div><div class="plot" id="focus-chart" style="height:320px"></div><div class="hint" id="focus-chart-note"></div></div>
         <div id="focus-body" class="focus-body"></div>
@@ -186,7 +193,7 @@
   <section data-tab="lab" class="tab">
     <div class="lab-layout">
       <div class="card lab-form">
-        <h2>Backtest <small>one unit per trade, always</small></h2>
+        <h2>Backtest <small>one unit per trade: 1 lot, or 1 share (the desk itself trades stocks as delivery of about ₹10,000)</small></h2>
         <div class="chips" id="lab-cats"></div>
         <label>Instrument <select id="lab-instrument"></select></label>
         <div class="hint" id="lab-inst-hint"></div>

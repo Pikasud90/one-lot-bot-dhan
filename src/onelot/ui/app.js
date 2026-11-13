@@ -17,6 +17,7 @@ const pct = (v, d = 1) => (v === null || v === undefined || Number.isNaN(Number(
 const spct = (v, d = 2) => (v === null || v === undefined || Number.isNaN(Number(v))) ? "–" : (Number(v) > 0 ? "+" : "") + Number(v).toFixed(d) + "%";
 const tsf = (s) => s ? String(s).replace("T", " ").slice(0, 16) : "–";
 const hhmm = (s) => s ? String(s).slice(11, 16) : "–";
+const hms = (s) => s ? String(s).slice(11, 19) : "–";
 const tile = (l, v, i = "", c = "") => `<div class="tile"><small>${l}</small><b class="${c}">${v}</b><i>${i}</i></div>`;
 // A rupee STRING from the API ("-12.05", exact from integer paise) for display: "−₹12.05", Indian digit grouping, never through a float. Plain text: esc() it in HTML.
 const inr = (s) => (s === null || s === undefined || s === "") ? "–" : (String(s).startsWith("-") ? "−₹" : "₹") + String(s).replace(/^-/, "").replace(/^\d+/, (w) => w.replace(/(\d)(?=(\d\d)*\d{3}$)/g, "$1,"));
@@ -132,6 +133,14 @@ function showTab(name) {
   if (tabLoaders[name]) tabLoaders[name]();
 }
 window.addEventListener("hashchange", () => showTab(location.hash.slice(1) || "home"));
+// Number keys 1 to 7 switch tabs, in the bar's order; never while typing in a field or with a modifier held.
+const tabForKey = (key, tag, editable, mods, tabs) => (mods || editable || /^(INPUT|TEXTAREA|SELECT)$/.test(String(tag || "").toUpperCase()) || !/^[1-9]$/.test(String(key))) ? null : (tabs[Number(key) - 1] ?? null);
+document.addEventListener("keydown", (e) => {
+  const t = e.target || {}, tabs = [...document.querySelectorAll("#tabs a")].map(a => a.dataset.tab);
+  const name = tabForKey(e.key, t.tagName, !!t.isContentEditable, e.ctrlKey || e.metaKey || e.altKey, tabs);
+  if (!name) return;
+  e.preventDefault(); if (location.hash.slice(1) !== name) location.hash = name; else showTab(name);
+});
 
 /* ── header badges + warnings ─────────────────────────────────────────── */
 let latest = null, acctSummary = null;
@@ -177,6 +186,7 @@ function renderAccount(a) {
   const s = a.summary || {}, p = a.panels || {};
   acctSummary = s;
   if (latest) renderBadges(latest);
+  renderToday();
   $("acct-age").textContent = a.fetched_at ? ("data as of " + tsf(a.fetched_at) + (a.stale ? " · stale" : "")) : "never fetched";
   if (!a.configured) {
     $("acct-notice").innerHTML = `<div class="notice"><svg class="mascot sm"><use href="#m-ichi"/></svg> No Dhan credentials yet. Add your client ID and a free-tier access token under
@@ -357,7 +367,7 @@ async function loadAlerts(force) {
   alerts.rest = rows.filter(s => s.status !== "PENDING");
   const exited = alerts.rows.filter(s => s.exit).length;
   $("alerts-meta").textContent = `${alerts.rows.length} alerts · ${pend.length} pending · ${alerts.rows.filter(s => s.status === "TAKEN" || s.status === "CLOSED").length} taken · ${exited} exited`;
-  $("home-signals").innerHTML = dlvHome(latest && latest.desk ? latest.desk.delivery : null) + (pend.length ? `<h3>Pending — take it or let it expire · its paper trade is already open</h3>` + pend.map(alertRow).join("") : `<div class="card"><div class="empty-inline"><svg class="mascot sm"><use href="#m-cow"/></svg> No pending alert. The desk is tracking ${latest && latest.desk ? latest.desk.counts.instruments : "the watchlist"} instruments.</div></div>`);
+  $("home-signals").innerHTML = dlvHome(latest && latest.desk ? latest.desk.delivery : null) + (pend.length ? `<h3>Pending — take it or let it expire · its paper trade is already open</h3>` + pend.map(alertRow).join("") : `<div class="card"><div class="empty-inline"><svg class="mascot sm"><use href="#m-cow"/></svg> No pending option alert. The desk is tracking ${latest && latest.desk ? latest.desk.counts.instruments : "the watchlist"} instruments: an option alert comes only when all seven timeframes newly align; the pullback rule trades rarely: weeks can pass.</div></div>`);
   wireAlerts($("home-signals"));
   drawArchive();
   drawScoreboard();
@@ -399,7 +409,7 @@ function drawScoreboard() {
     { l: "Open", n: 1, k: "open" },
     { l: "No fill", n: 1, k: "no_fill" },
   ], prim, { empty: "No primary strategy configured." }) +
-  `<div class="hint mt">One unit per trade, every alert, net of costs; delivery trades are shares worth about ${esc(rup(latest && latest.desk && latest.desk.delivery && latest.desk.delivery.unit_inr != null ? latest.desk.delivery.unit_inr : 10000))} each. Each row is one strategy on one timeframe and market, so trades from an earlier setting are not counted in it. A row with no trades has not alerted yet.` +
+  `<div class="hint mt">One lot per option trade, every alert, net of costs; delivery trades are shares worth about ${esc(rup(latest && latest.desk && latest.desk.delivery && latest.desk.delivery.unit_inr != null ? latest.desk.delivery.unit_inr : 10000))} each. Each row is one strategy on one timeframe and market, so trades from an earlier setting are not counted in it. A row with no trades has not alerted yet.` +
   (others.length ? ` Earlier strategies (no longer primary): ${others.map(x => `${esc(x.strategy)}${slot(x) ? ` ${esc(slot(x))}` : ""} ${x.trades} trades ${esc(inr(x.net))}`).join(" · ")}.` : "") + `</div>`;
 }
 function wireAlerts(root) {
@@ -600,7 +610,7 @@ function sigNum(l, v, c = "") { return `<div class="sig-num"><small>${l}</small>
 function signalCard(s) {
   const e = s.economics || {}, sell = s.direction === "short", o = e.option || {};
   const title = s.kind === "INDEX" ? `BUY ${esc(s.label)} ${o.strike ? fmt(o.strike, 0) : ""} ${esc(o.opt_type || "")} <span class="num" style="font-size:15px">${esc(e.unit_label)}</span>`
-    : `${sell ? "SELL" : "BUY"} ${esc(s.label)} <span class="num" style="font-size:15px">1 share</span>`;
+    : `${sell ? "SELL" : "BUY"} ${esc(s.label)} <span class="num" style="font-size:15px">${esc(e.unit_label || "delivery")}</span>`;
   return `<div class="card sigcard ${sell ? "sell" : ""}" data-sig="${s.id}">
     <div class="row between"><div class="sig-title">${title}</div><span class="countdown" data-exp="${esc(s.expires_at)}">…</span></div>
     <div class="sig-sub">${esc(s.strategy_label || s.strategy)} · ${esc(s.timeframe)} · signal bar ${hhmm(s.bar_ts)} · strength ${fmt(s.strength, 0)}${e.synthetic ? " · <span class='warn'>premium synthetic</span>" : ""}</div>
@@ -788,6 +798,16 @@ const dlvRow = (t) => `<tr><td><b>${esc(t.label || t.series_key)}</b> <span clas
 const dlvAlert = (t) => `<div class="card"><b>${esc(t.status === "EXIT_PENDING" ? "SELL" : "BUY")} ${esc(t.qty)} ${esc(t.label || t.series_key)}</b> <span class="dim">pullback 1d · delivery · ${esc(t.status === "EXIT_PENDING" ? `exit signal ${t.exit_signal_date}` : `signal ${t.signal_date}`)}</span><div class="hint">${esc(t.alert || "")}</div>${t.warning ? `<div class="hint warn">${esc(t.warning)}</div>` : ""}</div>`;
 const dlvHome = (d) => { if (!d || typeof d !== "object") return ""; const pend = Array.isArray(d.pending) ? d.pending : [], open = Array.isArray(d.open) ? d.open : []; const head = `<h3>Delivery (pullback) <small class="muted">${d.history_to ? `daily history complete to ${esc(d.history_to)}` : "daily history not complete"}${(d.stale || []).length ? ` · <span class="warn">not fresh: ${esc(d.stale.join(", "))}</span>` : ""}${d.top_up ? ` · ${esc(d.top_up)}` : ""}</small></h3>`; const table = open.length ? `<div class="scroll"><table><thead><tr><th>Stock</th> <th>Status</th> <th class="n">Entry</th> <th class="n">Last</th> <th class="n">Unrealised</th> <th class="n">Sessions</th> <th class="n" title="a close above this exits">SMA20 exit</th> <th class="n" title="a close at or below this exits">Stop</th></tr></thead><tbody>${open.map(dlvRow).join("")}</tbody></table></div>` : `<div class="muted">No open delivery trade.</div>`; return head + pend.map(dlvAlert).join("") + table; };
 const dlvArchive = (list) => !Array.isArray(list) || !list.length ? "" : `<h4>Delivery alerts</h4><div class="scroll"><table><thead><tr><th>Stock</th> <th>Signal</th> <th>Status</th> <th class="n">Entry</th> <th class="n">Exit</th> <th>Reason</th> <th class="n">Net</th></tr></thead><tbody>${list.map((t) => `<tr><td><b>${esc(t.label || t.series_key)}</b> <span class="dim">${esc(t.qty)} sh</span></td> <td>${esc(t.signal_date)}</td> <td>${esc(String(t.status).replace(/_/g, " ").toLowerCase())}${t.note ? ` <span class="dim">${esc(t.note)}</span>` : ""}</td> <td class="n">${fmt(t.entry)}${t.entry_late ? " (late)" : ""}</td> <td class="n">${fmt(t.exit)}${t.exit_late ? " (late)" : ""}</td> <td>${esc(t.exit_reason || "–")}</td> <td class="n ${cls(t.net)}">${rup2(t.net)}${t.net_pct == null ? "" : ` <span class="dim">${spct(t.net_pct)}</span>`}</td></tr>`).join("")}</tbody></table></div>`;
+// ── Home's "Today" strip: one line each for the session, the feed, the token, the two rules, and the next thing to do. Pure, for tests/desk/test_today_strip_ui.py. ──
+const tokenHoursLeft = (tv, now) => { const m = String(tv ?? "").match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/); return m ? (new Date(`${m[3]}-${m[2]}-${m[1]}T${m[4]}:${m[5]}:00+05:30`) - now) / 3600000 : null; };
+const todayLines = (d, tv, now) => { const out = [], left = tokenHoursLeft(tv, now), next = []; if (!d || typeof d !== "object" || d.booting) return [["Desk", d && d.booting ? "starting: the first bars are arriving" : "the Live Desk is not running", "warn"]]; const ses = d.session || {}, src = d.source || {}, openAt = ses.open_at ? new Date(ses.open_at) : null; out.push(["Session", ses.open ? `open · closes ${hhmm(ses.close_at)}${ses.entries_allowed ? "" : " · no new entries"}` : ses.trading_day && openAt && now < openAt ? `closed · opens at ${hhmm(ses.open_at)}` : ses.trading_day ? "closed for the day" : `closed · no session today${ses.holiday ? ` (${ses.holiday})` : ""}`, ses.open ? "ok" : ""]); out.push(["Feed", src.last_error ? `${delayNote(src)} · ${String(src.last_error).slice(0, 80)}` : src.delayed ? `${delayNote(src)} (${src.name || "?"} bars)` : `live (${src.name || "?"})`, src.last_error ? "bad" : src.delayed ? "warn" : "ok"]); if (left == null) out.push(["Dhan token", "time left unknown: refresh the portfolio", "warn"]); else { out.push(["Dhan token", left <= 0 ? "EXPIRED" : `${left < 1 ? Math.round(left * 60) + " min" : Math.floor(left) + " h " + Math.round((left % 1) * 60) + " min"} left`, left < 2 ? "bad" : "ok"]); if (left < 2) next.push(left <= 0 ? "Renew the Dhan token in Settings: it has expired." : "Renew the Dhan token in Settings: under two hours left."); } const idx = Array.isArray(d.indices) ? d.indices : [], al = idx.filter((r) => ["up", "down"].includes(trendVerdict(r.trend)[0])), pos = Array.isArray(d.positions) ? d.positions : []; out.push(["Options · micro-trend", (al.length ? `${al.length} of ${idx.length} aligned: ${al.map((r) => `${r.label || r.key} ${trendVerdict(r.trend)[0]}`).join(", ")}` : "no alignment") + (pos.length ? ` · open trade: ${pos.map((p) => p.label || p.key || p.series_key || "?").join(", ")}` : " · no open trade"), al.length || pos.length ? "ok" : ""]); const dl = d.delivery && typeof d.delivery === "object" ? d.delivery : null; if (!dl || dl.enabled === false) out.push(["Stocks · pullback delivery", "not running", "warn"]); else { const pend = Array.isArray(dl.pending) ? dl.pending.length : 0, op = Array.isArray(dl.open) ? dl.open.length : 0, stale = Array.isArray(dl.stale) ? dl.stale : []; out.push(["Stocks · pullback delivery", `${pend} pending alert${pend === 1 ? "" : "s"} · ${op} open delivery trade${op === 1 ? "" : "s"} · ${dl.history_to ? `daily history complete to ${dl.history_to}` : "daily history not complete"}`, stale.length || !dl.history_to ? "warn" : ""]); if (stale.length || !dl.history_to) next.push(`The daily history is stale${stale.length ? ` (${stale.slice(0, 3).join(", ")}${stale.length > 3 ? ` +${stale.length - 3}` : ""})` : ""}: top it up in Data.`); } out.push(["Next", next.length ? next.join(" ") : "nothing to do: the desk is watching", next.length ? "bad" : "ok"]); return out; };
+const todayStrip = (d, tv, now) => `<div class="today-grid">${todayLines(d, tv, now).map(([k, v, c]) => `<div class="trow ${c}"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("")}</div>`;
+function renderToday() {
+  const box = $("today-strip"); if (!box) return;
+  const d = latest && latest.desk;
+  box.innerHTML = todayStrip(d, acctSummary && acctSummary.token_validity, Date.now());
+  if ($("today-updated")) $("today-updated").textContent = d && d.updated_at ? `updated ${hms(d.updated_at)}` : "";
+}
 const pbChip = (pb) => { if (!pb || typeof pb !== "object") return ""; const r = pb.reading, t = pb.trade, chip = (text, c = "", title = "") => `<span class="schip ${c}" title="${esc(title)}">${esc(text)}</span>`; if (t && t.status === "EXIT_PENDING") return chip("pullback 1d · exit at the next open", "short", t.exit_reason || ""); if (t && t.status === "OPEN") return chip(`pullback 1d · open ${t.sessions ?? "?"} of ${t.max_sessions ?? pb.max_sessions ?? "?"}`, "", t.warning || ""); if ((t && t.status === "PENDING_ENTRY") || (r && r.signal)) return chip("pullback 1d · BUY at the next open", "long", pb.evidence || ""); if (r) return chip(`pullback 1d · ${fmt(r.below_high_pct, 1)}% of ${fmt(r.needed_pct, 0)}%`, "", r.why || ""); return chip("pullback 1d · no reading", "err", pb.note || "no complete daily history"); };
 const pbUnit = (pb) => `delivery: shares nearest ${rup(pb && pb.unit_inr != null ? pb.unit_inr : 10000)}`;
 const pbUnitShort = (pb) => `delivery · about ${rup(pb && pb.unit_inr != null ? pb.unit_inr : 10000)}`;
@@ -798,15 +818,11 @@ function accRow(r, isOpen) {
   const body = `
     ${r.kind === "STOCK" ? "" : trendBlock(r.trend, L.price)}
     ${r.kind === "STOCK" ? pbBlock(r.pullback) : ""}
-    <div class="grid4">
+    <div class="grid3">
       <div><h4>Market</h4>${kv("Last", fmt(L.price))}${kv("Day change", spct(L.change_pct), cls(L.change_pct))}${kv("Prev close", fmt(L.prev_close))}
         ${kv("Last bar", hhmm(L.bar_ts))}${kv("Tracked as", esc(r.tracked))}${kv("Unit", r.pullback ? esc(pbUnit(r.pullback)) : esc(r.unit))}${r.note ? `<div class="hint">${esc(r.note)}</div>` : ""}</div>
       <div><h4>Regime &amp; volatility</h4>${kv("Regime", esc(R.regime || "–"))}${kv("Trend (EMA20/50)", esc(R.trend || "–"), R.trend === "up" ? "pos" : R.trend === "down" ? "neg" : "")}
         ${kv("ADX(14)", fmt(R.adx, 1))}${kv("ATR(14)", fmt(R.atr))}${kv("ATR percentile", fmt(R.atr_pct, 0))}${kv("RSI(14)", fmt(R.rsi, 1))}${kv("VWAP", fmt(R.vwap))}${kv("NIFTY bias", fmt(R.mkt_bias, 0))}</div>
-      <div><h4>Risk governor</h4>${kv("Desk state", esc(risk.state || "–"), risk.state === "HALTED" ? "neg" : "pos")}${kv("Trades today (this)", `${K.trades_today || 0}`)}
-        ${kv("Trades today (all)", `${risk.trades_taken || 0}/${LM.max_trades_per_day || "–"}`)}${kv("Open (all)", `${risk.open_positions || 0}/${LM.max_open_positions || "–"}`)}
-        ${kv("Realised today (all)", rup(risk.realized_pnl), cls(risk.realized_pnl))}${kv("Daily loss limit", rup(LM.daily_loss_limit))}${kv("Consecutive losses", `${K.consecutive_losses || 0}`)}
-        ${risk.halt_reason ? `<div class="hint warn">${esc(risk.halt_reason)}</div>` : ""}</div>
       <div><h4>Data health</h4>${kv("State", hdot(H.state) + esc(H.state || "–"))}${kv("Source", esc(H.source || "–") + (H.delayed ? " (delayed ~15m)" : ""))}${kv("Resolution", `${H.resolution_min || "–"}m`)}
         ${kv("Bars held", H.bars || 0)}${kv("Bar age", L.age_sec != null ? Math.round(L.age_sec / 60) + " min" : "–")}<div class="hint">${esc(H.note || "")}${H.last_error ? "<br>" + esc(H.last_error) : ""}</div></div>
     </div>
@@ -841,6 +857,7 @@ function renderDesk(d) {
     `${ses.open ? "market open" : (ses.trading_day ? "market closed" : "holiday / weekend")} · ${ses.entries_allowed ? "entries allowed" : "no new entries"} · updated ${hhmm(d.updated_at)}` +
     (src.last_error ? ` · ⚠ ${src.last_error.slice(0, 80)}` : "");
   $("desk-risk-line").textContent = `${(d.positions || []).length} open · each closes at its exit alert's price`;
+  if ($("desk-updated")) $("desk-updated").textContent = `updated ${hms(d.updated_at)}`;
   // positions (re-render only when something changed)
   const psig = JSON.stringify((d.positions || []).map(p => [p.id, p.exit_advice, p.session_over, p.stop_underlying, p.last_underlying, p.unrealized, p.paper_status, p.user_entry_price, p.user_exit_price]));
   if (desk.sig.pos !== psig) {
@@ -878,11 +895,10 @@ function renderDesk(d) {
   draw($("desk-indices"), d.indices || []); draw($("desk-stocks"), d.stocks || []);
   // US-067: say how many slots are live and how many are paused; the delivery rule counts as one live slot a stock
   const dlv = d.delivery && d.delivery.enabled ? d.delivery : null;
-  const slotCount = (rows, live) => { const all = rows.reduce((a, r) => a + (r.strategies || []).length, 0), paused = rows.reduce((a, r) => a + (r.strategies || []).filter(s => s.enabled === false).length, 0); return `${rows.length} tracked · ${all - paused + live} active${paused ? ` · ${paused} paused` : ""}`; };
-  $("desk-idx-count").textContent = slotCount(d.indices || [], 0);
-  $("desk-stk-count").textContent = slotCount(d.stocks || [], dlv ? (d.stocks || []).filter(r => r.pullback).length : 0);
+  $("desk-idx-count").textContent = `${(d.indices || []).length} tracked · micro-trend rule`;
+  $("desk-stk-count").textContent = `${(d.stocks || []).length} tracked · ${dlv ? "pullback rule (delivery)" : "pullback rule off"}`;
   const stkSub = $("desk-stk-sub");
-  if (stkSub) stkSub.textContent = dlv ? `delivery · pullback rule · about ${rup(dlv.unit_inr != null ? dlv.unit_inr : 10000)} a trade` : "buy / sell · 1 share · intraday";
+  if (stkSub) stkSub.textContent = dlv ? `delivery · pullback rule · shares nearest ${rup(dlv.unit_inr != null ? dlv.unit_inr : 10000)} · carried for days` : "pullback rule · delivery · not running";
 }
 document.addEventListener("click", (e) => {
   const h = e.target.closest("[data-toggle]"); if (!h) return;
@@ -905,7 +921,7 @@ let lastDesk = null, lastDeskVersion = -1;
 function applyStream(payload) {
   latest = payload.state;
   if (latest.desk && latest.desk.unchanged) latest.desk = lastDesk; else if (latest.desk) lastDesk = latest.desk;
-  renderBadges(latest); renderWarnings(latest); renderSignal(latest); renderPositions(latest);
+  renderBadges(latest); renderWarnings(latest); renderToday(); renderSignal(latest); renderPositions(latest);
   renderPanels(latest); renderJournal(latest); renderFeed(payload.notifications);
   const changed = latest.desk && latest.desk.version !== lastDeskVersion;
   if (changed) lastDeskVersion = latest.desk.version;
@@ -934,10 +950,9 @@ function renderFocus(d) {
   $("focus-body").innerHTML = `
     <div class="row between"><div class="acc-name"><b>${esc(r.label)}</b><span class="dim">${r.kind === "INDEX" ? "index · options" : "stock"} · ${r.pullback ? esc(pbUnitShort(r.pullback)) : esc(r.unit)} · tracked as ${esc(r.tracked)}</span></div><div class="state-badge st-${esc(r.state)}">${esc(r.state)}</div></div>
     ${r.kind === "STOCK" ? "" : trendBlock(r.trend, L.price)}
-    <div class="grid4">
+    <div class="grid3">
       <div><h4>Market</h4>${kv("Last", fmt(L.price) + (L.live ? " <span class='pos'>●</span>" : ""))}${kv("Day change", spct(L.change_pct), cls(L.change_pct))}${kv("Prev close", fmt(L.prev_close))}${kv("Last bar", hhmm(L.bar_ts))}${L.live ? kv("Bid / ask", `${fmt(L.live.bid)} / ${fmt(L.live.ask)}`) : ""}</div>
       <div><h4>Regime &amp; volatility</h4>${kv("Regime", esc(R.regime || "–"))}${kv("Trend", esc(R.trend || "–"), R.trend === "up" ? "pos" : R.trend === "down" ? "neg" : "")}${kv("ADX(14)", fmt(R.adx, 1))}${kv("ATR(14)", fmt(R.atr))}${kv("ATR pct", fmt(R.atr_pct, 0))}${kv("RSI(14)", fmt(R.rsi, 1))}${kv("VWAP", fmt(R.vwap))}</div>
-      <div><h4>Risk governor</h4>${kv("Desk", esc(risk.state || "–"), risk.state === "HALTED" ? "neg" : "pos")}${kv("Trades today (this)", K.trades_today || 0)}${kv("Trades (all)", `${risk.trades_taken || 0}/${LM.max_trades_per_day || "–"}`)}${kv("Open (all)", `${risk.open_positions || 0}/${LM.max_open_positions || "–"}`)}${kv("Realised (all)", rup(risk.realized_pnl), cls(risk.realized_pnl))}</div>
       <div><h4>Data health</h4>${kv("State", hdot(H.state) + esc(H.state || "–"))}${kv("Source", esc(H.source || "–") + (H.delayed ? " (~15m delayed)" : ""))}${kv("Bars", `${H.bars || 0} × ${H.resolution_min || "–"}m`)}${kv("Bar age", L.age_sec != null ? Math.round(L.age_sec / 60) + " min" : "–")}<div class="hint">${esc(H.note || "")}</div></div>
     </div>
     <h4>Strategies</h4><div class="tbl">${table([{ l: "Strategy", f: s => `<b>${esc(s.label)}</b>` }, { l: "TF", k: "timeframe" }, { l: "Bar", f: s => hhmm(s.last_bar_ts) },
