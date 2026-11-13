@@ -18,6 +18,7 @@ import asyncio
 import datetime as dt
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,8 @@ from ..clock import IST
 log = logging.getLogger(__name__)
 
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
+#: guards the lazy build of the Machine Learning Lab (`/api/mllab`): one MlLab per desk
+_MLLAB_LOCK = threading.Lock()
 
 
 class AckBody(BaseModel):
@@ -1007,15 +1010,19 @@ def create_app(engine, api_token: str) -> FastAPI:
         if timeframe not in ml.TIMEFRAMES:
             raise HTTPException(400, f"timeframe must be one of {', '.join(ml.TIMEFRAMES)}")
         desk = _desk()
-        if mllab.get("desk") is not desk:
-            mllab["desk"] = desk
-            mllab["lab"] = ml.MlLab(
-                ml.desk_bars_getter(desk),
-                lambda: ml.desk_instruments(desk),
-                lambda: dt.datetime.now(IST),
-                ml.desk_stored_reader(desk),
-            )
-        body = json.dumps(mllab["lab"].matrix(timeframe), allow_nan=False)  # strict JSON
+        with _MLLAB_LOCK:  # two first requests at once build one MlLab, not two
+            if mllab.get("desk") is not desk:
+                mllab["lab"] = ml.MlLab(
+                    ml.desk_bars_getter(desk),
+                    lambda: ml.desk_instruments(desk),
+                    lambda: dt.datetime.now(IST),
+                    ml.desk_stored_reader(desk),
+                    ml.desk_session_close(desk),
+                    ml.desk_trading_day(desk),
+                )
+                mllab["desk"] = desk
+            lab = mllab["lab"]
+        body = json.dumps(lab.matrix(timeframe), allow_nan=False)  # strict JSON
         return Response(body, media_type="application/json")
 
     # ── UI ────────────────────────────────────────────────────────────────

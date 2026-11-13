@@ -63,6 +63,7 @@ def test_the_matrix_shape(client, tf):
             "last_close",
             "last_bar_ts",
             "next_bar_ts",
+            "bars",
             "note",
             "cells",
         }
@@ -97,3 +98,35 @@ def test_the_route_is_a_read():
         if getattr(r, "path", "") == "/api/mllab"
     ]
     assert routes == [("/api/mllab", ["GET"])]
+
+
+def test_two_first_requests_at_once_build_one_lab(monkeypatch):
+    import threading
+    import time
+
+    from onelot.mllab import service as svc
+
+    built = []
+    real = svc.MlLab
+
+    def slow(*args, **kwargs):
+        time.sleep(0.2)  # wide enough for the second request to arrive mid-build
+        lab = real(*args, **kwargs)
+        built.append(lab)
+        return lab
+
+    monkeypatch.setattr(svc, "MlLab", slow)
+    desk = SimpleNamespace(trackers={"NIFTY": tracker("NIFTY", "INDEX", 2)})
+    engine = MagicMock()
+    engine.desk = desk
+    c = TestClient(create_app(engine, "t"), raise_server_exceptions=False)
+    codes: list[int] = []
+    threads = [
+        threading.Thread(target=lambda: codes.append(c.get("/api/mllab?timeframe=1d").status_code))
+        for _ in range(2)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert codes == [200, 200] and len(built) == 1

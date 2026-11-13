@@ -25,6 +25,7 @@ from typing import Any
 import numpy as np
 import pandas as pd  # type: ignore[import-untyped]
 
+from ..clock import IST
 from ..data.hygiene import clean_intraday, consistent_daily
 from ..data.resample import resample_bars
 from ..indicators.mtf import index_ns, nominal_close_ns
@@ -64,47 +65,92 @@ def join_bars(stored: pd.DataFrame | None, live: pd.DataFrame | None) -> pd.Data
     return both[~both.index.duplicated(keep="last")].sort_index()
 
 
+#: when a session ends, by date (the desk's session clock; 15:30 IST without one)
+SessionClose = Callable[[dt.date], dt.datetime]
+#: after a session's close, its last bar counts as closed once the fine bars reach the close
+#: or, for a feed that stopped a little early (no trade in the last minute), this much later
+SESSION_SETTLE = dt.timedelta(minutes=10)
+
+
+def nse_close(day: dt.date) -> dt.datetime:
+    return dt.datetime.combine(day, dt.time(15, 30), tzinfo=IST)
+
+
+def _ns(ts: Any) -> int:
+    t = pd.Timestamp(ts)
+    return int((t if t.tzinfo else t.tz_localize("UTC")).as_unit("ns").value)
+
+
 def closed_bars(
-    fine: pd.DataFrame | None, daily: pd.DataFrame | None, timeframe: str, now: dt.datetime
+    fine: pd.DataFrame | None,
+    daily: pd.DataFrame | None,
+    timeframe: str,
+    now: dt.datetime,
+    session_close: SessionClose | None = None,
 ) -> pd.DataFrame:
     """The bars of `timeframe` closed at `now`, oldest first.
 
-    An intraday bar is closed when both the clock and the fine bars have reached its end
-    (the desk reads bars at the data's time, so a late feed never closes a bar early)."""
-    stamp = pd.Timestamp(now)
-    t_ns = int((stamp if stamp.tzinfo else stamp.tz_localize("UTC")).as_unit("ns").value)
+    A bar is closed when the clock and the fine bars have both reached its nominal end (a
+    late feed never closes a bar early), OR when the session it belongs to is over: a past
+    date, or `now` past that session's close with the fine bars reaching the close (or
+    `SESSION_SETTLE` later). So after 15:30 the day's last, shorter bar is in the series."""
+    close_of = session_close or nse_close
+    now_ns = _ns(now)
+    data_end: int | None = None
+    if fine is not None and not fine.empty:
+        fine_ns = index_ns(pd.DatetimeIndex(fine.index).sort_values())
+        gaps = np.diff(fine_ns[-50:])
+        step = int(gaps[gaps > 0].min()) if np.any(gaps > 0) else 60 * 10**9
+        data_end = int(fine_ns[-1]) + step
     if timeframe == "1d":
         bars = daily if daily is not None and not daily.empty else None
         if bars is None and fine is not None and not fine.empty:
             bars = resample_bars(fine, "1d")
+        t_ns = now_ns
     else:
         bars = (
             resample_bars(fine, _RULE[timeframe]) if fine is not None and not fine.empty else None
         )
-        if bars is not None and not bars.empty:
-            fine_ns = index_ns(pd.DatetimeIndex(fine.index).sort_values())  # type: ignore[union-attr]
-            gaps = np.diff(fine_ns[-50:])
-            step = int(gaps[gaps > 0].min()) if np.any(gaps > 0) else 60 * 10**9
-            t_ns = min(t_ns, int(fine_ns[-1]) + step)
+        t_ns = min(now_ns, data_end) if data_end is not None else now_ns
     if bars is None or bars.empty:
         return pd.DataFrame(columns=["close"])
     idx = pd.DatetimeIndex(bars.index)
     done = nominal_close_ns(idx, _RULE[timeframe]) <= t_ns
+    days = (idx.tz_convert(IST) if idx.tz is not None else idx).date
+    at = pd.Timestamp(now)
+    today = (at.tz_convert(IST) if at.tzinfo else at).date()
+    over: dict[dt.date, bool] = {}
+    for d in set(days):
+        if d < today:
+            over[d] = True
+            continue
+        c = _ns(close_of(d))
+        over[d] = now_ns >= c and (
+            (data_end is not None and data_end >= c)
+            or now_ns >= c + int(SESSION_SETTLE.total_seconds() * 1e9)
+        )
+    done |= np.array([over[d] for d in days], dtype=bool)
     return bars[done].sort_index()
 
 
-def next_bar_start(last_ts: pd.Timestamp, timeframe: str) -> pd.Timestamp:
+def next_bar_start(
+    last_ts: pd.Timestamp,
+    timeframe: str,
+    session_close: SessionClose | None = None,
+    is_trading_day: Callable[[dt.date], bool] | None = None,
+) -> pd.Timestamp:
     """When the bar after `last_ts` starts: the next bin, or the next session's 09:15 when
-    the session ends first (weekends skipped; exchange holidays are not known here)."""
+    the session ends first (weekends skipped, and exchange holidays when a calendar is given)."""
     ts = pd.Timestamp(last_ts)
-    if timeframe == "1d":
-        nxt = ts.normalize() + pd.Timedelta(days=1)
-    else:
+    close = pd.Timestamp((session_close or nse_close)(ts.date()))
+    if timeframe != "1d":
         nxt = ts + pd.Timedelta(minutes=_STEP[timeframe])
-        if nxt.time() < dt.time(15, 30) and nxt.date() == ts.date():
+        if nxt < close and nxt.date() == ts.date():
             return nxt
-        nxt = ts.normalize() + pd.Timedelta(days=1)
-    while nxt.weekday() >= 5:
+    nxt = ts.normalize() + pd.Timedelta(days=1)
+    for _ in range(30):  # a long run of holidays is a handful of days
+        if nxt.weekday() < 5 and (is_trading_day is None or is_trading_day(nxt.date())):
+            break
         nxt += pd.Timedelta(days=1)
     return nxt.normalize() + pd.Timedelta(hours=9, minutes=15)
 
@@ -147,8 +193,12 @@ class MlLab:
         instruments: Callable[[], Iterable[dict[str, Any]]] | Iterable[dict[str, Any]],
         clock: Callable[[], dt.datetime],
         stored_reader: StoredReader | None = None,
+        session_close: SessionClose | None = None,
+        is_trading_day: Callable[[dt.date], bool] | None = None,
     ) -> None:
         self.bars_getter = bars_getter
+        self.session_close = session_close  # None: 15:30 IST
+        self.is_trading_day = is_trading_day  # None: weekdays only
         self.stored_reader = stored_reader
         #: key -> (day read, the stored bars or None, a note when the read failed, when)
         self._stored: dict[str, tuple[dt.date, pd.DataFrame | None, str | None, dt.datetime]] = {}
@@ -186,7 +236,7 @@ class MlLab:
             fine, daily = self.bars_getter(key)
             if timeframe in STORED_TIMEFRAMES and self.stored_reader is not None:
                 fine, note = self._with_stored(key, fine, now)
-            bars = closed_bars(fine, daily, timeframe, now)
+            bars = closed_bars(fine, daily, timeframe, now, self.session_close)
         except Exception as exc:  # noqa: BLE001 - one row, never the matrix
             log.exception("mllab: bars of %s failed", key)
             return self._empty(head, f"bars unavailable: {type(exc).__name__}")
@@ -204,7 +254,10 @@ class MlLab:
             **head,
             "last_close": _num(closes[-1]),
             "last_bar_ts": last_ts.isoformat(),
-            "next_bar_ts": next_bar_start(last_ts, timeframe).isoformat(),
+            "next_bar_ts": next_bar_start(
+                last_ts, timeframe, self.session_close, self.is_trading_day
+            ).isoformat(),
+            "bars": len(closes),  # closes the forecasts used
             "note": note,
             "cells": {model: _cell(closes, model, season) for model in m.MODELS},
         }
@@ -220,6 +273,7 @@ class MlLab:
             "last_close": None,
             "last_bar_ts": None,
             "next_bar_ts": None,
+            "bars": 0,
             "note": None,
             "cells": {model: dict(cell) for model in m.MODELS},
         }
@@ -305,3 +359,17 @@ def desk_stored_reader(desk: Any, days: int = STORED_DAYS) -> StoredReader:
         return clean_intraday(t.series.key, raw) if raw is not None and not raw.empty else None
 
     return read
+
+
+def desk_session_close(desk: Any) -> SessionClose | None:
+    """The desk's session clock's close for a date (None without one: 15:30 IST)."""
+    clock = getattr(desk, "session_clock", None)
+    if clock is None or not hasattr(clock, "window_for"):
+        return None
+    return lambda day: clock.window_for(day).close_at
+
+
+def desk_trading_day(desk: Any) -> Callable[[dt.date], bool] | None:
+    """The desk's exchange calendar (None without one: weekdays only)."""
+    calendar = getattr(desk, "calendar", None)
+    return getattr(calendar, "is_trading_day", None) if calendar is not None else None

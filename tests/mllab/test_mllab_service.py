@@ -318,3 +318,88 @@ class TestStoredHistory:
         print(f"first 4h matrix with the stored read, 23 instruments: {took:.2f} s")
         assert all(r["cells"]["arima"]["note"] is None for r in out["rows"])
         assert took < 30
+
+
+class TestSessionEnd:
+    """The last bar of a session counts once the session is over (owner, 2026-11-13)."""
+
+    @staticmethod
+    def lab(until: str, at: str, is_trading_day=None):
+        fine = minute_bars("2026-11-13", days=30, until=ist(until))
+        return svc.MlLab(
+            lambda k: (fine, None), [{"key": "X"}], Clock(at), is_trading_day=is_trading_day
+        )
+
+    def test_after_the_close_the_last_bar_is_in_and_next_is_the_next_session(self):
+        lab = self.lab("2026-11-13 15:29", "2026-11-13 15:40")  # a Friday
+        row = lab.matrix("60m")["rows"][0]
+        assert row["last_bar_ts"] == "2026-11-13T15:15:00+05:30"
+        assert row["next_bar_ts"] == "2026-11-16T09:15:00+05:30"
+        assert lab.matrix("4h")["rows"][0]["last_bar_ts"] == "2026-11-13T13:15:00+05:30"
+        assert lab.matrix("30m")["rows"][0]["last_bar_ts"] == "2026-11-13T15:15:00+05:30"
+        assert lab.matrix("1d")["rows"][0]["last_bar_ts"] == "2026-11-13T09:15:00+05:30"
+
+    def test_earlier_sessions_last_bars_are_in(self):
+        bars = svc.closed_bars(
+            minute_bars("2026-11-13", days=5), None, "60m", ist("2026-11-13 10:00")
+        )
+        assert ist("2026-11-12 15:15") in bars.index and ist("2026-11-11 15:15") in bars.index
+
+    def test_during_the_session_the_forming_bar_is_not_used(self):
+        row = self.lab("2026-11-13 13:59", "2026-11-13 14:00").matrix("60m")["rows"][0]
+        assert row["last_bar_ts"] == "2026-11-13T12:15:00+05:30"  # 13:15 closes at 14:15
+        assert row["next_bar_ts"] == "2026-11-13T13:15:00+05:30"
+        row = self.lab("2026-11-13 13:59", "2026-11-13 14:00").matrix("4h")["rows"][0]
+        assert row["last_bar_ts"] == "2026-11-13T09:15:00+05:30"
+
+    def test_a_feed_that_stops_early_closes_the_bar_after_the_settle_time(self):
+        assert (
+            self.lab("2026-11-13 15:20", "2026-11-13 15:35").matrix("60m")["rows"][0]["last_bar_ts"]
+            == "2026-11-13T14:15:00+05:30"
+        )
+        assert (
+            self.lab("2026-11-13 15:20", "2026-11-13 15:41").matrix("60m")["rows"][0]["last_bar_ts"]
+            == "2026-11-13T15:15:00+05:30"
+        )
+
+    def test_an_exchange_holiday_is_skipped(self):
+        holiday = pd.Timestamp("2026-11-16").date()
+        lab = self.lab("2026-11-13 15:29", "2026-11-13 15:40", lambda d: d != holiday)
+        assert lab.matrix("60m")["rows"][0]["next_bar_ts"] == "2026-11-17T09:15:00+05:30"
+        assert lab.matrix("1d")["rows"][0]["next_bar_ts"] == "2026-11-17T09:15:00+05:30"
+
+    def test_the_desk_session_clock_and_calendar_are_used(self):
+        from onelot.clock import SessionClock, TradingCalendar
+
+        cal = TradingCalendar({pd.Timestamp("2026-11-16").date(): "test holiday"})
+        t = pd.Timestamp
+        cfg = SimpleNamespace(
+            market_open=t("09:15").time(),
+            market_close=t("13:00").time(),  # a short special session
+            first_entry_after=t("09:30").time(),
+            no_new_entry_after=t("12:30").time(),
+            eod_advisory=t("12:45").time(),
+            mandatory_squareoff=t("12:50").time(),
+        )
+        desk = SimpleNamespace(calendar=cal, session_clock=SessionClock(cfg, cal))
+        close = svc.desk_session_close(desk)
+        assert close is not None
+        assert pd.Timestamp(close(t("2026-11-13").date())) == ist("2026-11-13 13:00")
+        lab = svc.MlLab(
+            lambda k: (minute_bars("2026-11-13", days=20, until=ist("2026-11-13 12:59")), None),
+            [{"key": "X"}],
+            Clock("2026-11-13 13:05"),
+            session_close=close,
+            is_trading_day=svc.desk_trading_day(desk),
+        )
+        row = lab.matrix("60m")["rows"][0]
+        assert row["last_bar_ts"] == "2026-11-13T12:15:00+05:30"  # closed with the session
+        assert row["next_bar_ts"] == "2026-11-17T09:15:00+05:30"  # Monday 16th is a holiday
+        trading = svc.desk_trading_day(desk)
+        assert trading is not None and not trading(pd.Timestamp("2026-11-16").date())
+        assert svc.desk_session_close(SimpleNamespace()) is None
+        assert svc.desk_trading_day(SimpleNamespace(calendar=None)) is None
+
+    def test_the_row_says_how_many_bars_the_forecast_used(self):
+        row = self.lab("2026-11-13 15:29", "2026-11-13 15:40").matrix("4h")["rows"][0]
+        assert row["bars"] == 60 and row["cells"]["ewma"]["n"] == 60
