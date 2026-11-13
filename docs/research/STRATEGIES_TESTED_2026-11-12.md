@@ -106,3 +106,12 @@ which is the whole edge" (CR 130).
   premium (CR 130, ST 470, AS 106).
 - Real premiums could price only part of the trades (58% of 2,266 in RO 63; 41% for `carry30`), and
   the unpriced ones were the modelled winners for `carry30`.
+
+## Added on 13 November 2026
+
+| Strategy or rule | Holding | Study | Trades | Modelled premiums, % a trade | Real premiums | Standing | Source |
+|---|---|---|---|---|---|---|---|
+| The owner's options rule: Supertrend(14, 1.7) on 5m, 10m, 15m, 30m, 60m and 4h aligned, 3m trigger; exit when 3 of the 7 reverse, or at the session's exit | same day | Backtest of 13 Nov | 3,824 | five years −0.24 (t −0.6); −0.18 / +0.44 / −1.15; index +3.1 bp; 38.3% winners | not priced | "Not an edge". It is the one options rule in the paper test, by the owner's decision of 13 November; its alerts carry this result | MICROTREND_2026-11-13.md |
+
+From 13 November the desk runs two rules only: this one on the five indices and the pullback
+rule (the exception row of table B) on the 18 stocks.
