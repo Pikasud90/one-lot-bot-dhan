@@ -50,10 +50,10 @@ written on 11 November 2026; search for the heading if the file has changed sinc
 | 13. Tests | 1912 |
 | 14. The work plan | 2039 |
 | 15. Decisions only the owner can make | 2813 |
-| Appendix A. Research outputs of 11 November 2026 | 3064 |
-| Appendix B. Interface and API measurements | 3098 |
-| Appendix C. Sources | 3201 |
-| Appendix D. Index of findings | 3278 |
+| Appendix A. Research outputs of 11 November 2026 | 3075 |
+| Appendix B. Interface and API measurements | 3109 |
+| Appendix C. Sources | 3212 |
+| Appendix D. Index of findings | 3289 |
 
 **Severity.** P0: the app shows or uses something wrong today in a way that can mislead a trading
 decision. P1: must be fixed before the paper test can be trusted or the app can run unattended.
@@ -2835,6 +2835,17 @@ since then come first; the questions below them are kept as written.
   `.agile/stories/`; the operator notes are in `docs/04_OPERATIONS.md`. It replaces the
   backlog's story on stock carry (section 14.9). Every strategy tested so far, with the
   figures that ruled it out, is listed in `docs/research/STRATEGIES_TESTED_2026-11-12.md`.
+- **Final decisions of 13 November 2026, built the same day.** The desk now runs two rules
+  and nothing else. Index options: Supertrend(14, 1.7) on 5m, 10m, 15m, 30m, 60m and 4h
+  with the 3m trend as the trigger; a call when all seven point up, a put when all point
+  down; out when 3 of the 7 have reversed, or at the session's exit. Its backtest is in
+  `docs/research/MICROTREND_2026-11-13.md` (−0.24% of premium a trade: not an edge; the
+  owner chose it as the one way to follow options, and its alerts say what the backtest
+  found). Stocks: the pullback rule only. Every other slot is deleted from
+  `config/desk.yaml`. A new tab, Machine Learning Lab (`src/onelot/mllab/`), shows five
+  statistical forecasts of the next candle's close for every instrument on 15m, 30m, 60m,
+  4h and 1d; it raises no alert. Finding O-11 is fixed: a renewed token now reaches the
+  desk's bar source without a restart. The store is topped up for all 23 instruments.
 
 Each question gives the options, what each one changes and
 a recommendation with its reason. A story that depends on an answer names the question in its
