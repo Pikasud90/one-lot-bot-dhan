@@ -288,3 +288,29 @@ def test_in_market_hours_the_minute_history_loads_in_the_background(cfg, tmp_pat
     assert desk._minute_loader.name == "minute-history"
     desk._minute_loader.join(5)
     assert calls == ["NIFTY"] and len(desk.trackers["NIFTY"].minute_history) == 10
+
+
+def test_on_the_two_minute_failsafe_feed_the_rule_says_why_and_an_open_trade_is_warned(
+    cfg, tmp_path
+):
+    """US-068 review: 3m, 5m and 15m cannot be built from 2-minute bars, so the rule can neither
+    enter nor read its reversal exit: the slot and the card say so, and an open trade is warned."""
+    from types import SimpleNamespace
+
+    from onelot.desk.tracker import MICRO_FEED
+
+    db = init_database(f"sqlite:///{tmp_path / 'feed.db'}")
+    slot = StrategySlotCfg("microtrend", "3m", {})
+    desk_cfg = small_cfg(indices=(DeskInstrumentCfg("NIFTY", "NIFTY_OPT", "INDEX", (slot,)),),
+                         stocks=())  # fmt: skip
+    trade = SimpleNamespace(series_key="NIFTY", strategy="microtrend", status="OPEN",
+                            direction="long")  # fmt: skip
+    book = SimpleNamespace(open_trades=lambda: [trade], step=lambda *a, **k: [], status=lambda: {})
+    desk, _, _ = new_desk(cfg, db, desk_cfg=desk_cfg, paper=book)  # FakeSource: 2-minute bars
+    desk.poll()
+    t = desk.trackers["NIFTY"]
+    assert t.fine_minutes == 2 and t.micro_blocked
+    assert t.slots[0].last_verdict.reason == MICRO_FEED
+    card = next(d for d in desk.snapshot()["indices"] if d["key"] == "NIFTY")
+    assert MICRO_FEED in (card["trend"]["note"] or "")
+    assert card["trend"]["reversal"]["warning"].startswith("reversal exit cannot be read")

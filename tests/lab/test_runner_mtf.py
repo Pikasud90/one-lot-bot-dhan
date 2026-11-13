@@ -378,9 +378,9 @@ def frames_built(monkeypatch) -> list[str]:
     built: list[str] = []
     real = ms.rung_frames
 
-    def counting(base_bars, base, daily):
+    def counting(base_bars, base, daily, *timeframes):  # US-068: a ladder names its timeframes
         built.append(base)
-        return real(base_bars, base, daily)
+        return real(base_bars, base, daily, *timeframes)
 
     monkeypatch.setattr(ms, "rung_frames", counting)
     return built

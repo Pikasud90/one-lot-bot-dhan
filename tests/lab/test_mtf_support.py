@@ -354,9 +354,9 @@ def test_the_bars_are_resampled_once_for_every_setting_of_the_same_data(minute, 
     calls: list[str] = []
     real = ms.rung_frames
 
-    def counting(base_bars, base, daily):
+    def counting(base_bars, base, daily, *timeframes):  # US-068: a ladder names its timeframes
         calls.append(base)
-        return real(base_bars, base, daily)
+        return real(base_bars, base, daily, *timeframes)
 
     monkeypatch.setattr(ms, "rung_frames", counting)
     cache = ms.LadderCache()

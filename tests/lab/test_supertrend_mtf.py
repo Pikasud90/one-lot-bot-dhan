@@ -193,7 +193,9 @@ def test_the_default_setting_is_the_owners_rule():
 
 def test_it_is_the_one_registered_strategy_that_reads_other_timeframes():
     assert REGISTRY["supertrend_mtf"] is SupertrendMTF
-    assert [name for name, cls in REGISTRY.items() if cls.multi_timeframe] == ["supertrend_mtf"]
+    # US-068: the owner's micro-trend options rule reads other timeframes too
+    multi = [name for name, cls in REGISTRY.items() if cls.multi_timeframe]
+    assert multi == ["supertrend_mtf", "microtrend"]
 
 
 def test_the_trail_timeframe_is_the_entry_timeframe_unless_one_is_named():
