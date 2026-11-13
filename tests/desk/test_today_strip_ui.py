@@ -69,9 +69,12 @@ def test_the_strip_has_a_line_for_each_thing_the_owner_needs():
     assert lines["Session"][0] == "open · closes 15:30"
     assert lines["Feed"] == ["live (dhan)", "ok"]
     assert lines["Dhan token"] == ["10 h 0 min left", "ok"]
-    assert lines["Options · micro-trend"][0] == "1 of 2 aligned: NIFTY up · open trade: NIFTY 24500 CE"
+    assert (
+        lines["Options · micro-trend"][0] == "1 of 2 aligned: NIFTY up · open trade: NIFTY 24500 CE"
+    )
     assert lines["Stocks · pullback delivery"][0] == (
-        "1 pending alert · 0 open delivery trades · daily history complete to 2026-11-12")
+        "1 pending alert · 0 open delivery trades · daily history complete to 2026-11-12"
+    )
     assert lines["Next"] == ["nothing to do: the desk is watching", "ok"]
 
 
@@ -81,19 +84,28 @@ def test_a_short_token_a_stale_history_and_a_delayed_feed_say_what_to_do():
             "source": {"name": "yahoo", "delayed": True, "delayed_keys": ["NIFTY"], "last_error": None},
             "indices": [{"key": "NIFTY", "label": "NIFTY", "trend": trend(1, -1, 0, 1, 1, 1, 1)}], "positions": [],
             "delivery": {**SNAP["delivery"], "stale": ["SBIN", "TCS"]}}  # fmt: skip
-    lines = dict((k, [v, c]) for k, v, c in js("todayLines(P[0], P[1], NOW)", [snap, "13/11/2026 11:00"]))
+    lines = dict(
+        (k, [v, c]) for k, v, c in js("todayLines(P[0], P[1], NOW)", [snap, "13/11/2026 11:00"])
+    )
     assert lines["Session"][0] == "closed · opens at 11:15"
     assert lines["Feed"] == ["delayed ~15 min: NIFTY (yahoo bars)", "warn"]
     assert lines["Dhan token"] == ["1 h 0 min left", "bad"]
     assert lines["Options · micro-trend"][0] == "no alignment · no open trade"
-    assert "Renew the Dhan token" in lines["Next"][0] and "daily history is stale (SBIN, TCS)" in lines["Next"][0]
-    expired = dict((k, [v, c]) for k, v, c in js("todayLines(P[0], P[1], NOW)", [SNAP, "13/11/2026 09:00"]))
+    assert (
+        "Renew the Dhan token" in lines["Next"][0]
+        and "daily history is stale (SBIN, TCS)" in lines["Next"][0]
+    )
+    expired = dict(
+        (k, [v, c]) for k, v, c in js("todayLines(P[0], P[1], NOW)", [SNAP, "13/11/2026 09:00"])
+    )
     assert expired["Dhan token"] == ["EXPIRED", "bad"]
 
 
 @needs_node
 def test_the_strip_escapes_and_survives_no_desk():
-    html = js("todayStrip(P, null, NOW)", {**SNAP, "source": {"name": "<b>x</b>", "delayed": False}})
+    html = js(
+        "todayStrip(P, null, NOW)", {**SNAP, "source": {"name": "<b>x</b>", "delayed": False}}
+    )
     assert "&lt;b&gt;x&lt;/b&gt;" in html and "<b>x</b>" not in html
     assert "time left unknown" in html
     assert js("todayLines(null, null, NOW)") == [["Desk", "the Live Desk is not running", "warn"]]
@@ -106,7 +118,13 @@ def test_number_keys_switch_tabs_but_not_while_typing():
               ["1", "2", "7", "8", "a"]) == ["home", "live", "settings", None, None]  # fmt: skip
     for tag, editable, mods in [("INPUT", False, False), ("select", False, False), ("TEXTAREA", False, False),
                                 ("DIV", True, False), ("BODY", False, True)]:  # fmt: skip
-        assert js(f"tabForKey('2', {json.dumps(tag)}, {json.dumps(editable)}, {json.dumps(mods)}, P)", tabs) is None
+        assert (
+            js(
+                f"tabForKey('2', {json.dumps(tag)}, {json.dumps(editable)}, {json.dumps(mods)}, P)",
+                tabs,
+            )
+            is None
+        )
 
 
 def test_the_today_strip_sits_at_the_very_top_of_home():
@@ -124,6 +142,11 @@ def test_the_captions_that_contradict_the_desk_are_gone():
         assert gone not in html, gone
     assert "1 share · intraday" not in app
     assert '<span class="num" style="font-size:15px">1 share</span>' not in app
-    assert "Daily loss limit" not in app.split("function accRow", 1)[1].split("function renderDesk", 1)[0]
-    assert "<h4>Risk governor</h4>" not in app.split("function renderFocus", 1)[1].split("\n}\n", 1)[0]
+    assert (
+        "Daily loss limit"
+        not in app.split("function accRow", 1)[1].split("function renderDesk", 1)[0]
+    )
+    assert (
+        "<h4>Risk governor</h4>" not in app.split("function renderFocus", 1)[1].split("\n}\n", 1)[0]
+    )
     assert "One unit per trade, every alert" not in app
