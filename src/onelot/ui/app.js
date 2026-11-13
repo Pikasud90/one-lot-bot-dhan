@@ -1564,7 +1564,7 @@ function mllabTable(d) {
   const rows = (d && d.rows) || [];
   if (!rows.length) return `<div class="muted">No instruments tracked yet.</div>`;
   const head = `<th>Instrument</th>` + models.map(m => `<th title="${esc(m.description)}">${esc(MLLAB_NAMES[m.key] || m.key)}</th>`).join("");
-  const body = rows.map(r => `<tr><td class="ml-inst"><b>${esc(r.label)}</b> <span class="dim">${esc(r.kind)}</span><br><span class="mono">${esc(fmt(r.last_close))}</span><br><small class="muted">next candle ${esc(tsf(r.next_bar_ts))}</small></td>` +
+  const body = rows.map(r => `<tr><td class="ml-inst"><b>${esc(r.label)}</b> <span class="dim">${esc(r.kind)}</span><br><span class="mono">${esc(fmt(r.last_close))}</span><br><small class="muted">next candle ${esc(tsf(r.next_bar_ts))}</small>${r.bars > 0 && r.bars < 100 ? `<br><small class="warn">${esc(r.bars)} bars</small>` : ""}${r.note ? `<br><small class="muted">${esc(r.note)}</small>` : ""}</td>` +
     models.map(m => mllabCell((r.cells || {})[m.key])).join("") + `</tr>`).join("");
   return `<table class="ml-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }

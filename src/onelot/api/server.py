@@ -1014,6 +1014,8 @@ def create_app(engine, api_token: str) -> FastAPI:
                 lambda: ml.desk_instruments(desk),
                 lambda: dt.datetime.now(IST),
                 ml.desk_stored_reader(desk),
+                ml.desk_session_close(desk),
+                ml.desk_trading_day(desk),
             )
         body = json.dumps(mllab["lab"].matrix(timeframe), allow_nan=False)  # strict JSON
         return Response(body, media_type="application/json")

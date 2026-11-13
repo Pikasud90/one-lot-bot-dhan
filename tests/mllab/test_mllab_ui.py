@@ -177,3 +177,14 @@ def test_a_network_failure_is_shown_too():
         "await loadMllab(); return els['mllab-table'].innerHTML;"
     )
     assert "Forecasts unavailable: Failed to fetch" in got
+
+
+def test_a_thin_history_shows_its_bar_count_and_the_row_note():
+    p = payload()
+    for r in p["rows"]:
+        r["bars"] = 1000
+    p["rows"][3]["bars"] = 62
+    p["rows"][3]["note"] = "stored bars unreadable (OSError): live bars only"
+    html = run("return mllabTable(PAYLOAD);", p)
+    assert html.count(" bars</small>") == 1 and '<small class="warn">62 bars</small>' in html
+    assert "stored bars unreadable (OSError): live bars only" in html
