@@ -63,6 +63,7 @@ def test_the_matrix_shape(client, tf):
             "last_close",
             "last_bar_ts",
             "next_bar_ts",
+            "note",
             "cells",
         }
         assert set(row["cells"]) == set(m.MODELS)

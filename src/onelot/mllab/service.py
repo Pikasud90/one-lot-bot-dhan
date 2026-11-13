@@ -42,6 +42,26 @@ MAX_BARS = 1200
 
 #: (fine bars, daily bars) of an instrument, or (None, None)
 BarsGetter = Callable[[str], tuple[pd.DataFrame | None, pd.DataFrame | None]]
+#: (instrument key, now) -> the store's cleaned one-minute bars before the live ones
+StoredReader = Callable[[str, dt.datetime], pd.DataFrame | None]
+#: timeframes built from the stored one-minute bars joined with the live ones: the desk
+#: keeps about 25 sessions, too few 60m and 4h bars for the fitted models
+STORED_TIMEFRAMES: frozenset[str] = frozenset({"60m", "4h"})
+#: calendar days of stored one-minute bars read for them
+STORED_DAYS = 180
+#: a failed stored read is tried again after this long (a good one is kept for the day)
+STORED_RETRY = dt.timedelta(minutes=30)
+
+
+def join_bars(stored: pd.DataFrame | None, live: pd.DataFrame | None) -> pd.DataFrame | None:
+    """Stored and live bars as one sorted series; the live bar wins a timestamp both have."""
+    parts = [f for f in (stored, live) if f is not None and not f.empty]
+    if not parts:
+        return live
+    if len(parts) == 1:
+        return parts[0]
+    both = pd.concat(parts)
+    return both[~both.index.duplicated(keep="last")].sort_index()
 
 
 def closed_bars(
@@ -126,8 +146,14 @@ class MlLab:
         bars_getter: BarsGetter,
         instruments: Callable[[], Iterable[dict[str, Any]]] | Iterable[dict[str, Any]],
         clock: Callable[[], dt.datetime],
+        stored_reader: StoredReader | None = None,
     ) -> None:
         self.bars_getter = bars_getter
+        self.stored_reader = stored_reader
+        #: key -> (day read, the stored bars or None, a note when the read failed, when)
+        self._stored: dict[str, tuple[dt.date, pd.DataFrame | None, str | None, dt.datetime]] = {}
+        self._joined: dict[str, tuple[tuple, pd.DataFrame | None]] = {}
+        self.stored_reads = 0  # reads of the store (for tests)
         self._instruments = instruments
         self.clock = clock
         self._cache: dict[tuple[str, str], tuple[Any, dict[str, Any]]] = {}
@@ -155,8 +181,11 @@ class MlLab:
     def _row(self, inst: dict[str, Any], timeframe: str, now: dt.datetime) -> dict[str, Any]:
         key = str(inst.get("key"))
         head = {"key": key, "label": inst.get("label") or key, "kind": inst.get("kind")}
+        note = None
         try:
             fine, daily = self.bars_getter(key)
+            if timeframe in STORED_TIMEFRAMES and self.stored_reader is not None:
+                fine, note = self._with_stored(key, fine, now)
             bars = closed_bars(fine, daily, timeframe, now)
         except Exception as exc:  # noqa: BLE001 - one row, never the matrix
             log.exception("mllab: bars of %s failed", key)
@@ -168,7 +197,7 @@ class MlLab:
         stamp = (int(index_ns(pd.DatetimeIndex([last_ts]))[0]), len(bars))
         hit = self._cache.get((key, timeframe))
         if hit is not None and hit[0] == stamp:
-            return {**hit[1], **head}
+            return {**hit[1], **head, "note": note}
         closes = bars["close"].to_numpy(dtype=float)[-MAX_BARS:]
         season = m.SEASON[timeframe]
         row = {
@@ -176,6 +205,7 @@ class MlLab:
             "last_close": _num(closes[-1]),
             "last_bar_ts": last_ts.isoformat(),
             "next_bar_ts": next_bar_start(last_ts, timeframe).isoformat(),
+            "note": note,
             "cells": {model: _cell(closes, model, season) for model in m.MODELS},
         }
         self.model_runs += 1
@@ -190,8 +220,39 @@ class MlLab:
             "last_close": None,
             "last_bar_ts": None,
             "next_bar_ts": None,
+            "note": None,
             "cells": {model: dict(cell) for model in m.MODELS},
         }
+
+    def _with_stored(
+        self, key: str, live: pd.DataFrame | None, now: dt.datetime
+    ) -> tuple[pd.DataFrame | None, str | None]:
+        """The live fine bars joined with the store's, and a note when the store failed.
+        The store is read lazily, once a day per instrument, in this (request) thread: never
+        under the desk lock, and never written."""
+        today = pd.Timestamp(now).date()
+        got = self._stored.get(key)
+        stale = (
+            got is None or got[0] != today or (got[2] is not None and now - got[3] >= STORED_RETRY)
+        )
+        if stale:
+            self.stored_reads += 1
+            try:
+                frame = self.stored_reader(key, now)  # type: ignore[misc]
+                got = (today, frame, None, now)
+            except Exception as exc:  # noqa: BLE001 - the live bars alone, with a note
+                log.warning("mllab: stored bars of %s could not be read: %s", key, exc)
+                why = f"stored bars unreadable ({type(exc).__name__}): live bars only"
+                got = (today, None, why, now)
+            self._stored[key] = got
+        assert got is not None
+        stored, note = got[1], got[2]
+        mark = (id(stored), *fingerprint(live))
+        hit = self._joined.get(key)
+        if hit is None or hit[0] != mark:
+            hit = (mark, join_bars(stored, live))
+            self._joined[key] = hit
+        return hit[1], note
 
 
 def desk_bars_getter(desk: Any) -> BarsGetter:
@@ -226,3 +287,21 @@ def desk_instruments(desk: Any) -> list[dict[str, Any]]:
         {"key": k, "label": t.series.label, "kind": t.cfg.kind}
         for k, t in list(desk.trackers.items())
     ]
+
+
+def desk_stored_reader(desk: Any, days: int = STORED_DAYS) -> StoredReader:
+    """The store's one-minute bars of a desk instrument for the last `days` calendar days,
+    cleaned like the live ones (`clean_intraday`). One indexed range read; nothing written."""
+    from ..data.store import _read_bars
+
+    def read(key: str, now: dt.datetime) -> pd.DataFrame | None:
+        t = desk.trackers.get(key)
+        if t is None:
+            return None
+        at = pd.Timestamp(now)
+        raw = _read_bars(
+            desk.engine, t.series.key, "1m", start=at - pd.Timedelta(days=days), end=at
+        )
+        return clean_intraday(t.series.key, raw) if raw is not None and not raw.empty else None
+
+    return read

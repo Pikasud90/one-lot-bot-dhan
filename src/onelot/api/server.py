@@ -1002,15 +1002,18 @@ def create_app(engine, api_token: str) -> FastAPI:
     def mllab_matrix(timeframe: str = Query("15m")) -> Any:
         from fastapi.responses import Response
 
-        from ..mllab.service import TIMEFRAMES, MlLab, desk_bars_getter, desk_instruments
+        from ..mllab import service as ml
 
-        if timeframe not in TIMEFRAMES:
-            raise HTTPException(400, f"timeframe must be one of {', '.join(TIMEFRAMES)}")
+        if timeframe not in ml.TIMEFRAMES:
+            raise HTTPException(400, f"timeframe must be one of {', '.join(ml.TIMEFRAMES)}")
         desk = _desk()
         if mllab.get("desk") is not desk:
             mllab["desk"] = desk
-            mllab["lab"] = MlLab(
-                desk_bars_getter(desk), lambda: desk_instruments(desk), lambda: dt.datetime.now(IST)
+            mllab["lab"] = ml.MlLab(
+                ml.desk_bars_getter(desk),
+                lambda: ml.desk_instruments(desk),
+                lambda: dt.datetime.now(IST),
+                ml.desk_stored_reader(desk),
             )
         body = json.dumps(mllab["lab"].matrix(timeframe), allow_nan=False)  # strict JSON
         return Response(body, media_type="application/json")

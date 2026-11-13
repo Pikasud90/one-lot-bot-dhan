@@ -241,3 +241,80 @@ def test_desk_bars_getter_reads_the_trackers_frames_and_keeps_them():
     assert get("NIFTY") is a  # unchanged frames: the cleaned ones are kept
     assert get("MISSING") == (None, None)
     assert svc.desk_instruments(desk) == [{"key": "NIFTY", "label": "Nifty 50", "kind": "INDEX"}]
+
+
+class TestStoredHistory:
+    """60m and 4h: the store's one-minute bars of the last 180 days joined with the live ones."""
+
+    LIVE_FROM = ist("2026-10-08 09:15")  # the desk keeps about 25 sessions
+
+    def setup_lab(self, reader, n_instruments=1):
+        live = minute_bars("2026-11-13", days=48, until=ist("2026-11-13 11:00"))
+        live = live[live.index >= self.LIVE_FROM]
+        insts = INSTRUMENTS[:n_instruments]
+        bars = {r["key"]: (live, None) for r in insts}
+        return svc.MlLab(lambda k: bars[k], insts, Clock("2026-11-13 11:01"), reader), live
+
+    @staticmethod
+    def stored(reads=None, fail=False):
+        """125 sessions of stored one-minute bars (about 180 calendar days), up to the 9th."""
+        frame = minute_bars("2026-11-09", days=125, seed=7)
+
+        def read(key, now):
+            if reads is not None:
+                reads.append(key)
+            if fail:
+                raise OSError("database is locked")
+            return frame
+
+        return read
+
+    def test_a_4h_matrix_from_stored_and_live_bars_forecasts_with_all_five_models(self):
+        lab, _ = self.setup_lab(self.stored())
+        row = lab.matrix("4h")["rows"][0]
+        assert row["note"] is None
+        for model, cell in row["cells"].items():
+            assert cell["note"] is None, (model, cell["note"])
+            assert cell["n"] >= 60
+        assert row["cells"]["garch"]["backtest"]["steps"] == 100
+
+    def test_the_store_is_read_once(self):
+        reads: list[str] = []
+        lab, _ = self.setup_lab(self.stored(reads))
+        lab.matrix("4h")
+        lab.matrix("60m")
+        lab.matrix("4h")
+        assert reads == [INSTRUMENTS[0]["key"]] and lab.stored_reads == 1
+        lab.matrix("15m")  # 15m and 30m stay on the live bars
+        assert reads == [INSTRUMENTS[0]["key"]]
+
+    def test_a_failing_read_falls_back_to_the_live_bars(self):
+        lab, _ = self.setup_lab(self.stored(fail=True))
+        row = lab.matrix("4h")["rows"][0]
+        assert row["note"] == "stored bars unreadable (OSError): live bars only"
+        assert row["cells"]["garch"]["note"].startswith("too few bars to trust")
+        assert row["cells"]["ewma"]["note"] is None
+        json.dumps(row, allow_nan=False)
+
+    def test_the_joined_series_is_sorted_without_duplicates_and_live_wins(self):
+        stored = minute_bars("2026-11-09", days=125, seed=7)
+        live = minute_bars("2026-11-13", days=10, seed=8)  # overlaps the stored 4 sessions
+        joined = svc.join_bars(stored, live)
+        assert joined.index.is_monotonic_increasing and not joined.index.has_duplicates
+        both = stored.index.intersection(live.index)
+        assert len(both) > 0
+        assert (joined.loc[both, "close"] == live.loc[both, "close"]).all()
+        assert len(joined) == len(stored.index.union(live.index))
+        assert svc.join_bars(None, live) is live and svc.join_bars(stored, None) is stored
+
+    def test_the_first_4h_matrix_with_the_stored_read_is_quick_enough(self):
+        from onelot.data.hygiene import clean_intraday
+
+        frame = minute_bars("2026-11-09", days=125, seed=7)
+        lab, _ = self.setup_lab(lambda key, now: clean_intraday(key, frame), n_instruments=23)
+        t0 = time.perf_counter()
+        out = lab.matrix("4h")
+        took = time.perf_counter() - t0
+        print(f"first 4h matrix with the stored read, 23 instruments: {took:.2f} s")
+        assert all(r["cells"]["arima"]["note"] is None for r in out["rows"])
+        assert took < 30
