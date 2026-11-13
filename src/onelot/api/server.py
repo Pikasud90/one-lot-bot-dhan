@@ -29,6 +29,7 @@ from sqlalchemy import desc, select
 
 from ..broker.mock import MockBroker
 from ..clock import IST
+from ..desk.snapshots import NoPrices, list_snapshots, take_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -353,6 +354,18 @@ def create_app(engine, api_token: str) -> FastAPI:
         if engine.desk is None:
             raise HTTPException(503, "Live Desk not running")
         return engine.desk
+
+    # ── US-071: market snapshots ──────────────────────────────────────────
+    @app.post("/api/snapshots", dependencies=[Depends(require_token)])
+    def snapshot_take() -> dict:
+        try:
+            return take_snapshot(db, _desk().snapshot())
+        except NoPrices as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.get("/api/snapshots")
+    def snapshot_list(limit: int = Query(30, ge=1, le=200)) -> dict:
+        return {"snapshots": list_snapshots(db, limit)}
 
     @app.get("/api/desk")
     def desk_state() -> dict:

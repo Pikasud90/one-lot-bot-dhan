@@ -91,6 +91,12 @@
       <div class="row between"><h2>Today <small>alerts and paper trades only · the system never places an order</small></h2><span class="muted" id="today-updated"></span></div>
       <div id="today-strip" aria-live="polite"><div class="muted">Waiting for the desk…</div></div>
     </div>
+    <!-- 0b. Market snapshots (US-071): the button, and every saved snapshot to compare by hand -->
+    <div class="card" id="snap-card" aria-label="Market snapshots">
+      <div class="row between"><h2>Market snapshots <small>every price the desk tracks, saved so you can compare by hand</small></h2><button type="button" class="btn primary" id="snap-take">Take market snapshot</button></div>
+      <div class="muted" id="snap-msg" aria-live="polite"></div>
+      <div id="snap-list"><div class="muted">No snapshots yet.</div></div>
+    </div>
     <!-- 1. My portfolio -->
     <div class="row between">
       <h1 class="h1">My portfolio <small>free Trading API · cached — refreshed only when you ask or after a trade</small></h1>

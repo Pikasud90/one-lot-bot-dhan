@@ -708,3 +708,12 @@ delivery_evaluations = Table(
     Column("reading", JSON, nullable=False),
     Column("evaluated_at", TZDateTime, nullable=False),
 )
+
+# US-071: the owner's "market snapshot" button: every tracked price at one moment, kept to compare by hand.
+market_snapshots = Table(
+    "market_snapshots",
+    METADATA,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("taken_at", TZDateTime, nullable=False, index=True),
+    Column("rows", JSON, nullable=False),
+)

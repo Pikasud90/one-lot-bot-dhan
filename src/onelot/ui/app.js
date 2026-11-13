@@ -806,6 +806,31 @@ const dlvArchive = (list) => !Array.isArray(list) || !list.length ? "" : `<h4>De
 const tokenHoursLeft = (tv, now) => { const m = String(tv ?? "").match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/); return m ? (new Date(`${m[3]}-${m[2]}-${m[1]}T${m[4]}:${m[5]}:00+05:30`) - now) / 3600000 : null; };
 const todayLines = (d, tv, now) => { const out = [], left = tokenHoursLeft(tv, now), next = []; if (!d || typeof d !== "object" || d.booting) return [["Desk", d && d.booting ? "starting: the first bars are arriving" : "the Live Desk is not running", "warn"]]; const ses = d.session || {}, src = d.source || {}, openAt = ses.open_at ? new Date(ses.open_at) : null; out.push(["Session", ses.open ? `open · closes ${hhmm(ses.close_at)}${ses.entries_allowed ? "" : " · no new entries"}` : ses.trading_day && openAt && now < openAt ? `closed · opens at ${hhmm(ses.open_at)}` : ses.trading_day ? "closed for the day" : `closed · no session today${ses.holiday ? ` (${ses.holiday})` : ""}`, ses.open ? "ok" : ""]); out.push(["Feed", src.last_error ? `${delayNote(src)} · ${String(src.last_error).slice(0, 80)}` : src.delayed ? `${delayNote(src)} (${src.name || "?"} bars)` : `live (${src.name || "?"})`, src.last_error ? "bad" : src.delayed ? "warn" : "ok"]); if (left == null) out.push(["Dhan token", "time left unknown: refresh the portfolio", "warn"]); else { out.push(["Dhan token", left <= 0 ? "EXPIRED" : `${left < 1 ? Math.round(left * 60) + " min" : Math.floor(left) + " h " + Math.round((left % 1) * 60) + " min"} left`, left < 2 ? "bad" : "ok"]); if (left < 2) next.push(left <= 0 ? "Renew the Dhan token in Settings: it has expired." : "Renew the Dhan token in Settings: under two hours left."); } const idx = Array.isArray(d.indices) ? d.indices : [], al = idx.filter((r) => ["up", "down"].includes(trendVerdict(r.trend)[0])), pos = Array.isArray(d.positions) ? d.positions : []; out.push(["Options · micro-trend", (al.length ? `${al.length} of ${idx.length} aligned: ${al.map((r) => `${r.label || r.key} ${trendVerdict(r.trend)[0]}`).join(", ")}` : "no alignment") + (pos.length ? ` · open trade: ${pos.map((p) => p.label || p.key || p.series_key || "?").join(", ")}` : " · no open trade"), al.length || pos.length ? "ok" : ""]); const dl = d.delivery && typeof d.delivery === "object" ? d.delivery : null; if (!dl || dl.enabled === false) out.push(["Stocks · pullback delivery", "not running", "warn"]); else { const pend = Array.isArray(dl.pending) ? dl.pending.length : 0, op = Array.isArray(dl.open) ? dl.open.length : 0, stale = Array.isArray(dl.stale) ? dl.stale : []; out.push(["Stocks · pullback delivery", `${pend} pending alert${pend === 1 ? "" : "s"} · ${op} open delivery trade${op === 1 ? "" : "s"} · ${dl.history_to ? `daily history complete to ${dl.history_to}` : "daily history not complete"}`, stale.length || !dl.history_to ? "warn" : ""]); if (stale.length || !dl.history_to) next.push(`The daily history is stale${stale.length ? ` (${stale.slice(0, 3).join(", ")}${stale.length > 3 ? ` +${stale.length - 3}` : ""})` : ""}: top it up in Data.`); } out.push(["Next", next.length ? next.join(" ") : "nothing to do: the desk is watching", next.length ? "bad" : "ok"]); return out; };
 const todayStrip = (d, tv, now) => `<div class="today-grid">${todayLines(d, tv, now).map(([k, v, c]) => `<div class="trow ${c}"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("")}</div>`;
+// ── US-071: market snapshots. Pure renderers (tested in tests/desk/test_snapshots_ui.py), then the button. ──
+const snapWhen = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? "–" : new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hour12: false, day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(d); };
+const snapTable = (s) => `<table class="snap-table"><thead><tr><th>Instrument</th><th class="n">Price</th><th class="n">Day change %</th><th class="n">Change since the previous snapshot %</th><th>Price time</th></tr></thead><tbody>${(s.rows || []).map((r) => `<tr><td>${esc(r.label || r.key)}</td><td class="n">${esc(fmt(r.price))}</td><td class="n ${cls(r.change_pct)}">${esc(pct(r.change_pct, 2))}</td><td class="n ${cls(r.change_since_prev_pct)}">${esc(pct(r.change_since_prev_pct, 2))}</td><td>${esc(r.bar_ts ? snapWhen(r.bar_ts) : "–")}</td></tr>`).join("")}</tbody></table>`;
+const snapList = (list, openIds) => !Array.isArray(list) || !list.length ? `<div class="muted">No snapshots yet.</div>` : list.map((s) => { const on = openIds.includes(s.id); return `<div class="snap-item"><div class="row between"><span><b>${esc(snapWhen(s.taken_at))}</b> <span class="muted">· ${esc(s.count)} prices</span></span><button type="button" class="btn small ghost" data-snap-id="${esc(s.id)}" aria-expanded="${on}">${on ? "Hide" : "Show"}</button></div>${on ? snapTable(s) : ""}</div>`; }).join("");
+let snapData = [], snapOpen = [];
+function renderSnaps() { $("snap-list").innerHTML = snapList(snapData, snapOpen); }
+async function loadSnaps() {
+  try { snapData = (await fetch("/api/snapshots?limit=30").then((r) => r.json())).snapshots || []; } catch (e) { return; }
+  renderSnaps();
+}
+async function takeSnap() {
+  const btn = $("snap-take"), msg = $("snap-msg"); btn.disabled = true; msg.className = "muted"; msg.textContent = "Taking the snapshot…";
+  try {
+    const s = await api("/api/snapshots", {});
+    snapOpen = [s.id]; msg.textContent = `Saved: ${snapWhen(s.taken_at)} IST, ${s.count} prices.`; await loadSnaps();
+  } catch (e) { msg.className = "neg"; msg.textContent = String(e.message || e); }
+  btn.disabled = false;
+}
+$("snap-take").addEventListener("click", takeSnap);
+$("snap-list").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-snap-id]"); if (!b) return;
+  const id = Number(b.dataset.snapId); snapOpen = snapOpen.includes(id) ? snapOpen.filter((x) => x !== id) : [...snapOpen, id]; renderSnaps();
+});
+loadSnaps();
+
 function renderToday() {
   const box = $("today-strip"); if (!box) return;
   const d = latest && latest.desk;

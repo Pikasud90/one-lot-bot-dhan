@@ -497,3 +497,8 @@ td.best-row{color:var(--ok);font-weight:800}
 .updated-line{text-align:right;margin:-6px 0 8px}
 a:focus-visible,button:focus-visible,select:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
 .theme-pick{display:inline-flex;align-items:center;gap:8px;font:600 15px/1 var(--ui);letter-spacing:.06em;color:var(--head-muted)}
+
+/* US-071: market snapshots (no colours of its own) */
+.snap-item{padding:8px 0;border-top:1px solid var(--line)}
+.snap-item:first-child{border-top:0}
+.snap-table{margin-top:8px}

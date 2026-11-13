@@ -146,3 +146,13 @@ paper trades only: the system never places an order.
   Without them, or on the delayed 2-minute Yahoo feed (no 3m, 5m or 15m bars), nothing fires.
 - The index card shows the seven trends, "aligned up", "aligned down" or "not aligned", and for
   an open trade "reversed k of 7, exit at 3". The backtest of this exact rule lost a little.
+
+## Market snapshot button (US-071)
+Home, under "Today": the button "Take market snapshot" saves the last price of the 5 indices and
+18 stocks the desk tracks, with the day change, the previous close, the time of each price and
+its source, in the table `market_snapshots` (time in UTC; the page shows IST). The card lists the
+saved snapshots newest first; "Show" opens one, with each price's change since the snapshot
+before it, so you can check by hand what moved. The newest opens after you press the button.
+- While the desk is still starting and holds no price, the button answers 409 and saves nothing.
+- API: `POST /api/snapshots` (token, like every other POST) and `GET /api/snapshots?limit=30`.
+- Snapshots are kept; nothing deletes them. They are read-only records: no order is placed.
