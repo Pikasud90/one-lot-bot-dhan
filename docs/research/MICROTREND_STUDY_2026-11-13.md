@@ -100,3 +100,47 @@ premium on every trade, the share of trades that end at 15:15 (they carry all th
 Unsure: the real price uses the model's friction on top of traded premiums, so the 1-point
 gap is the premium level and path, not extra cost; the 12% unpriced trades are filled at their
 model result in the blend, which is generous since the model already beats real by 1 point.
+
+## 5. Lead's check, and the cuts like for like
+
+`scripts/microtrend_study_check.py` recomputes this note from the raw outputs with code of
+its own: every figure of sections 1 and 3 came out the same. It also found 30 of 30 sampled
+trades in the option store at the entry premium used here; the friction taken was 1.3 to 3.6
+points of premium a round trip (mean 1.6).
+
+The real-premium cuts of section 2 leave out the 185 unpriced trades, which are the large
+winners, so they read too low. Like for like below: the real result where a trade was priced,
+the model result less the 1.00-point gap where it was not. Five indices: the model less the
+same gap (an estimate). Three numbers in a row are TUNE / CHOOSE / TEST.
+
+| Situation at entry | NIFTY + BANKNIFTY: trades, % (t), periods | Five indices: trades, % (t) |
+|---|---|---|
+| All | 1,518, −1.29 (−2.9), −1.16 / −0.57 / −2.46 | 3,824, −1.25 (−3.3) |
+| India VIX above its one-year median | 753, −2.13 (−3.3), −2.19 / −1.04 / −2.76 | 1,886, −1.82 (−3.3) |
+| India VIX at or below its median | 765, −0.46 (−0.8), −0.19 / −0.24 / −1.95 | 1,938, −0.68 (−1.4) |
+| With the previous day's move | 1,140, −1.74 (−3.4), −1.67 / −0.23 / −3.55 | 2,856, −1.66 (−3.9) |
+| Against the previous day's move | 378, +0.07 (+0.1), +0.61 / −1.37 / +0.43 | 968, −0.03 (−0.0) |
+| Yesterday's range over 1.2 times normal | 358, −2.56 (−2.6), −2.85 / +0.92 / −4.97 | 909, −2.14 (−2.6) |
+| The 4h trend turned on its last bar | 234, −2.90 (−3.5), −3.03 / −2.27 / −3.07 | 612, −1.62 (−2.5) |
+| Calls | 904, −1.08 (−2.3), −1.21 / −0.34 / −1.49 | 2,319, −1.53 (−3.7) |
+| Puts | 614, −1.60 (−1.9), −1.08 / −0.87 / −3.41 | 1,505, −0.81 (−1.1) |
+| Monday | 300, −1.18 (−1.3), −0.04 / −2.93 / −2.66 | 760, −1.24 (−1.7) |
+| Tuesday | 318, −2.84 (−3.3), −3.66 / −2.28 / −0.46 | 776, −2.32 (−3.1) |
+| Wednesday | 299, −2.93 (−3.4), −2.33 / −0.40 / −5.93 | 767, −2.59 (−3.9) |
+| Thursday | 302, −0.31 (−0.3), +0.20 / +0.41 / −2.49 | 769, −0.50 (−0.5) |
+| Friday | 294, +1.06 (+0.9), +0.37 / +2.26 / +1.52 | 739, +0.68 (+0.7) |
+| Entry 09:30 to 10:29 | 575, −1.21 (−1.6), −0.76 / −0.04 / −3.48 | 1,455, −1.49 (−2.4) |
+| Entry 10:30 to 11:59 | 278, −1.24 (−1.2), −0.70 / −4.37 / +0.13 | 689, −1.21 (−1.5) |
+| Entry 12:00 to 13:29 | 397, −1.21 (−1.6), −2.45 / +2.92 / −2.24 | 992, −0.66 (−1.0) |
+| Entry 13:30 to 14:45 | 268, −1.63 (−2.1), −0.58 / −3.94 / −2.91 | 688, −1.60 (−3.0) |
+
+- No situation pays. Friday and entries against the previous day's move are the only rows at
+  or above zero, and neither can be told from zero (t 0.9 and 0.1).
+- The time of day makes no difference once the trades are compared like for like.
+- The rows that lose most are the ones to stand aside from if any are skipped: VIX above its
+  median, Tuesday, Wednesday, the day after a wide range, a 4h trend that has only just
+  turned, and a trade with the previous day's move. They lose 1.7 to 2.9% a trade.
+- The most favourable mix picked after seeing these rows (VIX at or below its median, not
+  Tuesday or Wednesday, entries from 10:30) gives +1.14% a trade on NIFTY and BANKNIFTY (283
+  trades, t 1.2; +1.84 / +0.01 / −0.20) and +0.58% on five indices (739 trades, t 0.7). It was
+  chosen with hindsight and is still not an edge: read it as an upper bound.

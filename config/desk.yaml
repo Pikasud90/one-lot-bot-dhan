@@ -43,7 +43,7 @@ defaults:
     - name: microtrend
       timeframe: 3m
       params: {st_period: 14, st_mult: 1.7, exit_count: 3, stop_buffer_atr: 3.0,
-               evidence: "Backtest of this exact rule: 3,824 trades over five years on five indices, −0.2% of premium a trade on modelled premiums, 38% winners. Not an edge: this is the paper test."}
+               evidence: "Backtest of this exact rule: 3,824 trades over five years on five indices, −0.2% of premium a trade on modelled premiums, 38% winners. On real premiums (NIFTY and BANKNIFTY, 1,518 trades) about −1.2% a trade. Not an edge: this is the paper test."}
   stock_strategies:       # 18 stocks
     # PULLBACK, delivery (owner's decision 2026-11-12, US-067; docs/research/ALPHA_SEARCH_2026-11-12.md
     # 5.2 and 5.3). After the close: the close is above its SMA200, NIFTY is above its SMA200,

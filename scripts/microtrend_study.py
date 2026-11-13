@@ -29,9 +29,9 @@ from pathlib import Path
 sys.path[:0] = [str(Path.cwd() / "src"), str(Path.cwd() / "scripts")]
 
 import microtrend_backtest as mb  # noqa: E402
-import mtf_bruteforce as h
-import numpy as np
-import pandas as pd
+import mtf_bruteforce as h  # noqa: E402
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
 
 OUT = h.ROOT / "data" / "research" / "microtrend_2026-11-13"
 TRADES = OUT / "trades.csv"
@@ -103,7 +103,7 @@ def build_trades() -> pd.DataFrame:
         prev_u = np.r_[False, up[idx][:-1]]
         prev_d = np.r_[False, dn[idx][:-1]]
         newal[idx] = (up[idx] & ~prev_u) | (dn[idx] & ~prev_d)
-        n_s = len(p.sess_first)
+        len(p.sess_first)
         sc = p.c[p.sess_last]
         rng = np.array([(p.h[a : b + 1].max() - p.l[a : b + 1].min()) / p.c[b]
                         for a, b in zip(p.sess_first, p.sess_last, strict=True)])  # fmt: skip
@@ -132,7 +132,9 @@ def build_trades() -> pd.DataFrame:
             age60, atr60 = tf_age_atr(p, "60m", e)
             age4h, _ = tf_age_atr(p, "240m", e)
             dist = s * (p.o[e] - p.L[5][e]) / atr60
-            firsts = np.array([not newal[p.sess_first[q] : j].any() for q, j in zip(ss, e)])
+            firsts = np.array(
+                [not newal[p.sess_first[q] : j].any() for q, j in zip(ss, e, strict=False)]
+            )
             rr = rng[np.maximum(ss - 1, 0)] / rmean[np.maximum(ss - 1, 0)]
             how = np.where((x == p.xi[ss]) & p.xclose[ss], "close", "open")
             out.append(pd.DataFrame({
@@ -226,15 +228,28 @@ def price() -> None:
                         continue
                     model = {"ret": float(t["ret"]), "inr": 0.0}
                     try:
-                        real = rp.price_one(int(t["e0"]), int(t["x0"]), float(t["strike"]),
-                                            int(t["side"]), t["how"], float(t["level"]), model)
+                        real = rp.price_one(
+                            int(t["e0"]),
+                            int(t["x0"]),
+                            float(t["strike"]),
+                            int(t["side"]),
+                            t["how"],
+                            float(t["level"]),
+                            model,
+                        )
                     except NeedBlock:
                         real = {"unpriced": "block not fetched"}
                     except Exception as exc:  # noqa: BLE001
                         real = {"unpriced": f"error: {type(exc).__name__}: {str(exc)[:80]}"}
-                    row = {"inst": inst, "e0": int(t["e0"]), "pass": off,
-                           "stopped": bool(state["stop"]), "real_ret": real.get("real_ret"),
-                           "unpriced": real.get("unpriced"), "real_entry": real.get("real_entry")}
+                    row = {
+                        "inst": inst,
+                        "e0": int(t["e0"]),
+                        "pass": off,
+                        "stopped": bool(state["stop"]),
+                        "real_ret": real.get("real_ret"),
+                        "unpriced": real.get("unpriced"),
+                        "real_entry": real.get("real_entry"),
+                    }
                     fh.write(json.dumps(row, default=str) + "\n")
                     fh.flush()
                 req = sum(q.requests for q in pricers.values())
@@ -320,7 +335,9 @@ def report() -> None:
         rows = [json.loads(x) for x in REAL.read_text().splitlines() if x]
         r = pd.DataFrame(rows).drop_duplicates(["inst", "e0"], keep="first")
         # a pass counts only if no row of it was written after a stop
-        full = [p for p in PASSES if p in set(r["pass"]) and not r.loc[r["pass"] == p, "stopped"].any()]
+        full = [
+            p for p in PASSES if p in set(r["pass"]) and not r.loc[r["pass"] == p, "stopped"].any()
+        ]
         base2 = base[base["inst"].isin(list(REAL_SERIES))].sort_values(["inst", "e0"]).copy()
         base2["pos"] = base2.groupby("inst").cumcount()
         base2["pass"] = base2["pos"] % K

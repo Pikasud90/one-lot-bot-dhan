@@ -111,7 +111,14 @@ which is the whole edge" (CR 130).
 
 | Strategy or rule | Holding | Study | Trades | Modelled premiums, % a trade | Real premiums | Standing | Source |
 |---|---|---|---|---|---|---|---|
-| The owner's options rule: Supertrend(14, 1.7) on 5m, 10m, 15m, 30m, 60m and 4h aligned, 3m trigger; exit when 3 of the 7 reverse, or at the session's exit | same day | Backtest of 13 Nov | 3,824 | five years −0.24 (t −0.6); −0.18 / +0.44 / −1.15; index +3.1 bp; 38.3% winners | not priced | "Not an edge". It is the one options rule in the paper test, by the owner's decision of 13 November; its alerts carry this result | MICROTREND_2026-11-13.md |
+| The owner's options rule: Supertrend(14, 1.7) on 5m, 10m, 15m, 30m, 60m and 4h aligned, 3m trigger; exit when 3 of the 7 reverse, or at the session's exit | same day | Backtest of 13 Nov | 3,824 | five years −0.24 (t −0.6); −0.18 / +0.44 / −1.15; index +3.1 bp; 38.3% winners | NIFTY and BANKNIFTY, 1,518 trades: 1.00 point below the model on the 1,333 priced; like for like −1.29 (t −2.9); −1.16 / −0.57 / −2.46 | "Not an edge". It is the one options rule in the paper test, by the owner's decision of 13 November; its alerts carry this result | MICROTREND_2026-11-13.md, MICROTREND_STUDY_2026-11-13.md |
+| Machine Learning Lab agreement: every model's up probability above 50% as a long reading, all below as a short reading | next candle, 15m to 1d | Walk-forward test of 13 Nov | 216,200 forecasts | not an options rule: after "all up" the next candle closed up 47.3% (15m), 49.0% (30m), 49.8% (60m), 48.8% (4h), 52.0% (1d), against 48.2 / 48.0 / 49.0 / 48.9 / 51.4 for any candle; t 1.4 at most | not applicable | "No signal". The Lab's bands measure the size of moves, not their sign | MLLAB_CONFIDENCE_2026-11-13.md, MLLAB_BANDS_2026-11-13.md |
 
-From 13 November the desk runs two rules only: this one on the five indices and the pullback
-rule (the exception row of table B) on the 18 stocks.
+From 13 November the desk runs two rules only: the options rule above on the five indices and
+the pullback rule (the exception row of table B) on the 18 stocks.
+
+No situation known at entry made the options rule pay on real premiums: 0 of 36 cells fixed
+in advance hold. Compared like for like it lost least with India VIX at or below its one-year
+median (−0.46% a trade) and on Thursdays and Fridays, and most on Tuesdays and Wednesdays
+(−2.8 and −2.9%), with VIX above its median (−2.1%), the day after a wide range (−2.6%) and
+when the 4h trend had only just turned (−2.9%). MICROTREND_STUDY_2026-11-13.md, section 5.

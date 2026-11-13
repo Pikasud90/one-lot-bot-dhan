@@ -58,7 +58,7 @@ def load_closes(inst: str, tf: str) -> pd.Series:
     b = b[b.index < CUTOFF.tz_convert(b.index.tz)]
     c = b["close"].astype(float)
     c = c[np.isfinite(c) & (c > 0)]
-    return c.iloc[-TFS[tf]:]
+    return c.iloc[-TFS[tf] :]
 
 
 def run_one(task: tuple[str, str]) -> pd.DataFrame:
@@ -123,8 +123,10 @@ def fmt(x: float, d: int = 1) -> str:
 
 def row(sel: pd.DataFrame, total: int, day: pd.Series, col: str = "r1") -> str:
     r = sel[col].dropna()
-    return (f"{len(sel):>6} {fmt(100 * len(sel) / max(total, 1)):>5}% "
-            f"{fmt(100 * (r > 0).mean()):>5}% {fmt(r.mean(), 2):>7} {fmt(ctstat(r, day), 2):>6}")
+    return (
+        f"{len(sel):>6} {fmt(100 * len(sel) / max(total, 1)):>5}% "
+        f"{fmt(100 * (r > 0).mean()):>5}% {fmt(r.mean(), 2):>7} {fmt(ctstat(r, day), 2):>6}"
+    )
 
 
 def report(all_df: pd.DataFrame) -> str:
@@ -139,8 +141,10 @@ def report(all_df: pd.DataFrame) -> str:
             n = len(G)
             if n == 0:
                 continue
-            P(f"--- {tf} {g}: base up share {fmt(100 * (G.r1 > 0).mean())}% "
-              f"mean r1 {fmt(G.r1.mean(), 2)} bp")
+            P(
+                f"--- {tf} {g}: base up share {fmt(100 * (G.r1 > 0).mean())}% "
+                f"mean r1 {fmt(G.r1.mean(), 2)} bp"
+            )
             P("single model: p>0.5 [n up% bp t] | p<0.5 [n up% bp t]")
             for m in DIR_MODELS:
                 a, b = G[G[m] > 0.5], G[G[m] < 0.5]
@@ -149,10 +153,12 @@ def report(all_df: pd.DataFrame) -> str:
             edges = [0, 0.45, 0.48, 0.52, 0.55, 1.0001]
             for m in DIR_MODELS:
                 cells = []
-                for lo, hi in zip(edges[:-1], edges[1:]):
+                for lo, hi in zip(edges[:-1], edges[1:], strict=False):
                     s = G[(G[m] >= lo) & (G[m] < hi)]
-                    cells.append(f"{len(s)}/{fmt(s[m].mean(), 3)}/{fmt(100 * (s.r1 > 0).mean())}"
-                                 f"/{fmt(s.r1.mean(), 2)}")
+                    cells.append(
+                        f"{len(s)}/{fmt(s[m].mean(), 3)}/{fmt(100 * (s.r1 > 0).mean())}"
+                        f"/{fmt(s.r1.mean(), 2)}"
+                    )
                 P(f"  {m:9} " + " | ".join(cells))
             for nm, hi, lo in (("agree>0.5", 0.5, 0.5), ("strong 0.52/0.48", 0.52, 0.48)):
                 lab = label(G, hi, lo)
@@ -178,19 +184,23 @@ def report(all_df: pd.DataFrame) -> str:
             for k in ("up", "down"):
                 base = (Q.lab == k).mean()
                 on = Q[Q.lab == k]
-                P(f"  persist {k}: base {fmt(100 * base)}% | still at t+1 "
-                  f"{fmt(100 * (on.f1 == k).mean())}% t+3 {fmt(100 * (on.f3 == k).mean())}% "
-                  f"t+5 {fmt(100 * (on.f5 == k).mean())}% | mean run "
-                  f"{fmt(len(on) / max(((Q.lab == k) & (Q.prev != k)).sum(), 1), 2)} bars")
+                P(
+                    f"  persist {k}: base {fmt(100 * base)}% | still at t+1 "
+                    f"{fmt(100 * (on.f1 == k).mean())}% t+3 {fmt(100 * (on.f3 == k).mean())}% "
+                    f"t+5 {fmt(100 * (on.f5 == k).mean())}% | mean run "
+                    f"{fmt(len(on) / max(((Q.lab == k) & (Q.prev != k)).sum(), 1), 2)} bars"
+                )
                 first = G.loc[Q[(Q.lab == k) & (Q.prev != k)].index]
                 P(f"  first-{k:4} " + " | ".join(row(first, n, day, f"r{h_}") for h_ in HORIZONS))
             if tf in ("15m", "60m"):
                 for half in (1, 2):
                     H = G[G.half == half]
                     lab = label(H)
-                    P(f"  half {half} ({H.ts.min().date()} to {H.ts.max().date()}): "
-                      f"up {row(H[lab == 'up'], len(H), day)} | down "
-                      f"{row(H[lab == 'down'], len(H), day)}")
+                    P(
+                        f"  half {half} ({H.ts.min().date()} to {H.ts.max().date()}): "
+                        f"up {row(H[lab == 'up'], len(H), day)} | down "
+                        f"{row(H[lab == 'down'], len(H), day)}"
+                    )
     return "\n".join(L)
 
 

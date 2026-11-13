@@ -45,7 +45,8 @@ indices, held 140 minutes on average.
   lose it; the two cancel. This is the same picture as every same-day trend rule tested
   before (STRATEGIES_TESTED_2026-11-12.md).
 - These are modelled premiums. On real premiums the earlier same-day trend rules came out 1
-  to 2 points lower.
+  to 2 points lower, and so did this rule when it was priced the same day: about −1.2% of
+  premium a trade on NIFTY and BANKNIFTY (MICROTREND_STUDY_2026-11-13.md).
 
 **Verdict.** Not an edge. The rule is in the paper test because the owner chose it as the
 one way to follow options; every alert of the rule says what this backtest found.
