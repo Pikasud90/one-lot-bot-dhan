@@ -21,6 +21,7 @@ Pure apart from pandas: no I/O and no clock.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -33,7 +34,11 @@ from ..data.resample import minutes_of, resample_bars
 from ..indicators import core as ind
 from . import ratchet
 
+log = logging.getLogger(__name__)
+
 ATR_PERIOD = 14
+#: the smallest delta a premium cost is divided by (the Simulator floors it the same way)
+DELTA_FLOOR = 0.05
 #: the session close a bin of the ATR's bars is cut at (the last 60m bin opens at 15:15)
 SESSION_CLOSE = dt.time(15, 30)
 #: the stage of a trade in plain words (the page and the notifications)
@@ -172,13 +177,24 @@ def close_reason(label: str) -> tuple[str, bool]:
     return label, False
 
 
-def unit_cost(costs_inr: float, qty: int, delta: float | None = None) -> float:
-    """Round-trip costs per unit of the managed price: per share, or per unit of premium
-    over the option's delta (floored at 0.05, as the Simulator floors it)."""
+def unit_cost(
+    costs_inr: float, qty: int, delta: float | None = None, *, option: bool = False
+) -> float:
+    """Round-trip costs per unit of the managed price: per share, or (`option`) per unit of
+    premium over the size of the option's delta, a put's negative delta counting as its
+    size, floored at DELTA_FLOOR as the Simulator floors it. An option with no usable delta
+    (None, NaN, infinite, zero) uses the floor and logs a WARNING: the cost is then the
+    largest it can be, never NaN, so the rule is always applied as the alert says."""
     if not (math.isfinite(costs_inr) and costs_inr > 0 and qty > 0):
         return 0.0
     per_unit = costs_inr / qty
-    return per_unit / max(float(delta), 0.05) if delta is not None else per_unit
+    if not option and delta is None:
+        return per_unit
+    size = abs(float(delta)) if delta is not None else math.nan
+    if not (math.isfinite(size) and size > 0):
+        log.warning("ratchet: no usable option delta (%r): the cost uses %s", delta, DELTA_FLOOR)
+        size = DELTA_FLOOR
+    return per_unit / max(size, DELTA_FLOOR)
 
 
 # ── JSON ──────────────────────────────────────────────────────────────────────

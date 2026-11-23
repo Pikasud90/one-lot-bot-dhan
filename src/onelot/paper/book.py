@@ -1219,6 +1219,7 @@ class PaperBook:
             opened_at=bar_ts,
             option=None,
             plan=rplan,
+            tick_paise=rules.tick_paise,
         )
         values = {
             "status": "OPEN",

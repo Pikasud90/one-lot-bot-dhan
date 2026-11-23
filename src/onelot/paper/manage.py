@@ -417,13 +417,14 @@ def _manage(
         if track is not None and rparams is not None:  # US-079: the stop and trail rule
             due_at_open = _exits_due_at_open(bar_ts, pending, state.opened_at, session_date, rules)
             closed, track, moved = _ratchet_bar(
-                state, track, view, i, bar, bar_ts, due_at_open, rparams, res
+                state, track, view, i, bar, bar_ts, due_at_open, rparams, res, rules.tick_paise
             )
             events.extend(moved)
             if closed is not None:
-                events.append(_closed_event(state, closed, bar, stop, res_min, track))
+                events.append(_closed_event(state, closed, bar, stop, res_min, track, target))
                 break
-            stop, target = to_paise(track.state.stop), to_paise(track.state.target)
+            stop = level_paise(state.kind, sign, track.state.stop, "stop", rules.tick_paise)
+            target = level_paise(state.kind, sign, track.state.target, "target", rules.tick_paise)
             trail_active = trail_active or track.state.stage > 0
             last_close, last_close_at = bar.close, bar_ts + res
             continue
@@ -635,6 +636,7 @@ def _closed_event(
     stop: int,
     res_min: int,
     track: RatchetTrack | None = None,
+    target: int | None = None,
 ) -> PaperEvent:
     """The CLOSED event: final, with the bar prices it used (the feed may revise bars).
 
@@ -653,7 +655,7 @@ def _closed_event(
     }
     if track is not None:  # US-079: the levels in force when the bar closed the trade
         detail |= _ratchet_detail(track)
-        detail["target_paise"] = to_paise(track.state.target)
+        detail["target_paise"] = target if target is not None else to_paise(track.state.target)
     return PaperEvent(state.trade_id, close.at, CLOSED, detail)
 
 
@@ -731,6 +733,7 @@ def _ratchet_bar(
     due_at_open: tuple[str, ...],
     params: ratchet.RatchetParams,
     res: dt.timedelta,
+    tick: int = 1,
 ) -> tuple[PaperClose | None, RatchetTrack, list[PaperEvent]]:
     """One bar under the rule (`manage.live.on_bar`, on the feed's own rupee prices so it
     equals a direct replay of `ratchet.py`): the exit it forces with the levels in force,
@@ -740,6 +743,7 @@ def _ratchet_bar(
     stop) closes at the open, as without the rule, unless the open gaps through the stop or
     the target: those outrank it (`desk.rules.EXIT_PRECEDENCE`). A gap closes at the open
     under the stage's stop name or TARGET, flagged `gap`."""
+    sign = track.plan.side
     o, h, low = float(view.open[i]), float(view.high[i]), float(view.low[i])
     hit, new, changes = on_bar(track.plan, track.state, o, h, low, params)
     gapped = hit is not None and hit[0].startswith("GAP_")
@@ -747,9 +751,11 @@ def _ratchet_bar(
         return _pick(dict.fromkeys(due_at_open, (bar.open, False)), bar_ts), track, []
     if hit is not None:
         reason, gap = close_reason(hit[0])
-        price = bar.open if gap else to_paise(hit[1])
+        what = "target" if reason == "TARGET" else "stop"
+        price = bar.open if gap else level_paise(state.kind, sign, hit[1], what, tick)
         return PaperClose(cast(CloseReason, reason), price, bar_ts, gap), track, []
     moved = RatchetTrack(track.plan, new)
+    kind_word = {STOP_MOVED: "stop", TARGET_MOVED: "target"}
     events: list[PaperEvent] = []
     for kind, old_level, new_level in (
         (STOP_MOVED, track.state.stop, new.stop),
@@ -758,8 +764,8 @@ def _ratchet_bar(
         if kind not in changes:
             continue
         detail: dict[str, Any] = {
-            "from_paise": to_paise(old_level),
-            "to_paise": to_paise(new_level),
+            "from_paise": level_paise(state.kind, sign, old_level, kind_word[kind], tick),
+            "to_paise": level_paise(state.kind, sign, new_level, kind_word[kind], tick),
             "initial_stop_paise": state.initial_stop_paise,
             "bar_ts": bar_ts.isoformat(),
             **bar.as_detail(),
@@ -768,6 +774,18 @@ def _ratchet_bar(
         }
         events.append(PaperEvent(state.trade_id, bar_ts + res, kind, detail))
     return None, moved, events
+
+
+def level_paise(kind: str, sign: int, rupees: float, what: str, tick: int) -> int:
+    """A level of the rule in paise. A stock's is snapped to its tick AGAINST the trader, as
+    the old path snaps a trailed stop and a target: a long's stop down and target up, a
+    short's the other way. An index level stays exact to the paisa (the option is repriced
+    from it)."""
+    paise = to_paise(rupees)
+    if kind != "STOCK" or tick <= 1:
+        return paise
+    down = (sign == 1) == (what == "stop")
+    return paise // tick * tick if down else -(-paise // tick) * tick
 
 
 def _ratchet_detail(track: RatchetTrack) -> dict[str, Any]:

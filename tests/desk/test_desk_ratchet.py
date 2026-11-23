@@ -4,7 +4,7 @@
                         price, read on the last 60m bar closed by the signal; the target 3
                         risks away; `manage.ratchet` frozen; one line in the text says how
     _manage_positions   a taken position shows its paper trade's levels and stage, and one
-                        notification per move says "raise your stop to X"
+                        notification per move says "move your stop to X"
 
 Through the REAL Desk and a REAL PaperBook (`paper.factory.build_paper_book`) on the test
 database; the bars are the harness's random walk, set on the tracker by hand, with a
@@ -48,25 +48,29 @@ def db(tmp_path):
     get_database.__globals__["_db"] = None
 
 
-def desk_with(cfg, db, slot: StrategySlotCfg, *, paper: bool = True) -> Desk:
+def desk_with(cfg, db, slot: StrategySlotCfg, *, paper: bool = True, key: str = "SBIN") -> Desk:
     stocks = (DeskInstrumentCfg("SBIN", "SBIN", "STOCK", (slot,)),)
-    desk_cfg = dataclasses.replace(small_cfg(indices=(), stocks=stocks), stock_horizon="intraday")
+    indices = (DeskInstrumentCfg("BANKNIFTY", "BANKNIFTY_OPT", "INDEX", (slot,)),)
+    desk_cfg = dataclasses.replace(
+        small_cfg(indices=indices if key != "SBIN" else (), stocks=stocks if key == "SBIN" else ()),
+        stock_horizon="intraday",
+    )
     book = build_paper_book(cfg, db.engine, clock=lambda: NOW) if paper else None
     desk, notifier, _ = new_desk(cfg, db, desk_cfg=desk_cfg, clock=ShutClock(), paper=book)
     desk.notifier_log = notifier  # type: ignore[attr-defined]
-    desk.source.served_by["SBIN"] = "dhan"  # a live grade: the book manages on wall time
-    desk.trackers["SBIN"].bars = morning()
+    desk.source.served_by[key] = "dhan"  # a live grade: the book manages on wall time
+    desk.trackers[key].bars = morning(45000.0 if key != "SBIN" else 800.0)
     return desk
 
 
-def morning() -> pd.DataFrame:
+def morning(base: float = 800.0) -> pd.DataFrame:
     """Six sessions of 2-minute bars, the last one cut at 10:05 on THU (the signal's close)."""
     end = pd.Timestamp(SIGNAL_CLOSE)
-    return synthetic(days=6, freq_min=2, base=800.0, seed=11, end=end)
+    return synthetic(days=6, freq_min=2, base=base, seed=11, end=end)
 
 
-def raise_alert(desk: Desk, direction: str = "long") -> dict:
-    t = desk.trackers["SBIN"]
+def raise_alert(desk: Desk, direction: str = "long", key: str = "SBIN") -> dict:
+    t = desk.trackers[key]
     close = float(t.bars["close"].iloc[-1])
     stop = close * (0.99 if direction == "long" else 1.01)  # the strategy's own stop
     v = Verdict(direction, "test", SIGNAL_BAR, stop, close, 60.0, ["why"], True)
@@ -196,12 +200,12 @@ class TestTheTakenPosition:
             seen.append((state["stop"], state["target"]))
 
         told = [n for n in desk.notifier_log.sent[sent_before:]  # type: ignore[attr-defined]
-                if "raise your stop" in n.title or "target moves out" in n.title]  # fmt: skip
+                if "move your stop" in n.title or "target moves out" in n.title]  # fmt: skip
         first = trade.plan["position"]["ratchet"]["plan"]
         levels = [(first["stop"], first["target"]), *seen]
         moves = sum(1 for a, b in zip(levels, levels[1:], strict=False) if a != b)
         assert p["stage"] == "TRAILING" and len(told) == moves >= 3
-        assert f"raise your stop to {seen[-1][0]:,.2f}" in told[-1].title
+        assert f"move your stop to {seen[-1][0]:,.2f}" in told[-1].title
         assert p["initial_stop_underlying"] < p["stop_underlying"]
 
     def test_without_a_paper_book_the_desk_walks_the_rule_itself(self, cfg, db) -> None:
@@ -226,5 +230,59 @@ class TestTheTakenPosition:
             p = desk.positions[pid]
             assert p["stop_underlying"] == round(state.stop, 2) and p["ratchet_source"] == "desk"
         told = [n for n in desk.notifier_log.sent[told_before:]  # type: ignore[attr-defined]
-                if "raise your stop" in n.title]  # fmt: skip
+                if "move your stop" in n.title]  # fmt: skip
         assert p["stage"] == "TRAILING" and len(told) == 3
+
+
+class TestTheIndexOption:
+    @pytest.mark.parametrize(("direction", "side"), [("long", "BUY_CE"), ("short", "BUY_PE")])
+    def test_a_call_and_a_put_through_the_desk_and_the_paper_book(
+        self, cfg, db, direction: str, side: str
+    ) -> None:
+        desk = desk_with(cfg, db, RATCHET, key="BANKNIFTY")
+        sig = raise_alert(desk, direction, key="BANKNIFTY")
+        eco, block = sig["economics"], sig["manage"]["ratchet"]
+        sign = 1 if direction == "long" else -1
+        t = desk.trackers["BANKNIFTY"]
+        risk = 1.5 * wilder_atr_60m(t.bars, SIGNAL_CLOSE)
+        assert eco["side"] == side and block["risk"] == pytest.approx(risk, abs=1e-4)
+        close = eco["underlying_entry"]
+        assert sign * (close - eco["underlying_stop"]) == pytest.approx(risk, abs=1e-3)
+        assert sign * (eco["underlying_target"] - close) == pytest.approx(3 * risk, abs=1e-3)
+        delta = eco["option"]["delta"]
+        assert 0 < delta < 1
+        assert block["cost"] == pytest.approx(eco["costs_inr"] / eco["qty"] / delta, abs=1e-3)
+
+        fill = pd.Timestamp(SIGNAL_CLOSE + dt.timedelta(minutes=2))
+        row = {"open": close, "high": close + 1, "low": close - 1, "close": close, "volume": 0.0}
+        t.bars = pd.concat([t.bars, pd.DataFrame([row], index=pd.DatetimeIndex([fill]))])
+        desk.paper.step(  # type: ignore[union-attr]
+            (fill + pd.Timedelta(minutes=2, seconds=5)).to_pydatetime(), desk._paper_bars
+        )
+        trade = desk.paper.for_alert(sig["id"])  # type: ignore[union-attr]
+        assert trade.status == "OPEN"
+        plan = trade.plan["position"]["ratchet"]["plan"]
+        assert plan["side"] == sign and plan["entry"] == pytest.approx(close)
+        assert sign * (plan["entry"] - plan["stop"]) == pytest.approx(block["risk"])
+        assert plan["cost"] == block["cost"]
+
+
+class TestABrokenRecordNeverStopsThePoll:
+    def test_the_paper_book_is_still_stepped_and_the_error_counted(
+        self, cfg, db, monkeypatch
+    ) -> None:
+        desk = desk_with(cfg, db, RATCHET)
+        sig = raise_alert(desk)
+        pid = desk.acknowledge(sig["id"], "TAKE")["position_id"]
+        p = desk.positions[pid]
+        p["ratchet"] = {"plan": "not a plan"}  # a malformed stored record
+        stop = p["stop_underlying"]
+        stepped: list[dt.datetime] = []
+        monkeypatch.setattr(desk, "_step_paper", lambda now: stepped.append(now))
+        errors = desk.hook_errors
+
+        desk.poll()
+
+        assert stepped and desk.hook_errors == errors + 1
+        assert desk.positions[pid]["stop_underlying"] == stop  # its old levels stand
+        assert desk.positions[pid]["ratchet"] == {"plan": "not a plan"}

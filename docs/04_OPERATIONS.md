@@ -167,9 +167,15 @@ paper trades only: the system never places an order.
   SESSION_END. The Paper panel shows an open trade's stage, its stop and target now and the
   first ones; a closed one shows the reason in words.
 - A position you took shows the same levels and stage as its paper trade. Each time the stop
-  or the target moves you get one notification: "raise your stop to X". Move your own stop to
+  or the target moves you get one notification: "move your stop to X". Move your own stop to
   that level; the desk never places or changes an order.
-- The Backtest Lab applies the same rule to a strategy with `ratchet` on, minute by minute.
+- A target that moved out and is then hit is still called TARGET; the event detail says it
+  moved (`target_moved`).
+- The alert archive audits such an alert at its first stop and target only, not the trail, so
+  its result can differ from the paper trade's; the archive says so beside the result.
+- The Backtest Lab applies the same rule to a strategy with `ratchet` on, minute by minute. The
+  Lab's cost term is its slippage and the paper book's is its charges, so the two can differ
+  by a few ticks at a breakeven stop.
 - Check the paper book against the rule on stored bars (opens the store read-only):
   `PYTHONPATH=src .venv/bin/python scripts/ratchet_desk_replay.py --store PATH/onelot.db`
   `--sessions 20 --instrument NIFTY`. It prints how many exits match and each one that does not.

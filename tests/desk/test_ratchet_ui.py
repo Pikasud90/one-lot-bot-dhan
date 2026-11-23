@@ -81,3 +81,18 @@ def test_a_taken_position_shows_its_stage_beside_the_stop() -> None:
     assert "trailing behind the best price · stop 45400.00 (first 45110.00)" in html
     assert "target 45660.00 (first 45510.00)" in html
     assert "trail" in plain and "stage" not in plain  # a position without the rule, as before
+
+
+def test_the_archive_says_a_rule_alert_is_audited_at_its_first_levels() -> None:
+    import test_paper_panel_ui as panel
+
+    old = panel.HELPERS
+    panel.HELPERS = ["auditNote"]
+    try:
+        ruled = js("auditNote(P)", {"manage": {"ratchet": {"risk": 1.0}}})
+        plain = js("auditNote(P)", {"manage": {"target_r": 2.0}})
+        bare = js("auditNote(P)", {})
+    finally:
+        panel.HELPERS = old
+    assert ruled == "audit at the first stop and target, not the trail"
+    assert plain == bare == "audit"  # every other alert reads as before

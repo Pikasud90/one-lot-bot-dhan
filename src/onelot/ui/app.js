@@ -315,13 +315,15 @@ function exitCell(x) {
   return `<span class="outc ${esc(x.reason)}">EXIT ${esc(String(x.reason).replace(/_/g, " "))}</span> <span class="num">${x.price != null ? rup2(x.price) : "–"}</span>` +
     (x.net != null ? ` <span class="${cls(x.net)}" style="font-family:var(--mono)">${rup(x.net)}</span>` : "");
 }
+// US-079: an alert managed by the stop and trail rule is audited at its FIRST levels only (no trail): say so
+const auditNote = (s) => s && s.manage && s.manage.ratchet ? "audit at the first stop and target, not the trail" : "audit";
 function outcomeCell(s) {
   const o = s.outcome;
   if (s.status === "PENDING") return `<span class="countdown" data-exp="${esc(s.expires_at)}">…</span>`;
   if (s.exit) return exitCell(s.exit) + (s.trade ? ` <span class="dim">· yours ${rup(s.trade.net_pnl)}</span>` : "");
   if (s.status === "TAKEN") return s.trade ? `<span class="outc ${s.trade.net_pnl >= 0 ? "TARGET" : "STOP"}">CLOSED ${rup(s.trade.net_pnl)}</span>` : `<span class="outc OPEN">MONITORING</span>`;
   if (!o || !o.outcome || o.outcome === "NO_DATA") return `<span class="dim">awaiting its exit</span>`;
-  return `<span class="outc ${esc(o.outcome)}">${esc(o.outcome.replace("_", " "))}</span> <span class="${cls(o.r_now)}" style="font-family:var(--mono)">${fmt(o.r_now, 2)}R</span> <span class="dim">audit</span>`;
+  return `<span class="outc ${esc(o.outcome)}">${esc(o.outcome.replace("_", " "))}</span> <span class="${cls(o.r_now)}" style="font-family:var(--mono)">${fmt(o.r_now, 2)}R</span> <span class="dim">${esc(auditNote(s))}</span>`;
 }
 function alertRow(s) {
   const e = s.economics || {}, o = s.option || e.option || {}, out = s.outcome || {}, c = s.confidence || {};
