@@ -175,13 +175,20 @@ async function handle(url, body) {
     if (s.trade) throw fail(409, "A trade is already open.");
     const a = s.alert; s.alert = null;
     s.trade = { id: s.closed.length + 1, status: "PENDING_FILL", side: a.side, sgn: a.side === "LONG" ? 1 : -1, action: a.action, qty: a.qty, what: a.traded.what, entry: null, stage: "INITIAL", risk: a.risk };
-    return { trade: tradeView(s, s.trade) };
+    return { ...stateOf(s), events: [], minutes: [] };
   }
-  if (m[2] === "skip") { if (!s.alert) throw fail(409, "There is no alert."); s.alert = null; return stateOf(s); }
-  if (m[2] === "close") { if (!s.trade || s.trade.status !== "OPEN") throw fail(409, "There is no open trade."); s.trade.closing = true; return stateOf(s); }
+  if (m[2] === "skip") { if (!s.alert) throw fail(409, "There is no alert."); s.alert = null; return { ...stateOf(s), events: [], minutes: [] }; }
+  if (m[2] === "close") {
+    if (!s.trade) throw fail(409, "There is no open trade.");
+    if (s.trade.status !== "OPEN") {   // not filled yet: cancelled, and said so
+      const id = s.trade.id; s.trade = null;
+      return { ...stateOf(s), events: [{ seq: ++s.evSeq, ts: sessionView(s).cursor, kind: "CANCELLED", text: "You closed the trade before it filled", data: { trade_id: id } }], minutes: [] };
+    }
+    s.trade.closing = true; return { ...stateOf(s), events: [], minutes: [] };
+  }
   if (s.trade && s.trade.status === "OPEN") s.trade.closing = true;
   s.status = "ENDED";
-  return stateOf(s);
+  return { ...stateOf(s), events: [], minutes: [] };
 }
 const api = { handle, OPTIONS, reset() { sessions.clear(); seq = 0; } };
 if (typeof module !== "undefined" && module.exports) module.exports = api;

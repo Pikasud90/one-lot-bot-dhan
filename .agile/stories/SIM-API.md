@@ -68,7 +68,9 @@ Body: `{"minutes": 1}` (1 to 390; ignored in `live`, which returns what has arri
   from them (bins anchored at 09:15 each day, `tf_minutes` wide).
 - `events`: everything that happened in those minutes, in order. Kinds: `ALERT`,
   `ALERT_EXPIRED`, `FILLED`, `STAGE` (data.stage one of BREAKEVEN, LOCKED, TRAILING),
-  `STOP_MOVED`, `TARGET_MOVED` (data.stop / data.target), `EXIT_SIGNAL`, `CLOSED`, `DAY_END`,
+  `STOP_MOVED`, `TARGET_MOVED` (data.stop / data.target), `EXIT_SIGNAL`, `CLOSED`, `CANCELLED`
+  (data.trade_id: a trade that never filled: closed or ended before the fill, or the day or the data
+  ended first; stored with status CANCELLED, never in the summary, the lists or the CSV), `DAY_END`,
   `DATA_END`. `ts` is the instant the user could know it (a bar's close).
 - `alert`, `trade`, `summary`: the state AFTER these minutes (same shapes as below).
 - `day_end`: the session's trading day just finished (the next advance starts the next
@@ -87,7 +89,12 @@ Closes an open trade the same way and marks the session ENDED.
 
 ### GET /api/sim/sessions/{id}
 The body below plus `"candles"`: the same closed candles as in the create answer (up to 300, to
-the cursor). `take`, `skip`, `close` and `end` answer with this body WITHOUT `candles`.
+the cursor). `take`, `skip`, `close` and `end` answer with this body WITHOUT `candles` and with two
+more keys: `events` (the events the action produced, same shape as in `advance`) and `minutes`
+(the one-minute bars it revealed, same shape as in `advance`). Both are empty except: `close` of a
+trade not yet filled gives one `CANCELLED` event; `end` with an open trade reveals one minute and
+gives its events (the closing `CLOSED`, reason MANUAL); `end` of an unfilled trade gives
+`CANCELLED`. The page appends these events to its log and draws these minutes.
 ```json
 {"session": {"...": "as above, with the present cursor and status RUNNING|DAY_END|ENDED"},
  "alert": {"id": "a_17", "ts": "...", "expires": "...", "side": "LONG", "action": "BUY CALL",
@@ -123,9 +130,10 @@ the cursor). `take`, `skip`, `close` and `end` answer with this body WITHOUT `ca
   that India VIX is stored only to a date before the cursor (modelled premiums then use that last
   value) or not at all.
 - A start needs one stored minute before it (a start on the very first stored minute is a 400);
-  a start in a hole of the store goes on at the next stored minute. A real option price may come
-  from the next traded minute within 3 minutes for a fill or an exit (`entry_wait_min`,
-  `exit_wait_min` in the stored detail); marks never look ahead.
+  a start in a hole of the store goes on at the next stored minute. A fill or an exit uses the real option
+  bar of THAT minute when the strike traded in it, otherwise the model premium of that minute,
+  marked `model`; a later minute's bar is never used (a replay must not show a price the user has
+  not seen).
 - `exit_reason`: STOP, BREAKEVEN_STOP, LOCK_STOP, TRAIL_STOP, the same with a `GAP_` prefix,
   TARGET, GAP_TARGET, SIGNAL_EXIT, SESSION_END, MANUAL, DATA_END.
 

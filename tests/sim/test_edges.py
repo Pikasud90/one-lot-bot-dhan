@@ -10,7 +10,7 @@ from onelot.clock import IST
 from onelot.sim.engine import SimError
 
 from .conftest import MemBars, flat_minutes, make_manager
-from .test_alerts_and_trades import DAYS, D, T, frames, until
+from .test_alerts_and_trades import DAYS, D, T, frames, start, until
 from .test_api_and_persistence import BODY, H, app_engine, client, strict  # noqa: F401
 
 
@@ -205,3 +205,74 @@ def test_a_vix_that_ends_before_the_cursor_day_is_said_in_the_premium_note(db_en
     assert "VIX" not in s.premium_note()  # stored up to the day: nothing to warn about
     stock = frames()
     assert stock  # a share never needs VIX
+
+
+# ── nothing happens silently ──────────────────────────────────────────────────
+def _alerted(db_engine, tmp_path, force):
+    rel, nifty = frames()
+    force(long=[f"{D} 10:10"])
+    m, s = start(db_engine, tmp_path, rel, nifty)
+    until(s, "10:14")
+    assert s.alert is not None
+    return m, s
+
+
+def test_closing_a_trade_before_its_fill_is_a_cancelled_event_and_never_a_result(
+    db_engine, tmp_path, force
+):
+    m, s = _alerted(db_engine, tmp_path, force)
+    taken = s.take(s.alert["id"])
+    assert taken["events"] == [] and taken["minutes"] == []
+    tid = taken["trade"]["id"]
+    r = s.close()
+    assert r["trade"] is None and r["minutes"] == []
+    assert [(e["kind"], e["data"]) for e in r["events"]] == [("CANCELLED", {"trade_id": tid})]
+    assert set(r["events"][0]) == {"seq", "ts", "kind", "text", "data"}
+    assert r["summary"]["trades"] == 0 and r["trades"] == []
+    rows = m.store.trades(session_id=s.setup.id)
+    assert [(x["id"], x["status"]) for x in rows] == [(tid, "CANCELLED")]
+    assert m.trades() == []  # never in the list of results nor the CSV
+    assert m.trades_csv().count("\n") == 1
+    # a new manager rebuilds the session without a trade, and the events are stored
+    m2 = make_manager(db_engine, m.store_bars, tmp_path)
+    s2 = m2.get(s.setup.id)
+    assert s2.trade is None and s2.closed == []
+
+
+def test_close_of_an_open_trade_reveals_nothing_and_end_reveals_the_minute_and_the_close(
+    db_engine, tmp_path, force
+):
+    m, s = _alerted(db_engine, tmp_path, force)
+    s.take(s.alert["id"])
+    s.advance(3)  # filled at 10:15, open
+    r = s.close()
+    assert r["events"] == [] and r["minutes"] == [] and r["trade"]["status"] == "OPEN"
+    e = s.end()
+    assert len(e["minutes"]) == 1 and e["session"]["status"] == "ENDED"
+    assert [x["kind"] for x in e["events"]] == ["CLOSED"]
+    assert e["events"][0]["data"]["exit_reason"] == "MANUAL" and e["trade"] is None
+    assert e["minutes"][0][0] == int(pd.Timestamp(e["session"]["cursor"]).timestamp())
+    seqs = [x["seq"] for x in e["events"]]
+    assert seqs == sorted(set(seqs))
+
+
+def test_end_with_a_trade_not_yet_filled_is_a_cancelled_event(db_engine, tmp_path, force):
+    _, s = _alerted(db_engine, tmp_path, force)
+    s.take(s.alert["id"])
+    e = s.end()
+    assert [x["kind"] for x in e["events"]] == ["CANCELLED"] and e["minutes"] == []
+    assert e["summary"]["trades"] == 0
+
+
+def test_the_http_answers_of_take_skip_close_and_end_carry_events_and_minutes(app_engine, force):  # noqa: F811
+    force(long=[f"{D} 10:10"])
+    c = client(app_engine)
+    body = {**BODY, "start": T("10:00").isoformat()}
+    sid = strict(c.post("/api/sim/sessions", json=body, headers=H))["session"]["id"]
+    a = strict(c.post(f"/api/sim/sessions/{sid}/advance", json={"minutes": 15}, headers=H))["alert"]
+    r = strict(c.post(f"/api/sim/sessions/{sid}/take", json={"alert_id": a["id"]}, headers=H))
+    assert r["events"] == [] and r["minutes"] == []
+    r = strict(c.post(f"/api/sim/sessions/{sid}/close", json={}, headers=H))
+    assert [e["kind"] for e in r["events"]] == ["CANCELLED"]
+    r = strict(c.post(f"/api/sim/sessions/{sid}/end", json={}, headers=H))
+    assert r["events"] == [] and r["minutes"] == []

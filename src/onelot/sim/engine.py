@@ -166,7 +166,6 @@ class TradeState:
     entry_ns: int | None = None
     entry_price: float | None = None
     entry_source: str | None = None
-    entry_wait: int = 0
     risk_inr: float | None = None
     mark: float | None = None
     mark_price: float | None = None
@@ -178,7 +177,6 @@ class TradeState:
             "alert": self.alert,
             "contract": self.contract.as_dict() if self.contract else None,
             "entry_source": self.entry_source,
-            "entry_wait_min": self.entry_wait,
             "risk_inr": self.risk_inr,
             "pending_exit": self.pending_exit,
         }
@@ -557,40 +555,43 @@ class SimSession:
         )
         self.alert = None
         self._save([])
-        return self.state()
+        return self._answer([], [])
 
     def skip(self, alert_id: str) -> dict[str, Any]:
         if self.alert is None or self.alert["id"] != alert_id:
             raise SimError(409, "There is no such alert to skip: it expired or was taken.")
         self.alert = None
         self._save([])
-        return self.state()
+        return self._answer([], [])
 
     def close(self) -> dict[str, Any]:
         t = self.trade
         if t is None:
             raise SimError(409, "There is no open trade to close.")
+        events: list[dict] = []
         if t.status == "PENDING_FILL":
-            self.store.drop_trade(t.id)
-            self.trade = None
+            self._cancel(events, self.cursor_ns + _MIN_NS, "You closed the trade before it filled")
         else:
             t.pending_exit = "MANUAL"
-        self._save([])
-        return self.state()
+        self._save(events)
+        return self._answer(events, [])
 
     def end(self) -> dict[str, Any]:
         """Close an open trade at the next minute's open (the last close when there is no
         next minute) and mark the session ENDED."""
         shown: list[dict] = []
+        minutes: list[list] = []
         events: list[dict] = []
         t = self.trade
         if t is not None and t.status == "PENDING_FILL":
-            self.store.drop_trade(t.id)
-            self.trade = None
+            self._cancel(
+                events, self.cursor_ns + _MIN_NS, "The session ended before the trade filled"
+            )
         elif t is not None and self.status != "ENDED":
             t.pending_exit = "MANUAL"
             if self.setup.mode == "past" and self.pos + 1 < len(self.ts):
-                shown = list(self.advance(1)["events"])  # saved by advance
+                got = self.advance(1)  # saved by advance
+                shown, minutes = list(got["events"]), list(got["minutes"])
             if self.trade is not None and self.pos >= 0:  # no next minute: the last close
                 p = self.pos
                 end_ns = int(self.ts[p]) + _MIN_NS
@@ -598,8 +599,22 @@ class SimSession:
         self.alert = None
         self.status = "ENDED"
         self._save(events)
-        del shown  # its events are saved; the answer is the state, as GET gives it
-        return self.state()
+        return self._answer(shown + [self._public(e) for e in events], minutes)
+
+    def _answer(self, events: list[dict], minutes: list[list]) -> dict[str, Any]:
+        """What take, skip, close and end answer: GET's body without `candles`, plus the
+        events the action produced (as in `advance`) and the minutes it revealed."""
+        pub = [self._public(e) if "_ts" in e else e for e in events]
+        return {**self.state(), "events": pub, "minutes": minutes}
+
+    def _cancel(self, events: list[dict], ns: int, text: str) -> None:
+        """A trade that never filled: stored as CANCELLED (never a result), and said so."""
+        t = self.trade
+        if t is None:
+            return
+        self.store.save_trade(t.id, {"status": "CANCELLED", "updated_at": now_ist()})
+        self.trade = None
+        self._event(events, ns, "CANCELLED", text, {"trade_id": t.id})
 
     # ── the clock: reveal minutes ─────────────────────────────────────────
     def advance(self, minutes: int = 1) -> dict[str, Any]:
@@ -826,8 +841,7 @@ class SimSession:
         same_day = int(_local(np.array([t.taken_ns], np.int64))[0][0]) == int(self.day[p])
         if not same_day or int(self.mod[p]) >= self.exit_min:
             # the trading day ended before the fill: nothing traded
-            self.store.drop_trade(t.id)
-            self.trade = None
+            self._cancel(events, t0, "The trading day ended before the trade filled")
             return
         side = t.side
         o = float(self.o[p])
@@ -839,7 +853,6 @@ class SimSession:
             entry_price = pr.option_entry(q.price)
             entry = o
             source = q.source
-            t.entry_wait = q.wait
             delta = max(pr.delta(t.contract, o, minute), 0.05)
             cost = pr.charges(1, entry_price, entry_price) / pr.qty / delta
         else:
@@ -945,9 +958,7 @@ class SimSession:
             exit_price = pr.option_exit(q.price)
             exit_level = level
             exit_source = q.source
-            exit_wait = q.wait
         else:
-            exit_wait = 0
             slipped = reason not in ("TARGET", "GAP_TARGET")
             exit_price = pr.stock_exit(t.side, level, slipped)
             exit_level = exit_price
@@ -959,7 +970,6 @@ class SimSession:
         st = t.state
         detail = t.detail()
         detail["exit_source"] = exit_source
-        detail["exit_wait_min"] = exit_wait
         if t.entry_source != exit_source:
             detail["note"] = (
                 f"the entry premium was {t.entry_source} and the exit premium {exit_source}"
@@ -1068,8 +1078,7 @@ class SimSession:
             self._expire(events, end_ns)
         t = self.trade
         if t is not None and t.status == "PENDING_FILL":
-            self.store.drop_trade(t.id)
-            self.trade = None
+            self._cancel(events, end_ns, "The trading day ended before the trade filled")
         elif t is not None:
             self._close_trade(events, p, "SESSION_END", self.c[p], "close", end_ns)
         self._event(events, end_ns, "DAY_END", "The trading day is over")
@@ -1085,8 +1094,7 @@ class SimSession:
             self._expire(events, end_ns)
         t = self.trade
         if t is not None and t.status == "PENDING_FILL":
-            self.store.drop_trade(t.id)
-            self.trade = None
+            self._cancel(events, end_ns, "The stored data ended before the trade filled")
         elif t is not None:
             self._close_trade(events, p, "DATA_END", self.c[p], "close", end_ns)
         self._event(events, end_ns, "DATA_END", "No more stored bars: the session is over")
@@ -1145,6 +1153,8 @@ class SimSession:
         for r in self.store.trades(session_id=self.setup.id):
             if r["status"] == "CLOSED":
                 self.closed.append(closed_row(r))
+            elif r["status"] == "CANCELLED":
+                continue
             elif self.trade is None:
                 self.trade = _trade_from_row(r)
                 t = self.trade
@@ -1234,7 +1244,6 @@ def _trade_from_row(r: dict[str, Any]) -> TradeState:
     t.entry_source = r.get("source")
     t.risk_inr = d.get("risk_inr")
     t.pending_exit = d.get("pending_exit")
-    t.entry_wait = int(d.get("entry_wait_min") or 0)
     return t
 
 

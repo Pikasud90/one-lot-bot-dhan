@@ -48,7 +48,7 @@ from onelot.manage import ratchet
 from onelot.sim.bars import StoreBars
 from onelot.sim.engine import ATR_PERIOD
 from onelot.sim.manager import default_deps
-from onelot.sim.pricing import MAX_WAIT_MIN, Contract, Pricer, StoredPremiums
+from onelot.sim.pricing import Contract, Pricer, StoredPremiums
 from onelot.store import init_database
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -453,7 +453,7 @@ class Run:
         close = next((e for e in evs if e["kind"] == "CLOSED"), None)
         out = {
             "name": self.name, "id": t["id"], "opt": is_opt, "entry_source": det.get("entry_source"),
-            "exit_source": det.get("exit_source"), "waits": (det.get("entry_wait_min"), det.get("exit_wait_min")),
+            "exit_source": det.get("exit_source"), 
             "reason": t["exit_reason"], "net": t["net"], "r": t["r_multiple"],
         }  # fmt: skip
         if not (
@@ -665,9 +665,8 @@ class Run:
         pr = self.w.pricer(self.key)
         c = Contract.from_dict(det["contract"])
         f0 = pd.Timestamp(self.minutes[i0][0], unit="s", tz="UTC")
-        got = stored.bar(c, f0, MAX_WAIT_MIN) if stored is not None else None
-        if got is not None:
-            raw, waited = got
+        raw = stored.bar(c, f0) if stored is not None else None
+        if raw is not None:
             P.check(
                 det.get("entry_source") == "real",
                 f"{w}: the store has the bar but the entry says {det.get('entry_source')}",
@@ -675,10 +674,6 @@ class Run:
             P.check(
                 abs(t["entry_price"] - pr.option_entry(float(raw[0]))) < 0.0051,
                 f"{w}: entry premium {t['entry_price']} != open {raw[0]} with spread and ticks {pr.option_entry(float(raw[0]))}",
-            )
-            P.check(
-                det.get("entry_wait_min") == waited,
-                f"{w}: entry wait {det.get('entry_wait_min')} != {waited}",
             )
         else:
             P.check(
@@ -704,9 +699,9 @@ class Run:
                 if at_open
                 else ("close" if reason in ("SESSION_END", "DATA_END") else "touch")
             )
-            g2 = stored.bar(c, minute, 0 if how == "close" else MAX_WAIT_MIN) if stored else None
+            g2 = stored.bar(c, minute) if stored else None
             if P.check(g2 is not None, f"{w}: exit says real but no stored bar at {ts_iso(ts)}"):
-                row, _ = g2
+                row = g2
                 if how == "open":
                     rawx = float(row[0])
                 elif how == "close":
@@ -863,12 +858,6 @@ def main() -> int:
         dict(Counter(x["entry_source"] for x in opt)),
         " exit",
         dict(Counter(x["exit_source"] for x in opt)),
-    )
-    print(
-        "entry wait minutes",
-        dict(Counter(x["waits"][0] for x in opt)),
-        " exit wait",
-        dict(Counter(x["waits"][1] for x in opt)),
     )
     print("exit reasons", dict(Counter(x["reason"] for x in audits)))
     allms = [m for r in runs for m in r.advance_ms]

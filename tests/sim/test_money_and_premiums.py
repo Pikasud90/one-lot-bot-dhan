@@ -178,14 +178,11 @@ def test_the_fill_uses_the_real_premium_when_the_store_has_it(db_engine, tmp_pat
 
 
 @pytest.mark.parametrize(
-    ("bar_at", "source", "wait"), [("10:15", "real", 0), ("10:17", "real", 2),
-                                   ("10:18", "real", 3), ("10:19", "model", 0)]
-)  # fmt: skip
-def test_a_fill_waits_up_to_three_minutes_for_the_strike_to_trade(
-    db_engine, tmp_path, force, bar_at, source, wait
-):
-    """US-083: the Lab's RealPricer waits at most 3 minutes for a strike to trade; so does the
-    Simulator, and the trade says how long it waited."""
+    ("bar_at", "source"), [("10:15", "real"), ("10:16", "model"), ("10:18", "model")]
+)
+def test_a_fill_never_uses_a_later_minutes_premium(db_engine, tmp_path, force, bar_at, source):
+    """US-083: the strike's bar of the SAME minute or the model, marked `model`: a bar of a
+    later minute (not yet seen) is never used."""
     path = tmp_path / "expired_options.db"
     writer = OptionBarStore(path)
     deps = default_deps(None, option_store_path=path)
@@ -198,14 +195,12 @@ def test_a_fill_waits_up_to_three_minutes_for_the_strike_to_trade(
         writer.put(
             Block(RollingKey("NIFTY", 1, blk.key.opt, blk.key.rel + dr), blk.day, True, blk.data)
         )
-    t = s.advance(1)["trade"]
+    t = s.advance(1)["trade"]  # the fill minute is 10:15
     assert t["source"] == source
     if source == "real":
         assert t["entry_price"] == ceil_tick(333.0 * (1 + BT.option_spread_pct) + 0.10)
-    assert s.trade.entry_wait == wait
     s.close()
     s.advance(1)
     detail = m.store.trades(session_id=s.setup.id, status="CLOSED")[0]["detail"]
-    assert detail["entry_wait_min"] == wait
-    assert "exit_wait_min" in detail
+    assert "entry_wait_min" not in detail and "exit_wait_min" not in detail
     writer.close()
