@@ -7,6 +7,7 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import io
+import math
 import secrets
 import threading
 import time
@@ -41,6 +42,12 @@ from .store import SimStore
 
 #: the timeframes a single-timeframe strategy can be simulated on
 TIMEFRAMES: tuple[str, ...] = ("1m", "3m", "5m", "10m", "15m", "30m", "60m")
+#: what a session's numbers may be: (lowest, highest, how the sentence says it)
+LIMITS: dict[str, tuple[float, float, str]] = {
+    "stop_atr_k": (0.1, 10.0, "0.1 to 10"),
+    "target_r": (0.5, 20.0, "0.5 to 20"),
+    "capital": (1000.0, 1e9, "1,000 to 1,000,000,000 rupees"),
+}
 SPEEDS: tuple[int, ...] = (1, 2, 5, 10, 60, 300)
 OPTIONS_TTL_S = 300.0
 #: what a strategy's `SUITABLE` categories mean for the desk's two kinds
@@ -224,20 +231,23 @@ class SimManager:
         for k in params:
             if k in given and given[k] is not None:
                 params[k] = given[k]
-        try:
-            for k in ("stop_atr_k", "target_r", "capital"):
-                params[k] = float(params[k])
-                if not params[k] > 0:
+        for k, (lo, hi, label) in LIMITS.items():
+            try:
+                v = params[k]
+                if isinstance(v, bool) or isinstance(v, str):
                     raise ValueError(k)
-        except (TypeError, ValueError):
-            raise SimError(
-                400, "stop_atr_k, target_r and capital must be positive numbers."
-            ) from None
+                v = float(v)
+            except (TypeError, ValueError):
+                raise SimError(400, f"{k} must be a number ({label}).") from None
+            if not math.isfinite(v) or not lo <= v <= hi:
+                raise SimError(400, f"{k} must be a number ({label}).")
+            params[k] = v
         params["stop_atr_tf"] = str(params["stop_atr_tf"])
         if params["stop_atr_tf"] not in ATR_TIMEFRAMES:
             raise SimError(400, "stop_atr_tf must be 60m or own.")
-        params["extend"] = bool(params["extend"])
-        params["auto_exit"] = bool(params["auto_exit"])
+        for k in ("extend", "auto_exit"):
+            if not isinstance(params[k], bool):
+                raise SimError(400, f"{k} must be true or false.")
         if mode == "live":
             if self.desk is None:
                 raise SimError(400, "The live desk is not running, so there is no live feed.")
@@ -254,11 +264,17 @@ class SimManager:
             rng = self._range(inst.key)
             if rng is None:
                 raise SimError(400, f"There are no stored one-minute bars of {inst.key}.")
-            if start <= rng[0] or start > rng[1]:
+            if start < rng[0] or start > rng[1]:
                 raise SimError(
                     400,
                     f"The start is outside the stored data of {inst.key}: "
                     f"{rng[0]:%Y-%m-%d %H:%M} to {rng[1]:%Y-%m-%d %H:%M}.",
+                )
+            if start == rng[0]:
+                raise SimError(
+                    400,
+                    f"A session needs one stored minute before its start: {inst.key} begins at "
+                    f"{rng[0]:%Y-%m-%d %H:%M}, so start a minute or more after that.",
                 )
         tracked = inst.tracked or inst.key
         spec = self.specs.get(tracked) or self.specs.get(inst.key)

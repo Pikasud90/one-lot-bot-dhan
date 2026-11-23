@@ -175,3 +175,37 @@ def test_the_fill_uses_the_real_premium_when_the_store_has_it(db_engine, tmp_pat
     else:
         assert t["source"] == "model"
     writer.close()
+
+
+@pytest.mark.parametrize(
+    ("bar_at", "source", "wait"), [("10:15", "real", 0), ("10:17", "real", 2),
+                                   ("10:18", "real", 3), ("10:19", "model", 0)]
+)  # fmt: skip
+def test_a_fill_waits_up_to_three_minutes_for_the_strike_to_trade(
+    db_engine, tmp_path, force, bar_at, source, wait
+):
+    """US-083: the Lab's RealPricer waits at most 3 minutes for a strike to trade; so does the
+    Simulator, and the trade says how long it waited."""
+    path = tmp_path / "expired_options.db"
+    writer = OptionBarStore(path)
+    deps = default_deps(None, option_store_path=path)
+    rel = flat_minutes("2025-01-06", 15, 1000.0, 1.0, volume=1000.0)
+    nifty = flat_minutes("2025-01-06", 15, 25000.0, 10.0)
+    m, s = session(db_engine, tmp_path, force, "NIFTY", rel, nifty, deps=deps)
+    s.take(s.alert["id"])
+    blk = _block(s.trade.contract, T(bar_at), 25000.0, 333.0)
+    for dr in (-1, 0, 1):  # the store holds the neighbouring rolling series too
+        writer.put(
+            Block(RollingKey("NIFTY", 1, blk.key.opt, blk.key.rel + dr), blk.day, True, blk.data)
+        )
+    t = s.advance(1)["trade"]
+    assert t["source"] == source
+    if source == "real":
+        assert t["entry_price"] == ceil_tick(333.0 * (1 + BT.option_spread_pct) + 0.10)
+    assert s.trade.entry_wait == wait
+    s.close()
+    s.advance(1)
+    detail = m.store.trades(session_id=s.setup.id, status="CLOSED")[0]["detail"]
+    assert detail["entry_wait_min"] == wait
+    assert "exit_wait_min" in detail
+    writer.close()

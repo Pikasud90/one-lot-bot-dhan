@@ -43,6 +43,9 @@ from ..lab.real_options import NeedBlock, RealPricer, interpolate
 #: (option dict as the desk's alerts carry it, the index level, the instant) -> premium | None
 LivePremium = Callable[[dict[str, Any], float, dt.datetime], float | None]
 
+#: a fill or an exit waits at most this many minutes for the strike to trade (the Lab's value)
+MAX_WAIT_MIN = 3
+
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
 
@@ -103,7 +106,9 @@ class Contract:
 
 class StoredPremiums:
     """Real one-minute option bars of a fixed strike from the expired-options store, through
-    the Lab's own lookup (`RealPricer._find`, no waiting: the bar of that minute or none)."""
+    the Lab's own lookup (`RealPricer._find`): the bar of that minute or, for a fill or an exit,
+    the next one that traded within `MAX_WAIT_MIN` minutes (as `RealPricer(max_wait_min=3)`).
+    A mark never looks ahead: it takes the bar of its own minute or none."""
 
     def __init__(
         self,
@@ -115,7 +120,9 @@ class StoredPremiums:
         und_1m: pd.DataFrame,
     ) -> None:
         self.bt = bt
-        self.rp = RealPricer(und, spec, bt, costs, store, und_1m, 1, source=None, max_wait_min=0)
+        self.rp = RealPricer(
+            und, spec, bt, costs, store, und_1m, 1, source=None, max_wait_min=MAX_WAIT_MIN
+        )
 
     def _code(self, day: dt.date, epoch: int) -> int:
         """The near (1) or next (2) monthly contract, by the Lab's roll rule."""
@@ -127,24 +134,29 @@ class StoredPremiums:
             return 1
         return 2 if left < float(self.bt.option_min_days_to_expiry) else 1
 
-    def bar(self, c: Contract, minute: pd.Timestamp) -> np.ndarray | None:
-        """(open, high, low, close, iv, spot) of the contract's bar in the minute starting at
-        `minute`, or None."""
-        epoch = int(minute.value // 1_000_000_000)
+    def bar(
+        self, c: Contract, minute: pd.Timestamp, wait: int = 0
+    ) -> tuple[np.ndarray, int] | None:
+        """((open, high, low, close, iv, spot), minutes waited) of the contract's bar in the
+        minute starting at `minute` or, with `wait`, the first one within that many minutes
+        after it; None when it did not trade."""
         day = minute.date()
-        try:
-            hit = self.rp._find(self._code(day, epoch), c.opt, c.strike, epoch, day, 0)
-        except NeedBlock:
-            return None
-        if isinstance(hit, str):
-            return None
-        return hit[1]
+        for w in range(wait + 1):
+            epoch = int(minute.value // 1_000_000_000) + 60 * w
+            try:
+                hit = self.rp._find(self._code(day, epoch), c.opt, c.strike, epoch, day, 0)
+            except NeedBlock:
+                continue  # a block the store lacks for this minute's strike: try the next minute
+            if not isinstance(hit, str):
+                return hit[1], w
+        return None
 
 
 @dataclass(frozen=True)
 class Quote:
     price: float  # a raw premium (before the spread) or a share price
     source: str  # real | model
+    wait: int = 0  # minutes the stored bar came after the minute asked for (0: that minute)
 
 
 class Pricer:
@@ -234,14 +246,15 @@ class Pricer:
             if got is not None and got > 0:
                 return Quote(float(got), "real")
         if self.stored is not None:
-            row = self.stored.bar(c, minute)
-            if row is not None:
+            got = self.stored.bar(c, minute, 0 if how == "close" else MAX_WAIT_MIN)
+            if got is not None:
+                row, waited = got
                 o, h, lo, cl = float(row[0]), float(row[1]), float(row[2]), float(row[3])
                 if how == "open":
-                    return Quote(o, "real")
+                    return Quote(o, "real", waited)
                 if how == "close":
-                    return Quote(cl, "real")
-                return Quote(interpolate((o, h, lo, cl), bar, float(level), c.opt), "real")
+                    return Quote(cl, "real", waited)
+                return Quote(interpolate((o, h, lo, cl), bar, float(level), c.opt), "real", waited)
         when = minute + pd.Timedelta(minutes=1) if how == "close" else minute
         return Quote(self.model_premium(c, float(level), when), "model")
 

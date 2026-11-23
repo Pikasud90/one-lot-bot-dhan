@@ -166,6 +166,7 @@ class TradeState:
     entry_ns: int | None = None
     entry_price: float | None = None
     entry_source: str | None = None
+    entry_wait: int = 0
     risk_inr: float | None = None
     mark: float | None = None
     mark_price: float | None = None
@@ -177,6 +178,7 @@ class TradeState:
             "alert": self.alert,
             "contract": self.contract.as_dict() if self.contract else None,
             "entry_source": self.entry_source,
+            "entry_wait_min": self.entry_wait,
             "risk_inr": self.risk_inr,
             "pending_exit": self.pending_exit,
         }
@@ -221,8 +223,8 @@ class SimSession:
         self._frame_mark: tuple[int, int] = (0, 0)
         self._frame_bucket: tuple[int, int] = (-1, -1)
         if restore is None:
-            self._load(setup.start + pd.Timedelta(days=HORIZON_DAYS))
             start_ns = _ns_of(setup.start)
+            self._load(setup.start + pd.Timedelta(days=HORIZON_DAYS), start_ns)
             self.pos = int(np.searchsorted(self.ts, start_ns, side="left")) - 1
             if self.setup.mode == "past" and self.pos + 1 >= len(self.ts):
                 raise SimError(400, "There are no stored one-minute bars after that start.")
@@ -234,10 +236,19 @@ class SimSession:
             self._restore(restore)
 
     # ── data ──────────────────────────────────────────────────────────────
-    def _load(self, until: pd.Timestamp | None) -> None:
+    def _load(self, until: pd.Timestamp | None, after_ns: int | None = None) -> None:
+        """Load the bars from the history start to `until`. When that leaves nothing after
+        `after_ns` (a gap in the store longer than the horizon), read on to the end of the
+        stored data rather than end the session while later bars exist."""
         s = self.setup
         end = None if s.mode == "live" else until
         minute = self.bars.minute_bars(s.series_key, self.hist_start, end)
+        if (
+            end is not None
+            and after_ns is not None
+            and (minute.empty or _ns_of(minute.index[-1]) <= after_ns)
+        ):
+            minute = self.bars.minute_bars(s.series_key, self.hist_start, None)
         self.loaded_until = until
         self._set_minutes(minute)
         self._build_frame()
@@ -298,11 +309,13 @@ class SimSession:
         if s.kind == "STOCK":
             return Pricer(s.spec, "STOCK", d.bt, d.stock_costs)
         vix = None
+        self.vix_last = None
         try:
             daily = self.bars.daily_bars("INDIAVIX")
             if daily is not None and not daily.empty:
                 vix = daily["close"].copy()
                 vix.index = pd.DatetimeIndex(vix.index).normalize()
+                self.vix_last = vix.index.max()
         except Exception:  # noqa: BLE001 - the constant IV instead
             vix = None
         stored = None
@@ -342,7 +355,9 @@ class SimSession:
         if rng is None or _ns_of(rng[1]) <= int(self.ts[-1]):
             return False
         cursor = self.cursor_ns
-        self._load(pd.Timestamp(cursor, tz="UTC").tz_convert(IST) + pd.Timedelta(days=HORIZON_DAYS))
+        self._load(
+            pd.Timestamp(cursor, tz="UTC").tz_convert(IST) + pd.Timedelta(days=HORIZON_DAYS), cursor
+        )
         self.pos = int(np.searchsorted(self.ts, cursor, side="right")) - 1
         return self.pos + 1 < len(self.ts)
 
@@ -394,14 +409,31 @@ class SimSession:
             )
         ]
 
+    def vix_note(self) -> str:
+        """Plain words when the volatility the model needs is missing at the cursor."""
+        if self.kind == "STOCK":
+            return ""
+        last = getattr(self, "vix_last", None)
+        if last is None:
+            return " India VIX is not stored, so modelled premiums use a fixed volatility."
+        day = pd.Timestamp(self.cursor_ns, tz="UTC").tz_convert(IST).tz_localize(None).normalize()
+        if day > pd.Timestamp(last).tz_localize(None).normalize():
+            return (
+                f" India VIX is stored only to {pd.Timestamp(last):%d %b %Y}: from there modelled "
+                "premiums use that last value."
+            )
+        return ""
+
     def premium_note(self) -> str:
         if self.kind == "STOCK":
             return "share prices from the one-minute bars, with the Lab's slippage and charges"
         if self.setup.mode == "live":
-            return "today's traded premiums through the desk where it has them, otherwise modelled"
-        if self.deps.option_store is None:
-            return "modelled premiums (Black-76): no expired-options store was found"
-        return "real traded premiums where stored, otherwise modelled"
+            note = "today's traded premiums through the desk where it has them, otherwise modelled"
+        elif self.deps.option_store is None:
+            note = "modelled premiums (Black-76): no expired-options store was found"
+        else:
+            note = "real traded premiums where stored, otherwise modelled"
+        return note + "." + self.vix_note() if self.vix_note() else note
 
     def session_view(self) -> dict[str, Any]:
         s = self.setup
@@ -807,6 +839,7 @@ class SimSession:
             entry_price = pr.option_entry(q.price)
             entry = o
             source = q.source
+            t.entry_wait = q.wait
             delta = max(pr.delta(t.contract, o, minute), 0.05)
             cost = pr.charges(1, entry_price, entry_price) / pr.qty / delta
         else:
@@ -912,7 +945,9 @@ class SimSession:
             exit_price = pr.option_exit(q.price)
             exit_level = level
             exit_source = q.source
+            exit_wait = q.wait
         else:
+            exit_wait = 0
             slipped = reason not in ("TARGET", "GAP_TARGET")
             exit_price = pr.stock_exit(t.side, level, slipped)
             exit_level = exit_price
@@ -924,6 +959,7 @@ class SimSession:
         st = t.state
         detail = t.detail()
         detail["exit_source"] = exit_source
+        detail["exit_wait_min"] = exit_wait
         if t.entry_source != exit_source:
             detail["note"] = (
                 f"the entry premium was {t.entry_source} and the exit premium {exit_source}"
@@ -1092,7 +1128,8 @@ class SimSession:
         self.cursor_ns = cursor_ns
         if self.setup.mode == "past":
             self._load(
-                pd.Timestamp(cursor_ns, tz="UTC").tz_convert(IST) + pd.Timedelta(days=HORIZON_DAYS)
+                pd.Timestamp(cursor_ns, tz="UTC").tz_convert(IST) + pd.Timedelta(days=HORIZON_DAYS),
+                cursor_ns,
             )
         else:
             self._load(None)
@@ -1197,6 +1234,7 @@ def _trade_from_row(r: dict[str, Any]) -> TradeState:
     t.entry_source = r.get("source")
     t.risk_inr = d.get("risk_inr")
     t.pending_exit = d.get("pending_exit")
+    t.entry_wait = int(d.get("entry_wait_min") or 0)
     return t
 
 
