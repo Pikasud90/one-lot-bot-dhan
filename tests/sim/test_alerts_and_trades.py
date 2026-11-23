@@ -70,6 +70,7 @@ def test_an_alert_appears_only_when_its_candle_has_closed(db_engine, tmp_path, f
     assert [e["kind"] for e in r["events"]] == ["ALERT"]
     assert r["events"][0]["ts"] == T("10:15").isoformat()
     a = r["alert"]
+    assert r["events"][0]["data"] == {"alert_id": a["id"], "side": "LONG", "action": "BUY"}
     assert a["side"] == "LONG" and a["action"] == "BUY" and a["qty"] == 1
     assert (a["entry"], a["risk"], a["stop"], a["target"]) == (1000.0, 3.0, 997.0, 1009.0)
     assert a["expires"] == T("10:25").isoformat()
@@ -84,9 +85,12 @@ def test_take_fills_at_the_next_open_with_slippage(db_engine, tmp_path, force):
     until(s, "10:14")
     st = s.take(s.alert["id"])
     assert st["trade"]["status"] == "PENDING_FILL" and st["alert"] is None
+    assert st["trade"]["stage"] == "FIRST_STOP"
+    assert set(st) == {"session", "alert", "trade", "summary", "trades"}
     r = s.advance(1)
     filled = [e for e in r["events"] if e["kind"] == "FILLED"]
     assert len(filled) == 1 and filled[0]["ts"] == T("10:15").isoformat()
+    assert {"trade_id", "entry", "entry_price"} <= set(filled[0]["data"])
     t = r["trade"]
     assert t["status"] == "OPEN" and t["entry_ts"] == T("10:15").isoformat()
     assert t["entry_price"] == round(1002.0 * (1 + SLIP), 2) == t["entry"]
@@ -157,7 +161,7 @@ def test_the_stop_and_target_follow_the_ratchet_minute_by_minute(db_engine, tmp_
         elif e["kind"] == "TARGET_MOVED":
             got.append(("TARGET_MOVED", e["data"]["target"], e["ts"]))
         elif e["kind"] == "CLOSED":
-            got.append(("CLOSED", e["data"]["reason"], e["ts"]))
+            got.append(("CLOSED", e["data"]["exit_reason"], e["ts"]))
     # the same rule run by hand on the same one-minute bars, the fill minute first
     want: list[tuple] = []
     state = ratchet.start(plan)
@@ -204,7 +208,8 @@ def test_a_minute_touching_the_stop_closes_the_trade(
     s.advance(1)  # 10:16, flat
     r = s.advance(1)  # 10:17
     closed = [e for e in r["events"] if e["kind"] == "CLOSED"]
-    assert len(closed) == 1 and closed[0]["data"]["reason"] == reason
+    assert len(closed) == 1 and closed[0]["data"]["exit_reason"] == reason
+    assert {"trade_id", "exit", "exit_price", "exit_reason", "net"} <= set(closed[0]["data"])
     t = s.closed[0]
     assert t["exit_reason"] == reason and t["exit_price"] == round(price, 2)
     assert r["trade"] is None
@@ -218,7 +223,8 @@ def test_a_strategy_exit_closes_at_the_next_open_with_auto_exit(db_engine, tmp_p
     r = s.advance(1)
     closed = [e for e in r["events"] if e["kind"] == "CLOSED"]
     assert (
-        closed[0]["data"]["reason"] == "SIGNAL_EXIT" and closed[0]["ts"] == T("10:30").isoformat()
+        closed[0]["data"]["exit_reason"] == "SIGNAL_EXIT"
+        and closed[0]["ts"] == T("10:30").isoformat()
     )
     assert s.closed[0]["exit_price"] == round(1000.0 * (1 - SLIP), 2)
 
@@ -232,7 +238,9 @@ def test_without_auto_exit_only_the_signal_is_raised_and_close_works(db_engine, 
     s.close()
     r = s.advance(1)
     closed = [e for e in r["events"] if e["kind"] == "CLOSED"]
-    assert closed[0]["data"]["reason"] == "MANUAL" and closed[0]["ts"] == T("10:36").isoformat()
+    assert (
+        closed[0]["data"]["exit_reason"] == "MANUAL" and closed[0]["ts"] == T("10:36").isoformat()
+    )
 
 
 # ── AC7 ───────────────────────────────────────────────────────────────────────
@@ -241,7 +249,8 @@ def test_the_session_exit_time_closes_the_trade_and_the_day_ends(db_engine, tmp_
     ev = until(s, "15:15")
     closed = [e for e in ev if e["kind"] == "CLOSED"]
     assert (
-        closed[0]["data"]["reason"] == "SESSION_END" and closed[0]["ts"] == T("15:15").isoformat()
+        closed[0]["data"]["exit_reason"] == "SESSION_END"
+        and closed[0]["ts"] == T("15:15").isoformat()
     )
     r = s.advance(390)
     assert r["day_end"] is True and r["cursor"] == T("15:29").isoformat()

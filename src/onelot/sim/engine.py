@@ -566,7 +566,8 @@ class SimSession:
         self.alert = None
         self.status = "ENDED"
         self._save(events)
-        return {**self.state(), "events": shown + [self._public(e) for e in events]}
+        del shown  # its events are saved; the answer is the state, as GET gives it
+        return self.state()
 
     # ── the clock: reveal minutes ─────────────────────────────────────────
     def advance(self, minutes: int = 1) -> dict[str, Any]:
@@ -774,7 +775,8 @@ class SimSession:
             "SELL": "Sell the share short",
         }[action]
         text = f"{verb}: {what} near {_num(price)}"
-        self._event(events, end, "ALERT", text, {"alert_id": self.alert["id"]})
+        data = {"alert_id": self.alert["id"], "side": self.alert["side"], "action": action}
+        self._event(events, end, "ALERT", text, data)
 
     def _expire(self, events: list[dict], ns: int) -> None:
         a = self.alert
@@ -963,7 +965,13 @@ class SimSession:
             "CLOSED",
             f"Closed ({reason.replace('_', ' ').lower()}) at {_num(exit_price)}: "
             f"net {_num(net)} rupees",
-            {"trade_id": t.id, "reason": reason, "net": _num(net), "exit_price": _num(exit_price)},
+            {
+                "trade_id": t.id,
+                "exit": _num(exit_level),
+                "exit_price": _num(exit_price),
+                "exit_reason": reason,
+                "net": _num(net),
+            },
         )
 
     def _row_from_fields(self, t: TradeState, f: dict[str, Any]) -> dict[str, Any]:
@@ -999,7 +1007,7 @@ class SimSession:
             "target": _num(st.target) if st else None,
             "stop0": _num(p.stop) if p else None,
             "target0": _num(p.target) if p else None,
-            "stage": STAGE_NAMES[st.stage] if st else None,
+            "stage": STAGE_NAMES[st.stage] if st else STAGE_NAMES[0],
             "best": _num(st.best) if st else None,
             "progress": _num(ratchet.progress(p, st.best), 4) if p and st else None,
             "mark": _num(t.mark),
