@@ -164,3 +164,28 @@ no more often than a coin. An instrument marked "opening candle" has its own, wi
 the day's first candle carries the overnight gap. "Move size" (calm, normal or active) ranks the
 band against its own history: after an active reading the next move was about 1.5 times that after
 a calm one. The Lab raises no alert and no trade.
+
+## Simulator (US-075)
+The Simulator trades one strategy's alerts with dummy money, on stored bars from a start time
+(mode `past`) or on the running desk's feed (mode `live`). It never places an order and never
+writes to the paper test: its trades are in their own tables.
+- Alerts: the strategy's own signals, built as the Lab builds them on 120 days of history. A
+  signal becomes an alert once its candle has closed; it lasts 10 market minutes. One alert or
+  one trade at a time; a signal meanwhile is dropped.
+- Fills: a taken alert fills at the open of the next one-minute bar. A stock pays the Lab's
+  slippage of 0.03% on the entry, on a stop and on an exit at an open; a target fills at its
+  level. Index options are one lot of the contract the Lab chooses (monthly, delta near 0.65).
+- Stop and target: the first stop is 1.5 x ATR(14) of the index or share on 60m bars (on the
+  strategy's own bars when they are 60m or longer); the first target is 3 risks away. Then the
+  rule in `manage/ratchet.py` moves them minute by minute. A strategy exit closes at the next
+  minute's open; open trades close at the session's exit time (15:15). Nothing is carried
+  overnight.
+- Premiums: the real traded premium from `data/expired_options.db` when it holds that strike's
+  bar for the minute (read only, never fetched), today's from the desk in mode `live`,
+  otherwise the Black-76 model. The Lab's half spread and two ticks apply to either. Each
+  trade records whether its entry and exit premiums were `real` or `model`.
+- Costs: the charges of `config/costs.yaml`, intraday equity for a share and index options for
+  an option, on both legs. R is the net result over the first risk in rupees.
+- Storage: `sim_sessions` (a session, its cursor and settings), `sim_trades` and `sim_events`.
+  A session not in memory is rebuilt from them at its cursor. `GET /api/sim/trades` and
+  `/api/sim/trades.csv` list the closed simulator trades of every session.

@@ -30,6 +30,7 @@ from sqlalchemy import desc, select
 from ..broker.mock import MockBroker
 from ..clock import IST
 from ..desk.snapshots import NoPrices, list_snapshots, take_snapshot
+from ..sim.routes import register as register_sim
 
 log = logging.getLogger(__name__)
 
@@ -1011,6 +1012,7 @@ def create_app(engine, api_token: str) -> FastAPI:
         )
         return {"received": True}
 
+    register_sim(app, engine, require_token)
     # ── Machine Learning Lab (read-only statistical forecasts; never an alert) ──
     mllab: dict[str, Any] = {}  # the MlLab of the running desk, built on first use
 
