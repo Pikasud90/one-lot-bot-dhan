@@ -1,11 +1,17 @@
 # One Lot Desk: signal-only Dhan trade desk
 
-One process, one web app, one rule: **one unit per trade**. One lot of a Bank Nifty option,
-one lot of a future, one share of a stock, one lot of a currency future. The desk finds the
-setup, prices it net of every Indian charge, tells you the instrument, the entry, the stop
-and the target, and then keeps telling you *hold / tighten / exit* until you are flat.
-**You** place every order on your Dhan terminal. There is no order-placement code anywhere
+One process, one web app. The desk watches two rules and nothing else, and tells you what to
+do; **you** place every order on your Dhan terminal. There is no order-placement code anywhere
 in this repository and a test enforces that.
+
+* **Micro-trend rule, on index options.** Four traded indices (NIFTY, BANKNIFTY, FINNIFTY,
+  SENSEX), intraday, one lot of the monthly contract per trade. MIDCPNIFTY is followed for
+  training only: it raises no alert and opens no paper trade.
+* **Pullback rule, on stocks.** 18 stocks as delivery trades of about Rs 10,000, carried for
+  days (about 7 winners in 10 in the backtest, not proven: it is a paper test).
+
+Every alert is priced net of every Indian charge and opens a paper trade at the alert's own
+prices. Nothing here has proven an edge yet; the figures are a forward test.
 
 It merges two earlier builds, the Bank Nifty live option engine (`bnta`) and the Fyers
 strategy/backtest framework (`tradebot`), into a single Dhan-only project. The old folders
@@ -14,22 +20,10 @@ are reference only.
 > Decision support, not advice. Every rupee figure is an estimate until reconciled with a
 > real contract note (see `docs/05_COST_RECONCILIATION.md`). See [DISCLAIMER.md](DISCLAIMER.md).
 
-> **Current state (2026-11-08, branch `sprint-02-owner-feedback`).** Parts of this README
-> predate the owner's review of 2026-11-07. Where they differ, these win:
->
-> * **One exit per alert.** Each entry alert gets exactly one exit alert, taken or not (no
->   repeated *hold / tighten* advice), and every alert opens a paper trade at the alert's own
->   prices. No risk governor blocks or hides an alert.
-> * **Paper test.** The Live Desk runs only three candidates of the cross-instrument retune,
->   with its exact settings (`config/desk.yaml`): Supertrend + volume on 30-minute bars, long
->   only, on the 5 index options (monthly CE, delta about 0.65); Supertrend + volume on
->   60-minute bars and Supertrend + ADX + MACD on 30-minute bars, short only, on 18 stocks.
->   None passed all three backtest years: it is a forward test, not a recommendation.
-> * **Real option prices.** The paper book prices option fills with the alerted contract's
->   traded one-minute prices; `scripts/real_options_study.py` re-prices option backtests with
->   Dhan's expired-options data. The Lab's own option backtests are still Black-76.
-> * Write-ups: `docs/research/CROSS_RETUNE_2026-11-07.md` and
->   `docs/research/REAL_OPTIONS_2026-11-08.md`.
+> **Current state (2026-11-23).** The rules above are the whole desk; every other slot is
+> paused (`config/desk.yaml`, `docs/04_OPERATIONS.md`). Each entry alert gets exactly one exit
+> alert, taken or not, and no risk governor blocks or hides an alert. The paper book prices
+> option fills with the alerted contract's traded one-minute prices where it has them.
 
 ---
 
@@ -37,18 +31,21 @@ are reference only.
 
 | Tab | What it does | Needs |
 |---|---|---|
-| **Home** | **Alerts** first: every signal with IST time, data source and delay, strategy, confidence, time-to-live, Taken / Skipped, then the archive with each alert's audited outcome at its own levels and a per-strategy scoreboard; positions being monitored; then your Dhan account (funds, holdings, positions, ledger, trade book, cached, never polled). | free-tier token |
-| **Live Desk** | Two panels, **4 traded indices** (buy CE / buy PE, 1 lot) plus MIDCPNIFTY for training only (no alerts), and **10 stocks** (buy / sell, 1 share), each under several strategies at once, with an open-positions strip and a market-context strip (VIX, NIFTY, BANKNIFTY, SENSEX, USD/INR, GIFT NIFTY slot). Collapsible rows show market, regime & volatility, risk governor and data health per instrument. Alerts give instrument, unit, entry, stop, target, rupee risk/reward and instructions; taken trades are managed until you close them. Runs on Yahoo bars (delayed) until the Data API is active. The original Bank Nifty engine is folded underneath. `docs/14_LIVE_DESK.md` | nothing (Yahoo) / Data API |
-| **Backtest Lab** | Desk watchlist first, then any instrument. TradingView-style charts (vendored, offline) with trade markers; equity + drawdown; 30 % rule panel. **Walk-forward** with auto-sized windows, **optimizer**, **sweeps** (every strategy × instrument × timeframe, each saved) and a **leaderboard** over every saved run. Sentiment gate. 14 strategies. `docs/15_LAB_SWEEPS_SENTIMENT.md` | nothing (Yahoo corpus) |
-| **Data** | Corpus coverage, backfill jobs (Yahoo now, Dhan 1-minute × 5 years once the Data API is on), quality report, and an **explore** section: daily closes vs VIX, return distribution, intraday range profile, sessions per month, weekday seasonality, correlation heatmap. | nothing / Data API |
+| **Home** | **Today** strip (session, feed, token, the two rules, the next thing to do); the **market snapshot** button, which saves the last price of the indices and stocks to compare by hand; **alerts** (IST time, source and delay, strategy, confidence, time to live, Taken or Skipped) and each alert's outcome at its own levels; the paper test; then your Dhan account (funds, holdings, positions, ledger, trade book, cached, never polled). | free-tier token |
+| **Live Desk** | The 4 traded indices (buy a call or a put, 1 lot) and MIDCPNIFTY for training only, and the 18 stocks (pullback, delivery). Each card shows its seven micro-trend readings, market context (VIX, NIFTY, BANKNIFTY, SENSEX, USD/INR, GIFT NIFTY slot) and the paper trade. A trade on an option is managed by one stop, target and trail rule: first stop 1.5 ATR, first target 3 risks, then the stop only moves up; you get one notice each time to move your own stop. Runs on Yahoo bars (delayed) until the Data API is active. `docs/14_LIVE_DESK.md` | nothing (Yahoo) / Data API |
+| **Simulator** | Practice with dummy money: pick a strategy, an instrument and a start time (or follow the live feed), press Play, and take or skip each alert at the replay's own speed. Same stop, target and trail rule, full charges, real premiums where stored. It never places an order and never touches the paper test. `?simfake=1` shows demo data. | stored history |
+| **Backtest Lab** | Any instrument, TradingView-style charts (vendored, offline) with trade markers; equity and drawdown; 30 % rule panel. **Walk-forward**, **optimizer**, **sweeps** (every strategy by instrument by timeframe, each saved) and a **leaderboard** over every saved run. Sentiment gate. The strategy library is research material; the desk trades only the two rules. `docs/15_LAB_SWEEPS_SENTIMENT.md` | nothing (Yahoo corpus) |
+| **Data** | Corpus coverage, backfill jobs (Yahoo now, Dhan 1-minute x 5 years once the Data API is on), quality report, and an **explore** section: daily closes vs VIX, return distribution, intraday range profile, sessions per month, weekday seasonality, correlation heatmap. | nothing / Data API |
 | **News & Sentiment** | **Market pulse** (breadth, index trend, VIX percentile, NIFTY PCR with the Data API) recorded every 15 min, score history chart, board, news feed, manual posts, **bulk import** of your scorer's history for backtests. | nothing |
+| **Machine Learning Lab** | **Market states**: how each session is classified and how the states follow each other (counting only; a mock or new store says plainly it has too few sessions). Below it, statistical forecasts of the next candle's close with 68% and 95% bands and how often each held. The up figure is not a signal and the Lab raises no alert. | stored history |
 | **Settings** | Paste Dhan credentials (written to `.env`, mode 0600, never echoed), **Test entitlements**, **Renew token** (TOTP self-renewal, no daily pasting), **Go live** (switch to the Dhan feed in place), desk watchlist, read-only config. | none |
 
 Everything runs in **one Python process** (`python -m onelot run`) on macOS, Linux and Windows,
 with SQLite in WAL mode. Docker is optional; there are no external services.
 
-The web app opens in a bright **Day** theme sized for reading at arm's length; the **☾ Night**
-button in the header switches to the dark desk and the choice is remembered per browser. The
+The web app opens in a bright **Day** theme sized for reading at arm's length; the Theme
+select in the header offers four more (Night, Laxmi-Ganesha, Ramayana, Batman) and the choice
+is remembered per browser. Keys 1 to 8 switch tabs, in the order of the tab bar. The
 header clock is system time in IST (seconds and milliseconds); click it for the NSE holiday
 calendar (2026 cross-checked; past holidays shaded, the next one highlighted).
 
@@ -129,7 +126,7 @@ been run end to end yet: the machine that wrote them had no running Docker daemo
 4. **Backtest Lab** (needs history): `Desk watchlist, NIFTY BANK options, EMA Cross, 12m, Run
    backtest`. Then *Walk-forward* on anything that looks good. Only out-of-sample numbers count.
    `python -m onelot sweep` and `python -m onelot leaderboard` do the same from the shell.
-5. **Live Desk** works immediately: 15 instruments, 45 strategy slots.
+5. **Live Desk** works immediately: 4 traded indices, MIDCPNIFTY for training, 18 stocks.
 6. Once the Data API is active: `python -m onelot backfill --provider dhan` (five years of
    1-minute bars) and re-run the research gate.
 
@@ -215,6 +212,8 @@ The token is never logged, shown in the UI or stored in the outbox.
 
 ### Strategies
 
+The Lab's library, for research. The desk itself trades only the two rules above.
+
 | Name | Idea | Built for |
 |---|---|---|
 | `ema_cross` | Your thesis #1: fast/slow EMA cross in a trending market (ADX, slow-EMA slope), RSI and relative volume agreeing, one entry per cross, structural stop. Default 12m. | options, futures, stocks, FX |
@@ -235,21 +234,19 @@ in `docs/12_STRATEGY_RESEARCH.md`.
 
 ---
 
-## The live engine (Bank Nifty options)
+## The original Bank Nifty engine
 
-Unchanged in substance from the previous build, with two defects fixed in this merge:
+The first build's live option engine (`bnta`) still runs underneath the Live Desk. Two
+defects were fixed in the merge:
 
 * **Crash recovery now really recovers**: open positions restored from the database are
-  re-subscribed on the feed before the Guardian starts (previously the Guardian "resumed"
-  on a contract that was never subscribed and silently did nothing).
+  re-subscribed on the feed before the Guardian starts.
 * **A dead option quote is no longer silent**: the Guardian pulls a REST quote, marks the
   position *degraded* after `quote_stale_after_sec`, warns, and escalates to CRITICAL every
   minute while the position stays unmanaged.
 
-Direction can come from the built-in gate stack (`strategy.live.source: gates`) or from any
-Lab strategy evaluated on the same closed index bars (`source: lab`). Health, session,
-contract selection (0.60 to 0.70 |Δ|, liquidity), net R/R, cooldown and the risk governor gate
-it either way; the Lab strategy only ever supplies the side and a structural stop.
+The desk's two rules are described in `docs/04_OPERATIONS.md`; `config/desk.yaml` holds their
+exact settings and the pause switch of every slot.
 
 ---
 
@@ -257,6 +254,7 @@ it either way; the Lab strategy only ever supplies the side and a structural sto
 
 | File | What |
 |---|---|
+| `config/desk.yaml` | the Live Desk: the two rules and their settings, the 5 indices, the 18 stocks |
 | `config/config.yaml` | engine, session, risk (absolute rupees), live source, backtest defaults, API bind |
 | `config/costs.yaml` | per-product statutory charges |
 | `config/universe.yaml` | series (indices, stocks, FX) → one-unit instruments; lot-size fallbacks |
