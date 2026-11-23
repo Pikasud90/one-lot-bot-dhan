@@ -717,3 +717,74 @@ market_snapshots = Table(
     Column("taken_at", TZDateTime, nullable=False, index=True),
     Column("rows", JSON, nullable=False),
 )
+
+# ── The Simulator (US-075): dummy-money sessions on past data or the live feed ─────────────
+# Their own tables on purpose: a simulated trade never reaches `paper_trades`, `paper_events`,
+# `desk_signals` or `desk_positions`, so the paper test, its scoreboard and its CSV never see
+# one. Money is rupees as floats rounded to the paisa (the page's contract, SIM-API.md).
+sim_sessions = Table(
+    "sim_sessions",
+    METADATA,
+    Column("id", String(16), primary_key=True),  # s_9f2c1a3b
+    Column("created_at", TZDateTime, nullable=False),
+    Column("instrument_key", String(32), nullable=False),  # the desk's key: NIFTY, RELIANCE
+    Column("strategy", String(48), nullable=False),
+    Column("timeframe", String(6), nullable=False),
+    Column("mode", String(8), nullable=False),  # past | live
+    Column("start_ts", TZDateTime, nullable=False),
+    Column("cursor_ts", TZDateTime, nullable=False),  # the start of the last revealed minute
+    Column("status", String(8), nullable=False),  # RUNNING | DAY_END | ENDED
+    Column("params", JSON, nullable=False),  # the settings, and `_state` (alert, counters)
+    Index("ix_sim_sessions_created", "created_at"),
+)
+
+sim_trades = Table(
+    "sim_trades",
+    METADATA,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("session_id", String(16), ForeignKey("sim_sessions.id"), nullable=False),
+    Column("status", String(16), nullable=False),  # PENDING_FILL | OPEN | CLOSED
+    Column("side", String(8), nullable=False),  # LONG | SHORT (the managed price)
+    Column("action", String(16), nullable=False),  # BUY | SELL | BUY CALL | BUY PUT
+    Column("qty", Integer, nullable=False),
+    Column("what", String(64), nullable=False),  # the share's name or the option contract
+    Column("source", String(8)),  # real | model: the entry premium's
+    Column("entry_ts", TZDateTime),
+    Column("entry", Float),  # managed prices: entry, levels, best, mark, exit
+    Column("entry_price", Float),  # traded prices: entry, mark, exit
+    Column("stop", Float),
+    Column("target", Float),
+    Column("stop0", Float),
+    Column("target0", Float),
+    Column("stage", String(12)),
+    Column("best", Float),
+    Column("progress", Float),
+    Column("mark", Float),
+    Column("mark_price", Float),
+    Column("open_pnl", Float),
+    Column("exit_ts", TZDateTime),
+    Column("exit", Float),
+    Column("exit_price", Float),
+    Column("exit_reason", String(24)),
+    Column("gross", Float),
+    Column("charges", Float),
+    Column("net", Float),
+    Column("r_multiple", Float),
+    Column("detail", JSON),  # the plan, the ratchet state, the contract, both sources
+    Column("updated_at", TZDateTime, nullable=False),
+    Index("ix_sim_trades_session", "session_id"),
+    Index("ix_sim_trades_status", "status"),
+)
+
+sim_events = Table(
+    "sim_events",
+    METADATA,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("session_id", String(16), ForeignKey("sim_sessions.id"), nullable=False),
+    Column("seq", Integer, nullable=False),
+    Column("ts", TZDateTime, nullable=False),  # when the user could know it (a bar's close)
+    Column("kind", String(16), nullable=False),
+    Column("text", Text, nullable=False),
+    Column("data", JSON),
+    UniqueConstraint("session_id", "seq", name="uq_sim_events_session_seq"),
+)
