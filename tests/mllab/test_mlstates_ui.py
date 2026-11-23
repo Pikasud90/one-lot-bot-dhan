@@ -18,7 +18,7 @@ CSS = UI / "mlstates.css"
 ONE_LINERS = ["esc", "DIRS", "ARROW", "pc", "upper"]
 FUNCTIONS = [
     "msContext", "msHeadline", "msSizeLine", "msBars", "msChips", "msRow", "msPattern",
-    "msRuns", "msEvidence", "msLegend", "msCard",
+    "msRuns", "msEvidence", "msLegend", "msThin", "msCard",
 ]  # fmt: skip
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -184,3 +184,37 @@ def test_the_js_has_no_colour_literal_and_the_root_exists():
     js = JS.read_text(encoding="utf-8")
     assert not re.search(r"#[0-9a-fA-F]{6}\b|\brgba?\(", js)
     assert 'id="mlstates-root"' in (UI / "index.html").read_text(encoding="utf-8")
+
+
+@needs_node
+class TestSizeChipsAndThinCard:
+    def test_an_active_session_chip_is_filled_and_says_wide(self):
+        s = [
+            {"date": "2026-11-12", "r_pct": 1, "z": 1, "direction": "bull", "size": "active"},
+            {"date": "2026-11-13", "r_pct": 1, "z": 1, "direction": "bull", "size": "calm"},
+        ]
+        html = run(f"return msChips({json.dumps(s)});")
+        assert 'class="ms-chip bull active" title="2026-11-12: +1.00%, bull, wide range"' in html
+        assert 'class="ms-chip bull calm" title="2026-11-13: +1.00%, bull, narrow range"' in html
+
+    def test_the_thin_card_shows_only_the_line_the_strip_and_the_legend(self):
+        d = {
+            "thin": True, "n_states": 3, "next": {"context": ["bull"], "n": 1,
+            "probs": {"bull": 0.7, "flat": 0.3, "bear": 0}, "lean": "bull",
+            "conviction": "none", "score": 2},
+            "base": {"bull": 0.67, "flat": 0.33, "bear": 0, "active": 0.5},
+            "runs": [{"direction": "bull", "length": 1, "continued": 1, "n": 1}],
+            "sessions": [{"date": "2026-11-13", "r_pct": 1, "z": 1, "direction": "bull",
+                          "size": "active"}],
+            "first_order": [], "second_order": [], "last": ["bull"],
+            "walk_forward": {"n": 0},
+        }  # fmt: skip
+        html = run(f"return msCard({json.dumps(d)}, [{{key: 'K', label: 'K'}}], 'K', true);")
+        assert (
+            "Only 3 stated sessions for this instrument: too few to read anything from. "
+            "The card fills in once there are 250." in html
+        )
+        assert "ms-chip" in html and "How to read this page" in html
+        card = re.sub(r"title=\"[^\"]*\"", "", html.split("<details")[0])
+        for bad in ("ms-bar", "ms-tick", "%", "conviction", "score", "usual", "ms-table", "Runs"):
+            assert bad not in card, bad

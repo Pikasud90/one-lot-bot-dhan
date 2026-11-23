@@ -105,12 +105,18 @@ function msLegend() {
     "it carries the overnight gap. \"Move size\" compares the band with its own history. The \"up\" figure there " +
     "is not a signal: tested, it is right no more often than a coin.</p>";
 }
+function msThin(d) {
+  return `Only ${esc(d.n_states ?? 0)} stated sessions for this instrument: too few to read anything from. ` +
+    "The card fills in once there are 250.";
+}
 function msCard(d, instruments, selected, open) {
   const opts = (instruments || []).map((i) => `<option value="${esc(i.key)}"${i.key === selected ? " selected" : ""}>${esc(i.label)}</option>`).join("");
   const head = `<div class="row between"><h2>Market states <small>how each session is classified, and how the states follow each other</small></h2>` +
     `<div class="actions"><select id="ms-select" aria-label="Instrument">${opts}</select></div></div>`;
   let body;
-  if (!d || !d.next) {
+  if (d && d.thin) {
+    body = `<p class="ms-thin">${msThin(d)}</p>` + (d.sessions && d.sessions.length ? `<div class="ms-strip">${msChips(d.sessions)}</div>` : "");
+  } else if (!d || !d.next) {
     body = `<div class="muted">${esc((d && d.note) || "Loading the states...")}</div>`;
   } else {
     body = `<div class="ms-headline">${msHeadline(d.next, d.base)}</div>` +
