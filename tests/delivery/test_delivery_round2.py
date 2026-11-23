@@ -266,3 +266,55 @@ def test_a_bad_bar_note_stays_on_the_card_through_the_next_session(tmp_path):
         w.poll(at(L[4], hhmm))
         assert w.desk.notes.get("SBIN") == note
         assert w.desk.card("SBIN")["note"] == note
+
+
+class FakeSource:
+    """A Dhan stand-in for the real backfill: serves one bar per request, fails for VIX on ask."""
+
+    name = "dhan"
+
+    def __init__(self, fail_vix: bool = False) -> None:
+        self.asked: list[tuple[str, str]] = []
+        self.fail_vix = fail_vix
+
+    def supported_resolutions(self):
+        return ["1d", "1m"]
+
+    def earliest_available(self, res, today):
+        return None
+
+    def history(self, key, symbol, res, start, end, session=None, spec=None):
+        import pandas as pd
+
+        self.asked.append((key, res))
+        if self.fail_vix and key == "INDIAVIX":
+            raise RuntimeError("vix feed down")
+        ts = pd.Timestamp(f"{end:%Y-%m-%d} 10:00", tz="Asia/Kolkata")
+        return pd.DataFrame(
+            {"open": [10.0], "high": [11.0], "low": [9.0], "close": [10.5], "volume": [0.0]},
+            index=pd.DatetimeIndex([ts], name="ts"),
+        )
+
+
+@pytest.mark.parametrize("fail_vix", [False, True])
+def test_the_real_top_up_requests_and_stores_vix_and_a_vix_failure_spares_the_rest(
+    cfg, tmp_path, monkeypatch, fail_vix
+):
+    from onelot.data.store import available_resolutions
+
+    db = init_database(f"sqlite:///{tmp_path / 'vix.db'}")
+    src = FakeSource(fail_vix)
+    monkeypatch.setattr("onelot.data.backfill.choose_provider", lambda mode, adapter: src)
+    d, _, _ = new_desk(cfg, db, desk_cfg=load_desk_config())
+    d._adapter_getter = lambda: object()
+    result = d._top_up_bars(["NIFTY", "SBIN"], None)
+    assert {("NIFTY", "1m"), ("SBIN", "1m")} <= set(src.asked)
+    assert ("INDIAVIX", "1d") in src.asked and ("INDIAVIX", "1m") in src.asked
+    stored = available_resolutions(d.engine, "INDIAVIX")
+    assert set(available_resolutions(d.engine, "NIFTY")) == {"1m"}
+    if fail_vix:
+        assert not stored
+        assert any("INDIAVIX" in e for e in result.errors)
+    else:
+        assert {"1d", "1m"} <= set(stored)
+        assert not result.errors
