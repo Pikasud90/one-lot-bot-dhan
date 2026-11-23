@@ -71,12 +71,19 @@ Target 2 R: −0.36% (t −1.0), 42.9% winners, payoff 1.24, −0.11 / −0.20 /
 
 ## Real premiums
 
-Still to run (the stage fetches only from 15:40 to 08:50 IST; this work ended before 15:40). It
-prices every NIFTY and BANKNIFTY trade of the baseline and the chosen cell with `price_one`
-(store first, 2 requests a second) and reports like for like. From the main checkout:
+Run 2026-11-23 after 15:40 IST: NIFTY and BANKNIFTY trades priced with `price_one` (21 broker
+requests, store first, no 401). Like for like: the real result where priced, the model less the
+measured gap where not. Priced: baseline 1,333 of 1,518 trades, chosen cell 1,343 of 1,529;
+the rest lie beyond ATM +-10 strikes of the entry. Three numbers in a row are TUNE / CHOOSE / TEST.
 
-    PYTHONPATH=src:scripts:. .venv/bin/python -W ignore \
-      "../ONE LOT BOT - DHAN - wt-us074/scripts/ratchet_study.py" real report
+| cell | trades | model | real (priced) | model (same) | gap | like for like % (t) | win % | TUNE / CHOOSE / TEST |
+|---|---|---|---|---|---|---|---|---|
+| baseline | 1518 | −0.29 | −2.78 | −1.77 | −1.00 | −1.29 (−2.9) | 35.6 | −1.16 / −0.57 / −2.46 |
+| 60m k2.0 ext kept | 1529 | −0.25 | −2.67 | −1.69 | −0.98 | −1.22 (−2.7) | 36.2 | −1.08 / −0.46 / −2.48 |
+
+Real premiums cost about 1 point a trade more than the model. Chosen minus baseline is +0.07
+points a trade like for like, with TEST −2.48% against −2.46%: nothing separates them, and both
+lose about 1.2% a trade. The model's verdict stands: no edge, and the ratchet adds none.
 
 ## Part B: the control (random entries, 20 seeds, four indices)
 
@@ -145,6 +152,6 @@ the option rule loses on model premiums in every cell, and random entries lose w
 The stock pullback rule stays a paper-test candidate (+1.21% a trade, +1.01 over holding,
 t +2.2) at shares nearest Rs 10,000; at one share the depository charge removes it.
 
-Not done or approximate: real premiums (to run); the option plan cost is a stand-in; the stock
+Not done or approximate: the option plan cost is a stand-in; the stock
 path from 15:14 to the close is unseen; a same-day stock sale pays no depository charge; stock
 trades before 2021-11-08 (they only set the order of later ones) are managed on daily bars.
