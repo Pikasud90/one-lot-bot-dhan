@@ -181,11 +181,23 @@ writes to the paper test: its trades are in their own tables.
   minute's open; open trades close at the session's exit time (15:15). Nothing is carried
   overnight.
 - Premiums: the real traded premium from `data/expired_options.db` when it holds that strike's
-  bar for the minute (read only, never fetched), today's from the desk in mode `live`,
-  otherwise the Black-76 model. The Lab's half spread and two ticks apply to either. Each
+  bar for the minute or, for a fill or an exit, the next one that traded within 3 minutes (the
+  Lab's rule; the wait is in the trade's detail as `entry_wait_min` / `exit_wait_min`; read
+  only, never fetched), today's from the desk in mode `live`, otherwise the Black-76 model. The Lab's half spread and two ticks apply to either. Each
   trade records whether its entry and exit premiums were `real` or `model`.
 - Costs: the charges of `config/costs.yaml`, intraday equity for a share and index options for
   an option, on both legs. R is the net result over the first risk in rupees.
+- India VIX: the model's volatility comes from the stored India VIX. When the cursor is past the
+  last stored VIX day (or there is none) the session's price note says so in plain words and the
+  model uses the last value (or a fixed volatility).
+- Gaps and short days: a hole in the stored bars is crossed (the next advance goes to the next
+  stored minute); a short evening session (Diwali Muhurat) ends its day at its last minute and
+  closes an open trade there. A start needs one stored minute before it. `minutes` must be a whole
+  number from 1 to 390; a session's `capital`, `stop_atr_k` and `target_r` must be sane numbers
+  and `extend` / `auto_exit` true or false, or the answer is a 400.
+- Checking it on real bars: `scripts/dev_seed_bars.py` copies bars (read only from the source)
+  into a private instance's database; `tests/sim/tools/drive_sim.py` drives its API, replays
+  every trade with the ratchet and checks the money (not collected by pytest).
 - Storage: `sim_sessions` (a session, its cursor and settings), `sim_trades` and `sim_events`.
   A session not in memory is rebuilt from them at its cursor. `GET /api/sim/trades` and
   `/api/sim/trades.csv` list the closed simulator trades of every session.

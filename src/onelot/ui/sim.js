@@ -84,9 +84,15 @@ function strategiesFor(opts, inst) {
 }
 const toIsoIst = (local) => local ? (local.length === 16 ? local + ":00" : local) + "+05:30" : null;
 const defaultStart = (inst) => inst && inst.last ? String(inst.last).slice(0, 10) + "T09:15" : "";
+/* A session needs one stored minute before its start, so the earliest start is the first stored minute plus one. */
+function plusMinute(local) {
+  const d = new Date(String(local).slice(0, 16) + ":00Z");
+  d.setUTCMinutes(d.getUTCMinutes() + 1);
+  return d.toISOString().slice(0, 16);
+}
 function clampStart(local, inst) {
   if (!inst || !local) return local || "";
-  const lo = String(inst.first).slice(0, 16), hi = String(inst.last).slice(0, 16);
+  const lo = plusMinute(inst.first), hi = String(inst.last).slice(0, 16);
   return local < lo ? lo : (local > hi ? hi : local);
 }
 const WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -96,6 +102,7 @@ function clockText(unix) {
   const d = new Date((unix + IST) * 1000), s = d.toISOString();
   return `${WEEK[d.getUTCDay()]} ${s.slice(8, 10)} ${MONTH[d.getUTCMonth()]} ${s.slice(0, 4)}  ${s.slice(11, 16)}`;
 }
+const liveStaleSeconds = () => 600;
 const minutesLeft = (alert, cursorIso) => Math.max(0, Math.round((Date.parse(alert.expires) - Date.parse(cursorIso) - 60000) / 60000));
 /* The alert card: what to do, the managed price levels, rupees at risk and reward, the traded instrument, the reasons. */
 function alertCardHtml(a, cursorIso) {
@@ -153,7 +160,7 @@ const S = {
   summary: null, trades: [], allTrades: null, view: "session", events: [], alertMarks: [], exitSignal: false,
   playing: false, speed: 1, acc: 0, liveAcc: 0, anim: null, busy: false, needRefresh: false, pausedByAlert: false,
   over: false, wantClosed: false, cursorIso: null, shownUnix: null, note: "", fake: null, resumeState: null,
-  chart: null, series: null, marks: null, lines: [], lineKey: "", ac: null,
+  healT: null, chart: null, series: null, marks: null, lines: [], lineKey: "", ac: null,
   pauseOnAlert: true, sound: true, setup: store.get("sim.setup", {}) || {},
 };
 const cssv = (n) => (window.Charts && window.Charts.cssVar ? window.Charts.cssVar(n) : getComputedStyle(document.documentElement).getPropertyValue(n).trim());
@@ -273,7 +280,7 @@ function renderSetup() {
   $("sim-tf").innerHTML = optHtml(tfs.map(t => [t, t]), st.timeframe);
   $("sim-start-wrap").hidden = st.mode === "live";
   const start = $("sim-start");
-  start.min = String(inst.first).slice(0, 16); start.max = String(inst.last).slice(0, 16);
+  start.min = plusMinute(inst.first); start.max = String(inst.last).slice(0, 16);
   st.start = clampStart(st.start && st.startFor === inst.key ? st.start : defaultStart(inst), inst); st.startFor = inst.key;
   start.value = st.start;
   $("sim-go").disabled = !strat;
@@ -293,7 +300,22 @@ function resetRun(session) {
   S.mode = session.mode; S.cursorIso = session.cursor; S.shownUnix = unixOf(session.cursor) + 60;
   S.alert = null; S.trade = null; S.lastClosed = null; S.summary = null; S.trades = []; S.events = []; S.alertMarks = [];
   S.exitSignal = false; S.anim = null; S.acc = 0; S.liveAcc = 0; S.over = false; S.note = ""; S.pausedByAlert = false; S.needRefresh = false;
-  S.playing = false; S.lineKey = ""; S.view = "session"; S.allTrades = null;
+  S.playing = false; S.lineKey = ""; S.view = "session"; S.allTrades = null; S.healT = null;
+}
+/* A session that starts (or resumes) in the middle of a candle only reveals that candle's later minutes, so the page draws it
+   from a wrong open. Remember its start; when it has closed, take the server's version of it. */
+function markPartial() {
+  const next = unixOf(S.cursorIso) + 60, b = binStart(next, S.tfm);
+  S.healT = next !== b ? b : null;
+}
+async function healCandle() {
+  const t = S.healT; S.healT = null;
+  if (t === null || !S.id) return;
+  try {
+    const got = await getJson(`/api/sim/sessions/${S.id}`);
+    const c = (got.candles || []).find(x => x[0] === t), i = S.candles.findIndex(x => x[0] === t);
+    if (c && i >= 0) { S.candles[i] = c; if (S.series) S.series.update(barOf(c)); }
+  } catch (e) {}
 }
 function takeState(st) {
   if (!st) return;
@@ -315,7 +337,7 @@ async function startSession() {
   resetRun(r.session);
   S.candles = r.candles || [];
   $("sim-run").hidden = false;
-  drawAll();
+  drawAll(); markPartial();
   takeState(r.state);
   store.set("sim.last", { id: S.id });
   S.note = S.mode === "live" ? "Following the live feed. Press Play." : "Press Play to start the replay.";
@@ -335,6 +357,7 @@ function pushMinutes(minutes) {
     const last = S.candles[S.candles.length - 1], c = mergeBar(last, m, S.tfm);
     if (last && last[0] === c[0]) S.candles[S.candles.length - 1] = c; else S.candles.push(c);
     drawLast(c);
+    if (S.healT !== null && c[0] > S.healT) healCandle();
   }
   if (minutes.length) S.shownUnix = minutes[minutes.length - 1][0] + 60;
 }
@@ -357,7 +380,7 @@ function absorb(res) {
     else if (ev.kind === "ALERT_EXPIRED") toast("The alert ran out of time.");
   }
   S.events = S.events.slice(0, 60);
-  if (res.day_end) { S.playing = false; S.note = "The trading day is finished. Press Play to go on to the next day."; }
+  if (res.day_end) { S.needRefresh = true; S.playing = false; S.note = "The trading day is finished. Press Play to go on to the next day."; }
   if (res.over) { S.playing = false; S.over = true; S.note = "The stored data has ended."; }
   syncLines(); syncMarkers(); render();
   if (reload || S.needRefresh) { S.needRefresh = false; refresh(); }
@@ -471,7 +494,9 @@ function render() {
   $("sim-play").disabled = S.over;
   $("sim-step").hidden = S.mode === "live"; $("sim-step").disabled = S.over;
   renderSpeeds();
-  $("sim-status").textContent = S.note || (S.session ? `${S.session.instrument.label} · ${S.session.strategy} · ${S.session.timeframe}` : "");
+  $("sim-premium").textContent = S.session && S.session.premium_note ? "Prices: " + S.session.premium_note : "";
+  const stale = S.mode === "live" && S.cursorIso && Date.now() / 1000 - (unixOf(S.cursorIso) + 60) > liveStaleSeconds();
+  $("sim-status").textContent = (stale ? `Waiting for live minutes: the newest one the engine has is from ${clockText(unixOf(S.cursorIso) + 60)}. ` : "") + (S.note || (S.session ? `${S.session.instrument.label} · ${S.session.strategy} · ${S.session.timeframe}` : ""));
   $("sim-alert").innerHTML = S.trade ? "" : alertCardHtml(S.alert, S.cursorIso);
   $("sim-pos").innerHTML = positionCardHtml(S.trade || S.lastClosed, S.exitSignal);
   $("sim-summary").innerHTML = summaryTilesHtml(S.summary, S.session && S.session.capital);
@@ -502,10 +527,10 @@ function resume() {
   const st = S.resumeState;
   if (!st) return;
   resetRun(st.session);
-  S.candles = [];
+  S.candles = st.candles || [];
   $("sim-run").hidden = false;
-  drawAll(); takeState(st);
-  S.note = "Resumed. The candles before this point are not reloaded; the chart builds from here.";
+  drawAll(); markPartial(); takeState(st);
+  S.note = "Resumed at the server's clock. Press Play.";
   $("sim-resume").innerHTML = ""; S.resumeState = null;
   render();
 }

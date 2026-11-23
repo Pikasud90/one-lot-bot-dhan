@@ -86,6 +86,8 @@ Closes the open trade at the open of the next one-minute bar (`CLOSED` event, re
 Closes an open trade the same way and marks the session ENDED.
 
 ### GET /api/sim/sessions/{id}
+The body below plus `"candles"`: the same closed candles as in the create answer (up to 300, to
+the cursor). `take`, `skip`, `close` and `end` answer with this body WITHOUT `candles`.
 ```json
 {"session": {"...": "as above, with the present cursor and status RUNNING|DAY_END|ENDED"},
  "alert": {"id": "a_17", "ts": "...", "expires": "...", "side": "LONG", "action": "BUY CALL",
@@ -110,6 +112,20 @@ Closes an open trade the same way and marks the session ENDED.
   `entry_price`, `mark_price`, `exit_price` are TRADED prices. For a stock the two are equal.
 - `source` is `real` or `model` (a modelled premium); `traded.what` is the share's name for a
   stock. `r_multiple` is the net result over the first risk in rupees.
+- `stage` is FIRST_STOP | BREAKEVEN | LOCKED | TRAILING (the ratchet's stages).
+- `ALERT`, `FILLED` and `CLOSED` events carry ids and prices in `data`: `ALERT` {alert_id, side,
+  action}, `FILLED` {trade_id, entry, entry_price, stop, target, source}, `CLOSED` {trade_id, exit,
+  exit_price, exit_reason, net}.
+- Session `params` also carries `auto_exit` and `stop_atr_tf` ("60m" or "own"). Limits: `stop_atr_k`
+  0.1 to 10, `target_r` 0.5 to 20, `capital` 1,000 to 1e9, `extend` and `auto_exit` booleans,
+  `minutes` a whole number 1 to 390 (a bool, a string or a fraction is a 400).
+- `session.premium_note` is plain words about where option prices come from and, when it applies,
+  that India VIX is stored only to a date before the cursor (modelled premiums then use that last
+  value) or not at all.
+- A start needs one stored minute before it (a start on the very first stored minute is a 400);
+  a start in a hole of the store goes on at the next stored minute. A real option price may come
+  from the next traded minute within 3 minutes for a fill or an exit (`entry_wait_min`,
+  `exit_wait_min` in the stored detail); marks never look ahead.
 - `exit_reason`: STOP, BREAKEVEN_STOP, LOCK_STOP, TRAIL_STOP, the same with a `GAP_` prefix,
   TARGET, GAP_TARGET, SIGNAL_EXIT, SESSION_END, MANUAL, DATA_END.
 

@@ -53,6 +53,7 @@ SIM_FUNCTIONS = [
     "partialMinute",
     "stepMinutes",
     "strategiesFor",
+    "plusMinute",
     "clampStart",
     "clockText",
     "alertCardHtml",
@@ -422,7 +423,8 @@ class TestSetupHelpers:
         out = run(
             f"return [clampStart('2020-01-01T09:15', {json.dumps(self.INST)}), clampStart('2030-01-01T09:15', {json.dumps(self.INST)}), toIsoIst('2026-10-05T09:15'), toIsoIst('')];"
         )
-        assert out == ["2021-11-08T09:15", "2026-11-20T15:29", "2026-10-05T09:15:00+05:30", None]
+        # the engine needs one stored minute before a start: the earliest start is the first minute + 1
+        assert out == ["2021-11-08T09:16", "2026-11-20T15:29", "2026-10-05T09:15:00+05:30", None]
 
     def test_timeframes_read_as_minutes(self):
         assert run("return ['1m', '3m', '15m', '60m', '1h', 'x'].map(tfMinutes);") == [
@@ -533,3 +535,26 @@ class TestStatic:
             html.count('<div id="sim-root">') == 1
             and '<script src="/static/sim.js" defer></script>' in html
         )
+
+
+def test_the_page_shows_the_premium_note_and_heals_a_candle_it_joined_midway():
+    js = SIM_JS.read_text("utf-8")
+    html = (UI / "index.html").read_text("utf-8")
+    assert 'id="sim-premium"' in html and "premium_note" in js
+    assert "markPartial()" in js and "healCandle()" in js
+    assert "S.candles = st.candles || []" in js  # a resume gets the chart's history back
+
+
+@needs_node
+def test_the_earliest_start_is_one_minute_after_the_first_stored_bar():
+    assert run(
+        "return [plusMinute('2026-05-04T09:15:00+05:30'), plusMinute('2026-05-04T23:59')];"
+    ) == [
+        "2026-05-04T09:16",
+        "2026-05-05T00:00",
+    ]
+
+
+def test_a_live_session_with_no_new_minutes_says_so():
+    js = SIM_JS.read_text("utf-8")
+    assert "Waiting for live minutes" in js and "liveStaleSeconds" in js
