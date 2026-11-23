@@ -6,7 +6,7 @@
 #sim-root .sim-resumecard{border-left:5px solid var(--cyan);font-size:16px}
 #sim-root .sim-bar{display:flex;flex-direction:column;gap:10px}
 #sim-root .sim-clock{font-family:var(--mono);font-size:26px;font-weight:700;letter-spacing:-.01em}
-#sim-root .sim-badge{display:inline-block;margin-left:10px;padding:4px 12px;font-size:13px;font-weight:700;letter-spacing:.1em;color:var(--muted);background:var(--panel2);border:1px solid var(--line2)}
+#sim-root .sim-badge{display:inline-block;margin-left:10px;padding:4px 12px;font-size:14px;font-weight:700;letter-spacing:.1em;color:var(--muted);background:var(--panel2);border:1px solid var(--line2)}
 #sim-root .sim-badge.on{color:var(--ok);border-color:var(--ok);background:var(--ok-bg)}
 #sim-root .sim-badge.live{color:var(--bad);border-color:var(--bad);background:var(--bad-bg)}
 #sim-root .sim-status{font-size:15px;min-height:1.4em}
@@ -26,7 +26,7 @@
 #sim-root .sim-levels{display:flex;flex-wrap:wrap;gap:6px 26px;font-size:16px;margin:6px 0}
 #sim-root .sim-levels b{font-family:var(--mono)}
 #sim-root .sim-traded{font-size:16px;margin:6px 0}
-#sim-root .sim-src{display:inline-block;padding:1px 9px;font-size:13px;font-weight:700;letter-spacing:.06em;border:1px solid var(--line2);background:var(--panel2);color:var(--muted)}
+#sim-root .sim-src{display:inline-block;padding:1px 9px;font-size:14px;font-weight:700;letter-spacing:.06em;border:1px solid var(--line2);background:var(--panel2);color:var(--muted)}
 #sim-root .sim-src.real{color:var(--ok);border-color:var(--ok);background:var(--ok-bg)}
 #sim-root .sim-src.modelled{color:var(--warn-ink);border-color:var(--warn);background:var(--warn-bg)}
 #sim-root .sim-reasons{margin:8px 0;padding-left:22px;font-size:15px}
@@ -39,7 +39,7 @@
 #sim-root .sim-progress{position:relative;height:14px;margin:8px 0 2px;background:var(--panel2);border:1px solid var(--line2)}
 #sim-root .sim-progress .sim-fill{height:100%;background:var(--ok)}
 #sim-root .sim-progress i{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--text)}
-#sim-root .sim-marks{position:relative;height:20px;font-size:13px;color:var(--muted);margin-bottom:8px}
+#sim-root .sim-marks{position:relative;height:20px;font-size:14px;color:var(--muted);margin-bottom:8px}
 #sim-root .sim-marks span{position:absolute;transform:translateX(-50%)}
 #sim-root .sim-marks span.end{right:0;transform:none}
 #sim-root .sim-log-head{justify-content:space-between;margin-bottom:10px}

@@ -243,7 +243,7 @@
         <div class="sub" data-sub="matrix">
           <div class="card">
             <div class="row between"><h2>Matrix <small>strategy → instrument → timeframe × setting, highest win rate first</small></h2>
-              <div class="actions"><select id="matrix-sweep"><option value="">all saved runs</option></select><input type="number" id="matrix-min" value="5" min="1" style="width:80px;margin:0" title="minimum trades"><button class="btn small" id="matrix-refresh">refresh</button></div></div>
+              <div class="actions"><select id="matrix-sweep" aria-label="Which saved runs"><option value="">all saved runs</option></select><input type="number" id="matrix-min" aria-label="Minimum trades" value="5" min="1" style="width:80px;margin:0" title="minimum trades"><button class="btn small" id="matrix-refresh">refresh</button></div></div>
             <div class="tiles small" id="matrix-summary"></div>
             <div id="lab-matrix"></div>
           </div>
@@ -251,12 +251,12 @@
         <div class="sub" data-sub="board">
           <div class="card">
             <div class="row between"><h2>Leaderboard <small>every saved run · sort by win rate or profit %, high or low first</small></h2>
-              <div class="actions"><select id="board-kind"><option value="">in-sample + walk-forward</option><option value="walkforward">walk-forward (OOS) only</option><option value="single">in-sample only</option></select>
-                <select id="board-cat"><option value="">all categories</option><option>OPTIONS</option><option>FUTURES</option><option>STOCK</option><option>CURRENCY</option></select>
-                <select id="board-strats" title="which strategies"><option value="primary">primary strategies</option><option value="">all strategies</option></select>
-                <select id="board-sort" title="sort by"><option value="score">sort: score</option><option value="win_rate">sort: win rate</option><option value="profit_pct">sort: profit %</option><option value="profit_factor">sort: profit factor</option><option value="expectancy_r">sort: expectancy R</option><option value="net_pnl">sort: net ₹</option><option value="trades">sort: trades</option></select>
+              <div class="actions"><select id="board-kind" aria-label="Which kind of run"><option value="">in-sample + walk-forward</option><option value="walkforward">walk-forward (OOS) only</option><option value="single">in-sample only</option></select>
+                <select id="board-cat" aria-label="Category"><option value="">all categories</option><option>OPTIONS</option><option>FUTURES</option><option>STOCK</option><option>CURRENCY</option></select>
+                <select id="board-strats" aria-label="Which strategies" title="which strategies"><option value="primary">primary strategies</option><option value="">all strategies</option></select>
+                <select id="board-sort" aria-label="Sort by" title="sort by"><option value="score">sort: score</option><option value="win_rate">sort: win rate</option><option value="profit_pct">sort: profit %</option><option value="profit_factor">sort: profit factor</option><option value="expectancy_r">sort: expectancy R</option><option value="net_pnl">sort: net ₹</option><option value="trades">sort: trades</option></select>
                 <button class="btn small" id="board-order" data-order="desc" title="toggle ascending / descending">↓ high first</button>
-                <input type="number" id="board-min" value="10" min="1" style="width:90px;margin:0" title="minimum trades"><button class="btn small" id="board-refresh">refresh</button></div></div>
+                <input type="number" id="board-min" aria-label="Minimum trades" value="10" min="1" style="width:90px;margin:0" title="minimum trades"><button class="btn small" id="board-refresh">refresh</button></div></div>
             <div class="tiles small" id="board-summary"></div>
             <div class="scroll" id="lab-board"></div>
           </div>
@@ -326,10 +326,10 @@
       </div>
       <div class="card"><div class="row between"><h2>Coverage <small id="cov-meta"></small></h2>
           <div class="actions">
-            <select id="cov-view" title="What the Lab can load per timeframe, or the raw rows stored"><option value="effective">what the Lab can use</option><option value="stored">bars stored</option></select>
-            <select id="cov-source"><option value="">all sources</option><option value="dhan">Dhan</option><option value="yahoo">Yahoo</option></select>
-            <select id="cov-tf"><option value="">all timeframes</option><option>1m</option><option>2m</option><option>5m</option><option>15m</option><option>30m</option><option>60m</option><option>1d</option></select>
-            <input type="search" id="cov-q" placeholder="series" style="width:120px">
+            <select id="cov-view" aria-label="View" title="What the Lab can load per timeframe, or the raw rows stored"><option value="effective">what the Lab can use</option><option value="stored">bars stored</option></select>
+            <select id="cov-source" aria-label="Source"><option value="">all sources</option><option value="dhan">Dhan</option><option value="yahoo">Yahoo</option></select>
+            <select id="cov-tf" aria-label="Timeframe"><option value="">all timeframes</option><option>1m</option><option>2m</option><option>5m</option><option>15m</option><option>30m</option><option>60m</option><option>1d</option></select>
+            <input type="search" id="cov-q" aria-label="Search series" placeholder="series" style="width:120px">
           </div></div>
         <div class="hint" id="cov-note"></div>
         <div class="scroll" id="data-coverage"></div></div>
@@ -337,7 +337,7 @@
     <div class="card" id="data-quality-card" hidden><h2>Quality</h2><div class="scroll" id="data-quality-out"></div></div>
     <div class="card">
       <div class="row between"><h2>Explore a series <small>what the backtests actually see</small></h2>
-        <div class="actions"><select id="eda-series"></select><select id="eda-res"><option>5m</option><option>2m</option><option>15m</option><option>60m</option></select><button class="btn small" id="eda-go">Explore</button></div></div>
+        <div class="actions"><select id="eda-series" aria-label="Series to explore"></select><select id="eda-res" aria-label="Resolution"><option>5m</option><option>2m</option><option>15m</option><option>60m</option></select><button class="btn small" id="eda-go">Explore</button></div></div>
       <div class="tiles small" id="eda-stats"></div>
       <div class="grid2">
         <div><h3>Daily close · India VIX (right axis)</h3><div class="plot" id="eda-close"></div></div>
@@ -469,7 +469,7 @@
     <div id="mlstates-root"><div class="card"><div class="muted">Loading the market states…</div></div></div>
     <div class="card">
       <div class="row between"><h2>Machine Learning Lab <small>the next candle's close, five statistical models</small></h2>
-        <div class="actions"><select id="mllab-tf"><option>15m</option><option>30m</option><option>60m</option><option>4h</option><option>1d</option></select>
+        <div class="actions"><select id="mllab-tf" aria-label="Timeframe"><option>15m</option><option>30m</option><option>60m</option><option>4h</option><option>1d</option></select>
           <span class="muted" id="mllab-updated">not loaded yet</span></div></div>
       <p class="hint">Statistical forecasts of the next candle's close. They inform; they raise no alert and no trade. Read the bands: tested on 13 November 2026, about 7 candles in 10 closed inside the 68% band and about 93 in 100 inside the 95% band. The day's opening candle has its own, wider band because it carries the overnight gap. "Move size" compares the band with its own history: after an active reading the next move was about 1.5 times that after a calm one. The "up" figure is not a signal: tested, it is right no more often than a coin.</p>
       <div class="scroll" id="mllab-table"><div class="muted">Loading forecasts…</div></div>

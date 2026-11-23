@@ -337,6 +337,11 @@ function takeState(st) {
   if (S.trade && S.trade.status === "CLOSED") { S.lastClosed = S.trade; S.trade = null; }
 }
 async function startSession() {
+  if (S.starting) return;   // a second click while the first request runs does nothing
+  S.starting = true; $("sim-go").disabled = true;
+  try { await startSessionNow(); } finally { S.starting = false; renderSetup(); }
+}
+async function startSessionNow() {
   readSetup();
   const st = S.setup;
   if (!st.strategy) return;
@@ -471,7 +476,12 @@ function applyAction(res) {
   S.events = S.events.slice(0, 60);
 }
 async function act(kind) {
-  if (!S.id) return;
+  if (!S.id || S.acting) return;
+  if (kind === "end" && !S.over && typeof confirm === "function" && !confirm("End this practice session? The replay stops and cannot be resumed.")) return;
+  S.acting = true;
+  try { await actNow(kind); } finally { S.acting = false; }
+}
+async function actNow(kind) {
   const base = `/api/sim/sessions/${S.id}`;
   if (S.anim) finishMinute();   // the minute being drawn belongs before whatever the action reveals
   let res = null;
@@ -493,7 +503,7 @@ async function act(kind) {
 /* ── rendering ──────────────────────────────────────────────────────── */
 function renderSpeeds() {
   const sp = (S.opts && S.opts.speeds) || [1, 2, 5, 10, 60, 300];
-  $("sim-speeds").innerHTML = S.mode === "live" ? "" : sp.map(v => `<span class="chip${v === S.speed ? " active" : ""}" data-speed="${v}">${v}x</span>`).join("");
+  $("sim-speeds").innerHTML = S.mode === "live" ? "" : sp.map(v => `<span class="chip${v === S.speed ? " active" : ""}" data-speed="${v}" role="button" tabindex="0" aria-pressed="${v === S.speed}" aria-label="Speed ${v} times">${v}x</span>`).join("");
 }
 function renderClock() { $("sim-clock").textContent = clockText(S.shownUnix); }
 function renderLog() {
@@ -583,8 +593,10 @@ async function loadTab() {
     S.opts = await getJson("/api/sim/options");
     if (!S.opts || !S.opts.instruments) throw new Error("no options");
   } catch (e) {
-    S.offline = true; S.opts = null;
-    $("sim-note").textContent = "The simulator's engine is not running in this build.";
+    S.opts = null;
+    // A 404 means this build has no engine; any other failure (the desk still starting, a 503) may pass, so the next visit tries again.
+    if (e && e.message === "404") { S.offline = true; $("sim-note").textContent = "The simulator's engine is not running in this build."; }
+    else $("sim-note").textContent = "The simulator is not answering yet (the desk may still be starting). Open this tab again to retry.";
     $("sim-go").disabled = true;
     return;
   }
@@ -623,7 +635,9 @@ function wire() {
     else act(a);
   });
   document.addEventListener("keydown", (e) => {
-    if (!OL.tabShown("sim") || !S.id) return;
+    if (!OL.tabShown("sim")) return;
+    if ((e.key === "Enter" || e.code === "Space") && e.target && e.target.closest && e.target.closest("[data-speed]")) { e.preventDefault(); e.target.click(); return; }
+    if (!S.id) return;
     const tag = (e.target && e.target.tagName) || "";
     if (/^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(tag) || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.code === "Space") { e.preventDefault(); setPlaying(!S.playing); }

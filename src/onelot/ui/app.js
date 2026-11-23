@@ -32,14 +32,23 @@ function toast(msg, kind = "") {
   const d = document.createElement("div"); d.className = "toast " + kind; d.textContent = msg;
   $("toasts").appendChild(d); setTimeout(() => d.remove(), 6000);
 }
-async function api(url, body, method, _retry) {
+// A second click on a button that sends a change (same address, same body) while the first is still running joins that request instead of sending another.
+const inflight = new Map();
+function api(url, body, method, _retry) {
+  if (!body) return apiNow(url, body, method, _retry);
+  const key = (method || "POST") + " " + url + " " + JSON.stringify(body);
+  if (inflight.has(key)) return inflight.get(key);
+  const p = apiNow(url, body, method, _retry).finally(() => inflight.delete(key));
+  inflight.set(key, p); return p;
+}
+async function apiNow(url, body, method, _retry) {
   const opt = { method: method || (body ? "POST" : "GET"), headers: { "x-onelot-token": TOKEN } };
   if (body) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
   const r = await fetch(url, opt);
   const j = await r.json().catch(() => ({}));
   if (r.status === 401 && !_retry) {
     // The engine restarted or its session token changed: re-sync it once and retry.
-    try { const t = await fetch("/api/session").then(x => x.json()); if (t.token && t.token !== TOKEN) { TOKEN = t.token; return api(url, body, method, true); } } catch (e) {}
+    try { const t = await fetch("/api/session").then(x => x.json()); if (t.token && t.token !== TOKEN) { TOKEN = t.token; return apiNow(url, body, method, true); } } catch (e) {}
   }
   if (!r.ok) { toast((j && (j.detail || j.error)) || `${r.status} ${url}`, "bad"); throw new Error(j.detail || r.status); }
   return j;
@@ -480,7 +489,7 @@ function wirePositions(root, after) {
   });
   root.querySelectorAll("[data-dclose]").forEach(b => b.onclick = async () => {
     const id = b.dataset.dclose, v = $("dx_" + id).value;
-    if (!v) { toast("Type the price you exited at, then Close now.", "warn"); return; }
+    if (!(Number(v) > 0)) { toast("Type the price you exited at (above zero), then Close now.", "warn"); return; }
     if (!confirm("Close it now at your exit price? It would otherwise close by itself at its exit alert's price.")) return;
     const r = await api(`/api/desk/position/${id}/close`, { exit_price: Number(v), reason: "MANUAL" });
     toast(r.closed ? `Closed: net ${rup(r.net_pnl)}` : (r.message || "not closed"), r.closed ? (r.net_pnl >= 0 ? "ok" : "bad") : "warn");
@@ -556,7 +565,8 @@ function renderPositions(s) {
         <button class="btn small" data-close="${p.position_id}">Close</button></td></tr>`).join("") + `</tbody></table>`;
   el.querySelectorAll("[data-close]").forEach(b => b.onclick = async () => {
     const v = $("x_" + b.dataset.close).value;
-    if (!v) { toast("Enter the price you actually exited at.", "warn"); return; }
+    if (!(Number(v) > 0)) { toast("Enter the price you actually exited at (above zero).", "warn"); return; }
+    if (!confirm("Close it now at your exit price?")) return;
     await api(`/api/position/${b.dataset.close}/close`, { exit_price: Number(v), reason: "MANUAL" });
   });
 }
@@ -1142,6 +1152,7 @@ $("lab-opt").onclick = () => submit("optimize").catch(() => {});
 $("lab-wf").onclick = () => submit("walkforward").catch(() => {});
 function startPoll() { if (lab.poll) return; lab.poll = setInterval(refreshRuns, 2000); refreshRuns(); }
 async function refreshRuns() {
+  if (document.hidden && lab.poll) return;   // the page is in the background: the next tick after it returns will catch up
   const r = await api("/api/lab/runs?limit=80"); lab.runs = r.runs;
   renderRuns(); renderSweeps();
   const busy = lab.runs.some(x => x.status === "RUNNING" || x.status === "QUEUED");
@@ -1406,6 +1417,7 @@ function drawCoverage() {
 [["cov-view", "view"], ["cov-source", "source"], ["cov-tf", "tf"]].forEach(([id, k]) => { const el = $(id); if (!el) return; el.value = covState[k]; el.onchange = () => { covState[k] = el.value; store.set("cov." + k, el.value); drawCoverage(); }; });
 if ($("cov-q")) $("cov-q").oninput = () => { covState.q = $("cov-q").value; drawCoverage(); };
 async function loadData() {
+  if (document.hidden && dataPoll) return;
   const [cov, jobs] = await Promise.all([api("/api/lab/coverage"), api("/api/data/jobs")]);
   covState.data = cov; drawCoverage();
   const busy = jobs.jobs.some(j => j.status === "RUNNING" || j.status === "QUEUED");
@@ -1510,6 +1522,7 @@ curl -X POST ${location.origin}/api/desk/context -H "x-onelot-token: $TOKEN" -H 
 }
 $("pulse-refresh").onclick = async () => { renderPulse(await api("/api/sentiment/pulse?refresh=1")); };
 $("sent-add").onclick = async () => {
+  if (!Number.isFinite(parseFloat($("sent-score").value)) || !Number.isFinite(parseFloat($("sent-conf").value))) { toast("Enter a score and a confidence first.", "warn"); return; }
   await api("/api/sentiment", { scope: $("sent-scope").value, symbol: $("sent-symbol").value || null, score: parseFloat($("sent-score").value), confidence: parseFloat($("sent-conf").value),
     horizon: $("sent-horizon").value, source: $("sent-source").value || "manual", note: $("sent-note").value || null });
   toast("Sentiment posted", "ok"); loadNews();
@@ -1520,6 +1533,7 @@ $("imp-run").onclick = async () => {
   $("imp-out").textContent = `imported ${r.imported} rows (${r.first.slice(0, 10)} → ${r.last.slice(0, 10)})`; toast(`Imported ${r.imported} scores`, "ok"); loadNews();
 };
 $("news-add").onclick = async () => {
+  if (!$("news-headline").value.trim()) { toast("Type a headline first.", "warn"); return; }
   const sym = $("news-symbols").value.trim().split(/[\s,]+/).filter(Boolean);
   const sent = $("news-sent").value === "" ? null : parseFloat($("news-sent").value);
   await api("/api/news", { headline: $("news-headline").value, body: $("news-body").value || null, source: $("news-source").value || null, url: $("news-url").value || null, symbols: sym, sentiment: sent });
@@ -1569,7 +1583,7 @@ $("cred-save").onclick = async () => {
 };
 $("cred-test").onclick = async () => {
   $("cred-test-out").innerHTML = `<div class="empty-inline"><svg class="mascot sm bounce"><use href="#m-ichi"/></svg> testing every endpoint (the scrip master download takes a while)…</div>`;
-  const r = await api("/api/settings/dhan/test", {});
+  let r; try { r = await api("/api/settings/dhan/test", {}); } catch (e) { $("cred-test-out").innerHTML = `<div class="warnbar">The test did not finish: ${esc(e.message)}</div>`; return; }
   const rows = Object.entries(r.checks || {}).map(([k, v]) => ({ name: k, ...v }));
   $("cred-test-out").innerHTML = `<div class="row"><span class="badge ${r.trading_ok ? "ok" : "bad"}"><span>trading API ${r.trading_ok ? "OK" : "FAIL"}</span></span>
     <span class="badge ${r.data_ok ? "ok" : "warn"}"><span>data API ${r.data_ok ? "OK" : "not available"}</span></span></div>` +
@@ -1579,14 +1593,14 @@ $("cred-test").onclick = async () => {
 };
 $("cred-renew").onclick = async () => {
   $("live-status").innerHTML = `<div class="empty-inline"><svg class="mascot sm bounce"><use href="#m-ichi"/></svg> minting a fresh token…</div>`;
-  const r = await api("/api/settings/dhan/renew", {});
+  let r; try { r = await api("/api/settings/dhan/renew", {}); } catch (e) { $("live-status").innerHTML = `<div class="warnbar">Renewal did not finish: ${esc(e.message)}</div>`; return; }
   toast(r.ok ? `Token renewed${r.expiry_time ? " · valid till " + r.expiry_time : ""}` : "Renewal failed: " + r.reason, r.ok ? "ok" : "bad");
   $("live-status").innerHTML = `<div class="${r.ok ? "notice" : "warnbar"}">${esc(r.ok ? "Token renewed" + (r.expiry_time ? " · valid till " + r.expiry_time : "") + (r.live ? " · live feed on" : "") : r.reason)}</div>`;
   acctLoaded = false; loadSettings(); loadAccount(true).catch(() => {});
 };
 $("cred-golive").onclick = async () => {
   $("live-status").innerHTML = `<div class="empty-inline"><svg class="mascot sm bounce"><use href="#m-ichi"/></svg> checking the Data API and starting the feed…</div>`;
-  const r = await api("/api/settings/dhan/golive", {});
+  let r; try { r = await api("/api/settings/dhan/golive", {}); } catch (e) { $("live-status").innerHTML = `<div class="warnbar">The check did not finish: ${esc(e.message)}</div>`; return; }
   toast(r.live ? (r.switched ? "Live feed started" : "Already live") : "Not live: " + r.reason, r.live ? "ok" : "warn");
   $("live-status").innerHTML = `<div class="${r.live ? "notice" : "warnbar"}">${esc(r.reason)}</div>`;
   loadSettings();
