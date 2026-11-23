@@ -62,7 +62,9 @@ indices:
   - {key: BANKNIFTY,  tracked: BANKNIFTY_OPT}
   - {key: NIFTY,      tracked: NIFTY_OPT}
   - {key: FINNIFTY,   tracked: FINNIFTY_OPT}
-  - {key: MIDCPNIFTY, tracked: MIDCPNIFTY_OPT}
+  # Owner, 2026-11-23: "we only buy options of indices specifically, nifty, sensex, finnifty,
+  # banknifty, no more, any further is for our training and testing."
+  - {key: MIDCPNIFTY, tracked: MIDCPNIFTY_OPT, trade: false}
   - {key: SENSEX,     tracked: SENSEX_OPT}
 
 stocks:                     # the retune's 18-stock basket (Adani Green excluded at the owner's request)

@@ -53,6 +53,7 @@ HELPERS = [
     "trendBlock",
     "slotTrail",
     "slotTrailNote",
+    "trainTag",  # US-078: "Training only: no alerts"
 ]
 #: what accRow needs beside them, each matched whole
 BLOCKS = [

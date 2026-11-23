@@ -588,6 +588,7 @@ class InstrumentTracker:
             "label": self.series.label,
             "kind": self.cfg.kind,
             "note": self.cfg.note,
+            "trade": self.cfg.trade,
             "tracked": self.instrument.key,
             "tracked_label": self.instrument.label,
             "unit": "1 share"

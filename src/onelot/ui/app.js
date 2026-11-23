@@ -611,6 +611,7 @@ function renderFeed(items) {
 const desk = { rendered: 0, force: true, sig: {}, open: store.get("desk.open", {}) };
 function hdot(state) { return `<span class="hs ${state === "OK" ? "ok" : (state === "CLOSED" || state === "LAGGING" ? "warn" : (state === "NO DATA" ? "" : "bad"))}"></span>`; }
 function sigNum(l, v, c = "") { return `<div class="sig-num"><small>${l}</small><b class="${c}">${v}</b></div>`; }
+const trainTag = (r) => r && r.trade === false ? `<span class="warn" style="font-size:12px">Training only: no alerts</span>` : "";
 function signalCard(s) {
   const e = s.economics || {}, sell = s.direction === "short", o = e.option || {};
   const title = s.kind === "INDEX" ? `BUY ${esc(s.label)} ${o.strike ? fmt(o.strike, 0) : ""} ${esc(o.opt_type || "")} <span class="num" style="font-size:15px">${esc(e.unit_label)}</span>`
@@ -865,7 +866,7 @@ function accRow(r, isOpen) {
   return `<div class="acc-row ${isOpen ? "open" : ""}" data-key="${esc(r.key)}">
     <div class="acc-top" data-toggle="${esc(r.key)}">
       <div class="acc-head">
-        <div class="acc-name"><b>${esc(r.label)}</b><span class="dim">${r.kind === "INDEX" ? "index · options" : "stock"} · ${r.pullback ? esc(pbUnitShort(r.pullback)) : esc(r.unit)}</span></div>
+        <div class="acc-name"><b>${esc(r.label)}</b><span class="dim">${r.kind === "INDEX" ? "index · options" : "stock"} · ${r.pullback ? esc(pbUnitShort(r.pullback)) : esc(r.unit)}</span>${trainTag(r)}</div>
         <div class="acc-price">${fmt(L.price)}<span class="${cls(L.change_pct)}">${spct(L.change_pct)}</span></div>
         <div class="acc-strats">${chips}</div>
         <div class="state-badge st-${esc(r.state)}">${esc(r.state)}</div>
