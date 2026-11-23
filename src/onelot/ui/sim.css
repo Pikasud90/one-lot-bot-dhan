@@ -1,1 +1,52 @@
-/* The Simulator tab (US-076). Theme variables only: no colour literals. */
+/* The Simulator tab (US-076). Theme variables only: no colour literals. Type is never below 13px. */
+#sim-root .sim-setup{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 14px;align-items:end}
+#sim-root .sim-go-wrap{padding-bottom:2px}
+#sim-root .sim-note{margin-top:12px;font-size:15px}
+#sim-root .sim-demo{border-left:5px solid var(--warn);background:var(--warn-bg);font-size:16px}
+#sim-root .sim-resumecard{border-left:5px solid var(--cyan);font-size:16px}
+#sim-root .sim-bar{display:flex;flex-direction:column;gap:10px}
+#sim-root .sim-clock{font-family:var(--mono);font-size:26px;font-weight:700;letter-spacing:-.01em}
+#sim-root .sim-badge{display:inline-block;margin-left:10px;padding:4px 12px;font-size:13px;font-weight:700;letter-spacing:.1em;color:var(--muted);background:var(--panel2);border:1px solid var(--line2)}
+#sim-root .sim-badge.on{color:var(--ok);border-color:var(--ok);background:var(--ok-bg)}
+#sim-root .sim-badge.live{color:var(--bad);border-color:var(--bad);background:var(--bad-bg)}
+#sim-root .sim-status{font-size:15px;min-height:1.4em}
+#sim-root .sim-chart-card{padding:8px}
+#sim-root .sim-chart{height:460px;width:100%}
+#sim-root .sim-pad{padding:14px}
+#sim-root .sim-alertcard{border-left:5px solid var(--accent)}
+#sim-root .sim-alertcard.long{border-left-color:var(--ok)}
+#sim-root .sim-alertcard.short{border-left-color:var(--bad)}
+#sim-root .sim-do{font-size:22px;margin-bottom:6px}
+#sim-root .sim-do .muted{font-size:15px}
+#sim-root .sim-levels{display:flex;flex-wrap:wrap;gap:6px 26px;font-size:16px;margin:6px 0}
+#sim-root .sim-levels b{font-family:var(--mono)}
+#sim-root .sim-traded{font-size:16px;margin:6px 0}
+#sim-root .sim-src{display:inline-block;padding:1px 9px;font-size:13px;font-weight:700;letter-spacing:.06em;border:1px solid var(--line2);background:var(--panel2);color:var(--muted)}
+#sim-root .sim-src.real{color:var(--ok);border-color:var(--ok);background:var(--ok-bg)}
+#sim-root .sim-src.modelled{color:var(--warn-ink);border-color:var(--warn);background:var(--warn-bg)}
+#sim-root .sim-reasons{margin:8px 0;padding-left:22px;font-size:15px}
+#sim-root .sim-poscard{border-left:5px solid var(--cyan)}
+#sim-root .sim-poscard.closed.won{border-left-color:var(--ok)}
+#sim-root .sim-poscard.closed.lost{border-left-color:var(--bad)}
+#sim-root .sim-result{font-size:18px;margin:6px 0}
+#sim-root .sim-exitsignal{margin:6px 0;padding:8px 12px;font-size:16px;font-weight:700;color:var(--warn-ink);background:var(--warn-bg);border:1px solid var(--warn)}
+#sim-root .sim-stage{font-size:16px;margin:6px 0;color:var(--muted)}
+#sim-root .sim-progress{position:relative;height:14px;margin:8px 0 2px;background:var(--panel2);border:1px solid var(--line2)}
+#sim-root .sim-progress .sim-fill{height:100%;background:var(--ok)}
+#sim-root .sim-progress i{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--text)}
+#sim-root .sim-marks{position:relative;height:20px;font-size:13px;color:var(--muted);margin-bottom:8px}
+#sim-root .sim-marks span{position:absolute;transform:translateX(-50%)}
+#sim-root .sim-marks span.end{right:0;transform:none}
+#sim-root .sim-log-head{justify-content:space-between;margin-bottom:10px}
+#sim-root .sim-csv{font-size:15px;font-weight:700;color:var(--cyan)}
+#sim-root .sim-log{overflow-x:auto}
+#sim-root .sim-h{margin:16px 0 6px;font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+#sim-root .sim-ev{font-size:15px;padding:3px 0;border-bottom:1px solid var(--line)}
+#sim-root .sim-ev.alert b{color:var(--accent2)}
+#sim-root .sim-ev.closed b{color:var(--accent)}
+#sim-root .sim-how{font-size:15px}
+#sim-root .sim-how summary{cursor:pointer;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--accent2);font-size:14px}
+#sim-root .sim-how li{margin:6px 0}
+@media (max-width:700px){#sim-root .sim-chart{height:340px}#sim-root .sim-clock{font-size:21px}}
+#sim-root #sim-summary .tile b{font-size:21px}
+#sim-root #sim-summary{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
