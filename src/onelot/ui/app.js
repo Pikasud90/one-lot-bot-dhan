@@ -1643,4 +1643,6 @@ $("mllab-tf").onchange = () => { store.set("mllab.tf", $("mllab-tf").value); loa
 tabLoaders.mllab = () => { loadMllab(); };
 setInterval(mllabTick, 60000);
 if (tabShown("mllab")) loadMllab();
+// The page's helpers for the feature files loaded after this one (sim.js, mlstates.js).
+window.OneLot = { $, fmt, rup, cls, esc, pct, tsf, hhmm, store, toast, api, table, tabLoaders, tabShown, latest: () => latest };
 })();
