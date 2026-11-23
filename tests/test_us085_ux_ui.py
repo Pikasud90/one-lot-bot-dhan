@@ -17,7 +17,13 @@ def test_every_filter_control_has_a_label() -> None:
         if 'type="hidden"' in tag or 'type="checkbox"' in tag or 'type="radio"' in tag:
             continue
         ident = re.search(r'id="([\w-]+)"', tag)
-        if ident and ident.group(1) in {"cov-q", "eda-series", "mllab-tf", "board-sort", "matrix-min"}:
+        if ident and ident.group(1) in {
+            "cov-q",
+            "eda-series",
+            "mllab-tf",
+            "board-sort",
+            "matrix-min",
+        }:
             assert "aria-label=" in tag, ident.group(1)
 
 
