@@ -246,9 +246,9 @@ class Pricer:
             if got is not None and got > 0:
                 return Quote(float(got), "real")
         if self.stored is not None:
-            got = self.stored.bar(c, minute, 0 if how == "close" else MAX_WAIT_MIN)
-            if got is not None:
-                row, waited = got
+            hit = self.stored.bar(c, minute, 0 if how == "close" else MAX_WAIT_MIN)
+            if hit is not None:
+                row, waited = hit
                 o, h, lo, cl = float(row[0]), float(row[1]), float(row[2]), float(row[3])
                 if how == "open":
                     return Quote(o, "real", waited)
