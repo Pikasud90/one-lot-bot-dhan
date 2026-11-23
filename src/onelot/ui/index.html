@@ -405,7 +405,58 @@
 
   <!-- ─────────────────────────── SIMULATOR (US-075, US-076) ─────────── -->
   <section data-tab="sim" class="tab">
-    <div id="sim-root"><div class="card"><div class="muted">Loading the simulator…</div></div></div>
+    <div id="sim-root">
+      <div id="sim-banner"></div>
+      <div id="sim-resume"></div>
+      <div class="card sim-setup-card">
+        <div class="sim-setup">
+          <div><label for="sim-mode">Mode</label><select id="sim-mode"><option value="past">Past data</option><option value="live">Live feed</option></select></div>
+          <div><label for="sim-inst">Instrument</label><select id="sim-inst"></select></div>
+          <div><label for="sim-strat">Strategy</label><select id="sim-strat"></select></div>
+          <div><label for="sim-tf">Timeframe</label><select id="sim-tf"></select></div>
+          <div id="sim-start-wrap"><label for="sim-start">Start date and time</label><input id="sim-start" type="datetime-local"></div>
+          <div class="sim-go-wrap"><button class="btn primary" id="sim-go" data-act="start">Start</button></div>
+        </div>
+        <div class="muted sim-note" id="sim-note">Loading the simulator…</div>
+      </div>
+      <div id="sim-run" hidden>
+        <div class="card sim-bar">
+          <div class="sim-clock-wrap"><span class="sim-clock" id="sim-clock">–</span> <span class="sim-badge" id="sim-badge"></span></div>
+          <div class="actions">
+            <button class="btn primary" id="sim-play" data-act="play">Play</button>
+            <button class="btn" id="sim-step" data-act="step">Step</button>
+            <span class="chips" id="sim-speeds"></span>
+            <label class="inline"><input type="checkbox" id="sim-pause-alert" checked> Pause on alert</label>
+            <label class="inline"><input type="checkbox" id="sim-sound" checked> Sound</label>
+            <button class="btn ghost small" id="sim-end" data-act="end">End session</button>
+          </div>
+          <div class="muted sim-status" id="sim-status"></div>
+        </div>
+        <div class="card sim-chart-card"><div id="sim-chart" class="sim-chart"></div></div>
+        <div id="sim-alert"></div>
+        <div id="sim-pos"></div>
+        <div class="tiles small" id="sim-summary"></div>
+        <div class="card">
+          <div class="actions sim-log-head">
+            <span class="chips"><span class="chip active" id="sim-view-session" data-act="view-session">This session</span><span class="chip" id="sim-view-all" data-act="view-all">All simulator trades</span></span>
+            <a class="sim-csv" href="/api/sim/trades.csv" download>Download CSV</a>
+          </div>
+          <div id="sim-log" class="sim-log"></div>
+          <h4 class="sim-h">What happened</h4>
+          <div id="sim-events" class="sim-events"></div>
+        </div>
+      </div>
+      <details class="card sim-how">
+        <summary>How this simulator works</summary>
+        <ul>
+          <li>The market is replayed one minute at a time from stored data, or follows the live feed. The server decides what you can see, so nothing from the future leaks in.</li>
+          <li>A trade you take is filled at the open of the next minute, with slippage and charges, like a real order.</li>
+          <li>Option prices are real traded premiums where they are stored; otherwise they are modelled, and marked as modelled.</li>
+          <li>Stops and targets rest in the market and close the trade by themselves.</li>
+          <li>These are practice trades with dummy money, kept apart from the paper test. Past results are not a promise.</li>
+        </ul>
+      </details>
+    </div>
   </section>
 
   <!-- ─────────────────────── MACHINE LEARNING LAB ─────────────────── -->
