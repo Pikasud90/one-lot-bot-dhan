@@ -587,7 +587,7 @@ class Desk:
         if not (stop and stop()):
             try:
                 vix = bf.backfill(self.engine, provider, [VIX_KEY], ["1d", "1m"], stop_flag=stop)
-                result.errors.extend(str(e) for e in vix.errors)
+                result.errors = [*result.errors, *vix.errors]
             except Exception as exc:  # noqa: BLE001
                 log.warning("delivery: the India VIX top-up failed: %s", exc)
                 result.errors.append(f"{VIX_KEY}: {exc}")
