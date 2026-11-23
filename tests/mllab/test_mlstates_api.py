@@ -153,3 +153,12 @@ class TestCache:
             lambda: dt.datetime(2026, 11, 12, 11, 0, tzinfo=data.index.tz),  # before the close
         )
         assert lab.reading("A")["as_of"] == "2026-11-11"
+
+
+def test_thin_flag_and_size_words_over_the_api(client):
+    short = strict(client.get("/api/mllab/states?instrument=SHORT").text)
+    assert short["thin"] is True
+    full = strict(client.get("/api/mllab/states?instrument=RELIANCE").text)
+    assert full["thin"] is False
+    assert {s["size"] for s in full["sessions"]} <= {"calm", "active"}
+    assert {s["size"] for s in full["sessions"]} == {"calm", "active"}

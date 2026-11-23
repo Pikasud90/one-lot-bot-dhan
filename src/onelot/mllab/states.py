@@ -37,6 +37,7 @@ PRIOR = 10.0  # pseudo-sessions of the base rate in every probability
 SECOND_MIN_N = 60  # the second-order context is shown from this many cases
 WALK_START = 250  # first stated session the walk-forward names
 RECENT = 60
+THIN_BELOW = 250  # fewer stated sessions than this: the page shows no evidence
 IST_OFFSET = "Asia/Kolkata"
 
 
@@ -329,7 +330,7 @@ def _sessions(states: pd.DataFrame) -> list[dict[str, Any]]:
             "r_pct": _round(100 * row.r, 3),
             "z": _round(row.z, 2),
             "direction": row.direction,
-            "size": row.size,
+            "size": row["size"],
         }
         for ts, row in tail.iterrows()
     ]
@@ -340,6 +341,7 @@ def reading(daily: pd.DataFrame) -> dict[str, Any]:
     st = classify(daily)
     out: dict[str, Any] = {"as_of": None, "sessions": [], "note": None}
     got = model(st)
+    out["thin"] = int(st["direction"].notna().sum()) < THIN_BELOW
     if "note" in got:
         out.update(got)
         out["note"] = "Too little history: market states need about 25 sessions at the least."

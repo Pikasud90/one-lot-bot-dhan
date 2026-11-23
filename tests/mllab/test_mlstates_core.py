@@ -215,3 +215,20 @@ def test_reading_is_strict_json_and_complete():
     assert len(out["runs"]) == 6
     short = st.reading(daily(rng.normal(0, 0.01, 10)))
     assert short["note"] and short["sessions"] == []
+
+
+def test_session_sizes_are_words_and_both_appear():
+    rng = np.random.default_rng(3)
+    d = daily(rng.normal(0, 0.01, 120), span=0.01)
+    d["high"] *= 1 + rng.uniform(0, 0.02, len(d))  # ranges vary: calm and active days
+    sizes = [s["size"] for s in st.reading(d)["sessions"]]
+    assert set(sizes) == {"calm", "active"}
+
+
+def test_thin_is_true_under_250_stated_sessions_and_false_at_250():
+    rng = np.random.default_rng(4)
+    d = daily(rng.normal(0, 0.01, 400), span=0.01)
+    d["high"] *= 1 + rng.uniform(0, 0.01, len(d))
+    assert st.reading(d.iloc[: 21 + 249])["thin"] is True
+    assert st.reading(d.iloc[: 21 + 250])["thin"] is False
+    assert st.reading(d.iloc[:10])["thin"] is True
