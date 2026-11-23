@@ -106,6 +106,15 @@ function clockText(unix) {
 const liveStaleSeconds = () => 600;
 /* True when a card (its top and bottom in the viewport) is not fully inside a viewport `vh` high. */
 const cardNeedsScroll = (top, bottom, vh) => top < 0 || bottom > vh;
+/* The price range the chart must show: the candles' own range (`orig`: {priceRange:{minValue,maxValue}} or null) widened to
+   hold every finite level (entry, stop, target). With no levels the candles' range is left alone. */
+function mergeRange(orig, levels) {
+  const v = (levels || []).filter(x => x !== null && x !== undefined && x !== "").map(Number).filter(Number.isFinite);
+  if (!v.length) return orig;
+  const base = orig && orig.priceRange ? orig.priceRange : null;
+  const lo = Math.min(...v, base ? base.minValue : Infinity), hi = Math.max(...v, base ? base.maxValue : -Infinity);
+  return { ...(orig || {}), priceRange: { minValue: lo, maxValue: hi } };
+}
 const NO_HISTORY = "No stored history for this instrument yet: run the backfill, or use Live";
 /* The line of the resume offer: a live session cannot be replayed, it jumps to the present. */
 function resumeLine(s) {
@@ -126,6 +135,7 @@ function alertCardHtml(a, cursorIso) {
     + `<div class="sim-levels"><span>Entry <b>${fmt(a.entry)}</b></span><span>Stop <b class="neg">${fmt(a.stop)}</b></span><span>Target <b class="pos">${fmt(a.target)}</b></span></div>`
     + `<div class="sim-levels"><span>Risk <b class="neg">${money(a.risk_inr)}</b></span><span>Reward <b class="pos">${money(a.reward_inr)}</b></span><span>Charges <b>${money(a.costs_inr)}</b></span></div>`
     + `<div class="sim-traded">You would trade <b>${esc(t.what || "–")}</b> at <b>${fmt(t.price)}</b> <span class="sim-src ${esc(sourceWord(t.source))}">${esc(sourceWord(t.source))}</span></div>`
+    + (t.iv_source === "implied" ? `<div class="muted">Stop and target prices are modelled on the volatility implied by the real price.</div>` : "")
     + (reasons ? `<ul class="sim-reasons">${reasons}</ul>` : "")
     + (left === null ? "" : `<div class="muted">This alert ends in ${left} market minute${left === 1 ? "" : "s"}.</div>`)
     + `<div class="actions"><button class="btn take" data-act="take">Take</button><button class="btn" data-act="skip">Skip</button></div></div>`;
@@ -171,7 +181,7 @@ const S = {
   summary: null, trades: [], allTrades: null, view: "session", events: [], alertMarks: [], exitSignal: false,
   playing: false, speed: 1, acc: 0, liveAcc: 0, anim: null, busy: false, needRefresh: false, pausedByAlert: false,
   over: false, wantClosed: false, cursorIso: null, shownUnix: null, note: "", fake: null, resumeState: null,
-  reveal: null, healT: null, chart: null, series: null, marks: null, lines: [], lineKey: "", ac: null,
+  reveal: null, scaleLevels: null, healT: null, chart: null, series: null, marks: null, lines: [], lineKey: "", ac: null,
   pauseOnAlert: true, sound: true, setup: store.get("sim.setup", {}) || {},
 };
 const cssv = (n) => (window.Charts && window.Charts.cssVar ? window.Charts.cssVar(n) : getComputedStyle(document.documentElement).getPropertyValue(n).trim());
@@ -208,7 +218,8 @@ function ensureChart() {
   if (!LW) { el.innerHTML = `<div class="muted sim-pad">The chart library is missing (static/vendor).</div>`; return false; }
   S.chart = LW.createChart(el, { ...chartOpts(), autoSize: true });
   const up = cssv("--ok"), dn = cssv("--bad");
-  S.series = S.chart.addSeries(LW.CandlestickSeries, { upColor: up, downColor: dn, borderVisible: false, wickUpColor: up, wickDownColor: dn, priceLineVisible: false });
+  S.series = S.chart.addSeries(LW.CandlestickSeries, { upColor: up, downColor: dn, borderVisible: false, wickUpColor: up, wickDownColor: dn, priceLineVisible: false,
+    autoscaleInfoProvider: (orig) => mergeRange(orig(), S.scaleLevels) });
   S.marks = LW.createSeriesMarkers(S.series, []);
   return true;
 }
@@ -228,6 +239,8 @@ function syncLines() {
   const key = src ? [t ? "t" : "a", src.entry, src.stop, src.target, t && t.stop0, t && t.target0].join("|") : "";
   if (key === S.lineKey) return;
   S.lineKey = key;
+  S.scaleLevels = src ? [src.entry, src.stop, src.target] : null;   // the scale holds them, and lets go when they are gone
+  try { S.chart.priceScale("right").applyOptions({ autoScale: true }); } catch (e) {}
   S.lines.forEach(l => { try { S.series.removePriceLine(l); } catch (e) {} });
   S.lines = [];
   if (!src) return;

@@ -220,6 +220,10 @@ writes to the paper test: its trades are in their own tables.
   trade records whether its entry and exit premiums were `real` or `model`.
 - Costs: the charges of `config/costs.yaml`, intraday equity for a share and index options for
   an option, on both legs. R is the net result over the first risk in rupees.
+- One curve per trade: when a premium is real, the model is calibrated to it (the implied
+  volatility at that level and time), so a stop and target premium, the rupee risk, R and any
+  modelled exit lie on one curve with the real price; each trade records `iv_used` and `iv_source`
+  (`implied` or `vix`). The chart's price scale always holds the entry, stop and target.
 - India VIX: the model's volatility comes from the stored India VIX. When the cursor is past the
   last stored VIX day (or there is none) the session's price note says so in plain words and the
   model uses the last value (or a fixed volatility).

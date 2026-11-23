@@ -257,6 +257,7 @@ class Run:
         self.advance_ms: list[float] = []
         self.created_ms = 0.0
         self.day_ends = 0
+        self.iv_sources: Counter = Counter()
         self.over = False
         self.state: dict[str, Any] = {}
         self.nxt = 0  # index in the stored frame of the next bar to be revealed
@@ -653,6 +654,15 @@ class Run:
                     abs(risk_inr - abs(t["entry"] - t["stop0"]) * qty) < 0.02,
                     f"{w}: stock risk_inr",
                 )
+            else:
+                # the first risk in rupees lies on one curve with the real premium: an option
+                # worth 0.3 to 1.0 of the index move (delta) per index point of risk
+                idx_risk = abs(t["entry"] - t["stop0"]) * qty
+                P.check(
+                    0.3 * idx_risk <= risk_inr <= 1.0 * idx_risk,
+                    f"{w}: option risk_inr {risk_inr:.0f} is {risk_inr / idx_risk:.2f} x the index risk {idx_risk:.0f}",
+                )
+                self.iv_sources[det.get("iv_source")] += 1
         else:
             P.check(t["r_multiple"] is None, f"{w}: r_multiple without a risk")
         if is_opt:
@@ -859,6 +869,7 @@ def main() -> int:
         " exit",
         dict(Counter(x["exit_source"] for x in opt)),
     )
+    print("iv source", dict(sum((r.iv_sources for r in runs), Counter())))
     print("exit reasons", dict(Counter(x["reason"] for x in audits)))
     allms = [m for r in runs for m in r.advance_ms]
     if allms:

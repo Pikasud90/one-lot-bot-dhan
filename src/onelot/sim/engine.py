@@ -167,6 +167,10 @@ class TradeState:
     entry_ns: int | None = None
     entry_price: float | None = None
     entry_source: str | None = None
+    #: the implied volatility the trade's modelled premiums use (None: the VIX-based one)
+    iv: float | None = None
+    iv_used: float | None = None
+    iv_source: str = "vix"  # implied | vix
     risk_inr: float | None = None
     mark: float | None = None
     mark_price: float | None = None
@@ -178,6 +182,8 @@ class TradeState:
             "alert": self.alert,
             "contract": self.contract.as_dict() if self.contract else None,
             "entry_source": self.entry_source,
+            "iv_used": self.iv_used,
+            "iv_source": self.iv_source,
             "risk_inr": self.risk_inr,
             "pending_exit": self.pending_exit,
         }
@@ -775,8 +781,12 @@ class SimSession:
             bar = (float(self.o[p]), float(self.h[p]), float(self.lo[p]), float(self.c[p]))
             q = pr.premium(contract, pd.Timestamp(int(self.ts[p]), tz="UTC"), bar, close, "close")
             price = pr.option_entry(q.price)
-            stop_price = pr.option_exit(pr.model_premium(contract, stop, when))
-            target_price = pr.option_exit(pr.model_premium(contract, target, when))
+            # a REAL premium calibrates the model: the stop and target premiums lie on the
+            # curve that passes through it (else they would be VIX-model prices next to a real one)
+            iv = pr.implied_iv(contract, q.price, close, when) if q.source == "real" else None
+            iv_source = "implied" if iv is not None else "vix"
+            stop_price = pr.option_exit(pr.model_premium(contract, stop, when, iv))
+            target_price = pr.option_exit(pr.model_premium(contract, target, when, iv))
             source = q.source
             what = contract.what
             action = "BUY CALL" if side == 1 else "BUY PUT"
@@ -789,6 +799,7 @@ class SimSession:
             action = "BUY" if side == 1 else "SELL"
             risk_inr = risk * pr.qty
             reward_inr = tr * risk * pr.qty
+            iv, iv_source = None, ""
         costs = pr.charges(side, price, target_price)
         self.alert = {
             "id": f"a_{self.alert_no}",
@@ -808,12 +819,18 @@ class SimSession:
                 "source": source,
                 "stop_price": _num(stop_price),
                 "target_price": _num(target_price),
+                **(
+                    {"iv_source": iv_source, "iv_used": _num(iv, 4)}
+                    if pr.is_option and iv_source == "implied"
+                    else {}
+                ),
             },
             "risk_inr": _num(risk_inr),
             "reward_inr": _num(reward_inr),
             "costs_inr": _num(costs),
             "reasons": reasons,
             "_rev": self.revealed,
+            "_iv": iv,
             "_contract": contract.as_dict() if contract else None,
         }
         verb = {
@@ -854,7 +871,14 @@ class SimSession:
             entry_price = pr.option_entry(q.price)
             entry = o
             source = q.source
-            delta = max(pr.delta(t.contract, o, minute), 0.05)
+            # re-anchor: the fill's real premium recalibrates the model; with none, the alert's
+            # implied volatility (one minute older, same curve) stays, else the VIX-based one
+            iv = pr.implied_iv(t.contract, q.price, o, minute) if q.source == "real" else None
+            if iv is None and t.alert.get("_iv"):
+                iv = float(t.alert["_iv"])
+            t.iv, t.iv_source = iv, "implied" if iv is not None else "vix"
+            t.iv_used = iv if iv is not None else pr.vix_iv(minute)
+            delta = max(pr.delta(t.contract, o, minute, iv), 0.05)
             cost = pr.charges(1, entry_price, entry_price) / pr.qty / delta
         else:
             entry_price = pr.stock_entry(side, o)
@@ -870,7 +894,7 @@ class SimSession:
         t.entry_price, t.entry_source = float(entry_price), source
         if pr.is_option:
             assert t.contract is not None
-            stop_fill = pr.option_exit(pr.model_premium(t.contract, plan.stop, minute))
+            stop_fill = pr.option_exit(pr.model_premium(t.contract, plan.stop, minute, t.iv))
             t.risk_inr = max(entry_price - stop_fill, pr.tick) * pr.qty
         else:
             t.risk_inr = plan.risk * pr.qty
@@ -940,7 +964,9 @@ class SimSession:
         if not pr.is_option or t.contract is None:
             return float(self.c[p])
         bar = (float(self.o[p]), float(self.h[p]), float(self.lo[p]), float(self.c[p]))
-        q = pr.premium(t.contract, pd.Timestamp(int(self.ts[p]), tz="UTC"), bar, bar[3], "close")
+        q = pr.premium(
+            t.contract, pd.Timestamp(int(self.ts[p]), tz="UTC"), bar, bar[3], "close", t.iv
+        )
         return float(q.price)
 
     def _close_trade(
@@ -955,7 +981,7 @@ class SimSession:
         if pr.is_option:
             assert t.contract is not None
             bar = (float(self.o[p]), float(self.h[p]), float(self.lo[p]), float(self.c[p]))
-            q = pr.premium(t.contract, minute, bar, level, how)
+            q = pr.premium(t.contract, minute, bar, level, how, t.iv)
             exit_price = pr.option_exit(q.price)
             exit_level = level
             exit_source = q.source
@@ -1245,6 +1271,9 @@ def _trade_from_row(r: dict[str, Any]) -> TradeState:
     t.entry_source = r.get("source")
     t.risk_inr = d.get("risk_inr")
     t.pending_exit = d.get("pending_exit")
+    t.iv_source = str(d.get("iv_source") or "vix")
+    t.iv_used = d.get("iv_used")
+    t.iv = float(t.iv_used) if t.iv_source == "implied" and t.iv_used else None
     return t
 
 
