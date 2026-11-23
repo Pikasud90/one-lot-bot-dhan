@@ -38,12 +38,13 @@ defaults:
     # MICRO TREND (owner's rule, US-068). Supertrend(14, 1.7) on 3m, 5m, 10m, 15m, 30m, 60m and
     # 4h, from the one-minute bars. At a 3-minute close where all seven newly point up: BUY a
     # call; all down: BUY a put (monthly contract at delta ~0.65, one lot). Out at the first
-    # 3-minute close where 3 of the 7 point against the trade, else at the session end. The
-    # alert's stop is a backstop 3 ATR(60m) beyond the 60m line, not the rule's exit.
+    # 3-minute close where 3 of the 7 point against the trade, else at the session end.
+    # US-079: the stop, target and trail rule manages the trade (ratchet: true): first stop
+    # 1.5 ATR(14) of 60m bars from the fill, target 3 risks away (docs/04_OPERATIONS.md).
     - name: microtrend
       timeframe: 3m
-      params: {st_period: 14, st_mult: 1.7, exit_count: 3, stop_buffer_atr: 3.0,
-               evidence: "Backtest of this exact rule: 3,824 trades over five years on five indices, −0.2% of premium a trade on modelled premiums, 38% winners. On real premiums (NIFTY and BANKNIFTY, 1,518 trades) about −1.2% a trade. Not an edge: this is the paper test."}
+      params: {st_period: 14, st_mult: 1.7, exit_count: 3, stop_buffer_atr: 3.0, ratchet: true,
+               evidence: "Backtest of this exact rule: 3,824 trades over five years on five indices, −0.2% of premium a trade on modelled premiums, 38% winners. On real premiums (NIFTY and BANKNIFTY, 1,518 trades) about −1.2% a trade. Tested 23 Nov on five years: the stop, target and trail rule cost nothing measurable and added nothing; the entries decide the result. Not an edge: this is the paper test."}
   stock_strategies:       # 18 stocks
     # PULLBACK, delivery (owner's decision 2026-11-12, US-067; docs/research/ALPHA_SEARCH_2026-11-12.md
     # 5.2 and 5.3). After the close: the close is above its SMA200, NIFTY is above its SMA200,

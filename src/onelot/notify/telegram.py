@@ -49,6 +49,7 @@ import httpx
 from ..clock import to_ist
 from ..config import TELEGRAM_TOKEN_SHAPE, telegram_redaction_literals
 from ..logging_setup import get_redactor, register_secrets
+from ..manage.live import managed_line
 from .base import shown_confidence
 
 log = logging.getLogger(__name__)
@@ -274,9 +275,9 @@ def format_alert(alert: Mapping[str, Any], now: dt.datetime) -> str:
 
     Reads only: id, created_at, expires_at, trading_symbol (else series_key), label, kind,
     side, horizon, risk_allowed, strategy_label (else strategy), timeframe,
-    confidence.{score,label}, data.delayed and economics.{qty, entry_price, stop_price,
+    confidence.{score,label}, data.delayed, economics.{qty, entry_price, stop_price,
     target_price, underlying_stop, underlying_target, synthetic, option.{strike, expiry,
-    lot}}. `now` drives the minutes left, so format at send time. Only risk_allowed
+    lot}} and manage.ratchet.extend (US-079: one line on how the trade is managed). `now` drives the minutes left, so format at send time. Only risk_allowed
     exactly False marks it blocked.
     """
     economics = _fields(alert.get("economics"))
@@ -298,8 +299,11 @@ def format_alert(alert: Mapping[str, Any], now: dt.datetime) -> str:
                 economics.get("underlying_target"),
             )
         )
+    lines.append(_levels("Stop", economics.get("stop_price"), economics.get("target_price")))
+    rule = _fields(_fields(alert.get("manage")).get("ratchet"))
+    if rule:  # US-079: how the stop and trail rule will manage the trade, in one line
+        lines.append(html.escape(managed_line(rule.get("extend") is not False)))
     lines += [
-        _levels("Stop", economics.get("stop_price"), economics.get("target_price")),
         _strategy_line(alert),
         _confidence_line(_fields(alert.get("confidence"))),
         _ttl_line(_when(alert.get("expires_at")), to_ist(now)),

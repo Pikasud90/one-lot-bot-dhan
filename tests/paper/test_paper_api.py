@@ -298,7 +298,8 @@ class TestLastSession:
 
 APP_JS = Path(__file__).resolve().parents[2] / "src" / "onelot" / "ui" / "app.js"
 PANEL_HELPERS = [
-    "esc", "cls", "tsf", "hhmm", "inr", "todayIST", "paperChip", "paperWhen", "paperRow",
+    "esc", "cls", "tsf", "hhmm", "inr", "todayIST", "paperChip", "paperWhen",
+    "RATCHET_STAGES", "RATCHET_REASONS", "levelsText", "paperReason", "paperRow",  # US-079
     "paperList", "paperOpen", "paperClosedOn", "paperShown", "paperDay", "paperSession",
     "paperFallback", "paperEmpty", "paperGroup", "paperHead", "paperTable", "paperCut", "paperPanel",
     "paperTotals", "paperSince", "paperMeta",

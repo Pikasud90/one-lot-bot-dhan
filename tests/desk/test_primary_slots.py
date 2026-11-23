@@ -27,7 +27,10 @@ def test_the_micro_trend_slot_runs_the_owners_setting():
         assert (slot.name, slot.timeframe, slot.enabled) == ("microtrend", "3m", True), index.key
         settings = {k: v for k, v in slot.params.items() if k != "evidence"}
         assert settings == {"st_period": 14, "st_mult": 1.7, "exit_count": 3,
-                            "stop_buffer_atr": 3.0}, index.key  # fmt: skip
+                            "stop_buffer_atr": 3.0, "ratchet": True}, index.key  # fmt: skip
+        # US-079: the study's sentence sits between the first and the last ones
+        assert "the stop, target and trail rule cost nothing measurable" in slot.params[
+            "evidence"]  # fmt: skip
         assert "Not an edge: this is the paper test." in slot.params["evidence"]
         strategy = get_strategy(slot.name, {**settings, "timeframe": slot.timeframe})
         assert strategy.multi_timeframe
