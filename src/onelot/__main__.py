@@ -467,6 +467,8 @@ def main(argv: list[str] | None = None) -> int:
         "backfill",
         "backtest",
         "research",
+        "sweep",
+        "leaderboard",
         "quality",
         "preflight",
         "cost",
@@ -474,10 +476,9 @@ def main(argv: list[str] | None = None) -> int:
         "-h",
         "--help",
     }
-    if not argv or all(a.startswith("-") for a in argv) and not (set(argv) & known):
+    # No command word anywhere (`--port 8787`, `--mock`, nothing at all) means `run`.
+    if not (set(argv) & known):
         argv = ["run", *argv]
-    elif argv[0] not in known and argv[0].startswith("-") and len(argv) > 1 and argv[1] in known:
-        pass
     args = build_parser().parse_args(argv)
     cfg = AppConfig.load(args.config)
     secrets = Secrets.load(cfg.project_root)

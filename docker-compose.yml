@@ -1,0 +1,18 @@
+# docker compose up --build        (then open http://127.0.0.1:8787/)
+# Add --mock by changing `command` below to run on the synthetic market with no credentials.
+services:
+  onelot:
+    build: .
+    image: onelot-desk
+    # Credentials come from .env if you made one (copy .env.example). It is optional.
+    env_file:
+      - path: .env
+        required: false
+    # Mock mode needs no credentials:
+    # command: ["python", "-m", "onelot", "run", "--mock", "--host", "0.0.0.0", "--port", "8787"]
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    restart: unless-stopped
