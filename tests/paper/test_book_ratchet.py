@@ -243,3 +243,101 @@ class TestTheOtherExitsAreUnchanged:
         closed = closed_of(events)
         assert (closed.ts, closed.detail["reason"]) == (ist(THU, 15, 15), "SESSION_END")
         assert closed.detail["price_paise"] == to_paise(QUIET[0])
+
+
+def stock_alert(direction: str = "long", risk: float = 3.331) -> dict[str, Any]:
+    """The conftest RELIANCE alert (tick 0.05) with the rule frozen, a risk off the tick."""
+    alert = make_alert("STOCK", direction)
+    alert["manage"] |= {"target_r": TARGET_R, "trail_atr_mult": 0.0, "ratchet": {
+        "stop_atr": 1.5, "atr_tf": "60m", "target_r": TARGET_R, "extend": True, "risk": risk,
+        "cost": 0.4}}  # fmt: skip
+    return alert
+
+
+class TestAStockIsOnItsTick:
+    @pytest.mark.parametrize("direction", ["long", "short"])
+    def test_levels_and_exits_are_snapped_against_the_trader(
+        self, make_book, engine, direction: str
+    ) -> None:
+        sign = 1 if direction == "long" else -1
+        book = opened(make_book, stock_alert(direction))
+        fill = (1000.0, 1000.5, 999.5, 1000.0)
+        book.step(at(7), feed(RELIANCE=bars([fill])))
+        position = the_row(engine)["plan"]["position"]
+        plan = position["ratchet"]["plan"]
+        exact_stop, exact_target = to_paise(plan["stop"]), to_paise(plan["target"])
+        assert exact_stop % 5 and exact_target % 5  # the rule's levels are off the tick
+        # a long's stop down and target up; a short's the other way
+        assert position["initial_stop_paise"] % 5 == 0 and position["target_paise"] % 5 == 0
+        assert 0 < sign * (exact_stop - position["initial_stop_paise"]) < 5
+        assert 0 < sign * (position["target_paise"] - exact_target) < 5
+
+        e, m = plan["entry"], 3 * 3.331
+        o, far = e + sign * 0.1 * m, e + sign * 0.3 * m  # 30% of the move: above breakeven
+        rows = [fill, (o, max(o, far), min(o, far), far)]
+        events = book.step(at(9), feed(RELIANCE=bars(rows)))
+        (moved,) = [ev for ev in events if ev.kind == "STOP_MOVED"]
+        assert moved.detail["to_paise"] % 5 == 0
+        assert 0 <= sign * (to_paise(moved.detail["stop"]) - moved.detail["to_paise"]) < 5
+
+        back = (o, max(o, e), min(o, e), e)  # opens beyond the stop, then trades through it
+        events = book.step(at(10), feed(RELIANCE=bars([*rows, back])))
+        closed = closed_of(events)
+        assert closed.detail["reason"] == "BREAKEVEN_STOP"
+        assert closed.detail["price_paise"] == moved.detail["to_paise"]
+
+
+class TestATradeFromBeforeThisBuild:
+    def test_it_is_stepped_by_the_new_code_and_closes_as_the_old_code_did(
+        self, make_book, engine
+    ) -> None:
+        """A stored OPEN trade whose plan has no ratchet key at all (every trade opened before
+        US-079): a restarted book manages it by the old rules. The numbers are the ones
+        test_book_manage.py pins for the same alert and bars."""
+        first = opened(make_book)  # the plain conftest stock alert, no manage.ratchet
+        first.step(at(7), feed(RELIANCE=bars([(1000.00, 1001.00, 999.00, 1000.50)])))
+        stored = the_row(engine)["plan"]
+        assert "ratchet" not in stored["position"] and "ratchet" not in stored["rules"]
+
+        rows = [(1000.00, 1001.00, 999.00, 1000.50), (999.00, 999.50, 994.00, 996.00)]
+        events = make_book().step(at(8), feed(RELIANCE=bars(rows)))  # a restart
+
+        row = the_row(engine)
+        assert (row["status"], row["close_reason"], row["exit_paise"]) == ("CLOSED", "STOP", 99_470)
+        assert (row["costs_paise"], row["net_paise"]) == (106, -560 - 106)
+        closed = closed_of(events)
+        assert (closed.ts, closed.detail["price_paise"], closed.detail["gap"]) == (
+            at(7),
+            99_500,
+            False,
+        )
+        assert "stage" not in closed.detail
+
+
+class TestAGapOutranksWhatIsDueAtTheSameOpen:
+    def test_a_gap_beats_the_strategy_exit(self, make_book, engine) -> None:
+        rows = [*WALK[:3], (45290.0, 45295.0, 45280.0, 45285.0)]  # 10:09 opens below the lock
+        book = opened(make_book, ratchet_alert())
+        events = book.step(
+            at(12), feed(BANKNIFTY=bars(rows)), lambda trade, now: ("SIGNAL_EXIT", at(9))
+        )
+        closed = closed_of(events)
+        assert (closed.ts, closed.detail["reason"], closed.detail["gap"]) == (
+            at(9),
+            "LOCK_STOP",
+            True,
+        )
+        assert closed.detail["price_paise"] == to_paise(45290.0)
+
+    def test_a_gap_beats_the_session_end(self, make_book, engine) -> None:
+        created = ist(THU, 15, 9, 3)
+        book = make_book(clock=lambda: ist(THU, 15, 20))
+        book.on_alert(ratchet_alert(created=created), ist(THU, 15, 9, 4))
+        held: Row = (45340.0, 45345.0, 45330.0, 45340.0)  # above the 45315 lock
+        # 15:10 .. 15:14, then the 15:15 bar (the session end is due) opens below the lock
+        rows = [*WALK[:3], held, held, (45100.0, 45105.0, 45090.0, 45100.0), held]
+        events = book.step(ist(THU, 15, 20), feed(BANKNIFTY=bars(rows, start=ist(THU, 15, 10))))
+        closed = closed_of(events)
+        assert closed.ts == ist(THU, 15, 15) and closed.detail["gap"] is True
+        assert closed.detail["reason"] == "LOCK_STOP"
+        assert closed.detail["price_paise"] == to_paise(45100.0)

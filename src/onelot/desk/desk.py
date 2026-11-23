@@ -923,7 +923,12 @@ class Desk:
                 "target_r": rset.target_r,
                 "extend": rset.extend,
                 "risk": round(risk, 4),
-                "cost": round(rlive.unit_cost(float(eco.costs_inr), int(eco.qty), delta), 4),
+                "cost": round(
+                    rlive.unit_cost(
+                        float(eco.costs_inr), int(eco.qty), delta, option=eco.kind == "INDEX"
+                    ),
+                    4,
+                ),
             }
         sig = {
             "id": sid,
@@ -1362,8 +1367,15 @@ class Desk:
                     and sign * (level - p["stop_underlying"]) > 0
                 ):
                     p["stop_underlying"], p["trail_active"] = round(level, 2), True
-            if isinstance(m.get("ratchet"), dict):
-                self._ratchet_position(pid, p, t, now)  # US-079: the stop and trail rule
+            if isinstance(m.get("ratchet"), dict):  # US-079: the stop and trail rule
+                saved = copy.deepcopy(p)
+                try:
+                    self._ratchet_position(pid, p, t, now)
+                except Exception:  # noqa: BLE001 - a broken record never stops the poll
+                    self.hook_errors += 1
+                    log.exception("desk: the stop and trail rule failed for position %s", pid)
+                    p.clear()
+                    p.update(saved)  # its old levels stand
             p["bars_held"] = int(
                 max(0, (now - opened).total_seconds() // 60) // max(1, int(m.get("tf_min", 5)))
             )
@@ -1438,7 +1450,7 @@ class Desk:
         """A taken position whose alert froze the stop and trail rule (US-079): its levels and
         stage are its paper trade's (the same rule on the same bars; the paper trade's close is
         its exit), or, with no paper trade, the rule walked here on the tracker's closed bars
-        from the alert's price. Each move of the stop or the target is told once: "raise your
+        from the alert's price. Each move of the stop or the target is told once: "move your
         stop to X". Nothing here closes the position."""
         block = p["manage"]["ratchet"]
         rec = p.get("ratchet") if isinstance(p.get("ratchet"), dict) else None
@@ -1475,7 +1487,7 @@ class Desk:
         side = p["side"].replace("_", " ")
         what = []
         if moved_stop:
-            what.append(f"raise your stop to {st.stop:,.2f}")
+            what.append(f"move your stop to {st.stop:,.2f}")
         if moved_target:
             what.append(f"the target moves out to {st.target:,.2f}")
         title = f"{p['label']} {side}: " + " and ".join(what)

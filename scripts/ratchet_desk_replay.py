@@ -224,7 +224,7 @@ def replay(store: Path, sessions: int, instrument: str) -> int:
         if not rlive.usable(risk):
             continue
         prem_cost = model.round_trip_cost(200.0, 200.0, int(spec.lot_size))
-        cost = rlive.unit_cost(prem_cost, int(spec.lot_size), DELTA)
+        cost = rlive.unit_cost(prem_cost, int(spec.lot_size), DELTA, option=True)
         alert = alert_for(sig, instrument, spec, risk, cost)
         day = by_day[sig.close_at.date()]
         want = reference(sig, day, risk, cost, settings.params)

@@ -20,7 +20,15 @@ from typing import Any, cast
 from ..manage import ratchet
 from ..manage.live import RatchetTrack, track_from_json, track_to_json
 from .alert import resolution_min
-from .manage import Direction, Kind, ManageRules, PositionState, StrategyExit, TrailLevel
+from .manage import (
+    Direction,
+    Kind,
+    ManageRules,
+    PositionState,
+    StrategyExit,
+    TrailLevel,
+    level_paise,
+)
 from .money import to_paise
 
 log = logging.getLogger(__name__)
@@ -145,6 +153,7 @@ def initial_position(
     opened_at: dt.datetime,
     option: Mapping[str, Any] | None,
     plan: ratchet.Plan | None = None,
+    tick_paise: int = 1,
 ) -> PositionState:
     """A freshly filled position: nothing managed yet, the stop and target the alert's; or,
     with the rule's `plan` (US-079), the plan's, anchored at the fill."""
@@ -153,7 +162,8 @@ def initial_position(
     track = None
     if plan is not None:
         track = RatchetTrack(plan, ratchet.start(plan))
-        stop, target = to_paise(plan.stop), to_paise(plan.target)
+        stop = level_paise(kind, plan.side, plan.stop, "stop", tick_paise)
+        target = level_paise(kind, plan.side, plan.target, "target", tick_paise)
     return PositionState(
         direction=cast(Direction, direction),
         kind=cast(Kind, kind),
