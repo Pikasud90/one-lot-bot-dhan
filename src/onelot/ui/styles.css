@@ -477,7 +477,7 @@ td.best-row{color:var(--ok);font-weight:800}
 .ml-inst{min-width:150px}
 .ml-cell{min-width:190px}
 .ml-p b{font-size:19px}
-.ml-small{font-size:12.5px;color:var(--muted)}
+.ml-small{font-size:14px;color:var(--muted)}
 
 /* ── US-070: the tab bar stays in view; the Today strip; the micro-trend legend; focus outlines ── */
 @media (min-width:900px){ .top{position:sticky;top:0;z-index:40} }
@@ -498,3 +498,29 @@ a:focus-visible,button:focus-visible,select:focus-visible,input:focus-visible,[t
 .snap-item{padding:8px 0;border-top:1px solid var(--line)}
 .snap-item:first-child{border-top:0}
 .snap-table{margin-top:8px}
+
+/* ── US-085: a compact header: brand, badges, theme and clock on one row, the tabs on a second ── */
+.top{padding:8px 20px 4px;margin-bottom:12px;gap:4px 18px}
+.brand-mark{width:42px;height:42px}
+.brand-mark .mascot{width:36px;height:36px}
+.top .tabs{flex:1 1 100%;order:5;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;gap:0}
+.top .tabs::-webkit-scrollbar{display:none}
+.tabs a{padding:6px 9px 5px;letter-spacing:.04em;white-space:nowrap}
+.top .badges{display:contents}
+.top .badges #badges{order:6;flex:1 1 100%;justify-content:flex-start;gap:6px 8px;margin-bottom:2px}
+.top .badges .theme-pick{order:2;margin-left:auto;flex:none}
+.top .clockbox{order:3}
+@media(min-width:1300px){
+  .top .badges{display:flex;margin-left:auto;gap:6px 12px;justify-content:flex-end;flex:1 1 0;flex-wrap:nowrap;min-width:0}
+  .top .badges #badges{order:0;flex:1 1 0;min-width:0;justify-content:flex-end;margin-bottom:0}
+  .top .badges .theme-pick{order:0;margin-left:0}
+}
+.clockbox{min-width:0;margin-left:0;padding:0 0 0 12px}
+.clock-date,.clock-session{display:inline-block;margin-top:2px}
+.clock-session{margin-left:8px}
+.clock-session:empty{display:none}
+.calpop{position:fixed;top:var(--head-h,110px)}
+.top.compact .brand-sub,.top.compact .clock-session{display:none}
+@media(max-width:1699px){ .brand-sub{display:none} }
+@media(max-width:899px){ .top .tabs{flex-wrap:wrap;overflow:visible} }
+.clockbox:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
