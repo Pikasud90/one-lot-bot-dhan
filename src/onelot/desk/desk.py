@@ -75,6 +75,8 @@ UNREADABLE = object()
 # A price the owner types is a price per share or per option unit: anything at or above this
 # is a typo (1e308 made the journal unserialisable, QA cycle 1 BUG-11).
 MAX_REPORTED_PRICE = 1e7
+#: the context series the nightly top-up adds to the trackers (the option pricer reads its close)
+VIX_KEY = "INDIAVIX"
 # The stored daily bars of the trend ladder are read once a calendar day. A read that failed
 # is tried again after the first delay, a store with no history for the series after the second.
 HISTORY_RETRY = dt.timedelta(minutes=10)
@@ -577,9 +579,19 @@ class Desk:
         adapter = self._adapter_getter()
         if adapter is None:
             raise RuntimeError("no Dhan adapter")
-        return bf.backfill(
-            self.engine, bf.choose_provider("dhan", adapter), keys, ["1m"], stop_flag=stop
-        )
+        provider = bf.choose_provider("dhan", adapter)
+        result = bf.backfill(self.engine, provider, keys, ["1m"], stop_flag=stop)
+        # India VIX is a context series, not a tracker: the option price model of the Lab and
+        # the Simulator reads its daily close, so it is topped up too (daily and one-minute
+        # bars). A failure is counted and logged, never allowed to undo the instruments' top-up.
+        if not (stop and stop()):
+            try:
+                vix = bf.backfill(self.engine, provider, [VIX_KEY], ["1d", "1m"], stop_flag=stop)
+                result.errors.extend(str(e) for e in vix.errors)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("delivery: the India VIX top-up failed: %s", exc)
+                result.errors.append(f"{VIX_KEY}: {exc}")
+        return result
 
     def _delivery_history(self, now: dt.datetime) -> None:
         """Outside the desk lock: the delivery rule's stored days and the top-up."""

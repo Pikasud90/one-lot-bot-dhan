@@ -60,13 +60,32 @@ def test_the_top_up_goes_through_the_real_desk_method_with_the_19_series_and_a_s
     now = at(L[3], "16:00")
     d.delivery.load_history(now)
     d.delivery.maybe_top_up(now)
-    (call,) = fake.calls
+    call, vix_call = fake.calls  # the instruments, then India VIX on its own
+    assert vix_call["keys"] == ["INDIAVIX"] and vix_call["res"] == ["1d", "1m"]
     # US-068: every tracked series (18 stocks and 5 indices), not only the 19 the rule reads
     assert len(call["keys"]) == 23 and "NIFTY" in call["keys"] and call["res"] == ["1m"]
     assert {"BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX"} <= set(call["keys"])
     assert callable(call["stop_flag"]) and call["stop_flag"]() in (True, False)
-    assert "1 error(s): SBIN 1m: timeout" in d.delivery.top_up_note
+    assert "SBIN 1m: timeout" in d.delivery.top_up_note
     assert "TypeError" not in d.delivery.top_up_note
+
+
+def test_a_vix_failure_leaves_the_instruments_top_up_whole_and_is_counted(desk, monkeypatch):
+    d, fake = desk
+    fake.errors = []
+
+    def boom(engine, provider, series_keys=None, resolutions=None, **kw):
+        fake.calls.append({"keys": list(series_keys), "res": list(resolutions)})
+        if series_keys == ["INDIAVIX"]:
+            raise RuntimeError("vix feed down")
+        return SimpleNamespace(errors=[])
+
+    monkeypatch.setattr("onelot.data.backfill.backfill", boom)
+    now = at(L[3], "16:00")
+    d.delivery.load_history(now)
+    d.delivery.maybe_top_up(now)
+    assert len(fake.calls) == 2 and len(fake.calls[0]["keys"]) == 23
+    assert "1 error(s): INDIAVIX: vix feed down" in d.delivery.top_up_note
 
 
 @pytest.mark.parametrize("hhmm", ["09:00", "12:30", "15:35"])
