@@ -125,6 +125,7 @@ $("clockbox").onclick = async () => {
   calMonth = calMonth || new Date();
   renderCalendar(); pop.hidden = false;
 };
+$("clockbox").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("clockbox").click(); } });
 $("cal-close").onclick = () => { $("calpop").hidden = true; };
 loadCalendar().catch(() => {});
 
@@ -137,7 +138,7 @@ function showTab(name) {
   if (tabLoaders[name]) tabLoaders[name]();
 }
 window.addEventListener("hashchange", () => showTab(location.hash.slice(1) || "home"));
-// Number keys 1 to 7 switch tabs, in the bar's order; never while typing in a field or with a modifier held.
+// Number keys 1 to 8 switch tabs, in the bar's order; never while typing in a field or with a modifier held.
 const tabForKey = (key, tag, editable, mods, tabs) => (mods || editable || /^(INPUT|TEXTAREA|SELECT)$/.test(String(tag || "").toUpperCase()) || !/^[1-9]$/.test(String(key))) ? null : (tabs[Number(key) - 1] ?? null);
 document.addEventListener("keydown", (e) => {
   const t = e.target || {}, tabs = [...document.querySelectorAll("#tabs a")].map(a => a.dataset.tab);
@@ -145,6 +146,12 @@ document.addEventListener("keydown", (e) => {
   if (!name) return;
   e.preventDefault(); if (location.hash.slice(1) !== name) location.hash = name; else showTab(name);
 });
+
+// The header keeps its height in a CSS variable (the calendar pop-up sits under it) and drops its small print once the page is scrolled.
+const headerHeight = () => { const h = document.querySelector("header.top"); if (h) document.documentElement.style.setProperty("--head-h", Math.round(h.getBoundingClientRect().bottom) + "px"); };
+const compactHeader = () => { const h = document.querySelector("header.top"); if (!h) return; const y = window.scrollY; if (y > 120) h.classList.add("compact"); else if (y < 20) h.classList.remove("compact"); headerHeight(); };
+window.addEventListener("scroll", compactHeader, { passive: true }); window.addEventListener("resize", headerHeight);
+headerHeight();
 
 /* ── header badges + warnings ─────────────────────────────────────────── */
 let latest = null, acctSummary = null;
