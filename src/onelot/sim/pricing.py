@@ -23,7 +23,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd  # type: ignore[import-untyped]
@@ -48,6 +48,10 @@ from ..lab.real_options import NeedBlock, RealPricer, interpolate
 LivePremium = Callable[[dict[str, Any], float, dt.datetime], float | None]
 
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _ot(c: Any) -> Literal["CE", "PE"]:
+    return "CE" if c.opt == "CE" else "PE"
 
 
 class ReadOnlyOptionStore(OptionBarStore):
@@ -218,7 +222,7 @@ class Pricer:
         intrinsic, out of bounds, no root): the VIX-based volatility is used then."""
         t = year_frac(ts.to_pydatetime(), expiry_datetime(c.expiry))
         try:
-            iv = float(implied_vol(raw_premium, spot, c.strike, t, self.bt.risk_free_rate, c.opt))  # type: ignore[arg-type]
+            iv = float(implied_vol(raw_premium, spot, c.strike, t, self.bt.risk_free_rate, _ot(c)))
         except (ValueError, ZeroDivisionError, OverflowError):
             return None
         return iv if math.isfinite(iv) and 1e-3 < iv < 4.9 else None
@@ -231,7 +235,7 @@ class Pricer:
         if iv is None:
             return float(self.model.premium(spot, c.strike, ts, expiry_datetime(c.expiry), c.opt))
         t = year_frac(ts.to_pydatetime(), expiry_datetime(c.expiry))
-        return float(b76_price(spot, c.strike, t, iv, self.bt.risk_free_rate, c.opt))
+        return float(b76_price(spot, c.strike, t, iv, self.bt.risk_free_rate, _ot(c)))
 
     def delta(self, c: Contract, spot: float, ts: pd.Timestamp, iv: float | None = None) -> float:
         if iv is None:
@@ -239,7 +243,7 @@ class Pricer:
                 float(self.model.delta(spot, c.strike, ts, expiry_datetime(c.expiry), c.opt))
             )
         t = year_frac(ts.to_pydatetime(), expiry_datetime(c.expiry))
-        return abs(float(b76_greeks(spot, c.strike, t, iv, self.bt.risk_free_rate, c.opt).delta))
+        return abs(float(b76_greeks(spot, c.strike, t, iv, self.bt.risk_free_rate, _ot(c)).delta))
 
     def premium(
         self,
