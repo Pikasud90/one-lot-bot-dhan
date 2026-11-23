@@ -89,6 +89,16 @@ class StrategyParams(BaseModel):
     max_bars: int = Field(
         0, description="Time stop in bars (0 = off)", json_schema_extra=opt(0, 36, 6)
     )
+    # the desk's stop, target and trail rule (US-079, `manage/ratchet.py`); off unless a slot
+    # asks: then the first stop is ratchet_stop_atr x ATR(14) of ratchet_atr_tf bars, the
+    # first target ratchet_target_r risks away, and target_r and the trails are not used
+    ratchet: bool = Field(False, description="Manage the trade by the stop, target and trail rule")
+    ratchet_stop_atr: float = Field(1.5, description="First stop in ATR(14) of ratchet_atr_tf bars")
+    ratchet_atr_tf: str = Field(
+        "60m", description="Bars of that ATR (the strategy's own if longer)"
+    )
+    ratchet_target_r: float = Field(3.0, description="First target in risks from the fill")
+    ratchet_extend: bool = Field(True, description="The target moves out from 80% of the move")
     # signal hygiene
     min_strength: float = Field(
         0.0,

@@ -88,6 +88,8 @@ from ..desk.rules import (
     session_due,
     sessions_held,
 )
+from ..manage import ratchet
+from ..manage.live import RatchetTrack, close_reason, on_bar
 from .events import PaperEvent
 from .fill import (
     NS_PER_MINUTE,
@@ -104,6 +106,8 @@ log = logging.getLogger(__name__)
 CloseReason = Literal[
     "STOP",
     "TRAIL_STOP",
+    "BREAKEVEN_STOP",  # US-079: the stop and trail rule, a stop raised above breakeven
+    "LOCK_STOP",  # US-079: the same rule, a stop that locks 35% of the planned move
     "TARGET",
     "SIGNAL_EXIT",
     "OPPOSITE_SIGNAL",
@@ -121,6 +125,7 @@ CLOSE_REASONS: frozenset[str] = frozenset(get_args(CloseReason))
 STRATEGY_EXIT_REASONS: frozenset[str] = frozenset(get_args(StrategyExitReason))
 CLOSED = "CLOSED"  # the event kind of a close
 STOP_MOVED = "STOP_MOVED"  # the event kind of a trail that tightened the stop
+TARGET_MOVED = "TARGET_MOVED"  # US-079: the rule moved the target out
 PRICE_COLUMNS = ("open", "high", "low", "close")
 # Strategy bars start at the NSE session open, as `data.resample.resample_bars` anchors them
 # (origin start_day, offset 09:15, closed and labelled left).
@@ -211,6 +216,9 @@ class PositionState:
     pending_exit: StrategyExit | None = None
     last_close_paise: int | None = None
     last_close_at: dt.datetime | None = None
+    #: US-079: the stop, target and trail rule's plan and state, in RUPEES on the managed
+    #: series; None for every trade whose alert did not ask for the rule
+    ratchet: RatchetTrack | None = None
 
 
 @dataclass(frozen=True)
@@ -236,6 +244,8 @@ class ManageRules:
     tick_paise: int
     resolution_min: int | None = None
     line_trail: bool = False
+    #: US-079: the stop, target and trail rule's shares (`manage.ratchet`); None: rule off
+    ratchet: ratchet.RatchetParams | None = None
 
 
 @dataclass(frozen=True)
@@ -385,6 +395,7 @@ def _manage(
     sign = 1 if state.direction == "long" else -1
     trail_atr = _trail_atr_paise(rules)
     stop, trail_active = state.stop_paise, state.trail_active
+    target, track, rparams = state.target_paise, state.ratchet, rules.ratchet
     last_close, last_close_at = state.last_close_paise, state.last_close_at
     last_ts = state.last_bar_ts
     seen_date = None if last_ts is None else last_ts.astimezone(IST).date()
@@ -403,6 +414,19 @@ def _manage(
         bar = BarPaise(
             *(to_paise(float(col[i])) for col in (view.open, view.high, view.low, view.close))
         )
+        if track is not None and rparams is not None:  # US-079: the stop and trail rule
+            due_at_open = _exits_due_at_open(bar_ts, pending, state.opened_at, session_date, rules)
+            closed, track, moved = _ratchet_bar(
+                state, track, view, i, bar, bar_ts, due_at_open, rparams, res
+            )
+            events.extend(moved)
+            if closed is not None:
+                events.append(_closed_event(state, closed, bar, stop, res_min, track))
+                break
+            stop, target = to_paise(track.state.stop), to_paise(track.state.target)
+            trail_active = trail_active or track.state.stage > 0
+            last_close, last_close_at = bar.close, bar_ts + res
+            continue
         lined = _line_stop(state, stop, bar_ts, rules, trail)
         if trail is not None and lined != stop:  # the strategy's line: from this open on
             events.append(_line_moved_event(state, stop, lined, trail, bar_ts))
@@ -439,6 +463,8 @@ def _manage(
     new_state = replace(
         state,
         stop_paise=stop,
+        target_paise=target,
+        ratchet=track,
         trail_active=trail_active,
         last_bar_ts=last_ts,
         bars_held=state.bars_held
@@ -603,7 +629,12 @@ def _line_stop(
 
 
 def _closed_event(
-    state: PositionState, close: PaperClose, bar: BarPaise, stop: int, res_min: int
+    state: PositionState,
+    close: PaperClose,
+    bar: BarPaise,
+    stop: int,
+    res_min: int,
+    track: RatchetTrack | None = None,
 ) -> PaperEvent:
     """The CLOSED event: final, with the bar prices it used (the feed may revise bars).
 
@@ -620,6 +651,9 @@ def _closed_event(
         "target_paise": state.target_paise,
         "resolution_min": res_min,
     }
+    if track is not None:  # US-079: the levels in force when the bar closed the trade
+        detail |= _ratchet_detail(track)
+        detail["target_paise"] = to_paise(track.state.target)
     return PaperEvent(state.trade_id, close.at, CLOSED, detail)
 
 
@@ -682,6 +716,70 @@ def _line_moved_event(
         "line_bar_close_ts": trail.bar_close_ts.isoformat(),
     }
     return PaperEvent(state.trade_id, bar_ts, STOP_MOVED, detail)
+
+
+# ── the stop, target and trail rule (US-079) ─────────────────────────────────
+
+
+def _ratchet_bar(
+    state: PositionState,
+    track: RatchetTrack,
+    view: OhlcBars,
+    i: int,
+    bar: BarPaise,
+    bar_ts: dt.datetime,
+    due_at_open: tuple[str, ...],
+    params: ratchet.RatchetParams,
+    res: dt.timedelta,
+) -> tuple[PaperClose | None, RatchetTrack, list[PaperEvent]]:
+    """One bar under the rule (`manage.live.on_bar`, on the feed's own rupee prices so it
+    equals a direct replay of `ratchet.py`): the exit it forces with the levels in force,
+    else the levels for the NEXT bar, each move booked at this bar's close.
+
+    What fell due before the bar opened (the strategy's exit, the session end, the time
+    stop) closes at the open, as without the rule, unless the open gaps through the stop or
+    the target: those outrank it (`desk.rules.EXIT_PRECEDENCE`). A gap closes at the open
+    under the stage's stop name or TARGET, flagged `gap`."""
+    o, h, low = float(view.open[i]), float(view.high[i]), float(view.low[i])
+    hit, new, changes = on_bar(track.plan, track.state, o, h, low, params)
+    gapped = hit is not None and hit[0].startswith("GAP_")
+    if due_at_open and not gapped:
+        return _pick(dict.fromkeys(due_at_open, (bar.open, False)), bar_ts), track, []
+    if hit is not None:
+        reason, gap = close_reason(hit[0])
+        price = bar.open if gap else to_paise(hit[1])
+        return PaperClose(cast(CloseReason, reason), price, bar_ts, gap), track, []
+    moved = RatchetTrack(track.plan, new)
+    events: list[PaperEvent] = []
+    for kind, old_level, new_level in (
+        (STOP_MOVED, track.state.stop, new.stop),
+        (TARGET_MOVED, track.state.target, new.target),
+    ):
+        if kind not in changes:
+            continue
+        detail: dict[str, Any] = {
+            "from_paise": to_paise(old_level),
+            "to_paise": to_paise(new_level),
+            "initial_stop_paise": state.initial_stop_paise,
+            "bar_ts": bar_ts.isoformat(),
+            **bar.as_detail(),
+            "source": "ratchet",
+            **_ratchet_detail(moved),
+        }
+        events.append(PaperEvent(state.trade_id, bar_ts + res, kind, detail))
+    return None, moved, events
+
+
+def _ratchet_detail(track: RatchetTrack) -> dict[str, Any]:
+    """The rule's levels as an event stores them: exact rupees beside the stage reached."""
+    st = track.state
+    return {
+        "stage": ratchet.STAGES[st.stage],
+        "stop": st.stop,
+        "target": st.target,
+        "best": st.best,
+        "target_moved": st.target != track.plan.target,
+    }
 
 
 # ── validation ────────────────────────────────────────────────────────────────

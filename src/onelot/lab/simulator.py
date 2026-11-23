@@ -14,6 +14,14 @@ Rules (shared with the live Guardian so research matches what you will be told l
   entry bar on and with no profit needed first. NaN means "no level on this bar". A stop the line
   has carried past the price is a gap through the stop at the next open.
 * Strategy exit signals and time stops exit at the next bar open; everything is flat by square-off.
+* The stop, target and trail rule (US-079, `p.ratchet`): the first stop is `ratchet_stop_atr` x
+  ATR(14) of 60m bars (`manage/live.first_risk`, read at the signal's close) from the fill, the
+  first target `ratchet_target_r` risks away, and `manage/ratchet.py` moves them on each
+  one-minute bar of `fine` (the strategy's own bars when there are none), as the paper book
+  does. `target_r`, the partial and both trails are not used; the strategy's exit, the time
+  stop and the square-off are as above. The rule's costs per unit are the Lab's own friction,
+  the slippage both ways. Exits are named "stop", "breakeven_stop", "lock_stop",
+  "trail_stop" (slipped) and "target" (at the level, or the open on a gap).
 """
 
 from __future__ import annotations
@@ -25,6 +33,8 @@ import numpy as np
 import pandas as pd
 
 from ..indicators import core as ind
+from ..manage import live as rlive
+from ..manage import ratchet
 from ..strategies.base import StrategyParams
 
 
@@ -143,6 +153,12 @@ def simulate(
     tf_minutes = max(1, int(round((idx[1] - idx[0]).total_seconds() / 60))) if n > 1 else 5
     resolver = PathResolver(fine, tf_minutes)
     start_i = int(idx.searchsorted(start)) if start is not None else 0
+    rset = rlive.settings_of(p)
+    rtable: tuple[np.ndarray, np.ndarray] | None = None
+    if rset is not None:
+        own = f[["open", "high", "low", "close"]]
+        src = fine if fine is not None and not fine.empty else own
+        rtable = rlive.atr_table(src, f"{tf_minutes}m", rset.atr_tf)
 
     trades: list[SimTrade] = []
     pos: SimTrade | None = None
@@ -150,6 +166,7 @@ def simulate(
     stop = target = partial_px = None
     partial_done = False
     pending = None  # (side, signal_i, stop, score)
+    rtrack: rlive.RatchetTrack | None = None  # US-079: the open trade under the rule
     pending_exit: str | None = None
     last_exit_i = -(10**9)
     per_day: dict[int, int] = {}
@@ -186,7 +203,14 @@ def simulate(
                     if risk < floor:
                         risk = floor
                         st = fill - side * risk
-                    if risk <= max(max_risk, floor if p.min_risk_pct > 0 else 0):
+                    take = risk <= max(max_risk, floor if p.min_risk_pct > 0 else 0)
+                    if take and rset is not None and rtable is not None:
+                        # US-079: the rule's first stop replaces the strategy's (whose setup
+                        # filter above still decides which signals are traded, as on the desk)
+                        risk = rset.stop_atr * rlive.atr_at(rtable, idx[si] + resolver.tf)
+                        take = rlive.usable(risk)
+                        st = fill - side * risk
+                    if take:
                         pos = SimTrade(
                             symbol,
                             strategy,
@@ -202,6 +226,14 @@ def simulate(
                         )
                         remaining, stop, target = 1.0, st, pos.target
                         partial_px = fill + side * p.partial_r * risk if p.partial_r > 0 else None
+                        rtrack = None
+                        if rset is not None:
+                            rplan = ratchet.plan_from_risk(
+                                side, float(fill), float(risk), rset.target_r, 2 * slip * fill
+                            )
+                            rtrack = rlive.RatchetTrack(rplan, ratchet.start(rplan))
+                            stop, target, partial_px = rplan.stop, rplan.target, None
+                            pos.target = rplan.target
                         partial_done = False
                         entry_i = i
                         per_day[dkey[i]] = per_day.get(dkey[i], 0) + 1
@@ -223,6 +255,17 @@ def simulate(
             if pending_exit is not None or tmin[i] >= sq_min:
                 reason = pending_exit or "square_off"
                 close_leg(i, o[i] * (1 - slip * side), remaining, reason)
+            elif rtrack is not None and rset is not None:
+                rtrack, hit = _ratchet_walk(
+                    rtrack, _minute_rows(fine, idx[i], resolver.tf, (o[i], h[i], l[i])), rset
+                )
+                stop, target = rtrack.state.stop, rtrack.state.target
+                pos.mfe = max(pos.mfe, side * (rtrack.state.best - pos.entry_price))
+                if hit is not None:
+                    reason, px = hit
+                    if reason != "target":
+                        px = px * (1 - slip * side)
+                    close_leg(i, px, remaining, reason)
             else:
                 # gap through the stop at the open
                 if (o[i] - stop) * side <= 0:
@@ -276,9 +319,10 @@ def simulate(
                                 )
             if pos is not None:
                 side = pos.side
-                # trailing stop (effective from next bar)
+                # trailing stop (effective from next bar); never under the rule (US-079)
                 if (
-                    p.trail_atr_mult > 0
+                    rtrack is None
+                    and p.trail_atr_mult > 0
                     and not np.isnan(atr_tr[i])
                     and pos.mfe >= p.trail_activate_r * pos.risk_ps
                 ):
@@ -286,7 +330,7 @@ def simulate(
                     stop = max(stop, cand) if side == 1 else min(stop, cand)
                 # the strategy's line trail: the stop follows the line, never back (next bar on)
                 line = ltr if side == 1 else strl
-                if line is not None and not np.isnan(line[i]):
+                if rtrack is None and line is not None and not np.isnan(line[i]):
                     stop = max(stop, line[i]) if side == 1 else min(stop, line[i])
                 if (side == 1 and lx[i]) or (side == -1 and sx[i]):
                     pending_exit = "signal"
@@ -316,6 +360,41 @@ def simulate(
                 if not np.isnan(sig_stop):
                     pending = (side, i, sig_stop, lsc[i] if side == 1 else ssc[i])
     return trades
+
+
+def _minute_rows(
+    fine: pd.DataFrame | None,
+    start: pd.Timestamp,
+    width: pd.Timedelta,
+    own: tuple[float, float, float],
+) -> list[tuple[float, float, float]]:
+    """The (open, high, low) of the one-minute bars inside the strategy bar opening at
+    `start`; the strategy bar itself when there are none."""
+    if fine is not None and not fine.empty:
+        win = fine.loc[start : start + width - pd.Timedelta(seconds=1)]
+        if not win.empty:
+            cols = (win[k].to_numpy(float) for k in ("open", "high", "low"))
+            return [(float(a), float(b), float(c)) for a, b, c in zip(*cols, strict=True)]
+    return [own]
+
+
+def _ratchet_walk(
+    track: rlive.RatchetTrack,
+    rows: list[tuple[float, float, float]],
+    settings: rlive.RatchetSettings,
+) -> tuple[rlive.RatchetTrack, tuple[str, float] | None]:
+    """The rule over `rows`, in order (`manage/live.on_bar`): the track after them, and the
+    exit one of them forced as (Lab reason, price before slippage), or None."""
+    state, params = track.state, settings.params
+    for o_, h_, l_ in rows:
+        hit, state, _ = rlive.on_bar(track.plan, state, o_, h_, l_, params)
+        if hit is not None:
+            reason, gap = rlive.close_reason(hit[0])
+            return rlive.RatchetTrack(track.plan, state), (
+                reason.lower(),
+                o_ if gap else hit[1],
+            )
+    return rlive.RatchetTrack(track.plan, state), None
 
 
 def _stop_reason(pos: SimTrade, stop: float) -> str:

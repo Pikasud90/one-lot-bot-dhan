@@ -17,6 +17,8 @@ from collections.abc import Mapping
 from numbers import Real
 from typing import Any, cast
 
+from ..manage import ratchet
+from ..manage.live import RatchetTrack, track_from_json, track_to_json
 from .alert import resolution_min
 from .manage import Direction, Kind, ManageRules, PositionState, StrategyExit, TrailLevel
 from .money import to_paise
@@ -58,7 +60,35 @@ def rules_from_alert(
         tick_paise=int(tick_paise),
         resolution_min=resolution,
         line_trail=manage.get("line_trail") is True,
+        ratchet=ratchet_params_of(manage.get("ratchet")),
     )
+
+
+def ratchet_params_of(block: object) -> ratchet.RatchetParams | None:
+    """US-079: the rule's shares when the alert froze a `manage.ratchet` block, else None
+    (every alert before the rule, and every slot that does not ask for it)."""
+    if not isinstance(block, Mapping):
+        return None
+    return ratchet.RatchetParams(extend=block.get("extend") is not False)
+
+
+def ratchet_plan_of(block: object, direction: str, entry_rupees: float) -> ratchet.Plan | None:
+    """US-079: the rule's plan for a fill at `entry_rupees` on the managed series: the first
+    stop `risk` away and the first target `target_r` risks away, both from the fill; None
+    without a usable block (the trade then keeps the alert's levels and today's rules)."""
+    if not isinstance(block, Mapping):
+        return None
+    try:
+        risk, target_r = float(block["risk"]), float(block["target_r"])
+        cost = float(block.get("cost") or 0.0)
+    except (KeyError, TypeError, ValueError):
+        log.warning("paper: manage.ratchet %r is unreadable; the alert's levels stand", block)
+        return None
+    if not all(math.isfinite(v) for v in (risk, target_r, cost)) or risk <= 0 or target_r <= 0:
+        log.warning("paper: manage.ratchet %r is unusable; the alert's levels stand", block)
+        return None
+    side = 1 if direction == "long" else -1
+    return ratchet.plan_from_risk(side, float(entry_rupees), risk, target_r, max(cost, 0.0))
 
 
 def rules_to_json(rules: ManageRules) -> dict[str, Any]:
@@ -78,6 +108,8 @@ def rules_to_json(rules: ManageRules) -> dict[str, Any]:
     }
     if rules.line_trail:
         stored["line_trail"] = True
+    if rules.ratchet is not None:  # written only when on, like line_trail
+        stored["ratchet"] = {"extend": rules.ratchet.extend}
     return stored
 
 
@@ -98,6 +130,7 @@ def rules_from_json(data: Mapping[str, Any], *, resolution: int | None) -> Manag
         tick_paise=int(data["tick_paise"]),
         resolution_min=resolution,
         line_trail=data.get("line_trail") is True,
+        ratchet=ratchet_params_of(data.get("ratchet")),
     )
 
 
@@ -111,10 +144,16 @@ def initial_position(
     levels: Mapping[str, Any],
     opened_at: dt.datetime,
     option: Mapping[str, Any] | None,
+    plan: ratchet.Plan | None = None,
 ) -> PositionState:
-    """A freshly filled position: nothing managed yet, the stop and target the alert's."""
+    """A freshly filled position: nothing managed yet, the stop and target the alert's; or,
+    with the rule's `plan` (US-079), the plan's, anchored at the fill."""
     stop = int(levels["underlying_stop_paise"])
     target = levels.get("underlying_target_paise")
+    track = None
+    if plan is not None:
+        track = RatchetTrack(plan, ratchet.start(plan))
+        stop, target = to_paise(plan.stop), to_paise(plan.target)
     return PositionState(
         direction=cast(Direction, direction),
         kind=cast(Kind, kind),
@@ -130,13 +169,14 @@ def initial_position(
         sessions_held=0,
         option=dict(option) if option else None,
         trade_id=int(trade_id),
+        ratchet=track,
     )
 
 
 def position_to_json(state: PositionState) -> dict[str, Any]:
     """The part of the state that changes as bars are managed, JSON-safe (ISO times)."""
     pending = state.pending_exit
-    return {
+    stored: dict[str, Any] = {
         "version": POSITION_VERSION,
         "entry_paise": state.entry_paise,
         "initial_stop_paise": state.initial_stop_paise,
@@ -153,6 +193,9 @@ def position_to_json(state: PositionState) -> dict[str, Any]:
         "last_close_paise": state.last_close_paise,
         "last_close_at": _iso(state.last_close_at),
     }
+    if state.ratchet is not None:  # US-079: written only for a trade under the rule
+        stored["ratchet"] = track_to_json(state.ratchet)
+    return stored
 
 
 def position_from_json(
@@ -190,6 +233,7 @@ def position_from_json(
         else StrategyExit(pending["reason"], _time(pending["bar_close_ts"])),
         last_close_paise=None if last_close is None else int(last_close),
         last_close_at=_time_or_none(data.get("last_close_at")),
+        ratchet=track_from_json(data["ratchet"]) if data.get("ratchet") else None,
     )
 
 
