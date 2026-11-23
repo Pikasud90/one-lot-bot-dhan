@@ -50,10 +50,10 @@ written on 11 November 2026; search for the heading if the file has changed sinc
 | 13. Tests | 1912 |
 | 14. The work plan | 2039 |
 | 15. Decisions only the owner can make | 2813 |
-| Appendix A. Research outputs of 11 November 2026 | 3088 |
-| Appendix B. Interface and API measurements | 3122 |
-| Appendix C. Sources | 3225 |
-| Appendix D. Index of findings | 3302 |
+| Appendix A. Research outputs of 11 November 2026 | 3115 |
+| Appendix B. Interface and API measurements | 3149 |
+| Appendix C. Sources | 3252 |
+| Appendix D. Index of findings | 3329 |
 
 **Severity.** P0: the app shows or uses something wrong today in a way that can mislead a trading
 decision. P1: must be fixed before the paper test can be trusted or the app can run unattended.
@@ -2859,6 +2859,33 @@ since then come first; the questions below them are kept as written.
   acceptance). (3) The options rule was priced on real premiums for NIFTY and BANKNIFTY: about
   −1.2% of premium a trade, negative in all three periods, and no situation known at entry makes
   it pay (`docs/research/MICROTREND_STUDY_2026-11-13.md`). Its alerts now carry that figure.
+- **Sprint of 23 November 2026.** The owner's ground rules of that day: buy options on NIFTY,
+  BANKNIFTY, FINNIFTY and SENSEX only (MIDCPNIFTY is kept for training: `trade: false` on its
+  line in `config/desk.yaml`), and manage every entry with one stop, target and trail rule. The
+  stop goes above breakeven at 25% of the way to the target, 35% of the move is locked at 50%,
+  and the target stays fixed until 80%. Built: the rule is `src/onelot/manage/ratchet.py`. The
+  Simulator, the paper book, the taken position and the Lab (for the micro-trend slot only) all
+  use it, with a first stop of 1.5 x ATR(14) of 60m bars and a target at 3 risks. The Simulator
+  replays a past day minute by minute: `src/onelot/sim/`, tables `sim_*`, the tab
+  `src/onelot/ui/sim.js`, contract `.agile/stories/SIM-API.md`. Market states (direction and
+  size of a session) are in `src/onelot/mllab/states.py`. The desk also has standalone
+  packaging: `Dockerfile`, `docker-compose.yml`, `requirements.lock.txt`, `QUICKSTART.md`.
+  Three studies, none found an edge. (1) The rule on option entries: the setting the fixed
+  procedure picked loses −0.28% of premium a trade against −0.37% for the present exits, and
+  −1.38% in the test period for both; on real premiums both lose about 1.2% a trade
+  (`docs/research/RATCHET_STUDY_2026-11-23.md`). (2) Market states: after two bulls the next
+  session is a bull 33.4% of the time against 33.5% for any session; size has memory, direction
+  has none (`docs/research/MLSTATES_2026-11-23.md`). (3) Every registered strategy inside four
+  market conditions: 0 of 90 cells passed even the first half of the test, where chance alone
+  gives about 2 (`docs/research/REGIME_STUDY_2026-11-23.md`). The pullback rule was left with
+  its own exits pending the owner's decision: every ratchet setting tried on it was worse.
+  The sprint found and fixed two defects. The nightly top-up of the store left India VIX out,
+  so its bars stopped on 6 November and the option price model of the Lab and the Simulator
+  quietly used a stale value (`src/onelot/desk/desk.py`, `_top_up_bars`). And the Lab put the
+  instrument's 09:30 to 14:45 window over a strategy's own entry window, so `gap_fade` gave 1
+  signal in five years on 18 stocks instead of 1,014 (`src/onelot/lab/runner.py`,
+  `_session_params`). The table of 23 November in `docs/research/STRATEGIES_TESTED_2026-11-12.md`
+  has the study figures.
 
 Each question gives the options, what each one changes and
 a recommendation with its reason. A story that depends on an answer names the question in its

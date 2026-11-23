@@ -27,9 +27,9 @@ from ..data.resample import normalize_resolution
 from ..data.store import _read_bars, available_resolutions, load_bars
 from ..data.universe import InstrumentSpec, load_specs, market_index_key
 from ..settings import current_settings
-from ..strategies.base import Context
+from ..strategies.base import Context, StrategyParams
 from ..strategies.mtf_support import LadderCache
-from ..strategies.registry import get_strategy
+from ..strategies.registry import BENCHMARKS, REGISTRY, get_strategy
 from .execution import (
     OptionPricer,
     daily_equity_on_calendar,
@@ -202,19 +202,41 @@ def _window(
     return sl, start_day
 
 
-def _session_params(spec: InstrumentSpec, params: dict) -> dict:
-    """Instrument session defaults (currency trades 09:00-17:00) unless the user set them."""
+def _own_window(strategy: str | None) -> tuple[str | None, str | None]:
+    """The entry window a strategy declares itself: a default of its own that differs from the
+    common one (gap_fade 09:15 to 09:45, intraday_momentum 14:30 to 15:00). None for a side it
+    leaves at the common default, and for a strategy that is not registered."""
+    cls = REGISTRY.get(strategy or "") or BENCHMARKS.get(strategy or "")
+    if cls is None:
+        return None, None
+    base = StrategyParams.model_fields
+    own = cls.Params.model_fields
+    start, end = (
+        own[k].default if own[k].default != base[k].default else None
+        for k in ("entry_start", "entry_end")
+    )
+    return start, end
+
+
+def _session_params(spec: InstrumentSpec, params: dict, strategy: str | None = None) -> dict:
+    """Instrument session defaults (currency trades 09:00-17:00) unless the user set them. A
+    strategy that declares an entry window of its own keeps it (never starting before the
+    session opens); one that does not gets the instrument's window."""
     s = spec.session
     out = dict(params)
-    out.setdefault("entry_start", s.get("first_entry", "09:30"))
-    out.setdefault("entry_end", s.get("last_entry", "14:45"))
+    own_start, own_end = _own_window(strategy)
+    if own_start is not None:
+        opens = str(s.get("open", "09:15"))
+        own_start = max(str(own_start), opens)  # "HH:MM" strings compare in time order
+    out.setdefault("entry_start", own_start or s.get("first_entry", "09:30"))
+    out.setdefault("entry_end", own_end or s.get("last_entry", "14:45"))
     out.setdefault("exit_time", s.get("square_off", "15:15"))
     return out
 
 
 def generate_for_instrument(cfg: BacktestConfig, cache: DataCache, strategy=None):
     spec = cache.spec(cfg.instrument_key)
-    params = _session_params(spec, cfg.params)
+    params = _session_params(spec, cfg.params, cfg.strategy)
     strategy = strategy or get_strategy(cfg.strategy, {**params, "timeframe": cfg.timeframe})
     bars = cache.bars(spec.series_key, cfg.timeframe)
     start = dt.date.fromisoformat(cfg.start) if cfg.start else None

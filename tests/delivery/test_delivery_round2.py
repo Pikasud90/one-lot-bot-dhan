@@ -60,13 +60,32 @@ def test_the_top_up_goes_through_the_real_desk_method_with_the_19_series_and_a_s
     now = at(L[3], "16:00")
     d.delivery.load_history(now)
     d.delivery.maybe_top_up(now)
-    (call,) = fake.calls
+    call, vix_call = fake.calls  # the instruments, then India VIX on its own
+    assert vix_call["keys"] == ["INDIAVIX"] and vix_call["res"] == ["1d", "1m"]
     # US-068: every tracked series (18 stocks and 5 indices), not only the 19 the rule reads
     assert len(call["keys"]) == 23 and "NIFTY" in call["keys"] and call["res"] == ["1m"]
     assert {"BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX"} <= set(call["keys"])
     assert callable(call["stop_flag"]) and call["stop_flag"]() in (True, False)
-    assert "1 error(s): SBIN 1m: timeout" in d.delivery.top_up_note
+    assert "SBIN 1m: timeout" in d.delivery.top_up_note
     assert "TypeError" not in d.delivery.top_up_note
+
+
+def test_a_vix_failure_leaves_the_instruments_top_up_whole_and_is_counted(desk, monkeypatch):
+    d, fake = desk
+    fake.errors = []
+
+    def boom(engine, provider, series_keys=None, resolutions=None, **kw):
+        fake.calls.append({"keys": list(series_keys), "res": list(resolutions)})
+        if series_keys == ["INDIAVIX"]:
+            raise RuntimeError("vix feed down")
+        return SimpleNamespace(errors=[])
+
+    monkeypatch.setattr("onelot.data.backfill.backfill", boom)
+    now = at(L[3], "16:00")
+    d.delivery.load_history(now)
+    d.delivery.maybe_top_up(now)
+    assert len(fake.calls) == 2 and len(fake.calls[0]["keys"]) == 23
+    assert "1 error(s): INDIAVIX: vix feed down" in d.delivery.top_up_note
 
 
 @pytest.mark.parametrize("hhmm", ["09:00", "12:30", "15:35"])
@@ -247,3 +266,55 @@ def test_a_bad_bar_note_stays_on_the_card_through_the_next_session(tmp_path):
         w.poll(at(L[4], hhmm))
         assert w.desk.notes.get("SBIN") == note
         assert w.desk.card("SBIN")["note"] == note
+
+
+class FakeSource:
+    """A Dhan stand-in for the real backfill: serves one bar per request, fails for VIX on ask."""
+
+    name = "dhan"
+
+    def __init__(self, fail_vix: bool = False) -> None:
+        self.asked: list[tuple[str, str]] = []
+        self.fail_vix = fail_vix
+
+    def supported_resolutions(self):
+        return ["1d", "1m"]
+
+    def earliest_available(self, res, today):
+        return None
+
+    def history(self, key, symbol, res, start, end, session=None, spec=None):
+        import pandas as pd
+
+        self.asked.append((key, res))
+        if self.fail_vix and key == "INDIAVIX":
+            raise RuntimeError("vix feed down")
+        ts = pd.Timestamp(f"{end:%Y-%m-%d} 10:00", tz="Asia/Kolkata")
+        return pd.DataFrame(
+            {"open": [10.0], "high": [11.0], "low": [9.0], "close": [10.5], "volume": [0.0]},
+            index=pd.DatetimeIndex([ts], name="ts"),
+        )
+
+
+@pytest.mark.parametrize("fail_vix", [False, True])
+def test_the_real_top_up_requests_and_stores_vix_and_a_vix_failure_spares_the_rest(
+    cfg, tmp_path, monkeypatch, fail_vix
+):
+    from onelot.data.store import available_resolutions
+
+    db = init_database(f"sqlite:///{tmp_path / 'vix.db'}")
+    src = FakeSource(fail_vix)
+    monkeypatch.setattr("onelot.data.backfill.choose_provider", lambda mode, adapter: src)
+    d, _, _ = new_desk(cfg, db, desk_cfg=load_desk_config())
+    d._adapter_getter = lambda: object()
+    result = d._top_up_bars(["NIFTY", "SBIN"], None)
+    assert {("NIFTY", "1m"), ("SBIN", "1m")} <= set(src.asked)
+    assert ("INDIAVIX", "1d") in src.asked and ("INDIAVIX", "1m") in src.asked
+    stored = available_resolutions(d.engine, "INDIAVIX")
+    assert set(available_resolutions(d.engine, "NIFTY")) == {"1m"}
+    if fail_vix:
+        assert not stored
+        assert any("INDIAVIX" in e for e in result.errors)
+    else:
+        assert {"1d", "1m"} <= set(stored)
+        assert not result.errors

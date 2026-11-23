@@ -201,7 +201,7 @@ class SimSession:
         self, setup: Setup, deps: Deps, bars: BarSource, store: Any, restore: dict | None = None
     ) -> None:
         self.setup, self.deps, self.bars, self.store = setup, deps, bars, store
-        sp = _session_params(setup.spec, {})
+        sp = _session_params(setup.spec, {}, setup.strategy)
         self.exit_min = _hhmm_min(sp["exit_time"])
         self.close_min = _hhmm_min(setup.spec.session.get("close", "15:30"))
         self.kind = setup.kind
