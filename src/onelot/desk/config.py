@@ -42,6 +42,8 @@ class DeskInstrumentCfg:
     kind: str  # INDEX | STOCK
     strategies: tuple[StrategySlotCfg, ...]
     note: str = ""
+    # US-078: false = a training instrument: tracked and shown, but it raises no alert
+    trade: bool = True
 
 
 @dataclass(frozen=True)
@@ -167,6 +169,12 @@ def _flag(value: object, name: str) -> bool:
     return value
 
 
+def _trade_flag(value: object, key: object) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"desk.yaml instrument {key}: trade must be true or false, not {value!r}")
+    return value
+
+
 def _product(value: object) -> str:
     if value not in PRODUCTS:
         raise ValueError(f"desk.yaml slot product must be one of {PRODUCTS}, not {value!r}")
@@ -193,6 +201,7 @@ def load_desk_config(path: str | Path | None = None) -> DeskConfig:
             "INDEX",
             _slots(e.get("strategies")) or idx_default,
             str(e.get("note") or ""),
+            _trade_flag(e.get("trade", True), e["key"]),
         )
         for e in raw.get("indices") or []
     )

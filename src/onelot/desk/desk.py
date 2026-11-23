@@ -198,6 +198,7 @@ class Desk:
         # notification or the poll. Its failures are counted here (Manager decision 5).
         self.paper = paper
         self.hook_errors = 0
+        self._training_logged: set[str] = set()
         self.app_cfg = cfg_app
         self.notifier = notifier
         self.governor = governor
@@ -824,6 +825,12 @@ class Desk:
     def _raise_signal(
         self, t: InstrumentTracker, slot: StrategySlot, v: Verdict, now: dt.datetime
     ) -> None:
+        if not t.cfg.trade:
+            # US-078: a training instrument is evaluated and shown, but never alerts
+            if t.cfg.key not in self._training_logged:
+                self._training_logged.add(t.cfg.key)
+                log.info("desk: %s is a training instrument (trade: false): no alerts", t.cfg.key)
+            return
         busy = self._busy_reason(t.instrument.key, slot.cfg.name, slot.cfg.timeframe, v)
         if busy is not None:
             log.debug(

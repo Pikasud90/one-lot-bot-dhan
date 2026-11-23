@@ -133,7 +133,9 @@ paper trades only: the system never places an order.
   a backfill from the Data tab.
 
 ## Index options: the micro-trend rule (US-068)
-- The only rule on the five indices. Supertrend(14, 1.7) on 3m (the trigger), 5m, 10m, 15m,
+- The only rule on the four traded indices (NIFTY, BANKNIFTY, FINNIFTY, SENSEX). MIDCPNIFTY is
+  tracked for training only (`trade: false` in `config/desk.yaml`): it raises no alert and opens
+  no paper trade. Supertrend(14, 1.7) on 3m (the trigger), 5m, 10m, 15m,
   30m, 60m and 4h, each read on its last closed bar; a 4h bar runs 09:15 to 13:15 and 13:15 to
   the close, and the afternoon one is first read the next session.
 - Alert: at a 3-minute close where all seven newly point up (BUY a call) or down (BUY a put),
