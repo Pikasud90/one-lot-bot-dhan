@@ -204,3 +204,101 @@ def test_a_fill_never_uses_a_later_minutes_premium(db_engine, tmp_path, force, b
     detail = m.store.trades(session_id=s.setup.id, status="CLOSED")[0]["detail"]
     assert "entry_wait_min" not in detail and "exit_wait_min" not in detail
     writer.close()
+
+
+# ── US-083: a real premium calibrates the model (one curve per trade) ─────────
+def _put_bars(writer, c, minutes: list[pd.Timestamp], spot: float, px: float) -> None:
+    rel = atm_rel(c.strike, spot, 50.0)
+    n = len(minutes)
+    one = {
+        "ts": np.array([int(m.value // 1_000_000_000) for m in minutes], dtype="int64"),
+        "open": np.full(n, px), "high": np.full(n, px), "low": np.full(n, px),
+        "close": np.full(n, px), "iv": np.full(n, 15.0), "volume": np.full(n, 100.0),
+        "oi": np.full(n, 1000.0), "strike": np.full(n, c.strike), "spot": np.full(n, spot),
+    }  # fmt: skip
+    for dr in (-1, 0, 1):
+        writer.put(Block(RollingKey("NIFTY", 1, c.opt, rel + dr), minutes[0].date(), True, one))
+
+
+def _t(c, ts: pd.Timestamp) -> float:
+    from onelot.lab.execution import expiry_datetime, year_frac
+
+    return year_frac(ts.to_pydatetime(), expiry_datetime(c.expiry))
+
+
+def test_a_real_premium_calibrates_the_stop_target_risk_and_the_modelled_exit(
+    db_engine, tmp_path, force
+):
+    from onelot.analytics.blackscholes import implied_vol
+    from onelot.analytics.blackscholes import price as bs_price
+
+    rel = flat_minutes("2025-01-06", 15, 1000.0, 1.0, volume=1000.0)
+    nifty = flat_minutes("2025-01-06", 15, 25000.0, 10.0)
+    # first a session on the model alone: the contract and the VIX-model premium at the alert
+    _, s0 = session(db_engine, tmp_path, force, "NIFTY", rel, nifty)
+    from onelot.sim.pricing import Contract
+
+    a0 = s0.alert
+    c = Contract.from_dict(a0["_contract"])
+    when = T("10:15")
+    model_alert = s0.pricer.model_premium(c, 25000.0, when)
+    # now the store says the market pays 6% LESS than that model
+    path = tmp_path / "expired_options.db"
+    writer = OptionBarStore(path)
+    deps = default_deps(None, option_store_path=path)
+    real_alert = round(model_alert * 0.94, 2)
+    _put_bars(writer, c, [T("10:14"), T("10:15")], 25000.0, real_alert)  # alert and fill minutes
+    _, s = session(db_engine, tmp_path, force, "NIFTY", rel, nifty, deps=deps)
+    a = s.alert
+    assert a["traded"]["source"] == "real" and a["traded"]["iv_source"] == "implied"
+    r = BT.risk_free_rate
+    iv = implied_vol(real_alert, 25000.0, c.strike, _t(c, when), r, c.opt)
+    entry = ceil_tick(real_alert * (1 + BT.option_spread_pct) + 0.10)
+    stop_hand = floor_tick(
+        bs_price(a["stop"], c.strike, _t(c, when), iv, r, c.opt) * (1 - BT.option_spread_pct) - 0.10
+    )
+    risk_hand = (entry - stop_hand) * a["qty"]
+    assert a["risk_inr"] == pytest.approx(risk_hand, rel=0.02)
+    assert a["traded"]["stop_price"] == pytest.approx(stop_hand, rel=0.02)
+    assert a["risk_inr"] != s0.alert["risk_inr"]  # not the VIX-model risk
+    # take, fill at the real open, then close: no real bar at 10:16, so the model prices the exit
+    s.take(a["id"])
+    s.advance(1)
+    t = s.trade
+    assert t.iv_source == "implied" and t.iv == pytest.approx(iv, rel=1e-3)
+    s.close()
+    s.advance(1)
+    closed = s.closed[0]
+    exit_hand = floor_tick(
+        bs_price(25000.0, c.strike, _t(c, T("10:16")), iv, r, c.opt) * (1 - BT.option_spread_pct)
+        - 0.10
+    )
+    assert closed["exit_price"] == pytest.approx(exit_hand, abs=0.1)
+    detail = s.store.trades(session_id=s.setup.id, status="CLOSED")[0]["detail"]
+    assert detail["iv_source"] == "implied" and detail["iv_used"] == pytest.approx(iv, rel=1e-3)
+    assert detail["exit_source"] == "model"
+    stop_fill = floor_tick(
+        bs_price(t.plan.stop, c.strike, _t(c, T("10:15")), iv, r, c.opt)
+        * (1 - BT.option_spread_pct)
+        - 0.10
+    )
+    assert detail["risk_inr"] == pytest.approx(
+        (closed["entry_price"] - stop_fill) * a["qty"], rel=0.02
+    )
+    risk = detail["risk_inr"]
+    assert closed["r_multiple"] == pytest.approx(closed["net"] / risk, abs=1e-3)
+    writer.close()
+
+
+def test_with_no_real_premium_the_alert_has_no_implied_volatility(db_engine, tmp_path, force):
+    rel = flat_minutes("2025-01-06", 15, 1000.0, 1.0, volume=1000.0)
+    nifty = flat_minutes("2025-01-06", 15, 25000.0, 10.0)
+    m, s = session(db_engine, tmp_path, force, "NIFTY", rel, nifty)
+    assert "iv_source" not in s.alert["traded"] and s.alert["_iv"] is None
+    s.take(s.alert["id"])
+    s.advance(1)
+    assert s.trade.iv is None and s.trade.iv_source == "vix"
+    s.close()
+    s.advance(1)
+    d = m.store.trades(session_id=s.setup.id, status="CLOSED")[0]["detail"]
+    assert d["iv_source"] == "vix" and d["iv_used"] > 0

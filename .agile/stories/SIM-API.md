@@ -134,6 +134,14 @@ gives its events (the closing `CLOSED`, reason MANUAL); `end` of an unfilled tra
   bar of THAT minute when the strike traded in it, otherwise the model premium of that minute,
   marked `model`; a later minute's bar is never used (a replay must not show a price the user has
   not seen).
+- One curve per trade: when the alert's or the fill's option premium is REAL, the model is calibrated
+  to it (the implied volatility that reproduces that premium at that index level and time, Black-76).
+  The alert's `stop_price`, `target_price`, `risk_inr`, `reward_inr`, the trade's first risk in rupees
+  (so `r_multiple`) and every later MODELLED premium of the trade (marks, an exit without a real bar)
+  use it. The fill re-anchors (its real premium recalibrates; with none, the alert's implied volatility
+  stays). With no real premium nothing changes (the VIX-based volatility). `alert.traded` gains
+  `iv_source: "implied"` and `iv_used` only when implied; the stored trade detail has `iv_used` and
+  `iv_source` ("implied" or "vix"; "vix" also when the implied volatility could not be solved).
 - `exit_reason`: STOP, BREAKEVEN_STOP, LOCK_STOP, TRAIL_STOP, the same with a `GAP_` prefix,
   TARGET, GAP_TARGET, SIGNAL_EXIT, SESSION_END, MANUAL, DATA_END.
 

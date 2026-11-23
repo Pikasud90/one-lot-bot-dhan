@@ -17,6 +17,7 @@ the tick (up on a buy, down on a sale); charges from the index options table.
 from __future__ import annotations
 
 import datetime as dt
+import math
 import sqlite3
 import threading
 from collections.abc import Callable
@@ -27,6 +28,9 @@ from typing import Any
 import numpy as np
 import pandas as pd  # type: ignore[import-untyped]
 
+from ..analytics.blackscholes import greeks as b76_greeks
+from ..analytics.blackscholes import implied_vol
+from ..analytics.blackscholes import price as b76_price
 from ..config import BacktestCfg
 from ..costs import CostModel, Side, round_to_tick
 from ..data.expired_options import OptionBarStore, Underlying
@@ -202,11 +206,40 @@ class Pricer:
         what = f"{self.underlying_key} {k:g} {opt} {exp.day} {MONTHS[exp.month - 1]}"
         return Contract(float(k), opt, exp, what, security_id)
 
-    def model_premium(self, c: Contract, spot: float, ts: pd.Timestamp) -> float:
-        return float(self.model.premium(spot, c.strike, ts, expiry_datetime(c.expiry), c.opt))
+    def vix_iv(self, ts: pd.Timestamp) -> float:
+        """The volatility the VIX-based model uses at `ts`."""
+        return float(self.model.iv_for(ts))
 
-    def delta(self, c: Contract, spot: float, ts: pd.Timestamp) -> float:
-        return abs(float(self.model.delta(spot, c.strike, ts, expiry_datetime(c.expiry), c.opt)))
+    def implied_iv(
+        self, c: Contract, raw_premium: float, spot: float, ts: pd.Timestamp
+    ) -> float | None:
+        """The volatility at which the model (Black-76) reproduces the REAL premium
+        `raw_premium` with the index at `spot` at `ts`; None when there is none (below
+        intrinsic, out of bounds, no root): the VIX-based volatility is used then."""
+        t = year_frac(ts.to_pydatetime(), expiry_datetime(c.expiry))
+        try:
+            iv = float(implied_vol(raw_premium, spot, c.strike, t, self.bt.risk_free_rate, c.opt))  # type: ignore[arg-type]
+        except (ValueError, ZeroDivisionError, OverflowError):
+            return None
+        return iv if math.isfinite(iv) and 1e-3 < iv < 4.9 else None
+
+    def model_premium(
+        self, c: Contract, spot: float, ts: pd.Timestamp, iv: float | None = None
+    ) -> float:
+        """The model's premium; with `iv` (an implied volatility) on that curve instead of the
+        VIX-based one."""
+        if iv is None:
+            return float(self.model.premium(spot, c.strike, ts, expiry_datetime(c.expiry), c.opt))
+        t = year_frac(ts.to_pydatetime(), expiry_datetime(c.expiry))
+        return float(b76_price(spot, c.strike, t, iv, self.bt.risk_free_rate, c.opt))
+
+    def delta(self, c: Contract, spot: float, ts: pd.Timestamp, iv: float | None = None) -> float:
+        if iv is None:
+            return abs(
+                float(self.model.delta(spot, c.strike, ts, expiry_datetime(c.expiry), c.opt))
+            )
+        t = year_frac(ts.to_pydatetime(), expiry_datetime(c.expiry))
+        return abs(float(b76_greeks(spot, c.strike, t, iv, self.bt.risk_free_rate, c.opt).delta))
 
     def premium(
         self,
@@ -215,6 +248,7 @@ class Pricer:
         bar: tuple[float, float, float, float],
         level: float,
         how: str,
+        iv: float | None = None,
     ) -> Quote:
         """The option's price when the index stood at `level` in the minute starting at
         `minute` whose index bar is `bar` (open, high, low, close). `how`: `open` (a fill or
@@ -243,7 +277,7 @@ class Pricer:
                     return Quote(cl, "real")
                 return Quote(interpolate((o, h, lo, cl), bar, float(level), c.opt), "real")
         when = minute + pd.Timedelta(minutes=1) if how == "close" else minute
-        return Quote(self.model_premium(c, float(level), when), "model")
+        return Quote(self.model_premium(c, float(level), when, iv), "model")
 
     def option_entry(self, raw: float) -> float:
         slip = self.bt.option_slippage_ticks * self.tick

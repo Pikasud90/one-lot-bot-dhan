@@ -57,6 +57,7 @@ SIM_FUNCTIONS = [
     "strategiesFor",
     "plusMinute",
     "resumeLine",
+    "mergeRange",
     "clampStart",
     "clockText",
     "alertCardHtml",
@@ -626,3 +627,27 @@ def test_the_fake_answers_actions_with_events_and_minutes_and_cancels_an_unfille
     )
     assert out[0] == ["alert", "events", "minutes", "session", "summary", "trade", "trades"]
     assert out[1:] == [["CANCELLED"], None, 0]
+
+
+@needs_node
+def test_the_chart_scale_holds_the_entry_stop_and_target_and_lets_go_without_them():
+    r = run(
+        "const o = {priceRange: {minValue: 100, maxValue: 110}};"
+        "return [mergeRange(o, [105, 90, 130]), mergeRange(o, [null, 'x', 104]), mergeRange(o, []), mergeRange(null, [5, 7]), mergeRange(o, null)];"
+    )
+    assert r[0] == {"priceRange": {"minValue": 90, "maxValue": 130}}
+    assert r[1] == {"priceRange": {"minValue": 100, "maxValue": 110}}  # only finite levels count
+    assert r[2] == {"priceRange": {"minValue": 100, "maxValue": 110}}  # none: the candles' own
+    assert r[3] == {"priceRange": {"minValue": 5, "maxValue": 7}}
+    assert r[4] == {"priceRange": {"minValue": 100, "maxValue": 110}}
+
+
+@needs_node
+def test_the_alert_card_says_when_stop_and_target_prices_are_modelled_on_an_implied_volatility():
+    a = {"id": "a_1", "side": "LONG", "action": "BUY CALL", "qty": 75, "entry": 1, "stop": 0, "target": 2,
+         "traded": {"what": "X", "price": 5, "source": "real", "iv_source": "implied"}}  # fmt: skip
+    plain = {**a, "traded": {"what": "X", "price": 5, "source": "real"}}
+    out = run(
+        f"return [alertCardHtml({json.dumps(a)}, null), alertCardHtml({json.dumps(plain)}, null)];"
+    )
+    assert "implied by the real price" in out[0] and "implied" not in out[1]
