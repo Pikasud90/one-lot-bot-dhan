@@ -453,7 +453,7 @@ class Run:
         close = next((e for e in evs if e["kind"] == "CLOSED"), None)
         out = {
             "name": self.name, "id": t["id"], "opt": is_opt, "entry_source": det.get("entry_source"),
-            "exit_source": det.get("exit_source"), 
+            "exit_source": det.get("exit_source"),
             "reason": t["exit_reason"], "net": t["net"], "r": t["r_multiple"],
         }  # fmt: skip
         if not (
