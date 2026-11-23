@@ -60,7 +60,29 @@ def trade_view(trade: PaperTrade) -> dict[str, Any]:
         "unrealised": format_rupees(unrealised),
         "created_at": _iso(trade.created_at),
         "closed_at": _iso(closed_at(trade)),
-    }
+    } | ratchet_levels(plan)
+
+
+def ratchet_levels(plan: Mapping[str, Any]) -> dict[str, Any]:
+    """US-079: for a trade managed by the stop and trail rule, `{"levels": ...}` with its
+    stage and its stop and target now and at the fill, on the managed series (the index
+    under an option), as strings with two decimals; `{}` for every other trade."""
+    position = plan.get("position") if isinstance(plan, Mapping) else None
+    track = position.get("ratchet") if isinstance(position, Mapping) else None
+    if not isinstance(track, Mapping):
+        return {}
+    try:
+        first, now = track["plan"], track["state"]
+        levels = {
+            "stage": str(now["stage_name"]),
+            "stop": f"{float(now['stop']):.2f}",
+            "target": f"{float(now['target']):.2f}",
+            "first_stop": f"{float(first['stop']):.2f}",
+            "first_target": f"{float(first['target']):.2f}",
+        }
+    except (KeyError, TypeError, ValueError):
+        return {}
+    return {"levels": levels}
 
 
 def open_mark(

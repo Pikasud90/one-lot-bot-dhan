@@ -75,6 +75,8 @@ TIMINGS = ("lab", "desk")
 LAB_REASON = {
     "STOP": "stop", "TRAIL_STOP": "trail", "SIGNAL_EXIT": "signal", "OPPOSITE_SIGNAL": "signal",
     "SESSION_END": "square_off", "TARGET": "target", "TIME_STOP": "time",
+    # US-079: the stop and trail rule's own stop names (the Lab names them alike)
+    "BREAKEVEN_STOP": "breakeven_stop", "LOCK_STOP": "lock_stop",
 }  # fmt: skip
 
 

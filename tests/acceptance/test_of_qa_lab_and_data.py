@@ -334,6 +334,7 @@ RESEARCH_STOCKS = {
 PAPER_TEST = {
     ("INDEX", "microtrend", "3m"): {
         "st_period": 14, "st_mult": 1.7, "exit_count": 3, "stop_buffer_atr": 3.0,
+        "ratchet": True,  # US-079: the stop, target and trail rule manages the trade
     },
 }  # fmt: skip
 # fmt: skip

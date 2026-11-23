@@ -96,7 +96,9 @@ class TestThePublicContract:
     def test_close_reason_is_the_nine_story_values_and_never_square_off(self):
         """The nine of the story; Manager decision 3 (gap_through_target) may add one tenth."""
         values = set(typing.get_args(U.manage().CloseReason))
-        assert CLOSE_REASONS <= values <= CLOSE_REASONS | {"GAP_THROUGH_TARGET"}
+        # US-079 adds the stop and trail rule's two stop names
+        rule = {"BREAKEVEN_STOP", "LOCK_STOP"}
+        assert CLOSE_REASONS <= values <= CLOSE_REASONS | {"GAP_THROUGH_TARGET"} | rule
         assert "SQUARE_OFF" not in values
 
     def test_strategy_exit_is_a_frozen_value_of_reason_and_bar_close_ts(self):

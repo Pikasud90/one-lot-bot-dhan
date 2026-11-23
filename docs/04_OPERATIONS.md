@@ -141,13 +141,38 @@ paper trades only: the system never places an order.
 - Alert: at a 3-minute close where all seven newly point up (BUY a call) or down (BUY a put),
   inside the option entry window, one lot of the monthly contract, one live idea per index.
 - Exit: the paper trade closes at the first one-minute bar at or after the 3-minute close where
-  3 of the 7 point against it, else at the session end. No target. The stop on the alert is a
-  backstop 3 ATR(60m) beyond the 60m line, not the rule's exit.
+  3 of the 7 point against it, else at the session end, unless the stop or the target comes
+  first (next section).
 - Each trend needs 70 of its own bars before it has a reading. The 4h trend needs about 35
   sessions: the desk reads 75 days of stored one-minute bars for it, so keep the store topped up.
   Without them, or on the delayed 2-minute Yahoo feed (no 3m, 5m or 15m bars), nothing fires.
 - The index card shows the seven trends, "aligned up", "aligned down" or "not aligned", and for
   an open trade "reversed k of 7, exit at 3". The backtest of this exact rule lost a little.
+
+## How a trade is managed: stop, target and trail (US-079)
+- A slot with `ratchet: true` in `config/desk.yaml` (today the micro-trend slot) is managed by
+  one rule, `src/onelot/manage/ratchet.py`. Every other slot is managed as before, and so is a
+  paper trade opened before this rule was switched on: it finishes under its own rules.
+- First stop: 1.5 x ATR(14) of 60m bars of the index (of the share for a stock), read on the
+  last 60m bar closed at or before the signal. First target: 3 times that risk. On the alert
+  both are measured from the alert's price; the paper trade measures them from its fill.
+- As the best price covers the planned move (entry to first target): at 25% the stop goes
+  above breakeven (costs plus 5% of the move), at 50% it locks 35% of the move, from 80% it
+  trails 20% of the move behind the best price and the target moves out by half the move each
+  time the price comes near it. The stop never comes back. A level moved by a minute bar holds
+  from the next minute bar; a bar touching both the stop and the target counts as the stop; a
+  bar opening beyond a level closes at its open.
+- The strategy's own exit (3 of 7) and the session end still close the trade as before.
+- Close reasons: STOP (first stop), BREAKEVEN_STOP, LOCK_STOP, TRAIL_STOP, TARGET, SIGNAL_EXIT,
+  SESSION_END. The Paper panel shows an open trade's stage, its stop and target now and the
+  first ones; a closed one shows the reason in words.
+- A position you took shows the same levels and stage as its paper trade. Each time the stop
+  or the target moves you get one notification: "raise your stop to X". Move your own stop to
+  that level; the desk never places or changes an order.
+- The Backtest Lab applies the same rule to a strategy with `ratchet` on, minute by minute.
+- Check the paper book against the rule on stored bars (opens the store read-only):
+  `PYTHONPATH=src .venv/bin/python scripts/ratchet_desk_replay.py --store PATH/onelot.db`
+  `--sessions 20 --instrument NIFTY`. It prints how many exits match and each one that does not.
 
 ## Market snapshot button (US-071)
 Home, under "Today": the button "Take market snapshot" saves the last price of the 5 indices and

@@ -32,6 +32,10 @@ HELPERS = [
     "todayIST",
     "paperChip",
     "paperWhen",
+    "RATCHET_STAGES",  # US-079: paperRow names the rule's stage and reasons
+    "RATCHET_REASONS",
+    "levelsText",
+    "paperReason",
     "paperRow",
     "paperList",
     "paperOpen",

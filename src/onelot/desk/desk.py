@@ -31,6 +31,10 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 from sqlalchemy import Engine, select, update
 
+# The desk's own manage package (never the paper book's manager, `paper/manage.py`)
+import onelot.manage.live as rlive
+import onelot.manage.ratchet as ratchet
+
 from ..broker.base import Contract
 from ..clock import IST, now_ist, to_ist
 from ..data.schema import desk_positions, desk_signals
@@ -841,8 +845,21 @@ class Desk:
                 busy,
             )
             return
+        rset = rlive.settings_of(getattr(slot.strategy, "p", None))
+        risk: float | None = None
+        if rset is not None:  # US-079: the first stop is the stop and trail rule's
+            risk = self._ratchet_risk(t, slot, v, rset)
+            if risk is None:
+                log.info(
+                    "desk: %s %s %s not alerted: no ATR(14) of %s bars yet for the first stop",
+                    t.cfg.key,
+                    slot.cfg.name,
+                    slot.cfg.timeframe,
+                    rset.atr_tf,
+                )
+                return
         try:
-            eco = self._economics(t, slot, v, now)
+            eco = self._economics(t, slot, v, now, risk, rset)
         except Exception as exc:  # noqa: BLE001
             log.exception("desk economics failed for %s", t.cfg.key)
             t.last_error = f"economics: {type(exc).__name__}: {exc}"
@@ -864,6 +881,8 @@ class Desk:
             exit_time if horizon == "intraday" else "n/a (swing: hold while the strategy holds)",
             v.reasons,
         )
+        if rset is not None:
+            text += "\n" + rlive.managed_line(rset.extend)
         regime_now = (slot.last_features or {}).get("regime")
         regime_ok = (regime_now in getattr(slot.strategy, "regimes", ())) if regime_now else None
         conf = confidence(
@@ -886,11 +905,26 @@ class Desk:
             "tf_min": slot.tf_min,
             "horizon": horizon,
         }
-        if slot.line_trail:
+        if slot.line_trail and rset is None:
             # The strategy trails the stop along its own line: the paper trade (and a position
             # the owner takes on this alert) follows the level the slot reports after each of
             # its closed bars. Absent on every other alert, so those stay exactly as they were.
             manage["line_trail"] = True
+        if rset is not None and risk is not None:
+            # US-079: the stop and trail rule manages the trade; the strategy's target and
+            # trails are not used. `cost` is per unit of the managed price (the index for an
+            # option: per unit of premium over the contract's delta).
+            delta = (eco.option or {}).get("delta") if eco.kind == "INDEX" else None
+            manage["target_r"] = rset.target_r
+            manage["trail_atr_mult"] = 0.0
+            manage["ratchet"] = {
+                "stop_atr": rset.stop_atr,
+                "atr_tf": rset.atr_tf,
+                "target_r": rset.target_r,
+                "extend": rset.extend,
+                "risk": round(risk, 4),
+                "cost": round(rlive.unit_cost(float(eco.costs_inr), int(eco.qty), delta), 4),
+            }
         sig = {
             "id": sid,
             "created_at": _iso(now),
@@ -1026,19 +1060,48 @@ class Desk:
             return "this bar was already alerted"
         return None
 
+    def _ratchet_risk(
+        self,
+        t: InstrumentTracker,
+        slot: StrategySlot,
+        v: Verdict,
+        rset: rlive.RatchetSettings,
+    ) -> float | None:
+        """The rule's first risk (US-079): `stop_atr` x ATR(14) of the index or stock on
+        `atr_tf` bars, read on the last of them closed at or before the signal bar's close
+        (`manage/live.first_risk`, as the Lab and the Simulator read it). None: no ATR yet."""
+        if v.bar_ts is None:
+            return None
+        fine = t.fine_bars()
+        bars = t.ladder_bars(fine) if not fine.empty else fine
+        signal_close = v.bar_ts + dt.timedelta(minutes=slot.tf_min)
+        risk = rlive.first_risk(bars, signal_close, slot.cfg.timeframe, rset)
+        return risk if rlive.usable(risk) else None
+
     def _economics(
-        self, t: InstrumentTracker, slot: StrategySlot, v: Verdict, now: dt.datetime
+        self,
+        t: InstrumentTracker,
+        slot: StrategySlot,
+        v: Verdict,
+        now: dt.datetime,
+        risk: float | None = None,
+        rset: rlive.RatchetSettings | None = None,
     ) -> Economics:
-        target_r = float(getattr(slot.strategy.p, "target_r", 0) or 0)
+        target_r = float(getattr(getattr(slot.strategy, "p", None), "target_r", 0) or 0)
+        if v.close is None or v.stop is None:
+            raise ValueError("a verdict without its close or its stop has no economics")
+        close, stop = float(v.close), float(v.stop)
+        if rset is not None and risk is not None:
+            # US-079: the first stop `risk` from the alert's price, the target target_r risks
+            sign = 1 if v.direction == "long" else -1
+            stop, target_r = close - sign * risk, rset.target_r
         if t.cfg.kind == "STOCK":
-            return stock_economics(
-                t.instrument, v.direction, float(v.close), float(v.stop), target_r
-            )
+            return stock_economics(t.instrument, v.direction, close, stop, target_r)
         chain = self._live_chain(t, now)
         if chain is not None:
             try:
                 eco = index_option_economics_from_chain(
-                    t.instrument, v.direction, float(v.close), float(v.stop), target_r, chain, now
+                    t.instrument, v.direction, close, stop, target_r, chain, now
                 )
                 if eco is not None:
                     if eco.option is not None:  # where its own bars live (real premiums)
@@ -1048,9 +1111,7 @@ class Desk:
             except Exception:  # noqa: BLE001
                 log.exception("chain economics failed; using the synthetic model")
         vix = self._context_last("INDIAVIX")
-        return index_option_economics(
-            t.instrument, v.direction, float(v.close), float(v.stop), target_r, now, vix
-        )
+        return index_option_economics(t.instrument, v.direction, close, stop, target_r, now, vix)
 
     def _live_chain(self, t: InstrumentTracker, now: dt.datetime):
         """The option chain of the contract an index alert names (desk.yaml `option_expiry`:
@@ -1301,6 +1362,8 @@ class Desk:
                     and sign * (level - p["stop_underlying"]) > 0
                 ):
                     p["stop_underlying"], p["trail_active"] = round(level, 2), True
+            if isinstance(m.get("ratchet"), dict):
+                self._ratchet_position(pid, p, t, now)  # US-079: the stop and trail rule
             p["bars_held"] = int(
                 max(0, (now - opened).total_seconds() // 60) // max(1, int(m.get("tf_min", 5)))
             )
@@ -1370,6 +1433,110 @@ class Desk:
                 conn.execute(
                     update(desk_positions).where(desk_positions.c.id == pid).values(payload=p)
                 )
+
+    def _ratchet_position(self, pid: str, p: dict, t: InstrumentTracker, now: dt.datetime) -> None:
+        """A taken position whose alert froze the stop and trail rule (US-079): its levels and
+        stage are its paper trade's (the same rule on the same bars; the paper trade's close is
+        its exit), or, with no paper trade, the rule walked here on the tracker's closed bars
+        from the alert's price. Each move of the stop or the target is told once: "raise your
+        stop to X". Nothing here closes the position."""
+        block = p["manage"]["ratchet"]
+        rec = p.get("ratchet") if isinstance(p.get("ratchet"), dict) else None
+        before = rlive.track_from_json(rec) if rec else None
+        linked = self._paper_link(p)
+        track: rlive.RatchetTrack | None = None
+        if linked is UNREADABLE:
+            return
+        if linked is not None:
+            stored = (getattr(linked, "plan", None) or {}).get("position") or {}
+            if isinstance(stored.get("ratchet"), dict):
+                track = rlive.track_from_json(stored["ratchet"])
+                p["ratchet_source"] = "paper"
+        else:
+            track = self._walk_ratchet(p, t, block, before, now)
+            p["ratchet_source"] = "desk"
+        if track is None:
+            return
+        if before is None:
+            before = rlive.RatchetTrack(track.plan, ratchet.start(track.plan))
+        p["ratchet"] = rlive.track_to_json(track) | {"last_bar_ts": p.get("ratchet_last_bar_ts")}
+        st = track.state
+        p["stop_underlying"], p["target_underlying"] = round(st.stop, 2), round(st.target, 2)
+        p["initial_stop_underlying"] = round(track.plan.stop, 2)
+        p["first_target_underlying"] = round(track.plan.target, 2)
+        p["entry_underlying"] = track.plan.entry
+        p["stage"] = ratchet.STAGES[st.stage]
+        p["stage_words"] = rlive.STAGE_WORDS[st.stage]
+        p["trail_active"] = st.stage > 0
+        moved_stop = st.stop != before.state.stop
+        moved_target = st.target != before.state.target
+        if not (moved_stop or moved_target):
+            return
+        side = p["side"].replace("_", " ")
+        what = []
+        if moved_stop:
+            what.append(f"raise your stop to {st.stop:,.2f}")
+        if moved_target:
+            what.append(f"the target moves out to {st.target:,.2f}")
+        title = f"{p['label']} {side}: " + " and ".join(what)
+        body = (
+            f"Levels on the {'underlying' if p.get('kind') == 'INDEX' else 'share'}: stop "
+            f"{st.stop:,.2f}, target {st.target:,.2f} ({rlive.STAGE_WORDS[st.stage]}). The "
+            f"first stop was {track.plan.stop:,.2f}."
+        )
+        self.notifier.send(
+            Notification(
+                title=title,
+                body=body,
+                level=NotificationLevel.WARNING,
+                position_id=pid,
+            ),
+            dedup_key=f"desk:ratchet:{pid}:{st.stop:.4f}:{st.target:.4f}",
+        )
+
+    def _walk_ratchet(
+        self,
+        p: dict,
+        t: InstrumentTracker,
+        block: dict,
+        before: rlive.RatchetTrack | None,
+        now: dt.datetime,
+    ) -> rlive.RatchetTrack | None:
+        """The rule walked by the desk itself (no paper trade): from the alert's price, over
+        the tracker's bars that opened at or after the alert and have closed by `now`. Stops
+        at the first bar that exits: the desk's own advice then tells the exit."""
+        try:
+            risk, target_r = float(block["risk"]), float(block["target_r"])
+            cost = float(block.get("cost") or 0.0)
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not (rlive.usable(risk) and rlive.usable(target_r)):
+            return None
+        side = 1 if p["direction"] == "long" else -1
+        track = before
+        if track is None:
+            plan = ratchet.plan_from_risk(
+                side, float(p["entry_underlying"]), risk, target_r, max(cost, 0.0)
+            )
+            track = rlive.RatchetTrack(plan, ratchet.start(plan))
+        if p.get("ratchet_hit"):
+            return track
+        since = p.get("ratchet_last_bar_ts") or p.get("alert_created_at") or p["opened_at"]
+        start = pd.Timestamp(since)
+        bars = t.bars
+        width = pd.Timedelta(minutes=self.fine_minutes)
+        # the bars that opened after the alert (as the paper book fills) or after the last one
+        # walked, and have closed by now
+        rows = bars[(bars.index > start) & (bars.index + width <= pd.Timestamp(now))]
+        params = ratchet.RatchetParams(extend=block.get("extend") is not False)
+        state = track.state
+        for ts, o_, h_, l_ in zip(rows.index, rows["open"], rows["high"], rows["low"], strict=True):
+            hit, state, _ = rlive.on_bar(track.plan, state, float(o_), float(h_), float(l_), params)
+            p["ratchet_last_bar_ts"] = pd.Timestamp(ts).isoformat()
+            if hit is not None:
+                p["ratchet_hit"] = list(hit)
+                break
+        return rlive.RatchetTrack(track.plan, state)
 
     def _note_session_over(self, pid: str, p: dict) -> None:
         """An intraday position from an earlier session (US-004 decision E): it raises no EXIT

@@ -81,6 +81,7 @@ from .position import (
     initial_position,
     position_from_json,
     position_to_json,
+    ratchet_plan_of,
     rules_from_alert,
     rules_from_json,
     rules_to_json,
@@ -1185,12 +1186,21 @@ class PaperBook:
             "resolution_min": resolution,
             "grade": trade.grade,
         }
+        # US-079: an alert that froze the stop and trail rule plans its levels from the fill
+        block = plan["alert"].get("manage", {}).get("ratchet") if rules.ratchet else None
+        rplan = None
         if trade.kind == "INDEX":
-            priced = self._price_option(trade, plan, bar_ts, open_paise, stop_paise)
+            rplan = ratchet_plan_of(block, trade.direction, open_paise / 100)
+            risk_stop = stop_paise if rplan is None else to_paise(rplan.stop)
+            priced = self._price_option(trade, plan, bar_ts, open_paise, risk_stop)
             if isinstance(priced, str):
                 return self._entry_unpriced(trade, decision, detail | {"error": priced}, now)
         else:
             priced = self._price_stock(trade, open_paise, stop_paise)
+            rplan = ratchet_plan_of(block, trade.direction, priced.entry_paise / 100)
+            if rplan is not None:
+                risk = abs(priced.entry_paise - to_paise(rplan.stop)) * trade.qty
+                priced = priced._replace(risk_paise=risk or None)
             sign = 1 if trade.direction == "long" else -1
             if target is not None and (priced.entry_paise - int(target)) * sign >= 0:
                 # the SLIPPED fill is at or past the target: a 'target' behind the entry
@@ -1208,6 +1218,7 @@ class PaperBook:
             levels=plan["levels"],
             opened_at=bar_ts,
             option=None,
+            plan=rplan,
         )
         values = {
             "status": "OPEN",

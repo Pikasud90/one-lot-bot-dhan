@@ -36,6 +36,7 @@ from ..data.universe import InstrumentSpec, SeriesSpec, market_index_key
 from ..indicators import core as ind
 from ..lab.runner import _session_params
 from ..manage import ratchet
+from ..manage.live import atr_timeframe
 from ..strategies.base import Context, Strategy
 from ..strategies.registry import get_strategy
 from .bars import BarSource
@@ -1245,14 +1246,6 @@ def _trade_from_row(r: dict[str, Any]) -> TradeState:
     t.risk_inr = d.get("risk_inr")
     t.pending_exit = d.get("pending_exit")
     return t
-
-
-def atr_timeframe(timeframe: str, stop_atr_tf: str) -> str:
-    """The bars the first stop's ATR is read on: 60m when `stop_atr_tf` is "60m" and the
-    strategy's timeframe is shorter than 60m, otherwise the strategy's own timeframe."""
-    if stop_atr_tf == "60m" and minutes_of(timeframe) < 60:
-        return "60m"
-    return timeframe
 
 
 # ── the strategy frame, the Lab's way ───────────────────────────────────────
