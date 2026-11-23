@@ -97,12 +97,13 @@ def register(
     @app.post("/api/sim/sessions/{sid}/advance", dependencies=[Depends(require_token)])
     def sim_advance(sid: str, payload: Any = _BODY) -> Response:
         body = _body(payload)
-        try:
-            n = int(body.get("minutes", 1))
-        except (TypeError, ValueError):
-            raise HTTPException(400, "minutes must be a whole number from 1 to 390.") from None
-        if not 1 <= n <= 390:
+        raw = body.get("minutes", 1)
+        whole = isinstance(raw, int) and not isinstance(raw, bool)
+        if isinstance(raw, float) and raw.is_integer():
+            raw, whole = int(raw), True
+        if not whole or not 1 <= raw <= 390:
             raise HTTPException(400, "minutes must be a whole number from 1 to 390.")
+        n = int(raw)
         return action(sid, lambda s: s.advance(n))
 
     @app.post("/api/sim/sessions/{sid}/take", dependencies=[Depends(require_token)])

@@ -43,6 +43,8 @@ SIM_ONE_LINERS = [
     "MONTH",
     "minutesLeft",
     "eventLine",
+    "cardNeedsScroll",
+    "NO_HISTORY",
 ]
 SIM_BLOCKS = ["STAGE_TEXT", "REASON_TEXT"]
 SIM_FUNCTIONS = [
@@ -53,6 +55,8 @@ SIM_FUNCTIONS = [
     "partialMinute",
     "stepMinutes",
     "strategiesFor",
+    "plusMinute",
+    "resumeLine",
     "clampStart",
     "clockText",
     "alertCardHtml",
@@ -422,7 +426,8 @@ class TestSetupHelpers:
         out = run(
             f"return [clampStart('2020-01-01T09:15', {json.dumps(self.INST)}), clampStart('2030-01-01T09:15', {json.dumps(self.INST)}), toIsoIst('2026-10-05T09:15'), toIsoIst('')];"
         )
-        assert out == ["2021-11-08T09:15", "2026-11-20T15:29", "2026-10-05T09:15:00+05:30", None]
+        # the engine needs one stored minute before a start: the earliest start is the first minute + 1
+        assert out == ["2021-11-08T09:16", "2026-11-20T15:29", "2026-10-05T09:15:00+05:30", None]
 
     def test_timeframes_read_as_minutes(self):
         assert run("return ['1m', '3m', '15m', '60m', '1h', 'x'].map(tfMinutes);") == [
@@ -533,3 +538,91 @@ class TestStatic:
             html.count('<div id="sim-root">') == 1
             and '<script src="/static/sim.js" defer></script>' in html
         )
+
+
+def test_the_page_shows_the_premium_note_and_heals_a_candle_it_joined_midway():
+    js = SIM_JS.read_text("utf-8")
+    html = (UI / "index.html").read_text("utf-8")
+    assert 'id="sim-premium"' in html and "premium_note" in js
+    assert "markPartial()" in js and "healCandle()" in js
+    assert "S.candles = st.candles || []" in js  # a resume gets the chart's history back
+
+
+@needs_node
+def test_the_earliest_start_is_one_minute_after_the_first_stored_bar():
+    assert run(
+        "return [plusMinute('2026-05-04T09:15:00+05:30'), plusMinute('2026-05-04T23:59')];"
+    ) == [
+        "2026-05-04T09:16",
+        "2026-05-05T00:00",
+    ]
+
+
+def test_a_live_session_with_no_new_minutes_says_so():
+    js = SIM_JS.read_text("utf-8")
+    assert "Waiting for live minutes" in js and "liveStaleSeconds" in js
+
+
+@needs_node
+def test_a_card_scrolls_only_when_it_is_not_fully_inside_the_viewport():
+    assert run(
+        "return [cardNeedsScroll(10, 300, 800), cardNeedsScroll(-1, 300, 800), cardNeedsScroll(600, 801, 800), cardNeedsScroll(0, 800, 800)];"
+    ) == [
+        False,
+        True,
+        True,
+        False,
+    ]
+
+
+@needs_node
+def test_the_resume_line_says_a_live_session_jumps_to_now():
+    inst = {"label": "NIFTY 50"}
+    live = {"instrument": inst, "strategy": "microtrend", "timeframe": "3m", "mode": "live",
+            "start": "2026-11-13T15:29:00+05:30", "cursor": "2026-11-13T15:29:00+05:30"}  # fmt: skip
+    past = {**live, "mode": "past", "cursor": "2026-10-05T10:06:00+05:30"}
+    out = run(f"return [resumeLine({json.dumps(live)}), resumeLine({json.dumps(past)})];")
+    assert "live session started 2026-11-13 15:29: it will jump to now." in out[0]
+    assert out[1] == "NIFTY 50, microtrend 3m, at 2026-10-05 10:06."
+
+
+@needs_node
+def test_an_instrument_without_stored_bars_does_not_break_the_start_picker():
+    none = {"key": "MM", "kind": "STOCK", "first": None, "last": None}
+    assert run(
+        f"return [plusMinute(null), clampStart('2026-10-05T09:15', {json.dumps(none)}), defaultStart({json.dumps(none)})];"
+    ) == ["", "2026-10-05T09:15", ""]
+    assert (
+        run("return NO_HISTORY;")
+        == "No stored history for this instrument yet: run the backfill, or use Live"
+    )
+
+
+def test_the_alert_panel_sits_beside_the_chart_on_wide_screens_and_below_on_narrow():
+    css = (UI / "sim.css").read_text("utf-8")
+    html = (UI / "index.html").read_text("utf-8")
+    js = SIM_JS.read_text("utf-8")
+    assert re.search(r"@media \(min-width:1100px\)\{#sim-root \.sim-main\{display:grid", css)
+    assert re.search(r"#sim-root \.sim-main\{display:block\}", css)  # narrow: stacked
+    assert (
+        html.index('class="sim-side"') > html.index('id="sim-chart"')
+        and 'id="sim-alert"' in html.split('class="sim-side"')[1]
+    )
+    flash = re.search(r"@keyframes sim-flash\{.*?\}\}", css, re.S).group(0)
+    assert "var(--accent2)" in flash and not re.search(r"#[0-9a-fA-F]{3,8}\b|rgb", flash)
+    assert 'scrollIntoView({ block: "nearest", behavior: "smooth" })' in js
+    assert "No stored history" in js and "applyAction(res)" in js
+
+
+@needs_node
+def test_the_fake_answers_actions_with_events_and_minutes_and_cancels_an_unfilled_trade():
+    out = run_fake(
+        f"""const s = await fake.handle('/api/sim/sessions', {{instrument:'NIFTY', strategy:'microtrend', timeframe:'3m', mode:'past', start:'{TestTheFake.START}', params:{{}}}});
+        const id = s.session.id;
+        let r = await fake.handle(`/api/sim/sessions/${{id}}/advance`, {{minutes: 15}});
+        const taken = await fake.handle(`/api/sim/sessions/${{id}}/take`, {{alert_id: r.alert.id}});
+        const closed = await fake.handle(`/api/sim/sessions/${{id}}/close`, {{}});
+        return [Object.keys(taken).sort(), closed.events.map(e => e.kind), closed.trade, closed.minutes.length];"""
+    )
+    assert out[0] == ["alert", "events", "minutes", "session", "summary", "trade", "trades"]
+    assert out[1:] == [["CANCELLED"], None, 0]

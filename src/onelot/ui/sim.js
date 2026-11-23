@@ -84,9 +84,16 @@ function strategiesFor(opts, inst) {
 }
 const toIsoIst = (local) => local ? (local.length === 16 ? local + ":00" : local) + "+05:30" : null;
 const defaultStart = (inst) => inst && inst.last ? String(inst.last).slice(0, 10) + "T09:15" : "";
+/* A session needs one stored minute before its start, so the earliest start is the first stored minute plus one. */
+function plusMinute(local) {
+  if (!local) return "";
+  const d = new Date(String(local).slice(0, 16) + ":00Z");
+  d.setUTCMinutes(d.getUTCMinutes() + 1);
+  return d.toISOString().slice(0, 16);
+}
 function clampStart(local, inst) {
-  if (!inst || !local) return local || "";
-  const lo = String(inst.first).slice(0, 16), hi = String(inst.last).slice(0, 16);
+  if (!inst || !local || !inst.first || !inst.last) return local || "";
+  const lo = plusMinute(inst.first), hi = String(inst.last).slice(0, 16);
   return local < lo ? lo : (local > hi ? hi : local);
 }
 const WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -95,6 +102,17 @@ function clockText(unix) {
   if (unix === null || unix === undefined) return "–";
   const d = new Date((unix + IST) * 1000), s = d.toISOString();
   return `${WEEK[d.getUTCDay()]} ${s.slice(8, 10)} ${MONTH[d.getUTCMonth()]} ${s.slice(0, 4)}  ${s.slice(11, 16)}`;
+}
+const liveStaleSeconds = () => 600;
+/* True when a card (its top and bottom in the viewport) is not fully inside a viewport `vh` high. */
+const cardNeedsScroll = (top, bottom, vh) => top < 0 || bottom > vh;
+const NO_HISTORY = "No stored history for this instrument yet: run the backfill, or use Live";
+/* The line of the resume offer: a live session cannot be replayed, it jumps to the present. */
+function resumeLine(s) {
+  const what = `${s.instrument.label}, ${s.strategy} ${s.timeframe}`;
+  return s.mode === "live"
+    ? `${what}, live session started ${String(s.start || "").replace("T", " ").slice(0, 16)}: it will jump to now.`
+    : `${what}, at ${String(s.cursor || "").replace("T", " ").slice(0, 16)}.`;
 }
 const minutesLeft = (alert, cursorIso) => Math.max(0, Math.round((Date.parse(alert.expires) - Date.parse(cursorIso) - 60000) / 60000));
 /* The alert card: what to do, the managed price levels, rupees at risk and reward, the traded instrument, the reasons. */
@@ -153,7 +171,7 @@ const S = {
   summary: null, trades: [], allTrades: null, view: "session", events: [], alertMarks: [], exitSignal: false,
   playing: false, speed: 1, acc: 0, liveAcc: 0, anim: null, busy: false, needRefresh: false, pausedByAlert: false,
   over: false, wantClosed: false, cursorIso: null, shownUnix: null, note: "", fake: null, resumeState: null,
-  chart: null, series: null, marks: null, lines: [], lineKey: "", ac: null,
+  reveal: null, healT: null, chart: null, series: null, marks: null, lines: [], lineKey: "", ac: null,
   pauseOnAlert: true, sound: true, setup: store.get("sim.setup", {}) || {},
 };
 const cssv = (n) => (window.Charts && window.Charts.cssVar ? window.Charts.cssVar(n) : getComputedStyle(document.documentElement).getPropertyValue(n).trim());
@@ -273,11 +291,13 @@ function renderSetup() {
   $("sim-tf").innerHTML = optHtml(tfs.map(t => [t, t]), st.timeframe);
   $("sim-start-wrap").hidden = st.mode === "live";
   const start = $("sim-start");
-  start.min = String(inst.first).slice(0, 16); start.max = String(inst.last).slice(0, 16);
+  start.min = plusMinute(inst.first); start.max = inst.last ? String(inst.last).slice(0, 16) : "";
   st.start = clampStart(st.start && st.startFor === inst.key ? st.start : defaultStart(inst), inst); st.startFor = inst.key;
   start.value = st.start;
-  $("sim-go").disabled = !strat;
-  $("sim-note").textContent = !strat ? "No strategy fits this instrument yet."
+  const noHistory = st.mode !== "live" && !(inst.first && inst.last);
+  $("sim-go").disabled = !strat || noHistory;
+  $("sim-note").textContent = noHistory ? NO_HISTORY + "."
+    : !strat ? "No strategy fits this instrument yet."
     : (inst.trade === false ? "Training only: you can practise on this instrument, the desk does not trade it. " : "") + (strat.description || "");
   store.set("sim.setup", st);
 }
@@ -293,7 +313,22 @@ function resetRun(session) {
   S.mode = session.mode; S.cursorIso = session.cursor; S.shownUnix = unixOf(session.cursor) + 60;
   S.alert = null; S.trade = null; S.lastClosed = null; S.summary = null; S.trades = []; S.events = []; S.alertMarks = [];
   S.exitSignal = false; S.anim = null; S.acc = 0; S.liveAcc = 0; S.over = false; S.note = ""; S.pausedByAlert = false; S.needRefresh = false;
-  S.playing = false; S.lineKey = ""; S.view = "session"; S.allTrades = null;
+  S.playing = false; S.lineKey = ""; S.view = "session"; S.allTrades = null; S.healT = null;
+}
+/* A session that starts (or resumes) in the middle of a candle only reveals that candle's later minutes, so the page draws it
+   from a wrong open. Remember its start; when it has closed, take the server's version of it. */
+function markPartial() {
+  const next = unixOf(S.cursorIso) + 60, b = binStart(next, S.tfm);
+  S.healT = next !== b ? b : null;
+}
+async function healCandle() {
+  const t = S.healT; S.healT = null;
+  if (t === null || !S.id) return;
+  try {
+    const got = await getJson(`/api/sim/sessions/${S.id}`);
+    const c = (got.candles || []).find(x => x[0] === t), i = S.candles.findIndex(x => x[0] === t);
+    if (c && i >= 0) { S.candles[i] = c; if (S.series) S.series.update(barOf(c)); }
+  } catch (e) {}
 }
 function takeState(st) {
   if (!st) return;
@@ -315,7 +350,7 @@ async function startSession() {
   resetRun(r.session);
   S.candles = r.candles || [];
   $("sim-run").hidden = false;
-  drawAll();
+  drawAll(); markPartial();
   takeState(r.state);
   store.set("sim.last", { id: S.id });
   S.note = S.mode === "live" ? "Following the live feed. Press Play." : "Press Play to start the replay.";
@@ -335,6 +370,7 @@ function pushMinutes(minutes) {
     const last = S.candles[S.candles.length - 1], c = mergeBar(last, m, S.tfm);
     if (last && last[0] === c[0]) S.candles[S.candles.length - 1] = c; else S.candles.push(c);
     drawLast(c);
+    if (S.healT !== null && c[0] > S.healT) healCandle();
   }
   if (minutes.length) S.shownUnix = minutes[minutes.length - 1][0] + 60;
 }
@@ -349,15 +385,15 @@ function absorb(res) {
       S.lastClosed = null; S.wantClosed = false; S.exitSignal = false;
       const a = res.alert;
       S.alertMarks.push({ t: unixOf(ev.ts), long: !a || a.side !== "SHORT" });
-      toast("Alert: " + ((a && a.action) || ev.text), "warn"); beep();
+      toast("Alert: " + ((a && a.action) || ev.text), "warn"); beep(); S.reveal = "alert";
       if (S.pauseOnAlert && S.playing) { S.playing = false; S.pausedByAlert = true; S.note = "Paused: there is an alert to take or skip."; }
     } else if (ev.kind === "FILLED") toast("Filled: " + (ev.text || "the trade is open"));
     else if (ev.kind === "EXIT_SIGNAL") { S.exitSignal = true; toast("The strategy says close this trade.", "warn"); }
-    else if (ev.kind === "CLOSED") { S.exitSignal = false; reload = true; S.wantClosed = true; toast(ev.text || "The trade is closed."); }
+    else if (ev.kind === "CLOSED") { S.exitSignal = false; reload = true; S.wantClosed = true; S.reveal = "result"; toast(ev.text || "The trade is closed."); }
     else if (ev.kind === "ALERT_EXPIRED") toast("The alert ran out of time.");
   }
   S.events = S.events.slice(0, 60);
-  if (res.day_end) { S.playing = false; S.note = "The trading day is finished. Press Play to go on to the next day."; }
+  if (res.day_end) { S.needRefresh = true; S.playing = false; S.note = "The trading day is finished. Press Play to go on to the next day."; }
   if (res.over) { S.playing = false; S.over = true; S.note = "The stored data has ended."; }
   syncLines(); syncMarkers(); render();
   if (reload || S.needRefresh) { S.needRefresh = false; refresh(); }
@@ -423,15 +459,29 @@ async function stepOnce() {
   if (S.anim) { finishMinute(); return; }
   await runFast(stepMinutes(S.cursorIso, S.tfm));
 }
+/* What an action revealed: its minutes go on the chart, its events into the log ("What happened"). */
+function applyAction(res) {
+  if (!res) return;
+  pushMinutes(res.minutes || []);
+  for (const ev of res.events || []) {
+    S.events.unshift(ev);
+    if (ev.kind === "CLOSED") { S.wantClosed = true; S.reveal = "result"; toast(ev.text || "The trade is closed."); }
+    else if (ev.kind === "CANCELLED") { S.lastClosed = null; toast(ev.text || "The trade was cancelled."); }
+  }
+  S.events = S.events.slice(0, 60);
+}
 async function act(kind) {
   if (!S.id) return;
   const base = `/api/sim/sessions/${S.id}`;
+  if (S.anim) finishMinute();   // the minute being drawn belongs before whatever the action reveals
+  let res = null;
   try {
-    if (kind === "take" && S.alert) await post(base + "/take", { alert_id: S.alert.id });
-    else if (kind === "skip" && S.alert) await post(base + "/skip", { alert_id: S.alert.id });
-    else if (kind === "close") await post(base + "/close", {});
-    else if (kind === "end") { await post(base + "/end", {}); S.playing = false; S.note = "The session has ended."; S.over = true; }
+    if (kind === "take" && S.alert) res = await post(base + "/take", { alert_id: S.alert.id });
+    else if (kind === "skip" && S.alert) res = await post(base + "/skip", { alert_id: S.alert.id });
+    else if (kind === "close") res = await post(base + "/close", {});
+    else if (kind === "end") { res = await post(base + "/end", {}); S.playing = false; S.note = "The session has ended."; S.over = true; }
   } catch (e) { return; }
+  applyAction(res);
   const resume = S.pausedByAlert && (kind === "take" || kind === "skip");
   if (kind === "take") S.lastClosed = null;
   if (S.anim) S.needRefresh = true; else await refresh();
@@ -471,11 +521,25 @@ function render() {
   $("sim-play").disabled = S.over;
   $("sim-step").hidden = S.mode === "live"; $("sim-step").disabled = S.over;
   renderSpeeds();
-  $("sim-status").textContent = S.note || (S.session ? `${S.session.instrument.label} · ${S.session.strategy} · ${S.session.timeframe}` : "");
+  $("sim-premium").textContent = S.session && S.session.premium_note ? "Prices: " + S.session.premium_note : "";
+  const stale = S.mode === "live" && S.cursorIso && Date.now() / 1000 - (unixOf(S.cursorIso) + 60) > liveStaleSeconds();
+  $("sim-status").textContent = (stale ? `Waiting for live minutes: the newest one the engine has is from ${clockText(unixOf(S.cursorIso) + 60)}. ` : "") + (S.note || (S.session ? `${S.session.instrument.label} · ${S.session.strategy} · ${S.session.timeframe}` : ""));
   $("sim-alert").innerHTML = S.trade ? "" : alertCardHtml(S.alert, S.cursorIso);
   $("sim-pos").innerHTML = positionCardHtml(S.trade || S.lastClosed, S.exitSignal);
   $("sim-summary").innerHTML = summaryTilesHtml(S.summary, S.session && S.session.capital);
   renderLog(); syncLines(); syncMarkers();
+  revealCard();
+}
+/* An alert or a result the user could miss: scroll its card into view and flash it. */
+function revealCard() {
+  if (!S.reveal) return;
+  const card = S.reveal === "alert" ? $("sim-alert").querySelector(".sim-alertcard") : $("sim-pos").querySelector(".sim-poscard.closed");
+  if (!card) return;
+  S.reveal = null;
+  const r = card.getBoundingClientRect();
+  if (cardNeedsScroll(r.top, r.bottom, window.innerHeight || document.documentElement.clientHeight)) card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  card.classList.remove("sim-flash"); void card.offsetWidth; card.classList.add("sim-flash");
+  setTimeout(() => card.classList.remove("sim-flash"), 2200);
 }
 async function showView(v) {
   S.view = v;
@@ -491,10 +555,13 @@ async function offerResume() {
   const last = store.get("sim.last", null);
   if (!last || !last.id || S.id) return;
   let st;
-  try { st = await getJson(`/api/sim/sessions/${last.id}`); } catch (e) { return; }
+  try { st = await getJson(`/api/sim/sessions/${last.id}`); } catch (e) {
+    if (String(e.message) === "404") store.set("sim.last", null);   // a database that no longer has it: stop asking
+    return;
+  }
   if (!st || !st.session || st.session.status === "ENDED") return;
   const s = st.session;
-  $("sim-resume").innerHTML = `<div class="card sim-resumecard">Resume your last session? <b>${esc(s.instrument.label)}</b>, ${esc(s.strategy)} ${esc(s.timeframe)}, at ${esc(tsfLocal(s.cursor))}. `
+  $("sim-resume").innerHTML = `<div class="card sim-resumecard">Resume your last session? ${esc(resumeLine(s))} `
     + `<button class="btn primary small" data-act="resume">Resume</button> <button class="btn small" data-act="dismiss">No thanks</button></div>`;
   S.resumeState = st;
 }
@@ -502,10 +569,10 @@ function resume() {
   const st = S.resumeState;
   if (!st) return;
   resetRun(st.session);
-  S.candles = [];
+  S.candles = st.candles || [];
   $("sim-run").hidden = false;
-  drawAll(); takeState(st);
-  S.note = "Resumed. The candles before this point are not reloaded; the chart builds from here.";
+  drawAll(); markPartial(); takeState(st);
+  S.note = "Resumed at the server's clock. Press Play.";
   $("sim-resume").innerHTML = ""; S.resumeState = null;
   render();
 }

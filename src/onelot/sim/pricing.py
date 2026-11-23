@@ -103,7 +103,9 @@ class Contract:
 
 class StoredPremiums:
     """Real one-minute option bars of a fixed strike from the expired-options store, through
-    the Lab's own lookup (`RealPricer._find`, no waiting: the bar of that minute or none)."""
+    the Lab's own lookup (`RealPricer._find`): the bar of THAT minute or none. No later minute
+    is ever used (a replay must not show a price the user has not seen); a strike that did
+    not trade in the minute is priced by the model and marked `model`."""
 
     def __init__(
         self,
@@ -129,16 +131,14 @@ class StoredPremiums:
 
     def bar(self, c: Contract, minute: pd.Timestamp) -> np.ndarray | None:
         """(open, high, low, close, iv, spot) of the contract's bar in the minute starting at
-        `minute`, or None."""
+        `minute`; None when it did not trade there (or the store lacks that block)."""
         epoch = int(minute.value // 1_000_000_000)
         day = minute.date()
         try:
             hit = self.rp._find(self._code(day, epoch), c.opt, c.strike, epoch, day, 0)
         except NeedBlock:
-            return None
-        if isinstance(hit, str):
-            return None
-        return hit[1]
+            return None  # a block the store lacks: the model prices it
+        return None if isinstance(hit, str) else hit[1]
 
 
 @dataclass(frozen=True)

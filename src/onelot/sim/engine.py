@@ -221,8 +221,8 @@ class SimSession:
         self._frame_mark: tuple[int, int] = (0, 0)
         self._frame_bucket: tuple[int, int] = (-1, -1)
         if restore is None:
-            self._load(setup.start + pd.Timedelta(days=HORIZON_DAYS))
             start_ns = _ns_of(setup.start)
+            self._load(setup.start + pd.Timedelta(days=HORIZON_DAYS), start_ns)
             self.pos = int(np.searchsorted(self.ts, start_ns, side="left")) - 1
             if self.setup.mode == "past" and self.pos + 1 >= len(self.ts):
                 raise SimError(400, "There are no stored one-minute bars after that start.")
@@ -234,10 +234,19 @@ class SimSession:
             self._restore(restore)
 
     # ── data ──────────────────────────────────────────────────────────────
-    def _load(self, until: pd.Timestamp | None) -> None:
+    def _load(self, until: pd.Timestamp | None, after_ns: int | None = None) -> None:
+        """Load the bars from the history start to `until`. When that leaves nothing after
+        `after_ns` (a gap in the store longer than the horizon), read on to the end of the
+        stored data rather than end the session while later bars exist."""
         s = self.setup
         end = None if s.mode == "live" else until
         minute = self.bars.minute_bars(s.series_key, self.hist_start, end)
+        if (
+            end is not None
+            and after_ns is not None
+            and (minute.empty or _ns_of(minute.index[-1]) <= after_ns)
+        ):
+            minute = self.bars.minute_bars(s.series_key, self.hist_start, None)
         self.loaded_until = until
         self._set_minutes(minute)
         self._build_frame()
@@ -298,11 +307,13 @@ class SimSession:
         if s.kind == "STOCK":
             return Pricer(s.spec, "STOCK", d.bt, d.stock_costs)
         vix = None
+        self.vix_last = None
         try:
             daily = self.bars.daily_bars("INDIAVIX")
             if daily is not None and not daily.empty:
                 vix = daily["close"].copy()
                 vix.index = pd.DatetimeIndex(vix.index).normalize()
+                self.vix_last = vix.index.max()
         except Exception:  # noqa: BLE001 - the constant IV instead
             vix = None
         stored = None
@@ -342,7 +353,9 @@ class SimSession:
         if rng is None or _ns_of(rng[1]) <= int(self.ts[-1]):
             return False
         cursor = self.cursor_ns
-        self._load(pd.Timestamp(cursor, tz="UTC").tz_convert(IST) + pd.Timedelta(days=HORIZON_DAYS))
+        self._load(
+            pd.Timestamp(cursor, tz="UTC").tz_convert(IST) + pd.Timedelta(days=HORIZON_DAYS), cursor
+        )
         self.pos = int(np.searchsorted(self.ts, cursor, side="right")) - 1
         return self.pos + 1 < len(self.ts)
 
@@ -394,14 +407,31 @@ class SimSession:
             )
         ]
 
+    def vix_note(self) -> str:
+        """Plain words when the volatility the model needs is missing at the cursor."""
+        if self.kind == "STOCK":
+            return ""
+        last = getattr(self, "vix_last", None)
+        if last is None:
+            return " India VIX is not stored, so modelled premiums use a fixed volatility."
+        day = pd.Timestamp(self.cursor_ns, tz="UTC").tz_convert(IST).tz_localize(None).normalize()
+        if day > pd.Timestamp(last).tz_localize(None).normalize():
+            return (
+                f" India VIX is stored only to {pd.Timestamp(last):%d %b %Y}: from there modelled "
+                "premiums use that last value."
+            )
+        return ""
+
     def premium_note(self) -> str:
         if self.kind == "STOCK":
             return "share prices from the one-minute bars, with the Lab's slippage and charges"
         if self.setup.mode == "live":
-            return "today's traded premiums through the desk where it has them, otherwise modelled"
-        if self.deps.option_store is None:
-            return "modelled premiums (Black-76): no expired-options store was found"
-        return "real traded premiums where stored, otherwise modelled"
+            note = "today's traded premiums through the desk where it has them, otherwise modelled"
+        elif self.deps.option_store is None:
+            note = "modelled premiums (Black-76): no expired-options store was found"
+        else:
+            note = "real traded premiums where stored, otherwise modelled"
+        return note + "." + self.vix_note() if self.vix_note() else note
 
     def session_view(self) -> dict[str, Any]:
         s = self.setup
@@ -525,40 +555,43 @@ class SimSession:
         )
         self.alert = None
         self._save([])
-        return self.state()
+        return self._answer([], [])
 
     def skip(self, alert_id: str) -> dict[str, Any]:
         if self.alert is None or self.alert["id"] != alert_id:
             raise SimError(409, "There is no such alert to skip: it expired or was taken.")
         self.alert = None
         self._save([])
-        return self.state()
+        return self._answer([], [])
 
     def close(self) -> dict[str, Any]:
         t = self.trade
         if t is None:
             raise SimError(409, "There is no open trade to close.")
+        events: list[dict] = []
         if t.status == "PENDING_FILL":
-            self.store.drop_trade(t.id)
-            self.trade = None
+            self._cancel(events, self.cursor_ns + _MIN_NS, "You closed the trade before it filled")
         else:
             t.pending_exit = "MANUAL"
-        self._save([])
-        return self.state()
+        self._save(events)
+        return self._answer(events, [])
 
     def end(self) -> dict[str, Any]:
         """Close an open trade at the next minute's open (the last close when there is no
         next minute) and mark the session ENDED."""
         shown: list[dict] = []
+        minutes: list[list] = []
         events: list[dict] = []
         t = self.trade
         if t is not None and t.status == "PENDING_FILL":
-            self.store.drop_trade(t.id)
-            self.trade = None
+            self._cancel(
+                events, self.cursor_ns + _MIN_NS, "The session ended before the trade filled"
+            )
         elif t is not None and self.status != "ENDED":
             t.pending_exit = "MANUAL"
             if self.setup.mode == "past" and self.pos + 1 < len(self.ts):
-                shown = list(self.advance(1)["events"])  # saved by advance
+                got = self.advance(1)  # saved by advance
+                shown, minutes = list(got["events"]), list(got["minutes"])
             if self.trade is not None and self.pos >= 0:  # no next minute: the last close
                 p = self.pos
                 end_ns = int(self.ts[p]) + _MIN_NS
@@ -566,8 +599,22 @@ class SimSession:
         self.alert = None
         self.status = "ENDED"
         self._save(events)
-        del shown  # its events are saved; the answer is the state, as GET gives it
-        return self.state()
+        return self._answer(shown + [self._public(e) for e in events], minutes)
+
+    def _answer(self, events: list[dict], minutes: list[list]) -> dict[str, Any]:
+        """What take, skip, close and end answer: GET's body without `candles`, plus the
+        events the action produced (as in `advance`) and the minutes it revealed."""
+        pub = [self._public(e) if "_ts" in e else e for e in events]
+        return {**self.state(), "events": pub, "minutes": minutes}
+
+    def _cancel(self, events: list[dict], ns: int, text: str) -> None:
+        """A trade that never filled: stored as CANCELLED (never a result), and said so."""
+        t = self.trade
+        if t is None:
+            return
+        self.store.save_trade(t.id, {"status": "CANCELLED", "updated_at": now_ist()})
+        self.trade = None
+        self._event(events, ns, "CANCELLED", text, {"trade_id": t.id})
 
     # ── the clock: reveal minutes ─────────────────────────────────────────
     def advance(self, minutes: int = 1) -> dict[str, Any]:
@@ -794,8 +841,7 @@ class SimSession:
         same_day = int(_local(np.array([t.taken_ns], np.int64))[0][0]) == int(self.day[p])
         if not same_day or int(self.mod[p]) >= self.exit_min:
             # the trading day ended before the fill: nothing traded
-            self.store.drop_trade(t.id)
-            self.trade = None
+            self._cancel(events, t0, "The trading day ended before the trade filled")
             return
         side = t.side
         o = float(self.o[p])
@@ -1032,8 +1078,7 @@ class SimSession:
             self._expire(events, end_ns)
         t = self.trade
         if t is not None and t.status == "PENDING_FILL":
-            self.store.drop_trade(t.id)
-            self.trade = None
+            self._cancel(events, end_ns, "The trading day ended before the trade filled")
         elif t is not None:
             self._close_trade(events, p, "SESSION_END", self.c[p], "close", end_ns)
         self._event(events, end_ns, "DAY_END", "The trading day is over")
@@ -1049,8 +1094,7 @@ class SimSession:
             self._expire(events, end_ns)
         t = self.trade
         if t is not None and t.status == "PENDING_FILL":
-            self.store.drop_trade(t.id)
-            self.trade = None
+            self._cancel(events, end_ns, "The stored data ended before the trade filled")
         elif t is not None:
             self._close_trade(events, p, "DATA_END", self.c[p], "close", end_ns)
         self._event(events, end_ns, "DATA_END", "No more stored bars: the session is over")
@@ -1092,7 +1136,8 @@ class SimSession:
         self.cursor_ns = cursor_ns
         if self.setup.mode == "past":
             self._load(
-                pd.Timestamp(cursor_ns, tz="UTC").tz_convert(IST) + pd.Timedelta(days=HORIZON_DAYS)
+                pd.Timestamp(cursor_ns, tz="UTC").tz_convert(IST) + pd.Timedelta(days=HORIZON_DAYS),
+                cursor_ns,
             )
         else:
             self._load(None)
@@ -1108,6 +1153,8 @@ class SimSession:
         for r in self.store.trades(session_id=self.setup.id):
             if r["status"] == "CLOSED":
                 self.closed.append(closed_row(r))
+            elif r["status"] == "CANCELLED":
+                continue
             elif self.trade is None:
                 self.trade = _trade_from_row(r)
                 t = self.trade

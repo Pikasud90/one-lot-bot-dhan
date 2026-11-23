@@ -151,7 +151,7 @@ def test_token_unknown_session_and_conflicts(app_engine, force):
     assert r.status_code == 400
     r = strict(c.post(f"/api/sim/sessions/{sid}/end", json={}, headers=H))
     assert r["session"]["status"] == "ENDED"
-    assert set(r) == {"session", "alert", "trade", "summary", "trades"}  # GET's body, no candles
+    assert set(r) == {"session", "alert", "trade", "summary", "trades", "events", "minutes"}
     got = strict(c.get(f"/api/sim/sessions/{sid}"))
     assert set(got) == {"session", "alert", "trade", "summary", "trades", "candles"}
     r = c.post(f"/api/sim/sessions/{sid}/advance", json={"minutes": 1}, headers=H)
