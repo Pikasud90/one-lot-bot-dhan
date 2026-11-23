@@ -1038,6 +1038,43 @@ def create_app(engine, api_token: str) -> FastAPI:
         body = json.dumps(lab.matrix(timeframe), allow_nan=False)  # strict JSON
         return Response(body, media_type="application/json")
 
+    # ── market states of the Lab (US-077): counted, read-only, never an alert ──
+    mlstates: dict[str, Any] = {}  # the MarketStates of the running desk, built on first use
+
+    def _mlstates() -> Any:
+        from ..mllab import service as ml
+        from ..mllab import states as ms
+
+        desk = _desk()
+        with _MLLAB_LOCK:
+            if mlstates.get("desk") is not desk:
+                mlstates["obj"] = ms.MarketStates(
+                    ml.desk_bars_getter(desk),
+                    lambda: ml.desk_instruments(desk),
+                    lambda: dt.datetime.now(IST),
+                    ml.desk_session_close(desk),
+                )
+                mlstates["desk"] = desk
+            return mlstates["obj"]
+
+    @app.get("/api/mllab/states/instruments")
+    def mllab_states_instruments() -> Any:
+        from fastapi.responses import Response
+
+        body = json.dumps({"instruments": _mlstates().instruments()}, allow_nan=False)
+        return Response(body, media_type="application/json")
+
+    @app.get("/api/mllab/states")
+    def mllab_states(instrument: str = Query("")) -> Any:
+        from fastapi.responses import Response
+
+        lab = _mlstates()
+        try:
+            out = lab.reading(instrument)
+        except KeyError:
+            raise HTTPException(400, f"unknown instrument {instrument!r}") from None
+        return Response(json.dumps(out, allow_nan=False), media_type="application/json")
+
     # ── UI ────────────────────────────────────────────────────────────────
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:

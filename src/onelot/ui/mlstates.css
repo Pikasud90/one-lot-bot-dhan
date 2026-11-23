@@ -1,1 +1,33 @@
 /* Market states (US-077). Theme variables only: no colour literals. */
+.ms-card h3{font-size:15px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px}
+.ms-headline{font-size:22px;font-weight:800;margin:12px 0 8px;color:var(--text)}
+.ms-size{font-size:19px;font-weight:700;margin:12px 0;color:var(--text)}
+.ms-bars{display:grid;gap:8px;max-width:640px}
+.ms-bar{display:grid;grid-template-columns:70px 1fr 170px;align-items:center;gap:10px;font-size:16px}
+.ms-bl{font-weight:800;letter-spacing:.08em;color:var(--muted)}
+.ms-bar.lean .ms-bl{color:var(--text)}
+.ms-track{position:relative;height:18px;background:var(--panel3);border:1px solid var(--line)}
+.ms-fill{position:absolute;left:0;top:0;bottom:0;background:var(--dim)}
+.ms-bar.bull .ms-fill{background:var(--ok)}
+.ms-bar.bear .ms-fill{background:var(--bad)}
+.ms-bar.flat .ms-fill{background:var(--cyan)}
+.ms-tick{position:absolute;top:-4px;bottom:-4px;width:3px;margin-left:-1px;background:var(--text)}
+.ms-bv{font-family:var(--mono);font-weight:700}
+.ms-bv small{color:var(--muted);font-weight:400}
+.ms-strip{display:flex;flex-wrap:wrap;gap:5px;margin:14px 0}
+.ms-chip{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;font-size:14px;font-weight:800;border:2px solid var(--dim);color:var(--dim)}
+.ms-chip.bull{border-color:var(--ok);color:var(--ok)}
+.ms-chip.bear{border-color:var(--bad);color:var(--bad)}
+.ms-chip.flat{border-color:var(--cyan);color:var(--cyan)}
+.ms-chip.active.bull{background:var(--ok);color:var(--panel)}
+.ms-chip.active.bear{background:var(--bad);color:var(--panel)}
+.ms-chip.active.flat{background:var(--cyan);color:var(--panel)}
+.ms-chip.calm{background:transparent}
+.ms-tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px}
+.ms-table{font-size:15.5px}
+.ms-table tr.ms-usual td{color:var(--muted);font-style:italic}
+.ms-evidence{font-size:16px;margin:14px 0 6px;color:var(--text)}
+.ms-legend{margin-top:14px;border-top:1px solid var(--line);padding-top:8px}
+.ms-legend summary{cursor:pointer;font-size:15px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent2)}
+.ms-legend p{font-size:15.5px;line-height:1.5;margin:10px 0;color:var(--text)}
+@media (max-width:640px){.ms-bar{grid-template-columns:56px 1fr;}.ms-bv{grid-column:1 / -1}}
