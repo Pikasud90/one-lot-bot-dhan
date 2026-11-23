@@ -1,6 +1,6 @@
 @echo off
 REM Stop the Bank Nifty Trade Assistant.
-setlocal
+setlocal EnableDelayedExpansion
 set "HERE=%~dp0"
 set "ROOT=%HERE%.."
 

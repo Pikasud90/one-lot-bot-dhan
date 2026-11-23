@@ -15,6 +15,17 @@ from .logging_setup import setup_logging
 from .ratelimit import RateLimiter
 
 
+def history_summary(cfg: AppConfig) -> tuple[int, int]:
+    """(series, bars) held in the local market-history database; (0, 0) on a fresh clone."""
+    from .data.db import get_engine
+    from .data.store import coverage_report
+
+    frame = coverage_report(get_engine(cfg.db_url_resolved))
+    if frame.empty:
+        return 0, 0
+    return int(frame["series_key"].nunique()), int(frame["bars"].sum())
+
+
 def main() -> int:
     cfg = AppConfig.load()
     secrets = Secrets.load(cfg.project_root)
@@ -29,11 +40,29 @@ def main() -> int:
     for p in problems:
         print(f"   BLOCKING: {p}")
 
+    try:
+        n_series, n_bars = history_summary(cfg)
+    except Exception as exc:  # noqa: BLE001 - a broken database must not hide the rest
+        n_series, n_bars = 0, 0
+        print(f"\n[history]  could not read the market-history database ({type(exc).__name__})")
+    else:
+        if n_bars:
+            print(f"\n[history]  {n_bars:,} bars in {n_series} series")
+        else:
+            print("\n[history]  EMPTY (a fresh install has none; it is not part of the download)")
+    if not n_bars:
+        print("   The Backtest Lab, Simulator and Machine Learning Lab (60m and 4h) need it.")
+        print("   Live Desk and Home do not. Download it (free, from Yahoo; takes a while):")
+        print("       python -m onelot backfill")
+
     if not secrets.has_broker_creds:
-        print("\n[credentials]  NOT SET")
-        print("   Fill DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN in .env.")
-        print("   Until then the engine runs on the SYNTHETIC mock market:")
-        print("       python -m onelot --mock")
+        print("\n[credentials]  NOT SET (optional)")
+        print("   Without Dhan credentials the app still runs, on the synthetic mock market:")
+        print("       python -m onelot run --mock")
+        print("   For your account and the live Dhan feed, either paste your client id and")
+        print("   access token in the Settings tab, or copy .env.example to .env and fill")
+        print("   DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN.")
+        print("\n[verdict]  nothing to check against Dhan yet; see the two notes above")
         return 1
 
     print(f"\n[credentials]  present (client-id ends ...{secrets.client_id[-4:]}, token redacted)")

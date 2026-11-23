@@ -1,0 +1,55 @@
+# Exact versions of the environment this desk was tested in (Python 3.12), for the packages in
+# requirements.txt and everything they pull in. Use it to rebuild that environment exactly:
+#   pip install -r requirements.lock.txt
+# Use requirements.txt instead when you want newer compatible versions or are on Windows
+# (the two Windows-only packages are listed at the end).
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+beautifulsoup4==4.15.0
+certifi==2026.10.23
+cffi==2.1.1
+charset-normalizer==3.5.2
+click==8.5.0
+cryptography==50.0.2
+curl_cffi==0.17.0
+dhanhq==2.3.0
+fastapi==0.162.0
+h11==0.16.0
+httpcore==1.0.9
+httptools==0.9.0
+httpx==0.28.1
+idna==3.20
+lxml==6.1.3
+multitasking==0.0.13
+numpy==2.5.4
+opentelemetry-api==1.45.1
+pandas==2.3.3
+peewee==4.5.3
+platformdirs==4.13.6
+protobuf==7.36.2
+pycparser==3.12
+pydantic==2.14.1
+pydantic_core==2.50.1
+pydantic-settings==2.16.1
+pyOpenSSL==26.4.0
+python-dateutil==3.0.0
+python-dotenv==1.2.4
+pytz==2026.5
+PyYAML==6.0.3
+requests==2.34.2
+six==1.17.0
+soupsieve==3.0.4
+SQLAlchemy==2.1.6
+starlette==1.10.0
+typing_extensions==4.16.0
+typing-inspection==0.4.4
+tzdata==2026.5
+urllib3==2.8.0
+uvicorn==0.54.0
+uvloop==0.23.0 ; sys_platform != "win32"
+watchfiles==1.3.0
+websockets==17.3
+yfinance==1.7.0
+windows-toasts>=1.1.1 ; sys_platform == "win32"
+plyer>=2.1 ; sys_platform == "win32"

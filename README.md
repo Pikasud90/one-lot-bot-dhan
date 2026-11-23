@@ -1,4 +1,4 @@
-# One Lot Desk — signal-only Dhan trade desk
+# One Lot Desk: signal-only Dhan trade desk
 
 One process, one web app, one rule: **one unit per trade**. One lot of a Bank Nifty option,
 one lot of a future, one share of a stock, one lot of a currency future. The desk finds the
@@ -7,8 +7,8 @@ and the target, and then keeps telling you *hold / tighten / exit* until you are
 **You** place every order on your Dhan terminal. There is no order-placement code anywhere
 in this repository and a test enforces that.
 
-It merges two earlier builds — the Bank Nifty live option engine (`bnta`) and the Fyers
-strategy/backtest framework (`tradebot`) — into a single Dhan-only project. The old folders
+It merges two earlier builds, the Bank Nifty live option engine (`bnta`) and the Fyers
+strategy/backtest framework (`tradebot`), into a single Dhan-only project. The old folders
 are reference only.
 
 > Decision support, not advice. Every rupee figure is an estimate until reconciled with a
@@ -37,15 +37,15 @@ are reference only.
 
 | Tab | What it does | Needs |
 |---|---|---|
-| **Home** | **Alerts** first: every signal with IST time, data source and delay, strategy, confidence, time-to-live, Taken / Skipped, then the archive with each alert's audited outcome at its own levels and a per-strategy scoreboard; positions being monitored; then your Dhan account (funds, holdings, positions, ledger, trade book — cached, never polled). | free-tier token |
-| **Live Desk** | Two panels — **4 traded indices** (buy CE / buy PE, 1 lot) plus MIDCPNIFTY for training only (no alerts) and **10 stocks** (buy / sell, 1 share) — each under several strategies at once, with an open-positions strip and a market-context strip (VIX, NIFTY, BANKNIFTY, SENSEX, USD/INR, GIFT NIFTY slot). Collapsible rows show market, regime & volatility, risk governor and data health per instrument. Alerts give instrument, unit, entry, stop, target, rupee risk/reward and instructions; taken trades are managed until you close them. Runs on Yahoo bars (delayed) until the Data API is active. The original Bank Nifty engine is folded underneath. `docs/14_LIVE_DESK.md` | nothing (Yahoo) / Data API |
+| **Home** | **Alerts** first: every signal with IST time, data source and delay, strategy, confidence, time-to-live, Taken / Skipped, then the archive with each alert's audited outcome at its own levels and a per-strategy scoreboard; positions being monitored; then your Dhan account (funds, holdings, positions, ledger, trade book, cached, never polled). | free-tier token |
+| **Live Desk** | Two panels, **4 traded indices** (buy CE / buy PE, 1 lot) plus MIDCPNIFTY for training only (no alerts), and **10 stocks** (buy / sell, 1 share), each under several strategies at once, with an open-positions strip and a market-context strip (VIX, NIFTY, BANKNIFTY, SENSEX, USD/INR, GIFT NIFTY slot). Collapsible rows show market, regime & volatility, risk governor and data health per instrument. Alerts give instrument, unit, entry, stop, target, rupee risk/reward and instructions; taken trades are managed until you close them. Runs on Yahoo bars (delayed) until the Data API is active. The original Bank Nifty engine is folded underneath. `docs/14_LIVE_DESK.md` | nothing (Yahoo) / Data API |
 | **Backtest Lab** | Desk watchlist first, then any instrument. TradingView-style charts (vendored, offline) with trade markers; equity + drawdown; 30 % rule panel. **Walk-forward** with auto-sized windows, **optimizer**, **sweeps** (every strategy × instrument × timeframe, each saved) and a **leaderboard** over every saved run. Sentiment gate. 14 strategies. `docs/15_LAB_SWEEPS_SENTIMENT.md` | nothing (Yahoo corpus) |
 | **Data** | Corpus coverage, backfill jobs (Yahoo now, Dhan 1-minute × 5 years once the Data API is on), quality report, and an **explore** section: daily closes vs VIX, return distribution, intraday range profile, sessions per month, weekday seasonality, correlation heatmap. | nothing / Data API |
 | **News & Sentiment** | **Market pulse** (breadth, index trend, VIX percentile, NIFTY PCR with the Data API) recorded every 15 min, score history chart, board, news feed, manual posts, **bulk import** of your scorer's history for backtests. | nothing |
-| **Settings** | Paste Dhan credentials (written to `.env`, mode 0600, never echoed), **Test entitlements**, **Renew token** (TOTP self-renewal, no daily pasting), **Go live** (switch to the Dhan feed in place), desk watchlist, read-only config. | — |
+| **Settings** | Paste Dhan credentials (written to `.env`, mode 0600, never echoed), **Test entitlements**, **Renew token** (TOTP self-renewal, no daily pasting), **Go live** (switch to the Dhan feed in place), desk watchlist, read-only config. | none |
 
-Everything runs in **one Python process** (`python -m onelot run`) on macOS and Windows,
-with SQLite in WAL mode. No Docker, no external services.
+Everything runs in **one Python process** (`python -m onelot run`) on macOS, Linux and Windows,
+with SQLite in WAL mode. Docker is optional; there are no external services.
 
 The web app opens in a bright **Day** theme sized for reading at arm's length; the **☾ Night**
 button in the header switches to the dark desk and the choice is remembered per browser. The
@@ -56,36 +56,82 @@ calendar (2026 cross-checked; past holidays shaded, the next one highlighted).
 
 ## Quick start
 
+Needs Python 3.10 or newer and git. Every command here was run on a fresh clone.
+
 ```bash
-# macOS / Linux
-scripts/start_mac.sh --mock          # synthetic market, no credentials; opens http://127.0.0.1:8787/
-scripts/start_mac.sh                 # real Dhan feed once credentials + Data API exist
+git clone https://github.com/Pikasud90/one-lot-bot-dhan.git onelot
+cd onelot
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m onelot run --mock --port 8787     # synthetic market, no credentials
+```
+
+Wait about half a minute, then open http://127.0.0.1:8787/ . Ctrl-C stops it. On Windows use
+`.venv\Scripts\python`. The launchers do the environment and install steps on first run:
+
+```bash
+scripts/start_mac.sh --mock          # macOS;  scripts/start_linux.sh on Linux
+scripts\start_win.bat --mock         # Windows (or scripts\start_win.ps1)
 scripts/start_mac.sh --lan           # also reachable from other devices on your network
+scripts/stop_mac.sh                  # stop (scripts\stop_win.bat on Windows)
 ```
 
-```bat
-:: Windows
-scripts\start_win.bat --mock
-scripts\start_win.bat --lan
+### What works without history
+
+A fresh clone has no market history; it is not in the repository. Home, Live Desk, Data, News
+and Settings work without it. **Backtest Lab, Simulator and Machine Learning Lab (60m and 4h)
+need it.** Download it once (free, from Yahoo; the full download is long):
+
+```bash
+.venv/bin/python -m onelot backfill
+.venv/bin/python -m onelot quality
 ```
 
-First run creates `.venv` and installs everything. Then:
+For a quick first try: `backfill --series BANKNIFTY --resolutions 1d`.
 
-1. **Settings → Dhan credentials**: paste your client ID and the free-tier access token, Save,
+### Real data
+
+Paste your Dhan client ID and access token in the Settings tab, or copy `.env.example` to
+`.env` and fill it in (`cp .env.example .env`). Then run `python -m onelot preflight`: it says
+in plain words what is missing (history, credentials) and which Dhan endpoints your token
+reaches. Start without `--mock` to use them.
+
+### Update
+
+```bash
+git pull
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+`requirements.lock.txt` pins the exact versions this desk was tested with (Python 3.12). Use
+`pip install -r requirements.lock.txt` for that exact environment, and `requirements.txt` for
+newer compatible versions or on Windows.
+
+### Container
+
+```bash
+docker build -t onelot-desk .
+docker compose up --build            # http://127.0.0.1:8787/ ; ./data and ./logs are mounted
+```
+
+The image installs from the lock file, runs as a non-root user and publishes the port on
+127.0.0.1 only. Credentials come from `.env` if you made one. These two commands have not
+been run end to end yet: the machine that wrote them had no running Docker daemon.
+
+### Using the tabs
+
+1. **Settings, Dhan credentials**: paste your client ID and the free-tier access token, Save,
    then **Test entitlements**. The report shows two tiers: *trading* (profile, funds, holdings,
-   positions, ledger, trade book — must all pass; verified live on a free-tier account) and
-   *data* (expiry list, option chain, historical bars — `NO_DATA_API` until the plan is bought).
-2. **Home** now shows your ledger and funds. Press Refresh whenever you want; it never polls.
-3. **Data**: the Yahoo corpus is already loaded on this machine (406 k bars: 26 series × 2m/5m/15m/60m/1d).
-   Run a backfill any time to top it up.
-4. **Backtest Lab**: `Desk watchlist → NIFTY BANK options → EMA Cross → 12m → Run backtest`.
-   Then *Walk-forward* on anything that looks good. Only out-of-sample numbers count.
-   **Sweep** runs everything on everything and the **Leaderboard** ranks all saved runs
-   (`python -m onelot sweep`, `python -m onelot leaderboard`).
-5. **Live Desk** works immediately on delayed Yahoo bars: 15 instruments, 45 strategy slots.
-5. Once the Data API is active: `python -m onelot backfill --provider dhan` (five years of
-   1-minute bars), re-run the research gate, and promote a PASS strategy to the live engine
-   with `strategy.live.source: lab` in `config/config.yaml`.
+   positions, ledger, trade book, which must all pass) and *data* (expiry list, option chain,
+   historical bars; `NO_DATA_API` until the plan is bought).
+2. **Home** then shows your ledger and funds. Press Refresh whenever you want; it never polls.
+3. **Data**: coverage of the local history, backfill jobs and the quality report.
+4. **Backtest Lab** (needs history): `Desk watchlist, NIFTY BANK options, EMA Cross, 12m, Run
+   backtest`. Then *Walk-forward* on anything that looks good. Only out-of-sample numbers count.
+   `python -m onelot sweep` and `python -m onelot leaderboard` do the same from the shell.
+5. **Live Desk** works immediately: 15 instruments, 45 strategy slots.
+6. Once the Data API is active: `python -m onelot backfill --provider dhan` (five years of
+   1-minute bars) and re-run the research gate.
 
 Command line equivalents:
 
@@ -111,11 +157,11 @@ Command line equivalents:
   The Live Desk and the Dhan corpus provider need it. The free-after-N-trades offer is
   discontinued per Dhan's FAQ.
 * **Tokens**: web-generated tokens are valid 24 hours; regenerate daily (or use the TOTP
-  endpoint — see `docs/13_DHAN_SETUP.md`). Because the entitlement is on the account, either of
+  endpoint, see `docs/13_DHAN_SETUP.md`). Because the entitlement is on the account, either of
   your two tokens works for everything once the plan is active. `.env` has two slots so the
   paid one can be kept separate: `DHAN_ACCESS_TOKEN` and optional `DHAN_DATA_ACCESS_TOKEN`.
 * **Postback URL**: optional; it only receives **order updates**. This desk never places orders,
-  so leave it blank — or point it at `http://<host>:8787/api/dhan/postback`, which records what
+  so leave it blank, or point it at `http://<host>:8787/api/dhan/postback`, which records what
   arrives and acts on nothing.
 
 ---
@@ -155,7 +201,7 @@ The token is never logged, shown in the UI or stored in the outbox.
   expired-options endpoint replaces it with real premiums.
 * **Full charges.** `config/costs.yaml` has a table per product (index/stock options, index/stock
   futures, equity intraday/delivery, currency futures/options): brokerage, STT, exchange, SEBI,
-  IPFT, stamp, GST. Still `verified_against_contract_note: false` — reconcile it.
+  IPFT, stamp, GST. Still `verified_against_contract_note: false`, reconcile it.
 * **Closed bars only**, fills at the next open ± slippage, same-bar stop/target resolved on the
   finer (2-minute) path when stored, square-off at the instrument's session end (currency
   16:45, equity 15:15).
@@ -179,7 +225,7 @@ The token is never logged, shown in the UI or stored in the outbox.
 | `squeeze` | Bollinger-inside-Keltner release + Donchian breakout with momentum. | stocks, futures, FX |
 | `donchian_breakout` | Classic N/M channel trend following with an ADX floor. | futures, FX, stocks |
 | `mean_reversion` | RSI(2) dips inside the intraday trend; small, frequent wins. | stocks, futures |
-| `intraday_momentum` | First half-hour predicts the last half-hour (Gao–Han–Li–Zhou 2018; international evidence Li 2020). | index futures / options |
+| `intraday_momentum` | First half-hour predicts the last half-hour (Gao, Han, Li and Zhou 2018; international evidence Li 2020). | index futures / options |
 | `gap_fade` | Short stocks that gap far above NIFTY's own gap; the one Fyers-era finding that held on a 2022-26 holdout (now WATCH). | stocks |
 | `benchmark_random` | Control: random entries with the same exits. Real strategies must beat it out of sample. | research only |
 
@@ -202,7 +248,7 @@ Unchanged in substance from the previous build, with two defects fixed in this m
 
 Direction can come from the built-in gate stack (`strategy.live.source: gates`) or from any
 Lab strategy evaluated on the same closed index bars (`source: lab`). Health, session,
-contract selection (0.60–0.70 |Δ|, liquidity), net R/R, cooldown and the risk governor gate
+contract selection (0.60 to 0.70 |Δ|, liquidity), net R/R, cooldown and the risk governor gate
 it either way; the Lab strategy only ever supplies the side and a structural stop.
 
 ---
@@ -236,7 +282,7 @@ src/onelot/
   strategy/              live gate stack: alpha.py · gates.py · selector.py · sizer.py · lab_source.py
   market/  trade/  risk/  analytics/  notify/  store/  replay/
 tests/                   engine tests + tests/lab/ + account/Dhan-reads + lab-source tests
-docs/                    00–08 live-engine design docs · 09–13 unified desk docs · research/
+docs/                    00 to 08 live-engine design docs · 09 to 13 unified desk docs · research/
 ```
 
 ---
@@ -248,7 +294,8 @@ scripts/gate.sh                          # the quality gate: format, lint, mypy 
 .venv/bin/python -m pytest               # tests only; `live` tests are skipped by default
 ```
 
-`scripts/gate.sh` runs exactly the commands listed in [CONTRIBUTING.md](CONTRIBUTING.md#running-everything).
+`scripts/gate.sh` runs exactly the commands listed in
+[CONTRIBUTING.md](CONTRIBUTING.md#running-everything).
 
 Invariants enforced by tests: no order-placement identifiers anywhere in `src/`; secrets never
 reach logs; closed bars only (signals on truncated history equal signals on full history);

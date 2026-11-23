@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bank Nifty Trade Assistant — macOS / Linux launcher.
+# One Lot Desk: macOS and Linux launcher (scripts/start_linux.sh runs this same file).
 #
 # Every path is quoted: this project's own directory contains spaces, and an
 # unquoted variable would silently break the venv and the database path.
@@ -17,9 +17,10 @@ REINSTALL=0
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/start_mac.sh [options]
+Usage: scripts/start_mac.sh [options]   (or scripts/start_linux.sh)
   --mock         run against the synthetic market (no credentials needed)
   --port N       API/dashboard port (default 8787)
+  --lan          also listen on your LAN (0.0.0.0) for other devices
   --reinstall    rebuild the virtual environment from scratch
   -h, --help     this message
 USAGE
@@ -55,7 +56,7 @@ if [[ ! -d "$VENV" ]]; then
   echo "==> installing dependencies (first run only, about a minute)"
   "$VENV/bin/python" -m pip install --quiet -r "$ROOT/requirements.txt"
   # Editable install so `python -m onelot` resolves without PYTHONPATH games.
-  "$VENV/bin/python" -m pip install --quiet -e "$ROOT"
+  "$VENV/bin/python" -m pip install --quiet --no-deps -e "$ROOT"
 fi
 
 if [[ ! -f "$ROOT/.env" ]]; then
@@ -68,4 +69,4 @@ mkdir -p "$ROOT/logs" "$ROOT/data"
 
 echo "==> starting the engine  (dashboard: http://127.0.0.1:$PORT/)"
 echo "    press Ctrl-C to stop"
-exec "$VENV/bin/python" -m onelot --port "$PORT" ${ARGS[@]+"${ARGS[@]}"}
+exec "$VENV/bin/python" -m onelot run --port "$PORT" ${ARGS[@]+"${ARGS[@]}"}
