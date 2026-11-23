@@ -57,8 +57,8 @@ def main() -> int:
 
     if not secrets.has_broker_creds:
         print("\n[credentials]  NOT SET (optional)")
-        print("   Without Dhan credentials the app still runs: on the synthetic mock market")
-        print("   (python -m onelot run --mock) or on delayed Yahoo bars.")
+        print("   Without Dhan credentials the app still runs, on the synthetic mock market:")
+        print("       python -m onelot run --mock")
         print("   For your account and the live Dhan feed, either paste your client id and")
         print("   access token in the Settings tab, or copy .env.example to .env and fill")
         print("   DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN.")
