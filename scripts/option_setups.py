@@ -235,7 +235,9 @@ def expiry_calendar(st: Store, und: str, sessions: list[dt.date]) -> pd.DataFram
     has almost no time value after 15:00 only on its last day (median time value from 15:00
     under 0.10% of the index; the lowest such day of the month), in the last ten days of a month. A month without such a day (no bars
     stored) takes the last session on or before the last weekday of the month that the
-    nearest found expiry fell on. Returns one row per month: day, how (store | filled)."""
+    nearest found expiry fell on. Returns one row per month: day, how (store | filled).
+    Known (independent check, 2026-11-25): the filled NIFTY 2025-05 date (Wed 28) is a day early;
+    the store puts that expiry on Thursday 29. Not re-run."""
     ser = st.series(und, 1, "CE", 0)
     found: dict[tuple[int, int], dt.date] = {}
     score: dict[tuple[int, int], float] = {}
