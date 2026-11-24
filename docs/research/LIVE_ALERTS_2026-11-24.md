@@ -13,10 +13,10 @@
    to change in the rule; the change worth making is in operations and the cost model.
 
 ## What was fixed in advance
-`scripts/live_alerts_study.py`; outputs in the main checkout's `data/research/live_alerts_
-2026-11-24/`. Stores opened read-only; the private tables were never read. The line-up split is at
-13 Nov: every slot but pullback was paused on 12 Nov at 11:06 (after that day's 4 alerts) and
-`microtrend` ran from 13 Nov. Entry in parts C and D is the open of the minute after the alert.
+`scripts/live_alerts_study.py`; outputs in `data/research/live_alerts_2026-11-24/` (main
+checkout). Stores read-only; private tables never read. The line-up split is at 13 Nov: every
+slot but pullback was paused on 12 Nov at 11:06 (after that day's 4 alerts) and `microtrend`
+ran from 13 Nov. Entry in parts C and D is the open of the minute after the alert.
 Model premiums are `h.pnl`'s. Part D's hypotheses were written into the script after parts A
 to C were read and before the history stage ran. Three numbers in a row: TUNE / CHOOSE / TEST.
 
