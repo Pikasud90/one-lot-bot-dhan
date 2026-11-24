@@ -26,7 +26,8 @@
 - t statistics treat one session as one draw. Costs: an option buyer needs 5 to 10 bp of index
   move in the trade's favour (ALPHA_SEARCH_2026-11-12).
 - Set after seeing V1 (labelled so): the words quiet and busy at the TUNE 15th and 85th
-  percentiles of rvol_5m (0.9 and 2.1), because the median-based expected turnover runs low.
+  percentiles of rvol_5m (0.95 and 2.06, set as 1.0 and 2.1), because the median-based
+  expected turnover runs low.
 
 ## V1. The day's shape
 Share of a normal day's basket turnover by half hour (09:15 first):

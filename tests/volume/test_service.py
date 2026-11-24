@@ -20,7 +20,7 @@ NOW_KEYS = {"minute", "turnover_1m", "expected_1m", "rvol_1m", "rvol_5m", "rvol_
             "state", "flow_share_5m", "flow_share_day", "turnover_day", "expected_day",
             "net_flow_day", "up", "down", "flat", "text"}  # fmt: skip
 TOP_KEYS = {"as_of", "session", "market_open", "source", "basket", "now", "minutes", "index",
-            "stocks", "indices", "alerts", "book", "settings", "notes"}  # fmt: skip
+            "stocks", "indices", "alerts", "book", "settings", "notes", "index_options"}  # fmt: skip
 ALERT_KEYS = {"id", "ts", "scope", "key", "rvol", "z", "flow_share", "direction", "leaders",
               "indices", "title", "text", "evidence"}  # fmt: skip
 
@@ -105,7 +105,10 @@ def test_spike_day_alerts_are_recomputed(shared):
     body = shared.body(SPIKE_DAY.isoformat())
     alerts = body["alerts"]
     assert alerts, "the fixture's spike must alert"
-    assert all(set(a) == ALERT_KEYS for a in alerts)
+    for a in alerts:  # the study has no fact for a single stock: no evidence key at all
+        want = ALERT_KEYS if a["scope"] == "MARKET" else ALERT_KEYS - {"evidence"}
+        assert set(a) == want
+        assert a.get("evidence", "x").strip()
     market = {a["id"]: a for a in alerts if a["scope"] == "MARKET"}
     first = market[f"v_{SPIKE_DAY:%Y%m%d}_1055_MARKET"]  # the spike's first minute
     assert first["direction"] == "SELLING" and first["z"] >= 2.5
@@ -250,3 +253,31 @@ def test_alert_decisions_do_not_look_ahead(shared, frames):
         view = compute_view(SPIKE_DAY, bars, base, list(BASKET) + [ABSENT], "clv")
         got = [w.alert_obj(view, base, c)["id"] for c in w._pick(view, 0, [])]
         assert got == [a["id"] for a in reversed(full) if a["ts"][11:16] <= upto]
+
+
+def test_now_is_null_before_the_first_closed_minute(store, frames):
+    """A desk holding only a pre-open bar of today: `now` is null, every key is present."""
+    w, now = live_watch(store, frames, upto="09:14")
+    pre = pd.Timestamp(dt.datetime.combine(SPIKE_DAY, dt.time(9, 8)), tz="Asia/Kolkata")
+    for t in w.desk.trackers.values():
+        old = t.bars[t.bars.index.date < SPIKE_DAY]
+        extra = old.iloc[-1:].copy()
+        extra.index = pd.DatetimeIndex([pre]).tz_convert(old.index.tz)
+        t.bars = pd.concat([old, extra])
+    body = w.body()
+    assert set(body) == TOP_KEYS and body["now"] is None
+    assert body["source"] == "live" and body["session"] == SPIKE_DAY.isoformat()
+    assert body["minutes"] == [] and body["stocks"] == [] and body["notes"]
+    json.dumps(body, allow_nan=False)
+
+
+def test_index_choice_and_options(shared):
+    keys = ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "MIDCPNIFTY"]
+    for k in ("banknifty", "MIDCPNIFTY"):
+        body = shared.body(DAYS[-2].isoformat(), k)
+        assert body["index"]["key"] == k.upper()
+    assert [o["key"] for o in body["index_options"]] == keys
+    assert body["index_options"][0] == {"key": "NIFTY", "label": "NIFTY 50"}
+    with pytest.raises(VolumeError) as e:
+        shared.body(DAYS[-2].isoformat(), "RELIANCE")
+    assert e.value.status == 400 and "MIDCPNIFTY" in e.value.message

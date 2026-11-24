@@ -64,6 +64,11 @@ def test_four_routes_answer_with_the_contract_keys(client):
     assert all({"id", "text", "value"} <= set(f) for f in s["facts"])
 
 
+def test_unknown_index_is_a_400(client):
+    r = client.get(f"/api/volume?date={DAYS[-2]}&index=NOPE")
+    assert r.status_code == 400 and r.json()["detail"].startswith("The index must be one of")
+
+
 def test_bad_date_is_a_400_with_a_plain_sentence(client):
     r = client.get("/api/volume?date=yesterday")
     assert r.status_code == 400 and r.json()["detail"].endswith(".")

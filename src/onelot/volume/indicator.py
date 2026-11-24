@@ -513,7 +513,7 @@ def profile(turn_full: pd.DataFrame) -> dict[str, Any]:
         shares.append(float(part.mean()) if keep.any() else 0.0)
     order = sorted(range(len(shares)), key=lambda i: -shares[i])
     rank = {i: r + 1 for r, i in enumerate(order)}
-    hh = [
+    hh: list[dict[str, Any]] = [
         {
             "from": minute_label(a),
             "to": minute_label(b),

@@ -255,7 +255,7 @@ session and the day's profile.
   sessions at the same minute. A session with fewer than 300 one-minute bars is never a baseline.
   They are built once a session on their own thread; until then the page says so in its notes.
 - Note on the scale: a median is below a mean, so a normal day reads about 1.4 times "normal".
-  The words quiet (below 0.9) and busy (2.1 or more) are set to that scale.
+  The words quiet (below 1.0) and busy (2.1 or more) are set to that scale.
 - When it alerts: a market spike score of 2.5 or more (about 1.3 a day), a single stock at 4.0
   or more (about 2.6 a day), never twice for the same market or stock inside 15 minutes, at most
   12 a day, and only for the last three closed minutes (in time or not at all). Each alert is

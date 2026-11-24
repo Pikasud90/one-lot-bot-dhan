@@ -72,7 +72,7 @@ class VolumeCfg:
     notify: bool = True  # false: alerts are stored and shown, never sent
     book: bool = True  # one quote request a minute for the basket's order book
     max_alerts_per_day: int = 12
-    quiet: float = 0.9  # rvol_5m below this: quiet (the study's 15th percentile)
+    quiet: float = 1.0  # rvol_5m below this: quiet (the study's 15th percentile, 0.95)
     busy: float = 2.1  # rvol_5m at or above this: busy (the study's 85th percentile)
 
 

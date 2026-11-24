@@ -52,6 +52,8 @@ BOOK_MAX_FAILURES = 3
 AUCTION_FROM = dt.date(2026, 8, 3)  # stock bars end at 15:14 from this session
 CACHE_DAYS = 8
 DEFAULT_INDEX = "NIFTY"
+#: the indices `?index=` may choose for the price line (VOL-API.md `index_options`)
+INDEX_OPTIONS = ("NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "MIDCPNIFTY")
 
 
 class VolumeError(Exception):
@@ -421,6 +423,9 @@ class VolumeWatch:
             METADATA.create_all(engine, tables=[volume_alerts, volume_book])
 
     # labels ------------------------------------------------------------
+    def index_options(self) -> list[dict[str, str]]:
+        return [{"key": k, "label": self.label(k)} for k in INDEX_OPTIONS]
+
     def label(self, key: str) -> str:
         s = self.series.get(key)
         return s.label if s is not None else key
@@ -668,7 +673,7 @@ class VolumeWatch:
         if likely:
             text += " Likely to move: " + ", ".join(self.label(k) for k in likely) + "."
         stamp = view.ts(col)
-        return {
+        obj: dict[str, Any] = {
             "id": f"v_{stamp:%Y%m%d_%H%M}_{c.key}",
             "ts": stamp.isoformat(),
             "scope": c.scope,
@@ -681,19 +686,22 @@ class VolumeWatch:
             "indices": likely,
             "title": f"Volume watch: {who}{times}, {words[way]}",
             "text": text,
-            "evidence": self.evidence_line(c.scope),
         }
+        evidence = self.evidence_line(c.scope)
+        if evidence:  # no fact in the study: the key is left out, never a placeholder
+            obj["evidence"] = evidence
+        return obj
 
-    def evidence_line(self, scope: str) -> str:
+    def evidence_line(self, scope: str) -> str | None:
+        """What the study says about such an alert; None when it has no fact for it (single-
+        stock spikes were not followed in the study)."""
         facts = {f.get("id"): f for f in self.study().get("facts", [])}
         if scope != "MARKET":
-            return (
-                "Single-stock spikes were not studied for what follows: a reason to look, no more."
-            )
+            return None
         size = facts.get("size_after_market_spike", {}).get("value")
         hit = facts.get("direction_after_market_spike", {}).get("value")
         if size is None or hit is None:
-            return ""
+            return None
         return (
             f"After such spikes NIFTY's next 15 minutes were {size:.1f} times as large as usual; "
             f"the direction followed the flow {hit * 100:.0f}% of the time."
@@ -771,8 +779,8 @@ class VolumeWatch:
     # bodies -------------------------------------------------------------
     def body(self, date: str | None = None, index: str = DEFAULT_INDEX) -> dict[str, Any]:
         index = (index or DEFAULT_INDEX).upper()
-        if index not in self.indices and index not in self.series:
-            raise VolumeError(400, f"index must be one of {', '.join(self.indices)}.")
+        if index not in INDEX_OPTIONS:
+            raise VolumeError(400, f"The index must be one of {', '.join(INDEX_OPTIONS)}.")
         if date:
             try:
                 day = dt.date.fromisoformat(date)
@@ -808,14 +816,14 @@ class VolumeWatch:
         if not any(v is not None for v in bars.values()):
             if requested:
                 raise self._unknown(day)
-            return self._empty_body(index, [f"No one-minute bars of the basket on {day}."])
+            return self._empty_body(index, [f"No one-minute bars of the basket on {day}."], day)
         base = self.baselines(day, wait=True)
         if base is None:
-            return self._empty_body(index, [self._build_note(day)])
+            return self._empty_body(index, [self._build_note(day)], day)
         view = compute_view(day, {k: v for k, v in bars.items() if v is not None}, base,
                             self.basket, self.cfg.rule)  # fmt: skip
         if view is None:
-            return self._empty_body(index, [f"No one-minute bars of the basket on {day}."])
+            return self._empty_body(index, [f"No one-minute bars of the basket on {day}."], day)
         alerts = [self.alert_obj(view, base, c) for c in self._pick(view, 0, [])]
         alerts.reverse()  # newest first
         idx_bars = self._stored_bars(index, day)
@@ -845,7 +853,9 @@ class VolumeWatch:
             return self._empty_body(index, [self._build_note(day)], session=day, source="live")
         view = self._view(day, base, live=True)
         if view is None:
-            return self._empty_body(index, ["No closed one-minute bar of the basket yet today."])
+            return self._empty_body(
+                index, ["No closed one-minute bar of the basket yet today."], day, "live"
+            )
         alerts = self.stored_alerts(day) if self.cfg.alerts_on else []
         idx_bars = _day_of(self._desk_bars(index), day)
         body = self._assemble(view, base, index, idx_bars, alerts, source="live")
@@ -921,6 +931,7 @@ class VolumeWatch:
             "now": None,
             "minutes": [],
             "index": {"key": index, "label": self.label(index), "minutes": []},
+            "index_options": self.index_options(),
             "stocks": [],
             "indices": [],
             "alerts": [],
@@ -955,7 +966,7 @@ class VolumeWatch:
         buy_day = float(np.nansum(view.buy_b[: lc + 1]))
         t_day = float(np.nansum(view.tb[: lc + 1]))
         fs_day = ind.flow_share(buy_day, t_day - buy_day)
-        stocks = []
+        stocks: list[dict[str, Any]] = []
         ups = downs = flats = 0
         for s in view.t:
             srv = view.stock_rv(s)
@@ -1034,6 +1045,7 @@ class VolumeWatch:
             },
             "minutes": minutes,
             "index": {"key": index, "label": self.label(index), "minutes": idx_rows},
+            "index_options": self.index_options(),
             "stocks": stocks,
             "indices": indices,
             "alerts": alerts,
@@ -1075,7 +1087,7 @@ class VolumeWatch:
     # the other routes ---------------------------------------------------
     def profile(self) -> dict[str, Any]:
         day = self._live_day() or self.last_stored_day()
-        empty = {"as_of": None, "sessions": 0, "minutes": [], "half_hours": [], "busiest": [],
+        empty: dict[str, Any] = {"as_of": None, "sessions": 0, "minutes": [], "half_hours": [], "busiest": [],
                  "quietest": [], "weekdays": [], "expiry": None}  # fmt: skip
         if day is None:
             return empty | {"text": "No one-minute bars of the basket are stored yet."}
