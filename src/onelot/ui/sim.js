@@ -120,11 +120,11 @@ function fitRoot() {
   const root = $("sim-root");
   if (!root || !OL.tabShown("sim")) return;
   if (document.fullscreenElement === root || phone()) { root.style.removeProperty("--sim-h"); return; }
-  const top = root.getBoundingClientRect().top + window.scrollY, h = Math.max(460, Math.floor(window.innerHeight - top - 8));
+  const top = root.getBoundingClientRect().top + window.scrollY, h = Math.max(420, Math.floor(window.innerHeight - top - 6));
   root.style.setProperty("--sim-h", h + "px");
   // the open panel gives way so the chart keeps its height (at least 530px wide-screen, 390px with the dock as a row)
   const wide = window.innerWidth >= 1200, strip = $("sim-strip").offsetHeight;
-  root.style.setProperty("--panel-h", Math.max(128, Math.min(212, h - strip - (wide ? 16 + 530 : 18 + 118 + 390))) + "px");
+  root.style.setProperty("--panel-h", Math.max(128, Math.min(212, h - strip - (wide ? 16 + 530 : 15 + 100 + 390))) + "px");
 }
 function panelOpen() { return S.view.panel === null ? window.innerHeight >= 800 : !!S.view.panel; }
 function renderPanelOpen() {
@@ -914,13 +914,13 @@ function renderLogCount() {
   set("sim-pt-log-n", S.events.length ? String(S.events.length) : "");
   show("sim-log-empty", !S.events.length);
 }
-function showPanelTab(name) {
+function showPanelTab(name, open) {
   S.view.ptab = name; saveView();
   ["trades", "log", "numbers", "how"].forEach(t => {
     $("sim-pt-" + t).setAttribute("aria-selected", String(t === name));
     $("sim-p-" + t).hidden = t !== name;
   });
-  if (!panelOpen()) { S.view.panel = true; saveView(); renderPanelOpen(); fitRoot(); }
+  if (open && !panelOpen()) { S.view.panel = true; saveView(); renderPanelOpen(); fitRoot(); }
   if (name === "log") { const pane = $("sim-log").parentElement; pane.scrollTop = pane.scrollHeight; }
 }
 async function showTradesView(v) {
@@ -1089,7 +1089,7 @@ function wire() {
     const tf = e.target.closest("[data-ctf]");
     if (tf) { setChartTf(tf.dataset.ctf); return; }
     const pt = e.target.closest("[data-ptab]");
-    if (pt) { showPanelTab(pt.dataset.ptab); return; }
+    if (pt) { showPanelTab(pt.dataset.ptab, true); return; }
     const row = e.target.closest("#sim-trades tr");
     if (row && !row.classList.contains("other") && row.dataset.ts && S.chart) {
       root.querySelectorAll("#sim-trades tr.sel").forEach(r => r.classList.remove("sel"));

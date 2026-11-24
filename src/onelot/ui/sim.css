@@ -9,12 +9,17 @@
   .shell:has(section[data-tab="sim"].active) .foot{display:none}
   /* the startup warnings stay on the other tabs and in the header's badges: here every pixel goes to the chart */
   .shell:has(section[data-tab="sim"].active) #warnings{display:none}
-  .shell:has(section[data-tab="sim"].active) header.top{margin-bottom:8px}
+  .shell:has(section[data-tab="sim"].active) header.top{margin-bottom:6px}
+}
+/* 700 to 1199px wide: the header's status badges (shown on every other tab) give their row to the chart */
+@media (max-width:1199px) and (min-width:700px){
+  .shell:has(section[data-tab="sim"].active) .top .badges #badges{display:none}
+  .shell:has(section[data-tab="sim"].active){padding-top:10px}
 }
 #sim-root{--dock-w:340px;--panel-h:212px;--ctl:40px;position:relative;display:grid;gap:8px;
   grid-template-columns:minmax(0,1fr) var(--dock-w);grid-template-rows:auto minmax(0,1fr) auto;
   grid-template-areas:"strip strip" "chart dock" "panel panel";
-  height:var(--sim-h,calc(100vh - 140px));min-height:460px;font-size:16px;color:var(--text)}
+  height:var(--sim-h,calc(100vh - 140px));min-height:420px;font-size:16px;color:var(--text)}
 #sim-root:fullscreen{height:100vh;padding:8px;background:var(--bg)}
 #sim-root .neg{color:var(--bad)} #sim-root .pos{color:var(--ok)}
 #sim-root kbd{display:inline-block;min-width:22px;padding:1px 5px;margin-left:8px;font:700 14px/1.2 var(--mono);border:1px solid currentColor;opacity:.75}
@@ -253,18 +258,19 @@
 @media (max-width:1199px){
   #sim-root .sim-ctfs{display:none}
   #sim-root .sim-sel-ctf{display:block}
-  #sim-root{--legend-r:230px}
+  #sim-root{--legend-r:280px}
 }
 @media (max-width:1199px) and (min-width:700px){
   #sim-root .sim-g-play{order:4;flex:1 1 100%;justify-content:flex-start}
 }
 /* 700 to 1199px: the dock is one row of two cards under the strip */
 @media (max-width:1199px) and (min-width:700px){
-  #sim-root{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr) auto;grid-template-areas:"strip" "dock" "chart" "panel";--ctl:38px;gap:6px}
+  #sim-root{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr) auto;grid-template-areas:"strip" "dock" "chart" "panel";--ctl:36px;gap:5px}
+  #sim-root .sim-play{height:40px}
   #sim-root .sim-strip{gap:5px 10px;padding:5px 8px}
   #sim-root .sim-sel-inst,#sim-root .sim-sel-strat{max-width:160px}
   #sim-root .sim-daybtn{min-width:136px}
-  #sim-root .sim-dock{flex-direction:row;height:118px;overflow:visible}
+  #sim-root .sim-dock{flex-direction:row;height:100px;overflow:visible}
   #sim-root .sim-slot{flex:1 1 0;min-width:0;overflow:auto}
   #sim-root .sim-slot .sim-card{padding:8px 12px;min-height:100%}
   #sim-root .sim-nums{flex:0 0 290px;padding:8px 12px;gap:4px 12px}
