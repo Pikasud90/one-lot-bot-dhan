@@ -29,7 +29,9 @@ from sqlalchemy import desc, select
 
 from ..broker.mock import MockBroker
 from ..clock import IST
+from ..config import TELEGRAM_TOKEN_SHAPE
 from ..desk.snapshots import NoPrices, list_snapshots, take_snapshot
+from ..notify.telegram import _CHAT_SHAPE
 from ..sim.routes import register as register_sim
 
 log = logging.getLogger(__name__)
@@ -139,6 +141,11 @@ class SentimentImportBody(BaseModel):
     replace_source: bool = Field(
         False, description="Delete earlier rows from the same source first"
     )
+
+
+class TelegramBody(BaseModel):
+    bot_token: str | None = None
+    chat_id: str | None = None
 
 
 class CredentialsBody(BaseModel):
@@ -913,6 +920,7 @@ def create_app(engine, api_token: str) -> FastAPI:
             "last_renew_at": _iso(getattr(engine, "_last_renew_at", None)),
             "last_renew_error": getattr(engine, "_last_renew_error", None),
             "desk_source": (engine.desk.snapshot().get("source") if engine.desk else None),
+            "telegram": engine.telegram_state(),
         }
 
     @app.post("/api/settings/dhan", dependencies=[Depends(require_token)])
@@ -924,6 +932,40 @@ def create_app(engine, api_token: str) -> FastAPI:
         return engine.update_credentials(
             body.client_id, body.access_token, body.data_access_token, body.pin, body.totp_secret
         )
+
+    # ── Telegram on the phone (US-087): the token is never in an answer ───
+    @app.post("/api/settings/telegram", dependencies=[Depends(require_token)])
+    def settings_telegram(body: TelegramBody) -> dict:
+        token = (body.bot_token or "").strip()
+        chat_id = (body.chat_id or "").strip()
+        if not token and not chat_id:
+            raise HTTPException(400, "nothing to save")
+        if token and not TELEGRAM_TOKEN_SHAPE.fullmatch(token):
+            raise HTTPException(
+                400,
+                "That does not look like a bot token. BotFather gives one like "
+                "123456789:ABC... (digits, a colon, then letters and digits). Nothing was saved.",
+            )
+        if chat_id and not _CHAT_SHAPE.fullmatch(chat_id):
+            raise HTTPException(
+                400,
+                "The chat id is a number (a group's starts with -). Use Find my chat id. "
+                "Nothing was saved.",
+            )
+        return engine.update_telegram(token or None, chat_id or None)
+
+    @app.post("/api/settings/telegram/chats", dependencies=[Depends(require_token)])
+    def settings_telegram_chats() -> dict:
+        return engine.find_telegram_chats()
+
+    @app.post("/api/settings/telegram/test", dependencies=[Depends(require_token)])
+    def settings_telegram_test() -> dict:
+        return engine.send_telegram_test()
+
+    @app.get("/api/notify/status")
+    def notify_status() -> dict:
+        """The phone channel in four facts (no secret), and every channel's counters."""
+        return {"telegram": engine.telegram_status(), **engine.notifier.status()}
 
     @app.post("/api/settings/dhan/renew", dependencies=[Depends(require_token)])
     def settings_dhan_renew() -> dict:

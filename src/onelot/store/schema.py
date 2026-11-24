@@ -653,6 +653,18 @@ telegram_outbox = Table(
 )
 
 
+# ── Token reminders' memory (US-087) ─────────────────────────────────────
+# A few named facts the Dhan token reminder ladder must not forget over a restart: the
+# expiry instant last seen, the stages already sent for it, the day of the last "expired"
+# reminder, whether an unreadable expiry was already reported. One row per name.
+token_reminder_state = Table(
+    "token_reminder_state",
+    METADATA,
+    Column("name", String(32), primary_key=True),
+    Column("value", Text, nullable=False),
+)
+
+
 # ── Delivery trades of the pullback rule (US-067) ─────────────────────────
 # One row per (stock, signal date): the entry alert, its paper trade and its exit alert are
 # states of the same row (PENDING_ENTRY -> OPEN -> EXIT_PENDING -> CLOSED, or MISSED), so a

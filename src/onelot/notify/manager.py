@@ -113,6 +113,14 @@ class Notifier:
         with self._lock:
             self._put(ch, name)
 
+    def remove_channel(self, name: str) -> bool:
+        """Drop the channel called `name` (its counters stay). True when there was one."""
+        with self._lock:
+            channels = [c for c in self.channels if c.name != name]
+            found = len(channels) != len(self.channels)
+            self.channels = channels
+        return found
+
     def _put(self, ch, name: str) -> None:
         """Caller holds self._lock. A new list each time: send() iterates a snapshot."""
         channels = list(self.channels)

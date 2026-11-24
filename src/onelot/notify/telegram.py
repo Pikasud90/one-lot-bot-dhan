@@ -43,6 +43,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -412,6 +413,11 @@ def format_missed(alert: Mapping[str, Any], now: dt.datetime) -> str:
 
 # ── TelegramClient ────────────────────────────────────────────────────────────
 API_BASE = "https://api.telegram.org"
+# US-087, development only: tests and a private run point the client at a fake on this machine.
+# Taken from the environment only (never from the page), and only for a loopback host.
+API_BASE_ENV = "TELEGRAM_API_BASE"
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost")
+_ignored_bases: set[str] = set()
 TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
 CHAT_ENV = "TELEGRAM_CHAT_ID"
 TIMEOUT = httpx.Timeout(10.0)  # connect, read, write and pool alike
@@ -441,6 +447,33 @@ class SendResult:
     message_id: int | None
     retry_after: float | None
     detail: str
+
+
+def api_base(env: Mapping[str, str] = os.environ) -> str:
+    """The Bot API's base address: the real one, unless TELEGRAM_API_BASE names a loopback
+    host (127.0.0.1 or localhost, http or https). Any other value is ignored, with one
+    warning per value that names only the host (a value is never echoed whole)."""
+    raw = env.get(API_BASE_ENV, "").strip()
+    if not raw:
+        return API_BASE
+    try:
+        parsed = urlsplit(raw)
+        host = parsed.hostname
+        port_ok = parsed.port is None or parsed.port > 0  # raises ValueError for a bad port
+    except ValueError:
+        host, parsed, port_ok = None, urlsplit(""), False
+    if parsed.scheme in ("http", "https") and host in _LOOPBACK_HOSTS and port_ok:
+        return raw.rstrip("/")
+    with _logging_lock:
+        first = raw not in _ignored_bases
+        _ignored_bases.add(raw)
+    if first:
+        log.warning(
+            "%s ignored: only a 127.0.0.1 or localhost address is accepted (host %r)",
+            API_BASE_ENV,
+            host or "unreadable",
+        )
+    return API_BASE
 
 
 def _failed(kind: SendKind, detail: str, retry_after: float | None = None) -> SendResult:
@@ -628,7 +661,7 @@ class TelegramClient:
             payload["disable_notification"] = True
         try:
             response = self._http.post(
-                f"{API_BASE}/bot{self._token}/sendMessage", json=payload, timeout=TIMEOUT
+                f"{api_base()}/bot{self._token}/sendMessage", json=payload, timeout=TIMEOUT
             )
             return _classify(response, self._forms)
         except httpx.HTTPStatusError as exc:  # an http client that raises for status
