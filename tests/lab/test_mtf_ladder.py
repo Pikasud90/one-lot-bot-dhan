@@ -8,11 +8,11 @@ import pandas as pd
 import pytest
 from tests.lab.conftest import make_intraday
 
+from onelot.clock import IST
 from onelot.data.resample import resample_bars
 from onelot.indicators import mtf
 from onelot.indicators.core import supertrend
 
-IST = "Asia/Kolkata"
 MIN = 60 * 1_000_000_000
 
 

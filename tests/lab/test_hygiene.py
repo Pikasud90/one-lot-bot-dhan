@@ -10,10 +10,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from onelot.clock import IST
 from onelot.data import hygiene
 from onelot.data.resample import resample_bars
-
-IST = "Asia/Kolkata"
 
 
 def minutes(day: str, px: float, n: int = 5) -> pd.DataFrame:

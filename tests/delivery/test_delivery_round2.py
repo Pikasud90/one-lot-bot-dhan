@@ -21,7 +21,7 @@ sys.path.insert(0, str(HERE))
 from desk_harness import new_desk  # noqa: E402
 from test_us067_tester_desk import FULL, STORE, L, World, at  # noqa: E402
 
-from onelot.clock import TradingCalendar  # noqa: E402
+from onelot.clock import IST, TradingCalendar  # noqa: E402
 from onelot.desk.config import load_desk_config  # noqa: E402
 from onelot.notify.base import Notification, NotificationLevel  # noqa: E402
 from onelot.notify.manager import Notifier  # noqa: E402
@@ -289,7 +289,7 @@ class FakeSource:
         self.asked.append((key, res))
         if self.fail_vix and key == "INDIAVIX":
             raise RuntimeError("vix feed down")
-        ts = pd.Timestamp(f"{end:%Y-%m-%d} 10:00", tz="Asia/Kolkata")
+        ts = pd.Timestamp(f"{end:%Y-%m-%d} 10:00", tz=IST)
         return pd.DataFrame(
             {"open": [10.0], "high": [11.0], "low": [9.0], "close": [10.5], "volume": [0.0]},
             index=pd.DatetimeIndex([ts], name="ts"),

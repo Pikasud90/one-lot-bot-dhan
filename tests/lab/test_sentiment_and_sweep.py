@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from onelot.clock import IST
 from onelot.lab.optimizer import MIN_WF_SESSIONS, plan_windows
 from onelot.lab.sentiment import apply_gate, bias_at, normalise, parse_import
 from onelot.lab.sweep import leaderboard, plan, rank_score, summarise
@@ -39,16 +40,14 @@ class TestSentiment:
         assert normalise(t).tolist() == [-0.8, 0.2, 0.9]
 
     def test_bias_uses_only_scores_at_or_before_bar_close(self):
-        idx = pd.date_range("2026-10-01 09:15", periods=6, freq="5min", tz="Asia/Kolkata")
+        idx = pd.date_range("2026-10-01 09:15", periods=6, freq="5min", tz=IST)
         scores = pd.Series(
             [0.9, -0.9],
             index=pd.DatetimeIndex(
                 [
+                    pd.Timestamp("2026-10-01 09:00", tz=IST),  # before the session: applies
                     pd.Timestamp(
-                        "2026-10-01 09:00", tz="Asia/Kolkata"
-                    ),  # before the session: applies
-                    pd.Timestamp(
-                        "2026-10-01 09:31", tz="Asia/Kolkata"
+                        "2026-10-01 09:31", tz=IST
                     ),  # applies from the bar closing >= 09:31
                 ]
             ),
@@ -58,10 +57,8 @@ class TestSentiment:
         assert b.tolist() == [1, 1, 1, -1, -1, -1]
 
     def test_stale_scores_are_ignored(self):
-        idx = pd.date_range("2026-10-20 09:15", periods=3, freq="5min", tz="Asia/Kolkata")
-        scores = pd.Series(
-            [0.9], index=pd.DatetimeIndex([pd.Timestamp("2026-10-01", tz="Asia/Kolkata")])
-        )
+        idx = pd.date_range("2026-10-20 09:15", periods=3, freq="5min", tz=IST)
+        scores = pd.Series([0.9], index=pd.DatetimeIndex([pd.Timestamp("2026-10-01", tz=IST)]))
         assert bias_at(scores, idx, 5, max_age_days=5).tolist() == [0, 0, 0]
 
     @pytest.mark.parametrize(
@@ -80,7 +77,7 @@ class TestSentiment:
     def test_gate_modes(self, mode, bias, exp_long, exp_short):
         f = pd.DataFrame(
             {"long_entry": [True], "short_entry": [True]},
-            index=[pd.Timestamp("2026-10-01 09:15", tz="Asia/Kolkata")],
+            index=[pd.Timestamp("2026-10-01 09:15", tz=IST)],
         )
         g = apply_gate(f, np.array([bias]), mode)
         assert (

@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from onelot.clock import IST
 from onelot.data import store
 from onelot.data.store import LAB_TIMEFRAMES, effective_coverage
 
@@ -29,7 +30,7 @@ def intraday(days: int, freq_min: int, start: str, base: float = 1000.0) -> pd.D
     """NSE-session bars (09:15-15:30 IST) as a deterministic random walk."""
     rng = np.random.default_rng(7)
     idx: list[pd.Timestamp] = []
-    day = pd.Timestamp(start, tz="Asia/Kolkata")
+    day = pd.Timestamp(start, tz=IST)
     while len({d.date() for d in idx}) < days:
         if day.weekday() < 5:
             idx.extend(
@@ -139,7 +140,7 @@ class TestLoadBarsKeepsTheNewestBars:
         five = intraday(30, 5, "2026-08-17")  # runs on to 2026-09-25
         store.save_bars(lab_engine, "X", "1m", one, "dhan")
         store.save_bars(lab_engine, "X", "5m", five, "yahoo")
-        start = pd.Timestamp("2026-09-01", tz="Asia/Kolkata")
+        start = pd.Timestamp("2026-09-01", tz=IST)
         out = store.load_bars(lab_engine, "X", "15m", start=start)
         assert not out.empty, "bars exist from 2026-09-01 to 2026-09-25 in the 5m base"
         assert out.index.min() >= start

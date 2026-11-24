@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from onelot.clock import IST
 from onelot.config import BacktestCfg, CostConfig
 from onelot.costs import CostModel
 from onelot.data.universe import InstrumentSpec
@@ -20,7 +21,7 @@ from onelot.strategies.base import StrategyParams
 
 
 def frame(ohlc, start="2026-09-01 09:15", freq="5min"):
-    idx = pd.date_range(start, periods=len(ohlc), freq=freq, tz="Asia/Kolkata")
+    idx = pd.date_range(start, periods=len(ohlc), freq=freq, tz=IST)
     df = pd.DataFrame(ohlc, columns=["open", "high", "low", "close"], index=idx, dtype=float)
     df["volume"] = 1000.0
     df["atr"] = 1.0

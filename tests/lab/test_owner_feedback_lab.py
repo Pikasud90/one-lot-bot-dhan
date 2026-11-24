@@ -283,5 +283,5 @@ class TestBarsReadOnce:
         out = store.load_bars(lab_engine, "SBIN", "15m")
         assert reads.count("1m") == 1 and "2m" not in reads
         assert out.index.min().date() == one.index.min().date()
-        assert out.index.tz is not None and str(out.index.tz) == "Asia/Kolkata"
+        assert out.index.tz is not None and out.index.tz == IST
         assert out.index.min().strftime("%H:%M") == "09:15"

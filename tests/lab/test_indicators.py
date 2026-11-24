@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from onelot.clock import IST
 from onelot.indicators import core as ind
 
 talib = pytest.importorskip("talib")
@@ -101,7 +102,7 @@ def test_tod_rvol_baseline(bars5):
 
 
 def test_divergence_detection_simple():
-    idx = pd.date_range("2026-01-01 09:15", periods=40, freq="5min", tz="Asia/Kolkata")
+    idx = pd.date_range("2026-01-01 09:15", periods=40, freq="5min", tz=IST)
     # peaks at bar 10 (105) and bar 20 (107, higher high), trough at 15; oscillator peaks 70 then 60
     p = [100 + i * 0.5 for i in range(11)] + [105 - (i - 10) * 0.8 for i in range(11, 16)]
     p += [101 + (i - 15) * 1.2 for i in range(16, 21)] + [

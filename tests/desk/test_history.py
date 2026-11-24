@@ -10,13 +10,12 @@ import pandas as pd
 import pytest
 from tests.lab.conftest import make_intraday
 
+from onelot.clock import IST
 from onelot.data.hygiene import clean_intraday, consistent_daily
 from onelot.data.resample import resample_bars
 from onelot.data.store import save_bars
 from onelot.desk.history import DAILY_DAYS, FINE_DAYS, FINE_RESOLUTION, daily_history
 from onelot.store import init_database
-
-IST = "Asia/Kolkata"
 
 
 def at(text: str) -> pd.Timestamp:
@@ -59,10 +58,9 @@ def dates_of(frame: pd.DataFrame) -> list[str]:
 
 
 def same(left: pd.DataFrame, right: pd.DataFrame) -> None:
-    """The same bars at the same moments of exchange time. (The store hands back the
-    standard library's zone object and a test frame carries pytz's: the same zone, but two
-    index types to pandas, so the moments are compared in UTC.)"""
-    assert str(left.index.tz) == str(right.index.tz) == IST
+    """The same bars at the same moments of exchange time, both on the app's one IST zone
+    (US-096: a fixed +05:30), the moments compared in UTC."""
+    assert left.index.tz == right.index.tz == IST
     pd.testing.assert_frame_equal(
         left.tz_convert("UTC"), right.tz_convert("UTC"), check_names=False, check_freq=False
     )
@@ -99,7 +97,7 @@ def test_stored_days_and_minute_bars_make_one_daily_series(engine):
     assert out["high"].iloc[0] == pytest.approx(990.0 * 1.004)
     assert out["volume"].iloc[0] == 5e5  # volume is not a price
     assert out.index.is_monotonic_increasing and not out.index.duplicated().any()
-    assert str(out.index.tz) == IST
+    assert out.index.tz == IST
     # one rule for the desk and the Lab: the series is the Lab's, built from the same bars
     same(out, consistent_daily(stored, clean_intraday("NIFTY", fine)))
 
