@@ -274,10 +274,10 @@
   #sim-root .sim-dock{flex-direction:row;height:100px;overflow:visible}
   #sim-root .sim-slot{flex:1 1 0;min-width:0;overflow:auto}
   #sim-root .sim-slot .sim-card{padding:8px 12px;min-height:100%}
-  #sim-root .sim-nums{flex:0 0 290px;padding:8px 12px;gap:4px 12px}
-  #sim-root .sim-nums b{font-size:17px}
+  #sim-root .sim-nums{flex:0 0 230px;padding:8px 12px;gap:4px 10px}
+  #sim-root .sim-nums b{font-size:16px}
   #sim-root .sim-tagrow{margin-bottom:2px}
-  #sim-root .sim-ticket:not([hidden]),#sim-root .sim-pos:not([hidden]){display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr) 140px;gap:0 12px;align-items:start}
+  #sim-root .sim-ticket:not([hidden]),#sim-root .sim-pos:not([hidden]){display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) 204px;gap:0 12px;align-items:start}
   #sim-root .sim-ticket .sim-tagrow,#sim-root .sim-ticket .sim-action,#sim-root .sim-ticket .sim-what{grid-column:1}
   #sim-root .sim-ticket .sim-action{font-size:26px}
   #sim-root .sim-ticket .sim-what,#sim-root .sim-pos .sim-what{font-size:15px;margin:0}
@@ -285,8 +285,12 @@
   #sim-root .sim-ticket .sim-buy{font-size:17px;margin:0}
   #sim-root .sim-ticket .sim-pair{font-size:15px;line-height:1.35}
   #sim-root .sim-ticket .sim-trig,#sim-root .sim-ticket .sim-why,#sim-root .sim-ticket #sim-tk-implied{display:none}
-  #sim-root .sim-ticket .sim-btns,#sim-root .sim-pos .sim-btns{grid-column:3;grid-row:1 / span 4;flex-direction:column;margin:0}
-  #sim-root .sim-ticket .sim-btn,#sim-root .sim-pos .sim-btn{min-height:44px;flex:none}
+  #sim-root .sim-ticket .sim-btns,#sim-root .sim-pos .sim-btns{grid-column:3;grid-row:1 / span 4;margin:0;align-self:center}
+  #sim-root .sim-ticket .sim-btn,#sim-root .sim-pos .sim-btn{min-height:48px;padding:0 8px}
+  #sim-root .sim-ticket .sim-left{display:none}
+  #sim-root .sim-ticket .sim-pair.sim-quiet{display:none}
+  #sim-root .sim-ticket .sim-plan{overflow:hidden}
+  #sim-root .sim-ticket .sim-what,#sim-root .sim-pos .sim-what{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #sim-root .sim-pos .sim-tagrow,#sim-root .sim-pos .sim-action,#sim-root .sim-pos .sim-what,#sim-root .sim-pos .sim-pending{grid-column:1}
   #sim-root .sim-pos .sim-action{font-size:22px}
   #sim-root .sim-pos #sim-ps-live{grid-column:2;grid-row:1 / span 4}
