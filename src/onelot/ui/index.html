@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="/static/styles.css">
 <link rel="stylesheet" href="/static/sim.css">
 <link rel="stylesheet" href="/static/mlstates.css">
+<link rel="stylesheet" href="/static/volume.css">
 <script src="/static/vendor/lightweight-charts.standalone.production.js" defer></script>
 <script src="/static/charts.js" defer></script>
 </head>
@@ -59,9 +60,10 @@
         <div class="brand-sub"><span class="kana">ワンロット</span> · signal-only · places no orders · you execute</div>
       </div>
     </a>
-    <nav class="tabs" id="tabs" aria-label="Sections (keys 1 to 8)">
+    <nav class="tabs" id="tabs" aria-label="Sections (keys 1 to 9)">
       <a href="#home" data-tab="home">Home</a>
       <a href="#live" data-tab="live">Live Desk</a>
+      <a href="#volume" data-tab="volume">Volume</a>
       <a href="#sim" data-tab="sim">Simulator</a>
       <a href="#lab" data-tab="lab">Backtest Lab</a>
       <a href="#data" data-tab="data">Data</a>
@@ -464,6 +466,11 @@
     </div>
   </section>
 
+  <!-- ─────────────────────────── VOLUME (US-090) ─────────────────────── -->
+  <section data-tab="volume" class="tab">
+    <div id="volume-root"><div class="card"><div class="muted">Loading the volume watch…</div></div></div>
+  </section>
+
   <!-- ─────────────────────── MACHINE LEARNING LAB ─────────────────── -->
   <section data-tab="mllab" class="tab">
     <div id="mlstates-root"><div class="card"><div class="muted">Loading the market states…</div></div></div>
@@ -531,5 +538,6 @@
 <script src="/static/app.js" defer></script>
 <script src="/static/sim.js" defer></script>
 <script src="/static/mlstates.js" defer></script>
+<script src="/static/volume.js" defer></script>
 </body>
 </html>

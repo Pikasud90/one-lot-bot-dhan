@@ -1,0 +1,82 @@
+/* The Volume tab (US-090). Theme variables only: no colour literals. Type is never below 14px. */
+#volume-root h2{font-size:20px}
+#volume-root .vol-h{margin:18px 0 10px}
+#volume-root h3{font-size:20px;margin:0 0 8px}
+#volume-root h4{font-size:15px;margin:14px 0 6px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+#volume-root label{font-size:14px}
+#volume-root .vol-sub{font-size:15px;margin:2px 0 8px}
+#volume-root .vol-note{font-size:15px;margin-top:8px}
+#volume-root .vol-pad{padding:14px}
+#volume-root .vol-demo{border-left:5px solid var(--warn);background:var(--warn-bg);font-size:16px}
+#volume-root .vol-closed{border-left:5px solid var(--cyan);background:var(--cyan-bg);font-size:18px;font-weight:700}
+#volume-root .vol-bar-row{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:flex-end}
+#volume-root .vol-status{flex:1 1 280px;font-size:20px;font-weight:700}
+#volume-root .vol-pick{flex:0 1 210px;min-width:150px}
+#volume-root .vol-pick.vol-go{flex:none;min-width:0}
+#volume-root .vol-err{font-size:15px;min-height:1.3em;margin-top:8px;color:var(--bad)}
+#volume-root .vol-err:empty{display:none}
+#volume-root .vol-head{font-size:22px;font-weight:800;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+#volume-root .vol-headtext{color:var(--text)}
+#volume-root .vol-help{font-size:15px;margin-top:6px}
+#volume-root .vol-chip{display:inline-block;padding:3px 14px;font-size:16px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;border:2px solid var(--line2);color:var(--muted);background:var(--panel2)}
+#volume-root .vol-chip.quiet{color:var(--cyan-ink);border-color:var(--cyan);background:var(--cyan-bg)}
+#volume-root .vol-chip.busy{color:var(--warn-ink);border-color:var(--warn);background:var(--warn-bg)}
+#volume-root .vol-chip.spike{color:var(--bad);border-color:var(--bad);background:var(--bad-bg)}
+#volume-root .vol-table .vol-chip{font-size:14px;padding:1px 9px}
+#volume-root .vol-tiles{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+#volume-root .tile small{font-size:14px}
+#volume-root .tile i{font-size:14px}
+#volume-root .tile b{font-size:26px}
+#volume-root .vol-split{position:relative;height:12px;margin-top:8px;background:var(--bad);border:1px solid var(--line2)}
+#volume-root .vol-split i{display:block;height:100%;background:var(--ok)}
+#volume-root .vol-split u,#volume-root .vol-bs u{position:absolute;left:50%;top:-3px;bottom:-3px;width:2px;background:var(--text);text-decoration:none}
+#volume-root .vol-split.big{height:18px;margin:8px 0 12px}
+#volume-root .vol-bs{position:relative;display:inline-block;vertical-align:middle;width:84px;height:12px;background:var(--bad);border:1px solid var(--line2)}
+#volume-root .vol-bs i{display:block;height:100%;background:var(--ok)}
+#volume-root .vol-bp{font-family:var(--mono);margin-left:6px}
+#volume-root .vol-readout{font-family:var(--mono);font-size:15px;min-height:1.5em;margin:6px 0;color:var(--text)}
+#volume-root .vol-chart{height:520px;width:100%}
+#volume-root .vol-chart.small{height:300px;margin-top:12px}
+#volume-root .vol-chart-card{padding-bottom:8px}
+#volume-root .vol-table{font-size:15.5px}
+#volume-root .vol-table th{font-size:14px;letter-spacing:.04em;text-align:right;vertical-align:bottom;white-space:normal}
+#volume-root .vol-table td{text-align:right}
+#volume-root .vol-table th.l,#volume-root .vol-table td.l{text-align:left}
+#volume-root .vol-table th.b,#volume-root .vol-table td.b{text-align:left}
+#volume-root .vol-table th[data-sort]{cursor:pointer;user-select:none}
+#volume-root .vol-table th[data-sort]:hover{color:var(--cyan)}
+#volume-root .vol-table th[data-sort]:focus-visible{outline:3px solid var(--accent);outline-offset:-3px}
+#volume-root .vol-table.small{max-width:520px}
+#volume-root .vol-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:0 14px}
+#volume-root .vol-index{font-size:16px}
+#volume-root .vol-index>div{margin:6px 0}
+#volume-root .vol-pword{font-size:22px;font-weight:800}
+#volume-root .vol-presslabels{display:flex;justify-content:space-between;font-size:14px;color:var(--muted)}
+#volume-root .vol-press{position:relative;height:26px;margin:2px 0 6px;background:var(--panel2);border:1px solid var(--line2)}
+#volume-root .vol-press i{position:absolute;top:3px;height:12px}
+#volume-root .vol-press b{position:absolute;top:17px;height:5px}
+#volume-root .vol-press .buy{background:var(--ok)}
+#volume-root .vol-press .sell{background:var(--bad)}
+#volume-root .vol-press u{position:absolute;left:50%;top:-3px;bottom:-3px;width:2px;background:var(--text);text-decoration:none}
+#volume-root .vol-pnums{font-size:15px}
+#volume-root .vol-ptext{font-size:17px;font-weight:700}
+#volume-root .vol-train{display:inline-block;margin-left:8px;padding:1px 9px;font-size:14px;font-weight:700;color:var(--warn-ink);background:var(--warn-bg);border:1px solid var(--warn)}
+#volume-root .vol-bookhead{font-size:18px}
+#volume-root .vol-nobook{font-size:16px;margin:0}
+#volume-root .vol-alert{border-left:5px solid var(--cyan);font-size:16px;margin-bottom:10px}
+#volume-root .vol-alert.buy{border-left-color:var(--ok)}
+#volume-root .vol-alert.sell{border-left-color:var(--bad)}
+#volume-root .vol-alert-top{font-size:18px;margin-bottom:4px}
+#volume-root .vol-when{font-family:var(--mono);color:var(--muted);margin-right:8px}
+#volume-root .vol-evidence{font-size:15px;margin-top:4px}
+#volume-root .vol-two{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0 24px;font-size:16px}
+#volume-root .vol-two ul,#volume-root .vol-facts{margin:6px 0;padding-left:22px;font-size:16px}
+#volume-root .vol-facts li{margin:6px 0}
+#volume-root .vol-legend{margin:0;font-size:16px}
+#volume-root .vol-legend dt{font-weight:800;margin-top:12px}
+#volume-root .vol-legend dd{margin:2px 0 0;color:var(--text);line-height:1.5}
+#volume-root .vol-warn{margin:16px 0 0;padding:10px 14px;font-size:17px;font-weight:700;border-left:5px solid var(--accent);background:var(--panel2)}
+#volume-root .vol-notes{font-size:15px;padding-left:22px}
+#volume-root .actions{margin:10px 0}
+@media (max-width:700px){#volume-root .vol-chart{height:400px}#volume-root .vol-status{font-size:18px}#volume-root .vol-head{font-size:19px}#volume-root .vol-pick{flex:1 1 140px}}
+#volume-root .btn.small{font-size:14px;padding:8px 14px}

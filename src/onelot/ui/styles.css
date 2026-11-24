@@ -523,4 +523,6 @@ a:focus-visible,button:focus-visible,select:focus-visible,input:focus-visible,[t
 .top.compact .brand-sub,.top.compact .clock-session{display:none}
 @media(max-width:1699px){ .brand-sub{display:none} }
 @media(max-width:899px){ .top .tabs{flex-wrap:wrap;overflow:visible} }
+/* US-090: nine tabs on one row at 1024px: tighter spacing, never smaller type */
+@media(min-width:900px) and (max-width:1299px){ .tabs a{padding:6px 5px 5px;letter-spacing:.01em} }
 .clockbox:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
