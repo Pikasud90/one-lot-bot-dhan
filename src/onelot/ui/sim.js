@@ -776,7 +776,7 @@ function renderHint(h) {
     else if (S.starting || (S.sess && S.sess.status === "BUILDING")) h = { tag: "Preparing", title: "Preparing the strategy", text: S.build ? `Step: ${S.build.step}. Play starts by itself when it is ready.` : "This takes a moment the first time." };
     else if (live() && !C.marketOpenAt(Date.now())) h = { tag: "Closed", title: "The market is closed", text: "Live practice starts at 09:15 on a trading day. Choose Past to practise on a stored day now." };
     else if (S.over) h = { tag: "Ended", title: "This session has ended", text: "Choose another day, instrument or strategy above to start a new one.", btns: [["day-rand", "A random day", ""], ["day-next", "The next day", ""]] };
-    else if (!S.sess) h = { tag: "Ready", title: live() ? "Practise on the live feed" : `Replay ${S.hidden ? "a hidden day" : C.dayText(c.day)} from 09:15`,
+    else if (!S.sess) h = { tag: "Ready", title: live() ? "Practise on the live feed" : `Replay ${S.hidden ? "a hidden day" : C.dayText(c.day)} from ${S.startIso ? S.startIso.slice(11, 16) : "09:15"}`,
       text: `<p>Press <b>Play</b> or <kbd>Space</kbd>. The chart shows the market one minute at a time; alerts from <b>${C.esc(strat ? strat.label : c.strategy)} · ${C.esc(c.timeframe)}</b> appear here.</p><p><kbd>N</kbd> jumps to the next alert, <kbd>→</kbd> moves one minute.</p>`, html: true };
     else h = { tag: "Watching", title: "No alert yet", text: `<p>Waiting for ${C.esc(strat ? strat.label : c.strategy)} · ${C.esc(c.timeframe)}.</p><p><kbd>N</kbd> jumps to the next alert.</p>`, html: true };
   }
