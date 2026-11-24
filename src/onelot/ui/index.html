@@ -506,6 +506,26 @@
         </ol>
       </div>
       <div>
+        <div class="card" id="telegram-card">
+          <h2>Telegram on your phone</h2>
+          <p class="muted">Trade alerts, "move your stop" notes, exit signals, critical desk states and the Dhan token reminders (60, 30, 15 and 5 minutes before it ends, then when it has ended) arrive in the Telegram app. Nothing arrives while this computer sleeps, is offline or the desk is stopped. The token is stored in <code>.env</code>, never shown back and never logged.</p>
+          <ol class="muted small-list">
+            <li>In Telegram open <b>@BotFather</b> and send <code>/newbot</code>. Copy the token it gives you.</li>
+            <li>Paste the token below and press Save.</li>
+            <li>Open your new bot in Telegram and press <b>Start</b>.</li>
+            <li>Press <b>Find my chat id</b> and pick your chat.</li>
+            <li>Press <b>Send a test message</b>.</li>
+          </ol>
+          <div id="tg-status" class="mt"></div>
+          <label>Bot token <input type="password" id="tg-token" autocomplete="off" placeholder="paste the token from BotFather"></label>
+          <label>Chat id <input type="text" id="tg-chat" autocomplete="off" inputmode="numeric" placeholder="found in step 4"></label>
+          <div class="actions mt">
+            <button class="btn primary" id="tg-save">Save</button>
+            <button class="btn" id="tg-find">Find my chat id</button>
+            <button class="btn" id="tg-test">Send a test message</button>
+          </div>
+          <div class="mt" id="tg-out"></div>
+        </div>
         <div class="card">
           <h2>Live Desk watchlist <small>config/desk.yaml</small></h2>
           <div id="desk-cfg"></div>

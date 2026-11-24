@@ -622,6 +622,7 @@ function renderFeed(items) {
     const hf = $("home-feed"); if (hf) { hf.prepend(d.cloneNode(true)); while (hf.children.length > 60) hf.removeChild(hf.lastChild); }
     if (n.level === "SIGNAL") { beep(); toast(n.title, "warn"); desk.force = true; }
     if (["EXIT", "CRITICAL"].includes(n.level)) { toast(n.title, "bad"); desk.force = true; }
+    if (n.kind === "token") toast(n.title + ": " + String(n.body || "").split(". ")[0], /renewed/i.test(n.title) ? "ok" : "bad");
   });
   while (el.children.length > 80) el.removeChild(el.lastChild);
 }
@@ -1549,12 +1550,13 @@ async function loadSettings() {
   $("env-path").textContent = s.env_path; $("postback-hint").textContent = s.postback_url_hint;
   $("cred-status").innerHTML = kv("Client ID", c.client_id || "<span class='warn'>not set</span>") + kv("Access token", c.access_token || "<span class='warn'>not set</span>") +
     kv("Data API token", c.data_access_token || "<span class='dim'>not set (optional)</span>") +
-    kv("Token valid till", s.token_expiry ? tsf(s.token_expiry) + " IST" : "<span class='dim'>unknown (refresh the account)</span>") +
+    kv("Token valid till", s.token_expiry ? tsf(s.token_expiry) + " IST" + tokenLeftText(s.token_expiry) : "<span class='dim'>unknown (refresh the account)</span>") +
     kv("Self-renew (TOTP)", c.can_self_renew ? "<span class='pos'>configured</span>" + (s.last_renew_at ? ` · last ${tsf(s.last_renew_at)}` : "") + (s.last_renew_error ? ` · <span class='neg'>${esc(s.last_renew_error)}</span>` : "") : "<span class='dim'>not configured</span>") +
     kv("Account reads", s.account_adapter ? "<span class='pos'>attached</span>" : "<span class='warn'>no adapter</span>") +
     kv("Data API plan", s.data_api_active ? "<span class='pos'>active</span>" : "<span class='warn'>not active / unknown</span>") +
     kv("Market feed", s.feed_live ? "<span class='pos'>Dhan (live)</span>" : "<span class='warn'>synthetic mock</span> <span class='dim'>— press Go live once the token is valid</span>") +
     kv("Desk bars", s.desk_source ? `${esc(s.desk_source.name)} ${esc(s.desk_source.resolution)} · ${esc(delayNote(s.desk_source))}${s.desk_source.socket ? ` · socket ${s.desk_source.socket.alive ? "<span class='pos'>connected</span>" : "<span class='warn'>down</span>"} (${s.desk_source.socket.subscribed} instruments)` : ""}` : "–");
+  renderTelegram(s.telegram);
   const block = (t, o) => `<h3>${t}</h3><pre class="code">${esc(JSON.stringify(o, null, 2))}</pre>`;
   $("cfg-view").innerHTML = kv("Mode", esc(s.mode)) + kv("Bind", `${esc(s.api.host)}:${s.api.port}`) +
     block("Live direction source (Bank Nifty engine)", s.live) + block("Risk (absolute rupees, one unit)", s.risk) + block("Backtest defaults", s.backtest) + block("Data corpus", s.data);
@@ -1567,6 +1569,38 @@ async function loadSettings() {
         { l: "Strategies", f: r => (r.strategies || []).map(x => `<span class="schip">${esc(x.name)}@${esc(x.timeframe)}${Object.keys(x.params || {}).length ? " ✎" : ""}</span>`).join(" ") }], rows) + `</div>`;
   } catch (e) { $("desk-cfg").innerHTML = `<div class="warn">Live Desk not running.</div>`; }
 }
+/* ── Telegram on the phone: the token is never shown back, only "set", "not set" or "wrong shape" ── */
+const tokenLeftText = (iso) => { const m = (new Date(iso) - Date.now()) / 60000; return m <= 0 ? " · <span class='neg'>expired</span>" : ` · ${m < 60 ? Math.ceil(m) + " min" : Math.floor(m / 60) + " h " + Math.round(m % 60) + " min"} left`; };
+function renderTelegram(t) {
+  const box = $("tg-status"); if (!box) return;
+  if (!t) { box.innerHTML = ""; return; }
+  box.innerHTML = kv("Bot token", t.token === "set" ? "<span class='pos'>set</span>" : t.token === "wrong shape" ? "<span class='neg'>wrong shape</span>" : "<span class='warn'>not set</span>") +
+    kv("Chat id", t.chat_id_set ? "<span class='pos'>set</span>" : "<span class='warn'>not set</span>") +
+    kv("Phone alerts", t.in_use ? "<span class='pos'>on</span>" : `<span class='warn'>off</span> <span class='dim'>${esc(t.problem || "")}</span>`);
+}
+$("tg-save").onclick = async () => {
+  const body = {}; if ($("tg-token").value.trim()) body.bot_token = $("tg-token").value.trim();
+  if ($("tg-chat").value.trim()) body.chat_id = $("tg-chat").value.trim();
+  if (!Object.keys(body).length) { toast("Nothing to save", "warn"); return; }
+  const r = await api("/api/settings/telegram", body);
+  $("tg-token").value = ""; $("tg-chat").value = "";
+  renderTelegram(r);
+  $("tg-out").innerHTML = `<div class="${r.in_use ? "notice" : "warnbar"}">${esc(r.in_use ? "Saved. Phone alerts are on. Press Send a test message." : "Saved. " + (r.problem || ""))}</div>`;
+};
+$("tg-find").onclick = async () => {
+  $("tg-out").innerHTML = `<div class="empty-inline">asking Telegram…</div>`;
+  const r = await api("/api/settings/telegram/chats", {});
+  const rows = (r.chats || []).map(c => `<div class="row"><span><b>${esc(c.name)}</b> <span class="dim">${esc(c.kind)} · ${esc(c.id)}</span></span> <button class="btn small" data-chat="${esc(c.id)}">Use this chat</button></div>`).join("");
+  $("tg-out").innerHTML = r.ok ? `<div class="notice">${esc(r.message)}</div>${rows}` : `<div class="warnbar">${esc(r.message)}</div>`;
+  $("tg-out").querySelectorAll("button[data-chat]").forEach(b => { b.onclick = async () => {
+    const t = await api("/api/settings/telegram", { chat_id: b.dataset.chat }); renderTelegram(t);
+    $("tg-out").innerHTML = `<div class="notice">Chat saved. Press Send a test message.</div>`; }; });
+};
+$("tg-test").onclick = async () => {
+  $("tg-out").innerHTML = `<div class="empty-inline">sending…</div>`;
+  const r = await api("/api/settings/telegram/test", {});
+  $("tg-out").innerHTML = `<div class="${r.ok ? "notice" : "warnbar"}">${esc(r.ok ? "sent: check Telegram on your phone" : r.message)}</div>`;
+};
 $("cred-save").onclick = async () => {
   const body = {}; if ($("cred-client").value.trim()) body.client_id = $("cred-client").value.trim();
   if ($("cred-token").value.trim()) body.access_token = $("cred-token").value.trim();
