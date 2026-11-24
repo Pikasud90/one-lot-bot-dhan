@@ -81,6 +81,9 @@ changes it alone: if it is wrong, say so in your report and keep to it.
   seconds, turnover, expected, buying, selling, net flow summed over the day so far,
   rvol_5m, z]`. `index.minutes`: `[unix seconds, close]` of the index chosen by `?index=KEY`
   (default NIFTY), for a price line over the flow.
+- Added 25 Nov: the body also carries `"index_options": [{"key": "NIFTY", "label": "NIFTY
+  50"}]`, the indices `?index=` accepts (an unknown key is a 400). `now` is null when no
+  minute of the shown session has closed yet. An alert's `evidence` may be absent.
 - `source`: `live` (today's session from the running desk's bars), `stored` (a session read
   from the store: a past date, or the last stored session while the market is closed or the
   desk has no bars yet). `market_open` is the desk's own session flag.
