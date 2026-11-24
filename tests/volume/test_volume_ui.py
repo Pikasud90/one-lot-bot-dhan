@@ -86,7 +86,9 @@ DAY = 1764046500  # the contract example row: 10:25 IST (the contract's own numb
 
 
 def ist(unix: int) -> str:
-    return dt.datetime.fromtimestamp(unix, dt.timezone(dt.timedelta(hours=5, minutes=30))).isoformat()
+    return dt.datetime.fromtimestamp(
+        unix, dt.timezone(dt.timedelta(hours=5, minutes=30))
+    ).isoformat()
 
 
 EXAMPLE: dict[str, Any] = {
@@ -118,7 +120,11 @@ EXAMPLE: dict[str, Any] = {
         [DAY, 412000000.0, 300000000.0, 239000000.0, 173000000.0, 680000000.0, 1.31, 1.4],
         [DAY + 60, 300000000.0, 310000000.0, 100000000.0, 200000000.0, 580000000.0, 1.2, 1.0],
     ],
-    "index": {"key": "NIFTY", "label": "NIFTY 50", "minutes": [[DAY, 25016.2], [DAY + 60, 25010.0]]},
+    "index": {
+        "key": "NIFTY",
+        "label": "NIFTY 50",
+        "minutes": [[DAY, 25016.2], [DAY + 60, 25010.0]],
+    },
     "stocks": [
         {
             "key": "HDFCBANK",
@@ -225,7 +231,9 @@ PROFILE = {
 STUDY = {
     "as_of": "2026-11-24",
     "note": "docs/research/VOLUME_STUDY_2026-11-24.md",
-    "facts": [{"id": "x", "text": "After a market-wide spike it was 1.7 times as large.", "value": 1.7}],
+    "facts": [
+        {"id": "x", "text": "After a market-wide spike it was 1.7 times as large.", "value": 1.7}
+    ],
     "alerts_per_day": {"market": 1.8, "stock": 4.5},
 }
 
@@ -327,7 +335,9 @@ class TestFormatters:
         assert out[0] == ["Quiet", "Normal", "Busy", "Spike", "–"]
         assert "0.6" in out[1] and "1.5" in out[2]
         assert 'class="vol-chip spike"' in out[3] and ">Spike<" in out[3]
-        assert 'class="vol-chip normal"' in out[4]  # an unknown state shows as normal, never as a broken chip
+        assert (
+            'class="vol-chip normal"' in out[4]
+        )  # an unknown state shows as normal, never as a broken chip
 
     def test_the_error_line(self):
         out = run(
@@ -398,7 +408,7 @@ class TestRules:
             "return [pressureWord(-0.42), pressureWord(0.3), pressureWord(0.01), pressureWord(null), clampHalf(-0.42), clampHalf(3), clampHalf(-9), clampHalf(null), pressBar(-0.42, 0.1)];"
         )
         assert out[:8] == ["Selling pressure", "Buying pressure", "Balanced", "–", -21, 50, -50, 0]
-        assert 'right:50%;width:21%' in out[8] and 'left:50%;width:5%' in out[8]
+        assert "right:50%;width:21%" in out[8] and "left:50%;width:5%" in out[8]
 
 
 @needs_node
@@ -455,7 +465,16 @@ class TestRender:
         assert h["banner"] == "" and h["status"] == "Live now, last closed minute 11:41"
         assert "Volume is 1.3 times normal for this time of day. Buyers 58%." in h["headline"]
         assert 'class="vol-chip normal"' in h["headline"]
-        for text in ("1.4 times", "1.3 times", "1.1 times", "Buyers 58%", "Buyers 51%", "₹3,400 crore", "11", "6"):
+        for text in (
+            "1.4 times",
+            "1.3 times",
+            "1.1 times",
+            "Buyers 58%",
+            "Buyers 51%",
+            "₹3,400 crore",
+            "11",
+            "6",
+        ):
             assert text in out["tiles"] or text in ("11", "6"), text
         assert "1 unchanged" in out["tiles"] and "normal by now: ₹3,150 crore" in out["tiles"]
         assert "HDFC Bank" in h["stocks"] and "₹410 crore" in h["stocks"]
@@ -477,7 +496,9 @@ class TestRender:
     def test_the_closed_answer_shows_the_banner_and_no_book(self):
         d = dict(EXAMPLE, market_open=False, source="stored", book=None)
         out = run(f"return sectionsHtml({json.dumps(d)}, {{key:'label', dir:'asc'}}, '');")
-        assert "The market is closed." in out["banner"] and 'class="card vol-closed"' in out["banner"]
+        assert (
+            "The market is closed." in out["banner"] and 'class="card vol-closed"' in out["banner"]
+        )
         assert out["status"].startswith("Stored session of 25 Nov")
         assert "not shown now" in out["book"]
 
@@ -494,7 +515,9 @@ class TestRender:
         }
         out = run(f"return sectionsHtml({json.dumps(d)}, {{key:'z', dir:'desc'}}, '');")
         assert "No closed minute yet" in out["headline"] and "No closed minute yet" in out["tiles"]
-        assert "No stock has bars yet" in out["stocks"] and "No index pressure yet" in out["indices"]
+        assert (
+            "No stock has bars yet" in out["stocks"] and "No index pressure yet" in out["indices"]
+        )
         assert "No watch alerts in this session." in out["alerts"]
 
     def test_the_table_headings_are_keyboard_buttons_with_a_sort_state(self):
@@ -506,7 +529,9 @@ class TestRender:
         assert out.count('aria-sort="none"') == 9
 
     def test_a_missing_value_is_a_dash_not_nan(self):
-        out = run(f"return stocksTableHtml({json.dumps(EXAMPLE['stocks'])}, {{key:'z', dir:'desc'}});")
+        out = run(
+            f"return stocksTableHtml({json.dumps(EXAMPLE['stocks'])}, {{key:'z', dir:'desc'}});"
+        )
         assert "NaN" not in out and "undefined" not in out and "null" not in out
 
     def test_earlier_alerts(self):
@@ -627,9 +652,15 @@ class TestFake:
         out = run_fake(
             "const p = await fake.handle('/api/volume/profile'); const s = await fake.handle('/api/volume/study'); const a = await fake.handle('/api/volume/alerts?limit=2'); return [Object.keys(p), p.minutes.length, p.busiest.length, s.facts.length, a.alerts.length, a.alerts[0].session];"
         )
-        assert {"minutes", "half_hours", "busiest", "quietest", "weekdays", "expiry", "text"} <= set(
-            out[0]
-        )
+        assert {
+            "minutes",
+            "half_hours",
+            "busiest",
+            "quietest",
+            "weekdays",
+            "expiry",
+            "text",
+        } <= set(out[0])
         assert out[1] == 375 and out[2] == 2 and out[3] == 2 and out[4] == 2 and out[5]
 
     def test_the_demo_switches(self):
@@ -638,14 +669,18 @@ class TestFake:
             f"const fake = require({json.dumps(str(VOL_FAKE))});"
             "(async () => { const d = await fake.handle('/api/volume'); console.log(JSON.stringify([d.market_open, d.source, d.book])); })();"
         )
-        done = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=30, check=False)
+        done = subprocess.run(
+            ["node", "-e", script], capture_output=True, text=True, timeout=30, check=False
+        )
         assert done.returncode == 0, done.stderr
         assert json.loads(done.stdout.strip().splitlines()[-1]) == [False, "stored", None]
         script = script.replace("&volbook=0&volclosed=1", "&volerr=1").replace(
             "const d = await fake.handle('/api/volume'); console.log(JSON.stringify([d.market_open, d.source, d.book]));",
             "try { await fake.handle('/api/volume'); console.log('ok'); } catch (e) { console.log(JSON.stringify(e.status)); }",
         )
-        done = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=30, check=False)
+        done = subprocess.run(
+            ["node", "-e", script], capture_output=True, text=True, timeout=30, check=False
+        )
         assert done.stdout.strip() == "503"
 
 
