@@ -59,6 +59,24 @@ class DeliveryCfg:
 
 
 @dataclass(frozen=True)
+class VolumeCfg:
+    """desk.yaml `volume:` (US-089, `.agile/stories/VOL-API.md`): the Volume Watch. The levels
+    come from docs/research/VOLUME_STUDY_2026-11-24.md."""
+
+    basket: tuple[str, ...] = ()  # empty = the desk's stocks
+    rule: str = "bvc"  # the up-share rule: clv | tick | bvc (the study chose bvc)
+    z_alert: float = 2.5  # a market alert from this spike score
+    stock_z_alert: float = 4.0  # a single-stock alert from this spike score
+    cooldown_min: int = 15  # no second alert of the same scope and key inside this
+    alerts_on: bool = True  # false: the watch decides no alert at all
+    notify: bool = True  # false: alerts are stored and shown, never sent
+    book: bool = True  # one quote request a minute for the basket's order book
+    max_alerts_per_day: int = 12
+    quiet: float = 0.9  # rvol_5m below this: quiet (the study's 15th percentile)
+    busy: float = 2.1  # rvol_5m at or above this: busy (the study's 85th percentile)
+
+
+@dataclass(frozen=True)
 class DeskConfig:
     poll_seconds: int = 60
     history_days: int = 15
@@ -80,6 +98,7 @@ class DeskConfig:
     option_expiry: str = "monthly"
     option_roll_days: int = 3
     delivery: DeliveryCfg = field(default_factory=DeliveryCfg)
+    volume: VolumeCfg = field(default_factory=VolumeCfg)
 
     def _owner_order(self) -> tuple[str, ...]:
         """desk.yaml `primary_strategies` in the owner's order, then every other configured
@@ -240,6 +259,7 @@ def load_desk_config(path: str | Path | None = None) -> DeskConfig:
         _expiry_mode(raw.get("option_expiry", "monthly")),
         int(raw.get("option_roll_days", 3)),
         _delivery(raw.get("delivery")),
+        _volume(raw.get("volume")),
     )
 
 
@@ -262,6 +282,41 @@ def _delivery(raw: object) -> DeliveryCfg:
         special_min_bars=int(raw.get("special_min_bars", 30)),
     )
     parse_hhmm(cfg.last_bar_at)  # a bad time is a config error now, not at the close
+    return cfg
+
+
+def _volume(raw: object) -> VolumeCfg:
+    """desk.yaml `volume:`; an unknown key or a bad value is an error, never silently ignored."""
+    if raw is None:
+        return VolumeCfg()
+    if not isinstance(raw, dict):
+        raise ValueError(f"desk.yaml volume must be a mapping, not {raw!r}")
+    known = {f.name for f in fields(VolumeCfg)}
+    extra = sorted(set(raw) - known)
+    if extra:
+        raise ValueError(f"desk.yaml volume: unknown key(s) {extra}")
+    d = VolumeCfg()
+    basket = raw.get("basket") or ()
+    if isinstance(basket, str) or not isinstance(basket, (list, tuple)):
+        raise ValueError(f"desk.yaml volume.basket must be a list of stock keys, not {basket!r}")
+    rule = str(raw.get("rule", d.rule))
+    if rule not in ("clv", "tick", "bvc"):
+        raise ValueError(f"desk.yaml volume.rule must be clv, tick or bvc, not {rule!r}")
+    cfg = VolumeCfg(
+        basket=tuple(dict.fromkeys(str(k).upper() for k in basket)),
+        rule=rule,
+        z_alert=float(raw.get("z_alert", d.z_alert)),
+        stock_z_alert=float(raw.get("stock_z_alert", d.stock_z_alert)),
+        cooldown_min=int(raw.get("cooldown_min", d.cooldown_min)),
+        alerts_on=_flag(raw.get("alerts_on", d.alerts_on), "volume.alerts_on"),
+        notify=_flag(raw.get("notify", d.notify), "volume.notify"),
+        book=_flag(raw.get("book", d.book), "volume.book"),
+        max_alerts_per_day=int(raw.get("max_alerts_per_day", d.max_alerts_per_day)),
+        quiet=float(raw.get("quiet", d.quiet)),
+        busy=float(raw.get("busy", d.busy)),
+    )
+    if cfg.cooldown_min < 0 or cfg.max_alerts_per_day < 0:
+        raise ValueError("desk.yaml volume: cooldown_min and max_alerts_per_day must be >= 0")
     return cfg
 
 

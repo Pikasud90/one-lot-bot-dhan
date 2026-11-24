@@ -165,6 +165,21 @@ def scrip_fields(r: dict) -> dict:
     }
 
 
+def depth_steps(raw: Any, steps: int = 5) -> tuple[tuple[float, int, int], ...]:
+    """A side of Dhan's market depth (a list of {price, quantity, orders}, best first) as up to
+    `steps` (price, quantity, orders); a step without a price or a quantity is left out."""
+    out: list[tuple[float, int, int]] = []
+    for row in (raw if isinstance(raw, list) else [])[:steps]:
+        if not isinstance(row, dict):
+            continue
+        price = _f(_first(row, "price"))
+        qty = _i(_first(row, "quantity", "qty"))
+        if price is None or qty is None or price <= 0:
+            continue
+        out.append((price, qty, _i(_first(row, "orders")) or 0))
+    return tuple(out)
+
+
 def _first(d: dict, *keys, default=None):
     """Tolerate key-name variation across API versions rather than KeyError."""
     for k in keys:
@@ -709,6 +724,8 @@ class DhanAdapter:
                     volume=_f(_first(q, "volume")),
                     oi=_f(_first(q, "oi")),
                     source="rest",
+                    bids=depth_steps(_first(depth, "buy", default=[])),
+                    asks=depth_steps(_first(depth, "sell", default=[])),
                 )
         return out
 

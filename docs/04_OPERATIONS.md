@@ -241,3 +241,39 @@ writes to the paper test: its trades are in their own tables.
 - Storage: `sim_sessions` (a session, its cursor and settings), `sim_trades` and `sim_events`.
   A session not in memory is rebuilt from them at its cursor. `GET /api/sim/trades` and
   `/api/sim/trades.csv` list the closed simulator trades of every session.
+
+## Volume Watch (US-089)
+Index bars carry no volume, so the watch reads the market's volume from the 18 desk stocks (the
+basket, `volume.basket` in `config/desk.yaml`). It runs inside the desk for as long as the desk
+runs; outside 09:15 to 15:30 on trading days there is no volume, and the page shows the last
+session and the day's profile.
+- What it reads: the one-minute bars the desk already holds for today, and the store's bars for
+  the sessions before (read queries only; it asks the broker for no bars of its own). Turnover is
+  volume x close in rupees; a minute's buying part comes from the `bvc` rule (the study's choice).
+- Baselines: the expected turnover of each minute is the median of that minute over the previous
+  20 full sessions; the spike score compares the last 5 minutes with the previous 60 full
+  sessions at the same minute. A session with fewer than 300 one-minute bars is never a baseline.
+  They are built once a session on their own thread; until then the page says so in its notes.
+- Note on the scale: a median is below a mean, so a normal day reads about 1.4 times "normal".
+  The words quiet (below 0.9) and busy (2.1 or more) are set to that scale.
+- When it alerts: a market spike score of 2.5 or more (about 1.3 a day), a single stock at 4.0
+  or more (about 2.6 a day), never twice for the same market or stock inside 15 minutes, at most
+  12 a day, and only for the last three closed minutes (in time or not at all). Each alert is
+  stored once in `volume_alerts` (a restart repeats none) and goes through the Notifier as a
+  WARNING of kind `volume`: the page's toasts, the computer's notifications and Telegram.
+- A watch alert is not a trade alert: it never opens a paper trade and never says buy or sell.
+  The study found a size effect (the index's next 5 to 60 minutes about 1.5 times as large as
+  usual) and no direction: the flow's side was right about half the time.
+- Order book: one quote request a minute for the basket while the market is open and the Data
+  API is on, the best five price steps a side, stored in `volume_book` (60 days kept). After 3
+  failed reads in a row it stops until the next session.
+- How to switch it off: in `config/desk.yaml`, `volume.alerts_on: false` (no alerts at all),
+  `volume.notify: false` (alerts stored and shown, never sent), `volume.book: false` (no quote
+  requests); then "Reload desk config" in Settings or a restart. A failure inside the watch is
+  caught, counted and shown in the page's notes; the desk's other work goes on.
+- Not studied yet: what follows a single-stock spike, and the order book (recorded, not tested).
+- Routes: `GET /api/volume` (`?date=YYYY-MM-DD` for a stored session, `?index=KEY` for the price
+  line), `/api/volume/profile`, `/api/volume/alerts?limit=100`, `/api/volume/study`.
+- Checking a day by hand: `PYTHONPATH=src .venv/bin/python scripts/volume_replay.py --store
+  data/onelot.db --date 2026-11-20` opens the store read-only, prints the day and recomputes the
+  newest minute straight from the bars.

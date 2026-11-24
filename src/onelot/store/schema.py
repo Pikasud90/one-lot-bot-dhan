@@ -788,3 +788,30 @@ sim_events = Table(
     Column("data", JSON),
     UniqueConstraint("session_id", "seq", name="uq_sim_events_session_seq"),
 )
+
+# ── The Volume Watch (US-089, `.agile/stories/VOL-API.md`) ───────────────────────────────────
+# A watch alert is not a trade alert: it never opens a paper trade. Its id is the key, so a
+# restart never raises (or sends) the same alert twice.
+volume_alerts = Table(
+    "volume_alerts",
+    METADATA,
+    Column("id", String(48), primary_key=True),  # v_20261125_1139_MARKET
+    Column("session", String(10), nullable=False),  # 2026-11-25
+    Column("ts", TZDateTime, nullable=False),  # the alert minute's bar start
+    Column("scope", String(8), nullable=False),  # MARKET | STOCK
+    Column("key", String(32), nullable=False),  # MARKET or the stock
+    Column("payload", JSON, nullable=False),  # the contract's alert object
+    Column("sent", Boolean, nullable=False, default=False),
+    Column("created_at", TZDateTime, nullable=False),
+    Index("ix_volume_alerts_session", "session"),
+)
+
+# One reading a minute of the basket's order book (the best five price steps); 60 days kept.
+volume_book = Table(
+    "volume_book",
+    METADATA,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("ts", TZDateTime, nullable=False, index=True),
+    Column("session", String(10), nullable=False),
+    Column("payload", JSON, nullable=False),  # {"bid_share": .., "stocks": [..]}
+)
