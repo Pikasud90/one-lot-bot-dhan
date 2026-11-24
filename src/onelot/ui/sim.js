@@ -329,7 +329,7 @@ async function loadPicture() {
   try { performance.mark("sim-switch-start"); } catch (e) {}
   const c = S.choice, inst = instOf(c.instrument) || { key: c.instrument, label: c.instrument || "–", kind: "INDEX" };
   S.meta = { key: inst.key, label: inst.label, kind: inst.kind, tick: inst.tick, hasVolume: inst.kind !== "INDEX" };
-  S.loading = true; S.error = null; S.empty = false;
+  S.loading = true; S.error = null; S.empty = false; status("");
   S.chart.reset();
   resetLegendLines(); flag(null); show("sim-build", false);
   veil(`Loading ${inst.label} · ${S.view.ctf} …`, live() ? "Live feed" : (S.hidden ? "A hidden day" : (c.day ? C.dayText(c.day) : "")), "load");
@@ -368,7 +368,7 @@ async function loadPicture() {
 }
 function prepare() {
   const c = S.choice, my = S.req;
-  if (!c.strategy || S.empty || live()) return;
+  if (!c.strategy || S.empty || S.error || live()) return;
   const url = `/api/sim/prepare?${q({ instrument: c.instrument, strategy: c.strategy, timeframe: c.timeframe, start: S.startIso })}`;
   let tries = 0;
   const once = () => getJson(url).then((r) => {
@@ -506,6 +506,7 @@ async function running(st, r, resumed) {
   const marks = r.marks || st.marks || [];
   S.mark = marks.length ? marks[marks.length - 1] : null;
   S.over = s.status === "ENDED";
+  if (resumed && !S.trade && !S.alert && S.trades.length) S.lastClosed = S.trades[0];   // the last result, as it was
   if (s.premium_note) set("sim-premium", "Prices in this session: " + s.premium_note + ".");
   status(resumed ? "Resumed where you left off." : (live() ? "Following the live feed." : "The replay is ready."));
   renderAll(); renderLegend();
@@ -640,7 +641,7 @@ async function forward(n, until) {
   if (S.moving || live()) return;
   if (!sessReady()) { await ensureSession(n === 1 ? "step" : (until === "alert" && n === 390 ? "next" : "candle")); return; }
   if (S.over) return;
-  S.moving = true; S.playing = false; S.dayOver = null; renderAll();
+  S.moving = true; S.playing = false; S.dayOver = null; status(""); renderAll();
   try {
     await settle();
     let left = n;
@@ -967,7 +968,7 @@ async function loadTab() {
   if (S.booted) { renderAll(); if (S.chart && !S.hover) renderLegend(); return; }
   S.booted = true;
   ensureChart();
-  if (S.fake) { set("sim-banner", "Demo data, not market data"); show("sim-banner", true); window.SimPage = { chart: () => S.chart, state: () => S }; }
+  if (S.fake) { set("sim-banner", "Demo data, not market data"); show("sim-banner", true); window.SimPage = { chart: () => S.chart, state: () => S, forget() { dropSession(); S.chart.reset(); renderAll(); }, offerResume }; }   // for the browser checks: a page that lost its session, then the offer
   buildSpeeds(); renderSpeeds(); showPanelTab(S.view.ptab || "trades"); renderPanelOpen();
   setChecks();
   renderAll();

@@ -213,8 +213,16 @@ function create(el, LW, opts = {}) {
     setMarkers(list) { state.markers = (list || []).slice(); ctl.redrawMarkers(); },
     redrawMarkers() {
       const first = state.bars.length ? state.bars[0][0] : Infinity;
-      const out = state.markers.map((m) => ({ ...m, time: C.binStart(m.minute, state.tfm) })).filter((m) => m.time >= first)
-        .map((m) => ({ time: m.time, position: m.position, shape: m.shape, color: cssv(m.color), text: m.text, size: 1 }))
+      // markers that fall on the same candle and side are merged into one ("Alert · In 413.20"): no stacked labels
+      const groups = new Map();
+      state.markers.forEach((m) => {
+        const time = C.binStart(m.minute, state.tfm);
+        if (time < first) return;
+        const k = time + "|" + m.position, g = groups.get(k);
+        if (!g) groups.set(k, { time, position: m.position, shape: m.shape, color: m.color, text: m.text });
+        else { g.text = g.text && m.text ? g.text + " · " + m.text : (g.text || m.text); g.shape = m.shape; g.color = m.color; }
+      });
+      const out = [...groups.values()].map((m) => ({ time: m.time, position: m.position, shape: m.shape, color: cssv(m.color), text: m.text, size: 1 }))
         .sort((a, b) => a.time - b.time);
       marks.setMarkers(out);
     },

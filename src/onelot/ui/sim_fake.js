@@ -33,7 +33,7 @@ const INSTRUMENTS = [
   { key: "MIDCPNIFTY", label: "NIFTY MIDCAP SELECT", kind: "INDEX", live: false, trade: false, tick: 0.05, lot: 120, unit: "lot", base: 12800, vol: 0 },
   { key: "RELIANCE", label: "Reliance Industries", kind: "STOCK", live: false, trade: true, tick: 0.1, lot: 1, unit: "share", base: 1400, vol: 26000 },
   { key: "TATASTEEL", label: "Tata Steel", kind: "STOCK", live: false, trade: true, tick: 0.01, lot: 1, unit: "share", base: 150, vol: 310000 },
-  { key: "ETERNAL", label: "Eternal (no stored bars)", kind: "STOCK", live: false, trade: true, tick: 0.05, lot: 1, unit: "share", base: 300, vol: 0, empty: true },
+  { key: "ETERNAL", label: "Eternal", kind: "STOCK", live: false, trade: true, tick: 0.05, lot: 1, unit: "share", base: 300, vol: 0, empty: true },
 ];
 const STRATEGIES = [
   { name: "microtrend", label: "Micro trend (demo)", kinds: ["INDEX"], timeframes: ["3m", "5m", "15m"], default_timeframe: "3m",
