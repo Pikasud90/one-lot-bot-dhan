@@ -56,7 +56,7 @@
 #sim-root .sim-play .i-pause{display:none}
 #sim-root .sim-play.on .i-pause{display:block} #sim-root .sim-play.on .i-play{display:none}
 #sim-root .sim-play.on{background:var(--accent2)}
-#sim-root .sim-clockbox{display:flex;flex-direction:column;justify-content:center;min-width:172px;padding:0 4px 0 10px;border-left:1px solid var(--line)}
+#sim-root .sim-clockbox{display:flex;flex-direction:column;justify-content:center;width:252px;flex:none;padding:0 4px 0 10px;border-left:1px solid var(--line)}
 #sim-root .sim-clock{font:700 18px/1.15 var(--mono);letter-spacing:-.01em;white-space:nowrap}
 #sim-root .sim-state{font:600 14px/1.25 var(--ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
 #sim-root .sim-state.on{color:var(--ok)} #sim-root .sim-state.wait{color:var(--warn-ink)} #sim-root .sim-state.bad{color:var(--bad)}

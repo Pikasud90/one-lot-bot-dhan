@@ -1,667 +1,1145 @@
-/* The Simulator tab (US-076): bar replay and live practice trading.
-   Calls the engine's JSON (.agile/stories/SIM-API.md). The server owns the cursor; this page asks for the next
-   minute(s) when its own clock reaches them and builds the candles from the one-minute bars it is given.
-   With ?simfake=1 the calls go to src/onelot/ui/sim_fake.js instead (demo data, not market data). */
+/* The Simulator tab (US-094): a replay workspace in the manner of a bar-replay tool.
+   Talks to the engine through the second contract (.agile/stories/SIM-API.md and SIM-API-2.md). The server owns the
+   cursor; the page asks for CHUNKS of minutes and reveals them one by one on its own clock (requestAnimationFrame) at
+   the chosen speed, never drawing a minute beyond the cursor. Pure helpers live in sim_core.js (window.SimCore), the
+   chart in sim_chart.js (window.SimChart). With ?simfake=1 the calls go to sim_fake.js (demo data, not market data). */
 (() => {
 "use strict";
-const OL = window.OneLot;
-if (!OL) return;
-const { $, fmt, cls, esc, hhmm, store, toast, api, table } = OL;
-const IST = 19800;                 // seconds: the chart and the clock read Indian time
-const DAY_OPEN = 33300;            // 09:15 as seconds into the day
-const DAY_MINUTES = 375;           // 09:15 to 15:30
-
-/* ── pure helpers (unit-tested in node) ─────────────────────────────── */
-const tfMinutes = (tf) => Math.max(1, (parseInt(tf, 10) || 1) * (/h$/i.test(String(tf)) ? 60 : 1));
-const unixOf = (iso) => Math.floor(Date.parse(iso) / 1000);
-const money = (v) => (v === null || v === undefined || Number.isNaN(Number(v))) ? "–" : (Number(v) < 0 ? "−" : "") + "₹" + Math.abs(Number(v)).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const minutePath = (b) => b[4] >= b[1] ? [b[1], b[3], b[2], b[4]] : [b[1], b[2], b[3], b[4]];
-const minuteSeconds = (speed) => 60 / Math.max(1, speed);
-const minutesToAsk = (speed, owedSeconds) => speed <= 10 ? 1 : Math.max(0, Math.min(390, Math.floor(owedSeconds / 60)));
-const sourceWord = (s) => s === "real" ? "real" : "modelled";
-const sideWord = (side) => side === "SHORT" ? "short" : "long";
-const clampPct = (p) => Math.max(0, Math.min(100, Math.round((Number(p) || 0) * 100)));
-const tradedBy = (t) => (t.traded && t.traded.what) || "–";
-const STAGE_TEXT = {
-  INITIAL: "First stop: the stop has not moved yet",
-  BREAKEVEN: "Stop above breakeven",
-  LOCKED: "35% of the move locked in",
-  TRAILING: "Trailing behind the best price",
-};
-const REASON_TEXT = {
-  STOP: "Stopped out at the first stop",
-  BREAKEVEN_STOP: "Stopped at breakeven",
-  LOCK_STOP: "Stopped with 35% locked",
-  TRAIL_STOP: "Trailing stop",
-  TARGET: "Target reached",
-  SIGNAL_EXIT: "Strategy exit",
-  SESSION_END: "Session end",
-  MANUAL: "Closed by you",
-  DATA_END: "End of the stored data",
-};
-const stageText = (stage) => STAGE_TEXT[stage] || STAGE_TEXT.INITIAL;
-function reasonText(reason) {
-  const gap = /^GAP_/.test(String(reason || ""));
-  const base = REASON_TEXT[String(reason || "").replace(/^GAP_/, "")];
-  if (!base) return reason ? String(reason) : "–";
-  return gap ? base + " (the price gapped past it)" : base;
-}
-/* Bin start (unix seconds) of the candle holding `unix`; bins are anchored at 09:15 each day. */
-function binStart(unix, tfm) {
-  const rel = (((unix + IST) % 86400) + 86400) % 86400 - DAY_OPEN, w = tfm * 60;
-  return unix - (((rel % w) + w) % w);
-}
-/* The candle after adding one-minute bar to prev (the forming candle, or null). Candle = [t, o, h, l, c, v]. */
-function mergeBar(prev, bar, tfm) {
-  const t = binStart(bar[0], tfm);
-  if (prev && prev[0] === t) return [t, prev[1], Math.max(prev[2], bar[2]), Math.min(prev[3], bar[3]), bar[4], (prev[5] || 0) + (bar[5] || 0)];
-  return [t, bar[1], bar[2], bar[3], bar[4], bar[5] || 0];
-}
-function foldMinutes(candles, minutes, tfm) {
-  const out = candles.slice();
-  for (const m of minutes) {
-    const last = out[out.length - 1], c = mergeBar(last, m, tfm);
-    if (last && last[0] === c[0]) out[out.length - 1] = c; else out.push(c);
-  }
-  return out;
-}
-/* The minute drawn so far at fraction f of its length: open -> low -> high -> close when it closed up, open -> high -> low -> close when down. */
-function partialMinute(bar, f) {
-  const path = minutePath(bar), x = Math.min(1, Math.max(0, f)) * 3, seg = Math.min(2, Math.floor(x));
-  const price = path[seg] + (path[seg + 1] - path[seg]) * (x - seg);
-  const seen = path.slice(0, seg + 1).concat([price]);
-  return [bar[0], bar[1], Math.max(...seen), Math.min(...seen), x >= 3 ? bar[4] : price, bar[5] || 0];
-}
-/* Minutes to ask for so that one Step ends at the close of a candle. */
-function stepMinutes(cursorIso, tfm) {
-  const next = unixOf(cursorIso) + 60, o = Math.floor((((next + IST) % 86400) - DAY_OPEN) / 60);
-  if (o < 0 || o >= DAY_MINUTES) return tfm;
-  return Math.max(1, Math.min(tfm - (o % tfm), DAY_MINUTES - o));
-}
-function strategiesFor(opts, inst) {
-  const kind = inst && inst.kind;
-  return ((opts && opts.strategies) || []).filter(s => (s.kinds || []).includes(kind));
-}
-const toIsoIst = (local) => local ? (local.length === 16 ? local + ":00" : local) + "+05:30" : null;
-const defaultStart = (inst) => inst && inst.last ? String(inst.last).slice(0, 10) + "T09:15" : "";
-/* A session needs one stored minute before its start, so the earliest start is the first stored minute plus one. */
-function plusMinute(local) {
-  if (!local) return "";
-  const d = new Date(String(local).slice(0, 16) + ":00Z");
-  d.setUTCMinutes(d.getUTCMinutes() + 1);
-  return d.toISOString().slice(0, 16);
-}
-function clampStart(local, inst) {
-  if (!inst || !local || !inst.first || !inst.last) return local || "";
-  const lo = plusMinute(inst.first), hi = String(inst.last).slice(0, 16);
-  return local < lo ? lo : (local > hi ? hi : local);
-}
-const WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const MONTH = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-function clockText(unix) {
-  if (unix === null || unix === undefined) return "–";
-  const d = new Date((unix + IST) * 1000), s = d.toISOString();
-  return `${WEEK[d.getUTCDay()]} ${s.slice(8, 10)} ${MONTH[d.getUTCMonth()]} ${s.slice(0, 4)}  ${s.slice(11, 16)}`;
-}
-const liveStaleSeconds = () => 600;
-/* True when a card (its top and bottom in the viewport) is not fully inside a viewport `vh` high. */
-const cardNeedsScroll = (top, bottom, vh) => top < 0 || bottom > vh;
-/* The price range the chart must show: the candles' own range (`orig`: {priceRange:{minValue,maxValue}} or null) widened to
-   hold every finite level (entry, stop, target). With no levels the candles' range is left alone. */
-function mergeRange(orig, levels) {
-  const v = (levels || []).filter(x => x !== null && x !== undefined && x !== "").map(Number).filter(Number.isFinite);
-  if (!v.length) return orig;
-  const base = orig && orig.priceRange ? orig.priceRange : null;
-  const lo = Math.min(...v, base ? base.minValue : Infinity), hi = Math.max(...v, base ? base.maxValue : -Infinity);
-  return { ...(orig || {}), priceRange: { minValue: lo, maxValue: hi } };
-}
-const NO_HISTORY = "No stored history for this instrument yet: run the backfill, or use Live";
-/* The line of the resume offer: a live session cannot be replayed, it jumps to the present. */
-function resumeLine(s) {
-  const what = `${s.instrument.label}, ${s.strategy} ${s.timeframe}`;
-  return s.mode === "live"
-    ? `${what}, live session started ${String(s.start || "").replace("T", " ").slice(0, 16)}: it will jump to now.`
-    : `${what}, at ${String(s.cursor || "").replace("T", " ").slice(0, 16)}.`;
-}
-const minutesLeft = (alert, cursorIso) => Math.max(0, Math.round((Date.parse(alert.expires) - Date.parse(cursorIso) - 60000) / 60000));
-/* The alert card: what to do, the managed price levels, rupees at risk and reward, the traded instrument, the reasons. */
-function alertCardHtml(a, cursorIso) {
-  if (!a) return "";
-  const t = a.traded || {};
-  const left = cursorIso && a.expires ? minutesLeft(a, cursorIso) : null;
-  const reasons = (a.reasons || []).map(r => `<li>${esc(r)}</li>`).join("");
-  return `<div class="card sim-alertcard ${a.side === "SHORT" ? "short" : "long"}" data-alert="${esc(a.id)}">`
-    + `<div class="sim-do"><b>${esc(a.action)}</b> <span class="muted">${esc(sideWord(a.side))}, quantity ${esc(a.qty)}</span></div>`
-    + `<div class="sim-levels"><span>Entry <b>${fmt(a.entry)}</b></span><span>Stop <b class="neg">${fmt(a.stop)}</b></span><span>Target <b class="pos">${fmt(a.target)}</b></span></div>`
-    + `<div class="sim-levels"><span>Risk <b class="neg">${money(a.risk_inr)}</b></span><span>Reward <b class="pos">${money(a.reward_inr)}</b></span><span>Charges <b>${money(a.costs_inr)}</b></span></div>`
-    + `<div class="sim-traded">You would trade <b>${esc(t.what || "–")}</b> at <b>${fmt(t.price)}</b> <span class="sim-src ${esc(sourceWord(t.source))}">${esc(sourceWord(t.source))}</span></div>`
-    + (t.iv_source === "implied" ? `<div class="muted">Stop and target prices are modelled on the volatility implied by the real price.</div>` : "")
-    + (reasons ? `<ul class="sim-reasons">${reasons}</ul>` : "")
-    + (left === null ? "" : `<div class="muted">This alert ends in ${left} market minute${left === 1 ? "" : "s"}.</div>`)
-    + `<div class="actions"><button class="btn take" data-act="take">Take</button><button class="btn" data-act="skip">Skip</button></div></div>`;
-}
-/* The position card: waiting for the fill, the open trade (stage, progress to the target with its 25/50/80 marks, open profit), or the closed result. */
-function positionCardHtml(t, exitSignal) {
-  if (!t) return "";
-  const head = `<b>${esc(t.action || "")}</b> <span class="muted">${esc(sideWord(t.side))}, quantity ${esc(t.qty)}, ${esc(tradedBy(t))} <span class="sim-src ${esc(sourceWord(t.source))}">${esc(sourceWord(t.source))}</span></span>`;
-  if (t.status === "PENDING_FILL") {
-    return `<div class="card sim-poscard"><div class="sim-do">${head}</div><div>Waiting for the fill at the next minute's open. Press Play to move to that minute.</div></div>`;
-  }
-  if (t.status === "CLOSED" || t.exit_reason) {
-    return `<div class="card sim-poscard closed ${Number(t.net) >= 0 ? "won" : "lost"}"><div class="sim-do">${head}</div>`
-      + `<div class="sim-result"><b>${esc(reasonText(t.exit_reason))}</b>: net <b class="${cls(t.net)}">${money(t.net)}</b>`
-      + (t.r_multiple === null || t.r_multiple === undefined ? "" : ` (${fmt(t.r_multiple, 2)} R)`) + `</div>`
-      + `<div class="sim-levels"><span>In <b>${fmt(t.entry)}</b></span><span>Out <b>${fmt(t.exit)}</b></span><span>Gross <b class="${cls(t.gross)}">${money(t.gross)}</b></span><span>Charges <b>${money(t.charges)}</b></span></div></div>`;
-  }
-  const w = clampPct(t.progress);
-  return `<div class="card sim-poscard open"><div class="sim-do">${head}</div>`
-    + (exitSignal ? `<div class="sim-exitsignal">The strategy says close this trade.</div>` : "")
-    + `<div class="sim-levels"><span>Entry <b>${fmt(t.entry)}</b></span><span>Stop <b class="neg">${fmt(t.stop)}</b></span><span>Target <b class="pos">${fmt(t.target)}</b></span><span>Now <b>${fmt(t.mark)}</b></span></div>`
-    + `<div class="sim-stage">${esc(stageText(t.stage))}</div>`
-    + `<div class="sim-progress" title="progress to the target"><div class="sim-fill" style="width:${w}%"></div><i style="left:25%"></i><i style="left:50%"></i><i style="left:80%"></i></div>`
-    + `<div class="sim-marks"><span style="left:25%">25%</span><span style="left:50%">50%</span><span style="left:80%">80%</span><span class="end">target</span></div>`
-    + `<div class="sim-levels"><span>Open profit <b class="${cls(t.open_pnl)}">${money(t.open_pnl)}</b></span><span>${w}% of the way to the target</span></div>`
-    + `<div class="actions"><button class="btn danger" data-act="close">Close</button></div></div>`;
-}
-function summaryTilesHtml(s, capital) {
-  if (!s) return "";
-  const tile = (l, v, c = "", i = "") => `<div class="tile"><small>${esc(l)}</small><b class="${c}">${v}</b>${i ? `<i>${esc(i)}</i>` : ""}</div>`;
-  return tile("Trades", esc(s.trades ?? 0), "", `${s.winners ?? 0} winners`)
-    + tile("Net result", money(s.net), cls(s.net)) + tile("Charges", money(s.charges))
-    + tile("Average winner", money(s.avg_win), cls(s.avg_win)) + tile("Average loser", money(s.avg_loss), cls(s.avg_loss))
-    + tile("Best", money(s.best), cls(s.best)) + tile("Worst", money(s.worst), cls(s.worst))
-    + tile("Equity", money(s.equity), "", capital ? "started with " + money(capital) : "");
-}
-const eventLine = (e) => `<div class="sim-ev ${esc(String(e.kind || "").toLowerCase())}"><span class="muted">${esc(hhmm(e.ts))}</span> <b>${esc(String(e.kind || "").replace("_", " "))}</b> ${esc(e.text || "")}</div>`;
-const tsfLocal = (s) => s ? String(s).replace("T", " ").slice(0, 16) : "–";
+const OL = window.OneLot, C = window.SimCore, SC = window.SimChart;
+if (!OL || !C || !SC) return;
+const { $, store, toast, api } = OL;
+const cssv = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const NO_HISTORY = "No stored history for this instrument yet: run the backfill on the Data tab, or use Live";
 
 /* ── state ──────────────────────────────────────────────────────────── */
+const VIEW0 = { ctf: "3m", speed: 10, smooth: true, pauseOnAlert: true, slowInTrade: true, autoNextDay: false, hideDate: false, sound: true, panel: null, ptab: "trades" };
 const S = {
-  opts: null, offline: false, id: null, session: null, tfm: 3, mode: "past", candles: [], alert: null, trade: null, lastClosed: null,
-  summary: null, trades: [], allTrades: null, view: "session", events: [], alertMarks: [], exitSignal: false,
-  playing: false, speed: 1, acc: 0, liveAcc: 0, anim: null, busy: false, needRefresh: false, pausedByAlert: false,
-  over: false, wantClosed: false, cursorIso: null, shownUnix: null, note: "", fake: null, resumeState: null,
-  reveal: null, scaleLevels: null, healT: null, chart: null, series: null, marks: null, lines: [], lineKey: "", ac: null,
-  pauseOnAlert: true, sound: true, setup: store.get("sim.setup", {}) || {},
+  fake: null, opts: null, offline: false, booted: false, chart: null,
+  days: new Map(),                                   // instrument -> its stored days (or a promise of them)
+  choice: Object.assign({ instrument: null, strategy: null, timeframe: null, mode: "past", day: null }, store.get("sim.choice", {}) || {}),
+  view: Object.assign({}, VIEW0, store.get("sim.view", {}) || {}),
+  req: 0, ac: null, tfReq: 0,                        // the newest choice (a late answer never overwrites it)
+  meta: null, empty: false, loading: false, error: null, hidden: false,
+  startIso: null, drawn: null,                       // where the next session starts; the start of the last minute drawn
+  sess: null, starting: false, acting: false, moving: false, want: null, poll: null, build: null,
+  chunks: [], inflight: null, owe: 0, frac: 0, hold: false, playing: false, pausedByAlert: false, lastFrame: 0, liveAcc: 0,
+  alert: null, trade: null, lastClosed: null, summary: null, trades: [], allTrades: null, tview: "session",
+  events: [], markers: [], overlays: {}, mark: null, exitSignal: false, dayOver: null, over: false,
+  resume: null, hover: false, flagTimer: 0, note: "", audio: null,
 };
-const cssv = (n) => (window.Charts && window.Charts.cssVar ? window.Charts.cssVar(n) : getComputedStyle(document.documentElement).getPropertyValue(n).trim());
-const toT = (unix) => unix + IST;
-const instOf = (key) => ((S.opts && S.opts.instruments) || []).find(i => i.key === key);
+const saveChoice = () => store.set("sim.choice", S.choice);
+const saveView = () => store.set("sim.view", S.view);
+const instOf = (key) => ((S.opts && S.opts.instruments) || []).find(i => i.key === key) || null;
+const stratOf = (name) => ((S.opts && S.opts.strategies) || []).find(s => s.name === name) || null;
+const chartTfs = () => (S.opts && S.opts.chart_timeframes) || C.CHART_TFS;
+const speeds = () => (S.opts && S.opts.speeds) || C.SPEEDS;
+const ctfm = () => C.tfMinutes(S.view.ctf);
+const live = () => S.choice.mode === "live";
+const tradeOpen = () => !!(S.trade && S.trade.status === "OPEN");
+const sessReady = () => !!(S.sess && (S.sess.status === "RUNNING" || S.sess.status === "DAY_END"));
+const force = () => C.speedInForce(S.view.speed, !!S.trade, S.view.slowInTrade);
+const phone = () => window.innerWidth < 700;
 
 /* ── calls ──────────────────────────────────────────────────────────── */
-async function getJson(url) {   // reads are plain fetches: a missing engine must not toast
+async function getJson(url, signal) {   // reads are plain fetches: a missing engine must not toast
   if (S.fake) return S.fake.handle(url);
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(String(r.status));
-  return r.json();
+  const r = await fetch(url, { signal });
+  let j = null;
+  try { j = await r.json(); } catch (e) {}
+  if (!r.ok) { const e = new Error((j && j.detail) || String(r.status)); e.status = r.status; throw e; }
+  return j;
 }
 async function post(url, body) {
-  if (S.fake) { try { return await S.fake.handle(url, body || {}); } catch (e) { toast(e.message, "bad"); throw e; } }
+  if (S.fake) return S.fake.handle(url, body || {});
   return api(url, body || {});
 }
+const q = (o) => Object.entries(o).filter(([, v]) => v !== null && v !== undefined && v !== "").map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+function daysOf(key) {
+  if (!S.days.has(key)) {
+    S.days.set(key, getJson(`/api/sim/days?${q({ instrument: key })}`).then(r => { const d = (r && r.days) || []; S.days.set(key, d); return d; })
+      .catch(() => { S.days.delete(key); return []; }));
+  }
+  const d = S.days.get(key);
+  return Array.isArray(d) ? Promise.resolve(d) : d;
+}
+const daysNow = (key) => { const d = S.days.get(key); return Array.isArray(d) ? d : null; };
 
-/* ── chart ──────────────────────────────────────────────────────────── */
-function chartOpts() {
-  return {
-    layout: { background: { type: "solid", color: cssv("--panel") }, textColor: cssv("--plot-font"), fontFamily: "JetBrains Mono, Menlo, monospace", fontSize: 13, attributionLogo: false },
-    grid: { vertLines: { color: cssv("--grid") }, horzLines: { color: cssv("--grid") } },
-    rightPriceScale: { borderColor: cssv("--line2") },
-    timeScale: { borderColor: cssv("--line2"), timeVisible: true, secondsVisible: false, rightOffset: 6 },
-    localization: { locale: "en-IN" },
-  };
+/* ── small view helpers ─────────────────────────────────────────────── */
+const set = (id, text) => { const el = $(id); if (el && el.textContent !== text) el.textContent = text; };
+const show = (id, on) => { const el = $(id); if (el && el.hidden === !!on) el.hidden = !on; };
+const setTone = (id, t) => { const el = $(id); if (el) { el.classList.toggle("pos", t === "pos"); el.classList.toggle("neg", t === "neg"); } };
+function disable(id, why) {
+  const el = $(id);
+  if (!el) return;
+  el.disabled = !!why;
+  if (why) { if (!el.dataset.tip) el.dataset.tip = el.title || ""; el.title = why; } else if (el.dataset.tip !== undefined) { el.title = el.dataset.tip; delete el.dataset.tip; }
 }
-function ensureChart() {
-  const el = $("sim-chart");
-  if (!el) return false;
-  if (S.chart) return true;
-  const LW = window.LightweightCharts;
-  if (!LW) { el.innerHTML = `<div class="muted sim-pad">The chart library is missing (static/vendor).</div>`; return false; }
-  S.chart = LW.createChart(el, { ...chartOpts(), autoSize: true });
-  const up = cssv("--ok"), dn = cssv("--bad");
-  S.series = S.chart.addSeries(LW.CandlestickSeries, { upColor: up, downColor: dn, borderVisible: false, wickUpColor: up, wickDownColor: dn, priceLineVisible: false,
-    autoscaleInfoProvider: (orig) => mergeRange(orig(), S.scaleLevels) });
-  S.marks = LW.createSeriesMarkers(S.series, []);
-  return true;
+function status(text) { S.note = text || ""; set("sim-status", S.note); }
+function flag(text, kind, ms) {
+  clearTimeout(S.flagTimer);
+  const el = $("sim-flag");
+  if (!text) { el.hidden = true; return; }
+  el.textContent = text; el.className = "sim-flag " + (kind || ""); el.hidden = false;
+  if (ms) S.flagTimer = setTimeout(() => { if (!(S.alert && !S.trade)) el.hidden = true; else renderFlag(); }, ms);
 }
-function retheme() {
-  if (!S.chart) return;
-  S.chart.applyOptions(chartOpts());
-  const up = cssv("--ok"), dn = cssv("--bad");
-  S.series.applyOptions({ upColor: up, downColor: dn, wickUpColor: up, wickDownColor: dn });
-  S.lineKey = ""; syncLines(); syncMarkers();
+function veil(text, sub, kind) {
+  const v = $("sim-veil");
+  if (!text) { v.hidden = true; return; }
+  set("sim-veil-text", text); set("sim-veil-sub", sub || "");
+  v.className = "sim-veil" + (kind === "err" ? " err" : "");
+  show("sim-veil-spin", kind === "load");
+  show("sim-retry", kind === "err");
+  v.hidden = false;
 }
-const barOf = (c) => ({ time: toT(c[0]), open: c[1], high: c[2], low: c[3], close: c[4] });
-function drawAll() { if (ensureChart()) { S.series.setData(S.candles.map(barOf)); S.chart.timeScale().fitContent(); } }
-function drawLast(c) { if (S.series) S.series.update(barOf(c)); }
-function syncLines() {
-  if (!S.series) return;
-  const t = S.trade && S.trade.status === "OPEN" ? S.trade : null, a = !t && !S.trade && S.alert ? S.alert : null, src = t || a;
-  const key = src ? [t ? "t" : "a", src.entry, src.stop, src.target, t && t.stop0, t && t.target0].join("|") : "";
-  if (key === S.lineKey) return;
-  S.lineKey = key;
-  S.scaleLevels = src ? [src.entry, src.stop, src.target] : null;   // the scale holds them, and lets go when they are gone
-  try { S.chart.priceScale("right").applyOptions({ autoScale: true }); } catch (e) {}
-  S.lines.forEach(l => { try { S.series.removePriceLine(l); } catch (e) {} });
-  S.lines = [];
-  if (!src) return;
-  const add = (price, name, title, faint) => {
-    if (!Number.isFinite(Number(price))) return;
-    S.lines.push(S.series.createPriceLine({ price: Number(price), color: cssv(name), lineWidth: faint ? 1 : 2, lineStyle: faint ? 3 : (a ? 2 : 0), axisLabelVisible: !faint, title }));
-  };
-  add(src.entry, "--cyan", a ? "alert entry" : "entry");
-  add(src.stop, "--bad", "stop");
-  add(src.target, "--ok", "target");
-  if (t && Number(t.stop0) !== Number(t.stop)) add(t.stop0, "--bad", "first stop", true);
-  if (t && Number(t.target0) !== Number(t.target)) add(t.target0, "--ok", "first target", true);
-}
-function syncMarkers() {
-  if (!S.marks) return;
-  const m = [], seen = new Map();
-  S.alertMarks.forEach(a => m.push({ time: toT(binStart(a.t - 60, S.tfm)), position: a.long ? "belowBar" : "aboveBar", shape: a.long ? "arrowUp" : "arrowDown", color: cssv("--accent2"), text: "alert", size: 1 }));
-  S.trades.concat(S.trade ? [S.trade] : []).forEach(t => seen.set(t.id, t));
-  seen.forEach(t => {
-    const long = t.side !== "SHORT";
-    if (t.entry_ts && t.status !== "PENDING_FILL") m.push({ time: toT(binStart(unixOf(t.entry_ts), S.tfm)), position: long ? "belowBar" : "aboveBar", shape: "circle", color: cssv("--cyan"), text: "in", size: 1 });
-    if (t.exit_ts) m.push({ time: toT(binStart(unixOf(t.exit_ts), S.tfm)), position: long ? "aboveBar" : "belowBar", shape: "square", color: Number(t.net) >= 0 ? cssv("--ok") : cssv("--bad"), text: t.r_multiple == null ? "out" : fmt(t.r_multiple, 1) + "R", size: 1 });
-  });
-  m.sort((x, y) => x.time - y.time);
-  S.marks.setMarkers(m);
-}
-
-/* ── sound ──────────────────────────────────────────────────────────── */
 function beep() {
-  if (!S.sound) return;
+  if (!S.view.sound) return;
   try {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
-    S.ac = S.ac || new AC();
+    S.audio = S.audio || new AC();
     [0, 0.22].forEach(d => {
-      const o = S.ac.createOscillator(), g = S.ac.createGain(), t0 = S.ac.currentTime + d;
+      const o = S.audio.createOscillator(), g = S.audio.createGain(), t0 = S.audio.currentTime + d;
       o.frequency.value = 880; g.gain.setValueAtTime(0.18, t0); g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.18);
-      o.connect(g); g.connect(S.ac.destination); o.start(t0); o.stop(t0 + 0.2);
+      o.connect(g); g.connect(S.audio.destination); o.start(t0); o.stop(t0 + 0.2);
     });
   } catch (e) {}
 }
+/* An in-page question in plain words (Esc or No: false). Opening it pauses play. */
+function confirm(text, yes = "Yes", no = "No") {
+  setPlaying(false);
+  return new Promise((resolve) => {
+    const box = $("sim-ask"), y = $("sim-ask-yes"), n = $("sim-ask-no");
+    set("sim-ask-text", text); y.textContent = yes; n.textContent = no; box.hidden = false; y.focus();
+    const done = (v) => { box.hidden = true; y.onclick = n.onclick = null; S.answer = null; resolve(v); };
+    y.onclick = () => done(true); n.onclick = () => done(false); S.answer = done;
+  });
+}
 
-/* ── setup bar ──────────────────────────────────────────────────────── */
-const optHtml = (items, sel) => items.map(([v, l]) => `<option value="${esc(v)}"${String(v) === String(sel) ? " selected" : ""}>${esc(l)}</option>`).join("");
-function renderSetup() {
-  const o = S.opts, st = S.setup;
+/* ── the workspace's size ───────────────────────────────────────────── */
+function fitRoot() {
+  const root = $("sim-root");
+  if (!root || !OL.tabShown("sim")) return;
+  if (document.fullscreenElement === root || phone()) { root.style.removeProperty("--sim-h"); return; }
+  const top = root.getBoundingClientRect().top + window.scrollY;
+  root.style.setProperty("--sim-h", Math.max(460, Math.floor(window.innerHeight - top - 10)) + "px");
+}
+function panelOpen() { return S.view.panel === null ? window.innerHeight >= 800 : !!S.view.panel; }
+function renderPanelOpen() {
+  const open = panelOpen();
+  $("sim-root").dataset.panel = open ? "open" : "closed";
+  $("sim-panel-toggle").setAttribute("aria-expanded", String(open));
+}
+
+/* ── the strip: choices ─────────────────────────────────────────────── */
+const optHtml = (items, sel) => items.map(([v, l, dis]) => `<option value="${C.esc(v)}"${String(v) === String(sel) ? " selected" : ""}${dis ? " disabled" : ""}>${C.esc(l)}</option>`).join("");
+/* Make the choice whole: an instrument, a strategy that fits it, one of its timeframes (the options' defaults first). */
+function settleChoice() {
+  const o = S.opts, c = S.choice, d = (o && o.defaults) || {};
   if (!o) return;
   const insts = o.instruments || [];
-  if (!insts.length) return;
-  const inst = instOf(st.instrument) || insts[0];
-  st.instrument = inst.key;
-  st.mode = st.mode === "live" && inst.live ? "live" : "past";
-  $("sim-mode").innerHTML = optHtml([["past", "Past data"]].concat(inst.live ? [["live", "Live feed"]] : []), st.mode);
-  $("sim-inst").innerHTML = optHtml(insts.map(i => [i.key, i.label + (i.trade === false ? " (training only)" : "")]), inst.key);
-  const strats = strategiesFor(o, inst);
-  const strat = strats.find(s => s.name === st.strategy) || strats[0];
-  st.strategy = strat ? strat.name : "";
-  $("sim-strat").innerHTML = optHtml(strats.map(s => [s.name, s.label]), st.strategy);
+  const inst = instOf(c.instrument) || instOf(d.instrument) || insts[0];
+  if (!inst) return;
+  c.instrument = inst.key;
+  const strats = C.strategiesFor(o, inst);
+  const strat = strats.find(s => s.name === c.strategy) || strats.find(s => s.name === d.strategy) || strats[0];
+  c.strategy = strat ? strat.name : null;
   const tfs = strat ? strat.timeframes || [] : [];
-  st.timeframe = tfs.includes(st.timeframe) ? st.timeframe : (strat ? strat.default_timeframe || tfs[0] : "");
-  $("sim-tf").innerHTML = optHtml(tfs.map(t => [t, t]), st.timeframe);
-  $("sim-start-wrap").hidden = st.mode === "live";
-  const start = $("sim-start");
-  start.min = plusMinute(inst.first); start.max = inst.last ? String(inst.last).slice(0, 16) : "";
-  st.start = clampStart(st.start && st.startFor === inst.key ? st.start : defaultStart(inst), inst); st.startFor = inst.key;
-  start.value = st.start;
-  const noHistory = st.mode !== "live" && !(inst.first && inst.last);
-  $("sim-go").disabled = !strat || noHistory;
-  $("sim-note").textContent = noHistory ? NO_HISTORY + "."
-    : !strat ? "No strategy fits this instrument yet."
-    : (inst.trade === false ? "Training only: you can practise on this instrument, the desk does not trade it. " : "") + (strat.description || "");
-  store.set("sim.setup", st);
+  c.timeframe = tfs.includes(c.timeframe) ? c.timeframe : (strat ? (tfs.includes(d.timeframe) ? d.timeframe : strat.default_timeframe || tfs[0]) : null);
+  if (c.mode === "live" && !inst.live) c.mode = "past";
 }
-function readSetup() {
-  const st = S.setup;
-  st.mode = $("sim-mode").value; st.instrument = $("sim-inst").value; st.strategy = $("sim-strat").value;
-  st.timeframe = $("sim-tf").value; st.start = $("sim-start").value;
+function renderChoice() {
+  const o = S.opts, c = S.choice;
+  if (!o) return;
+  const inst = instOf(c.instrument);
+  $("sim-inst").innerHTML = optHtml((o.instruments || []).map(i => [i.key, i.label + (i.trade === false ? " (training only)" : "")]), c.instrument);
+  const strats = C.strategiesFor(o, inst);
+  $("sim-strat").innerHTML = strats.length ? optHtml(strats.map(s => [s.name, s.label]), c.strategy) : `<option value="">No strategy fits</option>`;
+  const strat = stratOf(c.strategy);
+  $("sim-tf").innerHTML = optHtml(((strat && strat.timeframes) || []).map(t => [t, t]), c.timeframe);
+  $("sim-strat").title = strat ? `${strat.label}: ${strat.description || ""}` : "No strategy fits this instrument yet.";
+  renderDay();
+  renderMode();
+}
+function renderDay() {
+  const c = S.choice, days = daysNow(c.instrument), hidden = S.hidden;
+  set("sim-day", live() ? "Live today" : (hidden ? "A hidden day" : (c.day ? C.dayText(c.day) : "–")));
+  const i = days && c.day ? days.indexOf(c.day) : -1;
+  disable("sim-day-prev", live() ? "Live practice follows today" : (!days || i <= 0 ? "No stored day before this one" : null));
+  disable("sim-day-next", live() ? "Live practice follows today" : (!days || i < 0 || i >= days.length - 1 ? "No stored day after this one" : null));
+  disable("sim-day-rand", live() ? "Live practice follows today" : (!days || !days.length ? "No stored days for this instrument" : null));
+  disable("sim-day", live() ? "Live practice follows today" : (!days || !days.length ? "No stored days for this instrument" : null));
+  const inp = $("sim-day-input");
+  if (days && days.length) { inp.min = days[0]; inp.max = days[days.length - 1]; }
+  inp.value = c.day || "";
+}
+function renderMode() {
+  const inst = instOf(S.choice.instrument), lv = live();
+  $("sim-mode-past").setAttribute("aria-pressed", String(!lv));
+  $("sim-mode-live").setAttribute("aria-pressed", String(lv));
+  disable("sim-mode-live", inst && !inst.live ? "The running desk has no live feed for this instrument" : null);
+}
+function buildSpeeds() {
+  const sp = speeds();
+  $("sim-speeds").innerHTML = sp.map(v => `<button type="button" data-speed="${v}" aria-pressed="false" title="${v === 1 ? "Real time: one market minute a minute" : `${v} market minutes a minute`} (↑ ↓)">${v}x</button>`).join("");
+  $("sim-speed-sel").innerHTML = optHtml(sp.map(v => [v, v + "x"]), S.view.speed);
+  const tfs = chartTfs();
+  $("sim-ctfs").innerHTML = tfs.map(t => `<button type="button" data-ctf="${C.esc(t)}" aria-pressed="false" title="Chart timeframe ${C.esc(t)} ([ and ])">${C.esc(t)}</button>`).join("");
+  $("sim-ctf").innerHTML = optHtml(tfs.map(t => [t, "Chart " + t]), S.view.ctf);
+  const keys = $("sim-keys-list");
+  keys.innerHTML = C.KEYS.map(([k, w]) => `<dt>${k.split(" ").map(p => /^[+]$/.test(p) ? " + " : `<kbd>${C.esc(p)}</kbd>`).join("")}</dt><dd>${C.esc(w)}</dd>`).join("");
+}
+function renderSpeeds() {
+  const f = force(), lv = live();
+  $("sim-speeds").querySelectorAll("button").forEach(b => {
+    const v = Number(b.dataset.speed);
+    b.setAttribute("aria-pressed", String(v === f));
+    b.classList.toggle("chosen", v === S.view.speed);
+    b.disabled = lv;
+    b.title = lv ? "Live practice runs at the market's own pace" : (v === 1 ? "Real time: one market minute a minute (↑ ↓)" : `${v} market minutes a minute (↑ ↓)`);
+  });
+  const sel = $("sim-speed-sel");
+  if (String(sel.value) !== String(S.view.speed)) sel.value = String(S.view.speed);
+  sel.disabled = lv;
+  $("sim-ctfs").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.ctf === S.view.ctf)));
+  if ($("sim-ctf").value !== S.view.ctf) $("sim-ctf").value = S.view.ctf;
 }
 
-/* ── session ────────────────────────────────────────────────────────── */
-function resetRun(session) {
-  S.id = session.id; S.session = session; S.tfm = session.tf_minutes || tfMinutes(session.timeframe);
-  S.mode = session.mode; S.cursorIso = session.cursor; S.shownUnix = unixOf(session.cursor) + 60;
-  S.alert = null; S.trade = null; S.lastClosed = null; S.summary = null; S.trades = []; S.events = []; S.alertMarks = [];
-  S.exitSignal = false; S.anim = null; S.acc = 0; S.liveAcc = 0; S.over = false; S.note = ""; S.pausedByAlert = false; S.needRefresh = false;
-  S.playing = false; S.lineKey = ""; S.view = "session"; S.allTrades = null; S.healT = null;
+/* ── the strip: play state and the clock ────────────────────────────── */
+function clockUnix() {
+  const ch = S.chunks[0], bar = ch && ch.bars[ch.i];
+  if (bar && S.frac > 0) return bar[0] + S.frac * 60;
+  return S.drawn === null ? null : S.drawn + 60;
 }
-/* A session that starts (or resumes) in the middle of a candle only reveals that candle's later minutes, so the page draws it
-   from a wrong open. Remember its start; when it has closed, take the server's version of it. */
-function markPartial() {
-  const next = unixOf(S.cursorIso) + 60, b = binStart(next, S.tfm);
-  S.healT = next !== b ? b : null;
+function renderClock() {
+  const t = clockUnix();
+  const txt = t === null ? "–" : (!S.sess && !live() ? C.readyText(t, S.hidden) : C.clockText(t, { hidden: S.hidden }));
+  set("sim-clock", txt);
+  set("sim-countdown", t === null ? "" : (C.countdownText(t, ctfm()) ? "closes in " + C.countdownText(t, ctfm()) : ""));
 }
-async function healCandle() {
-  const t = S.healT; S.healT = null;
-  if (t === null || !S.id) return;
-  try {
-    const got = await getJson(`/api/sim/sessions/${S.id}`);
-    const c = (got.candles || []).find(x => x[0] === t), i = S.candles.findIndex(x => x[0] === t);
-    if (c && i >= 0) { S.candles[i] = c; if (S.series) S.series.update(barOf(c)); }
-  } catch (e) {}
+function whyNoPlay() {
+  if (S.offline) return "The simulator's engine is not running in this build.";
+  if (!S.opts) return "The simulator is still loading.";
+  if (S.empty) return NO_HISTORY + ".";
+  if (!S.choice.strategy) return "No strategy fits this instrument yet.";
+  if (S.loading) return "The chart is still loading.";
+  if (S.error) return "The chart could not be loaded: press Try again.";
+  if (S.over) return "This session has reached the end of the stored data: choose another day.";
+  if (live() && !C.marketOpenAt(Date.now())) return "The market is closed: live practice starts at 09:15 on a trading day.";
+  return null;
 }
-function takeState(st) {
-  if (!st) return;
-  if (st.session) { S.session = st.session; S.cursorIso = st.session.cursor || S.cursorIso; S.over = st.session.status === "ENDED"; }
-  S.alert = st.alert || null; S.trade = st.trade || null; S.summary = st.summary || S.summary; S.trades = st.trades || S.trades;
-  if (S.trade && S.trade.status === "CLOSED") { S.lastClosed = S.trade; S.trade = null; }
+function renderPlay() {
+  const why = whyNoPlay(), busy = S.starting || S.moving;
+  const p = $("sim-play");
+  p.classList.toggle("on", S.playing);
+  set("sim-play-word", S.playing ? "Pause" : "Play");
+  p.setAttribute("aria-label", S.playing ? "Pause" : "Play");
+  disable("sim-play", why);
+  if (!why) p.title = S.playing ? "Pause (Space)" : "Play (Space)";
+  disable("sim-step", why || (live() ? "Live practice runs at the market's own pace" : null));
+  disable("sim-next", why || (live() ? "Live practice runs at the market's own pace" : null));
+  disable("sim-end", S.sess && !S.over ? null : "No session is running");
+  const st = $("sim-state");
+  let word = "Paused", k = "";
+  if (S.offline) { word = "Engine off"; k = "bad"; }
+  else if (S.error) { word = "Error"; k = "bad"; }
+  else if (S.starting || (S.sess && S.sess.status === "BUILDING")) { word = "Preparing"; k = "wait"; }
+  else if (busy) { word = "Moving…"; k = "wait"; }
+  else if (S.playing) { word = live() ? "Live" : `Playing ${force()}x` + (force() < S.view.speed ? " (in a trade)" : ""); k = "on"; }
+  else if (S.alert && !S.trade && sessReady()) { word = "Alert: your move"; k = "wait"; }
+  else if (S.over) word = "Ended";
+  else if (S.dayOver) word = "Day over";
+  else if (!S.sess) word = "Ready";
+  st.textContent = word; st.className = "sim-state " + k;
+  renderSpeeds();
 }
-async function startSession() {
-  if (S.starting) return;   // a second click while the first request runs does nothing
-  S.starting = true; $("sim-go").disabled = true;
-  try { await startSessionNow(); } finally { S.starting = false; renderSetup(); }
+
+/* ── the legend ─────────────────────────────────────────────────────── */
+function renderLegend(idx) {
+  const ch = S.chart;
+  if (!ch) return;
+  const n = ch.bars.length, i = idx === undefined || idx === null ? n - 1 : Math.max(0, Math.min(n - 1, idx));
+  const c = ch.candleAt(i), prev = ch.candleAt(i - 1), m = S.meta;
+  const p = C.legendParts(m ? m.label : "–", S.view.ctf, c, prev, !!(m && m.hasVolume));
+  set("sim-lg-head", p.head); set("sim-lg-o", p.o); set("sim-lg-h", p.h); set("sim-lg-l", p.l); set("sim-lg-c", p.c);
+  set("sim-lg-chg", p.chg); setTone("sim-lg-chg", p.chgTone); set("sim-lg-vol", p.vol ? "Vol " + p.vol : "");
+  const lines = $("sim-lg-lines");
+  const plots = S.sess && S.sess.plots || [];
+  if (!plots.length) return;
+  const on = S.sess && S.view.ctf === S.sess.session.timeframe;
+  if (!on) { lines.dataset.mode !== "off" && (lines.textContent = `The strategy's lines show on the ${S.sess.session.timeframe} chart.`); lines.dataset.mode = "off"; return; }
+  if (lines.dataset.mode !== "on") {
+    lines.innerHTML = plots.map((pl, j) => `<span><i style="--sw:var(${ch.overlayColour(j)})"></i>${C.esc(pl.label)}<b data-plot="${C.esc(pl.id)}">–</b></span>`).join("");
+    lines.dataset.mode = "on";
+  }
+  lines.querySelectorAll("b[data-plot]").forEach(b => { const v = c ? ovValue(b.dataset.plot, c[0]) : null; const tx = v === null ? "–" : C.num(v); if (b.textContent !== tx) b.textContent = tx; });
 }
-async function startSessionNow() {
-  readSetup();
-  const st = S.setup;
-  if (!st.strategy) return;
-  if (S.id && !S.over) { try { await post(`/api/sim/sessions/${S.id}/end`, {}); } catch (e) {} }
-  S.playing = false;
+/* The strategy line's value at candle t (the newest point at or before it). */
+function ovValue(id, t) {
+  const d = S.overlays[id] || [];
+  let lo = 0, hi = d.length - 1, ans = null;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (d[m][0] <= t) { ans = d[m][1]; lo = m + 1; } else hi = m - 1; }
+  return ans;
+}
+function resetLegendLines() { const l = $("sim-lg-lines"); l.innerHTML = ""; l.dataset.mode = ""; }
+
+/* ── the chart ──────────────────────────────────────────────────────── */
+function ensureChart() {
+  if (S.chart) return true;
+  const LW = window.LightweightCharts;
+  if (!LW) { veil("The chart library is missing (static/vendor).", "", "err"); return false; }
+  S.chart = SC.create($("sim-chart"), LW, { cssv, pinBox: $("sim-pins") });
+  S.chart.chart.subscribeCrosshairMove((param) => {
+    const inside = param && param.point && param.logical !== undefined && param.time !== undefined;
+    S.hover = !!inside;
+    renderLegend(inside ? Math.round(param.logical) : null);
+  });
+  S.chart.chart.timeScale().subscribeVisibleLogicalRangeChange((r) => {
+    const n = S.chart.bars.length;
+    show("sim-tonow", !!(r && n && r.to < n - 1.5));
+  });
+  return true;
+}
+/* The present levels, zones and markers on the chart, from the state (an alert's plan or the open trade's). */
+function syncChart() {
+  if (!S.chart) return;
+  const t = tradeOpen() ? S.trade : null, a = !S.trade && S.alert ? S.alert : null;
+  if (t) S.chart.setLevels(t, "trade", C.levelLabels(t, "trade"));
+  else if (a) S.chart.setLevels(a, "alert", C.levelLabels(a, "alert"));
+  else S.chart.setLevels(null);
+  S.chart.setZones(t && t.entry_ts ? { minute: C.unixOf(t.entry_ts), entry: t.entry, stop: t.stop, target: t.target } : null);
+}
+function overlaysOn() { return !!(S.sess && S.view.ctf === S.sess.session.timeframe); }
+function drawOverlays() {
+  if (!S.chart || !S.sess) return;
+  const on = overlaysOn();
+  (S.sess.plots || []).forEach(p => S.chart.setOverlay(p.id, on ? S.overlays[p.id] || [] : []));
+  S.chart.showOverlays(on);
+}
+
+/* ── a choice: cancel what is in flight, veil, draw the new candles, prepare ── */
+async function loadPicture() {
+  const my = ++S.req;
+  if (S.ac) try { S.ac.abort(); } catch (e) {}
+  S.ac = typeof AbortController === "function" ? new AbortController() : null;
+  if (!ensureChart()) return;
+  try { performance.mark("sim-switch-start"); } catch (e) {}
+  const c = S.choice, inst = instOf(c.instrument) || { key: c.instrument, label: c.instrument || "–", kind: "INDEX" };
+  S.meta = { key: inst.key, label: inst.label, kind: inst.kind, tick: inst.tick, hasVolume: inst.kind !== "INDEX" };
+  S.loading = true; S.error = null; S.empty = false;
+  S.chart.reset();
+  resetLegendLines(); flag(null); show("sim-build", false);
+  veil(`Loading ${inst.label} · ${S.view.ctf} …`, live() ? "Live feed" : (S.hidden ? "A hidden day" : (c.day ? C.dayText(c.day) : "")), "load");
+  renderLegend(); renderAll();
+  if (inst.first === null && inst.last === null && !live()) {
+    S.loading = false; S.empty = true;
+    veil(`No stored bars for ${inst.label} yet`, "Run the backfill on the Data tab, or choose another instrument.", "info");
+    renderAll(); return;
+  }
+  const until = !live() && S.startIso ? C.minuteBefore(S.startIso) : null;
   let r;
   try {
-    r = await post("/api/sim/sessions", { instrument: st.instrument, strategy: st.strategy, timeframe: st.timeframe, mode: st.mode,
-      start: st.mode === "live" ? null : toIsoIst(st.start), params: {} });
-  } catch (e) { return; }
-  resetRun(r.session);
-  S.candles = r.candles || [];
-  $("sim-run").hidden = false;
-  drawAll(); markPartial();
-  takeState(r.state);
-  store.set("sim.last", { id: S.id });
-  S.note = S.mode === "live" ? "Following the live feed. Press Play." : "Press Play to start the replay.";
-  render();
-  try { if (!S.ac) { const AC = window.AudioContext || window.webkitAudioContext; if (AC) S.ac = new AC(); } } catch (e) {}
+    r = await getJson(`/api/sim/candles?${q({ instrument: inst.key, timeframe: S.view.ctf, until, count: 300 })}`, S.ac && S.ac.signal);
+  } catch (e) {
+    if (my !== S.req || (e && e.name === "AbortError")) return;
+    S.loading = false; S.error = (e && e.message) || "error";
+    veil("The chart could not be loaded", `The engine said: ${S.error}`, "err");
+    renderAll(); return;
+  }
+  if (my !== S.req) return;
+  S.loading = false;
+  const meta = r.instrument || {};
+  S.meta = { ...S.meta, label: meta.label || S.meta.label, tick: meta.tick || S.meta.tick, kind: meta.kind || S.meta.kind };
+  S.meta.hasVolume = (r.candles || []).some(x => x[5] > 0);   // an index has no volume
+  if (!(r.candles || []).length && !r.forming) {
+    S.empty = true;
+    veil(`No stored bars for ${S.meta.label} yet`, "Run the backfill on the Data tab, or choose another instrument.", "info");
+    renderAll(); return;
+  }
+  S.chart.load(S.meta, S.view.ctf, ctfm(), r.candles || [], r.forming || null);
+  S.drawn = until ? C.unixOf(S.startIso) - 60 : (r.until ? C.unixOf(r.until) : null);
+  veil(null);
+  try { performance.mark("sim-switch-drawn"); performance.measure("sim-switch", "sim-switch-start", "sim-switch-drawn"); } catch (e) {}
+  if (r.note) status(r.note);
+  renderLegend(); renderAll();
 }
-async function refresh() {
-  if (!S.id) return;
-  try { takeState(await getJson(`/api/sim/sessions/${S.id}`)); } catch (e) {}
-  if (S.wantClosed && !S.trade && S.trades[0]) { S.lastClosed = S.trades[0]; S.wantClosed = false; }
-  render();
+function prepare() {
+  const c = S.choice, my = S.req;
+  if (!c.strategy || S.empty || live()) return;
+  const url = `/api/sim/prepare?${q({ instrument: c.instrument, strategy: c.strategy, timeframe: c.timeframe, start: S.startIso })}`;
+  let tries = 0;
+  const once = () => getJson(url).then((r) => {
+    if (my !== S.req || S.sess) return;
+    if (r && r.status === "ready") status(`Ready: ${stratOf(c.strategy) ? stratOf(c.strategy).label : c.strategy} · ${c.timeframe} is prepared. Press Play.`);
+    else if (r && r.status === "building" && ++tries < 30) { status("Preparing the strategy in the background…"); setTimeout(once, 1000); }
+  }).catch(() => {});
+  once();
+}
+/* Throw the session away on the page (the server's is ended separately). Everything it drew goes with the chart's reset. */
+function dropSession() {
+  stopPoll();
+  S.sess = null; S.chunks = []; S.inflight = null; S.owe = 0; S.frac = 0; S.playing = false; S.pausedByAlert = false; S.want = null;
+  S.alert = null; S.trade = null; S.lastClosed = null; S.summary = null; S.trades = []; S.allTrades = null; S.tview = "session";
+  S.events = []; S.markers = []; S.overlays = {}; S.mark = null; S.exitSignal = false; S.dayOver = null; S.over = false; S.build = null;
+  $("sim-log").innerHTML = ""; renderTrades(); renderNumbers(); renderLogCount();
+}
+function endOld() {
+  const s = S.sess;
+  if (!s || S.over) return;
+  post(`/api/sim/sessions/${s.id}/end`, {}).catch(() => {});   // never waited for: the switch is instant
+}
+/* Change the choice. keepClock: an instrument, strategy or timeframe change in the middle of a session starts the new one
+   at the old cursor plus one minute. */
+async function choose(patch, opts = {}) {
+  if (!S.opts) return;
+  const mid = S.sess && !S.over && !live() && S.drawn !== null;
+  if (S.sess && tradeOpen() && !opts.asked) {
+    const t = S.trade;
+    const ok = await confirm(`You have an open ${t.action} on ${(S.sess.session.instrument || {}).label || ""}. Changing now closes it at the next minute's open and ends this session. Go ahead?`, "Close it and change", "Keep the trade");
+    if (!ok) { renderChoice(); return; }
+  }
+  const keepClock = mid && opts.keepClock !== false && !patch.day && patch.mode === undefined;
+  if (S.sess) endOld();
+  dropSession();
+  Object.assign(S.choice, patch);
+  settleChoice();
+  const days = await daysOf(S.choice.instrument);
+  if (keepClock && S.drawn !== null) {
+    S.startIso = C.isoOf(S.drawn + 60);
+    S.choice.day = S.startIso.slice(0, 10);
+  } else {
+    if (opts.random) S.hidden = !!S.view.hideDate; else if (patch.day || patch.instrument || patch.mode) S.hidden = false;
+    S.choice.day = C.snapDay(days, S.choice.day);
+    S.startIso = live() ? null : C.startIsoOf(S.choice.day);
+  }
+  if (S.chart) S.chart.hideDates(S.hidden);
+  saveChoice(); renderChoice();
+  await loadPicture();
+  prepare();
 }
 
-/* ── clock ──────────────────────────────────────────────────────────── */
-function pushMinutes(minutes) {
-  for (const m of minutes) {
-    const last = S.candles[S.candles.length - 1], c = mergeBar(last, m, S.tfm);
-    if (last && last[0] === c[0]) S.candles[S.candles.length - 1] = c; else S.candles.push(c);
-    drawLast(c);
-    if (S.healT !== null && c[0] > S.healT) healCandle();
-  }
-  if (minutes.length) S.shownUnix = minutes[minutes.length - 1][0] + 60;
-}
-function absorb(res) {
-  S.cursorIso = res.cursor || S.cursorIso;
-  S.alert = res.alert || null; S.summary = res.summary || S.summary;
-  if (res.trade && res.trade.status === "CLOSED") { S.lastClosed = res.trade; S.trade = null; } else S.trade = res.trade || null;
-  let reload = false;
-  for (const ev of res.events || []) {
-    S.events.unshift(ev);
-    if (ev.kind === "ALERT") {
-      S.lastClosed = null; S.wantClosed = false; S.exitSignal = false;
-      const a = res.alert;
-      S.alertMarks.push({ t: unixOf(ev.ts), long: !a || a.side !== "SHORT" });
-      toast("Alert: " + ((a && a.action) || ev.text), "warn"); beep(); S.reveal = "alert";
-      if (S.pauseOnAlert && S.playing) { S.playing = false; S.pausedByAlert = true; S.note = "Paused: there is an alert to take or skip."; }
-    } else if (ev.kind === "FILLED") toast("Filled: " + (ev.text || "the trade is open"));
-    else if (ev.kind === "EXIT_SIGNAL") { S.exitSignal = true; toast("The strategy says close this trade.", "warn"); }
-    else if (ev.kind === "CLOSED") { S.exitSignal = false; reload = true; S.wantClosed = true; S.reveal = "result"; toast(ev.text || "The trade is closed."); }
-    else if (ev.kind === "ALERT_EXPIRED") toast("The alert ran out of time.");
-  }
-  S.events = S.events.slice(0, 60);
-  if (res.day_end) { S.needRefresh = true; S.playing = false; S.note = "The trading day is finished. Press Play to go on to the next day."; }
-  if (res.over) { S.playing = false; S.over = true; S.note = "The stored data has ended."; }
-  syncLines(); syncMarkers(); render();
-  if (reload || S.needRefresh) { S.needRefresh = false; refresh(); }
-}
-async function advance(n) {
-  const id = S.id;
-  S.busy = true;
+/* ── the session ────────────────────────────────────────────────────── */
+function stopPoll() { if (S.poll) { clearTimeout(S.poll); S.poll = null; } }
+/* Create the session at the first Play, Step or Next alert; poll while it is being built; then do what was asked. */
+async function ensureSession(want) {
+  if (sessReady()) return true;
+  S.want = want;
+  if (S.starting) return;   // a second press while the first create runs does nothing
+  if (S.sess && S.sess.status === "BUILDING") return false;
+  if (whyNoPlay()) return false;
+  const c = S.choice, my = S.req;
+  S.starting = true; renderAll();
+  let r;
   try {
-    const res = await post(`/api/sim/sessions/${id}/advance`, { minutes: n });
-    return id === S.id ? res : null;
-  } catch (e) { S.playing = false; render(); return null; } finally { S.busy = false; }
-}
-async function startMinute() {
-  const res = await advance(1);
-  if (!res) return;
-  const mins = res.minutes || [];
-  if (!mins.length) { absorb(res); return; }
-  pushMinutes(mins.slice(0, -1));
-  S.anim = { res, bar: mins[mins.length - 1], base: S.candles[S.candles.length - 1] || null, f: 0 };
-}
-function finishMinute() {
-  const a = S.anim;
-  if (!a) return;
-  S.anim = null;
-  pushMinutes([a.bar]);
-  absorb(a.res);
-}
-async function runFast(n) {
-  const res = await advance(n);
-  if (!res) return;
-  pushMinutes(res.minutes || []);
-  absorb(res);
-}
-function tick(dtMs) {
-  if (!S.id || !S.playing || S.busy || S.over || document.hidden) return;
-  if (S.mode === "live") {
-    S.liveAcc += dtMs;
-    if (S.liveAcc >= 5000) { S.liveAcc = 0; runFast(1); }
-    return;
+    r = await post("/api/sim/sessions", { instrument: c.instrument, strategy: c.strategy, timeframe: c.timeframe, mode: c.mode, start: live() ? null : S.startIso, params: {} });
+  } catch (e) {
+    S.starting = false;
+    if (my === S.req) { status(`The session could not start: ${(e && e.message) || "error"}.`); flag(`The session could not start: ${(e && e.message) || "error"}`, "lost", 6000); }
+    renderAll(); return false;
   }
-  if (S.speed <= 10) {
-    if (!S.anim) { startMinute(); return; }
-    S.anim.f += dtMs / (minuteSeconds(S.speed) * 1000);
-    if (S.anim.f >= 1) { finishMinute(); return; }
-    drawLast(mergeBar(S.anim.base, partialMinute(S.anim.bar, S.anim.f), S.tfm));
-    S.shownUnix = S.anim.bar[0] + 60 * S.anim.f; renderClock();
-    return;
+  S.starting = false;
+  if (my !== S.req) { if (r && r.session) post(`/api/sim/sessions/${r.session.id}/end`, {}).catch(() => {}); return false; }
+  await adopt(r);
+  return false;
+}
+async function adopt(r, resumed) {
+  const st = r.state || r, s = r.session || st.session, my = S.req;
+  const strat = stratOf(s.strategy);
+  S.sess = { id: s.id, session: s, status: s.status, mode: s.mode, plots: (strat && strat.plots) || [] };
+  store.set("sim.last", { id: s.id });
+  if (s.status === "BUILDING") { showBuild(r.build || st.build); pollBuild(my); renderAll(); return; }
+  if (s.status === "FAILED") { failed(st.detail || r.detail); return; }
+  await running(st, r, resumed);
+}
+function showBuild(b) {
+  S.build = b || { step: "reading bars", elapsed_ms: 0 };
+  const words = { "reading bars": "reading the bars", "building signals": "building the signals", pricing: "pricing the options" }[S.build.step] || S.build.step;
+  set("sim-build-text", `Preparing the strategy: ${words} · ${(Number(S.build.elapsed_ms || 0) / 1000).toFixed(1)} s`);
+  show("sim-build", true);
+  status(`Preparing the strategy: ${words}. Play starts by itself when it is ready.`);
+  renderHint();
+}
+function pollBuild(my) {
+  stopPoll();
+  S.poll = setTimeout(async () => {
+    if (my !== S.req || !S.sess) return;
+    let st;
+    try { st = await getJson(`/api/sim/sessions/${S.sess.id}`); } catch (e) { if (my === S.req) pollBuild(my); return; }
+    if (my !== S.req || !S.sess || st.session.id !== S.sess.id) return;
+    S.sess.session = st.session; S.sess.status = st.session.status;
+    if (st.session.status === "BUILDING") { showBuild(st.build); pollBuild(my); return; }
+    show("sim-build", false);
+    if (st.session.status === "FAILED") { failed(st.detail); return; }
+    await running(st, st);
+  }, 250);
+}
+function failed(detail) {
+  show("sim-build", false);
+  S.sess = null; S.want = null;
+  S.error = detail || "The session could not be prepared.";
+  status("The session could not be prepared: " + S.error);
+  renderAll();
+  S.error = null;   // the picture stays usable: Play tries again
+  renderHint({ tag: "Failed", title: "The session could not be prepared", text: detail || "The engine gave no reason.", btns: [["retry-session", "Try again", "primary"]] });
+}
+/* A RUNNING session: take its whole state (resume restores the log and the markers), then do what was asked. */
+async function running(st, r, resumed) {
+  const s = st.session;
+  S.sess.session = s; S.sess.status = s.status;
+  show("sim-build", false);
+  const cursor = C.unixOf(s.cursor);
+  if (S.drawn === null || cursor !== S.drawn) await redrawTo(cursor);
+  takeState(st, true);
+  const evs = r.events || st.events || [];
+  S.events = []; S.markers = []; $("sim-log").innerHTML = "";
+  evs.forEach(ev => logEvent(ev, true));
+  renderLogCount();
+  S.chart.setMarkers(S.markers);
+  const ov = r.overlays || st.overlays || {};
+  S.overlays = {};
+  Object.keys(ov).forEach(k => { S.overlays[k] = (ov[k] || []).filter(p => p[0] + S.sess.session.tf_minutes * 60 <= S.drawn + 60); });
+  S.chart.setOverlayDefs(S.sess.plots);
+  resetLegendLines(); drawOverlays();
+  const marks = r.marks || st.marks || [];
+  S.mark = marks.length ? marks[marks.length - 1] : null;
+  S.over = s.status === "ENDED";
+  if (s.premium_note) set("sim-premium", "Prices in this session: " + s.premium_note + ".");
+  status(resumed ? "Resumed where you left off." : (live() ? "Following the live feed." : "The replay is ready."));
+  renderAll(); renderLegend();
+  const w = S.want; S.want = null;
+  if (w) run(w);
+}
+/* Bring the picture to the server's cursor (a start in a hole of the store, a resume). */
+async function redrawTo(cursor) {
+  const my = S.req;
+  try {
+    const r = await getJson(`/api/sim/candles?${q({ instrument: S.choice.instrument, timeframe: S.view.ctf, until: C.isoOf(cursor), count: 300 })}`);
+    if (my !== S.req) return;
+    S.chart.setCandles(S.view.ctf, ctfm(), r.candles || [], r.forming || null);
+    S.chart.startView();
+  } catch (e) {}
+  S.drawn = cursor;
+}
+function takeState(st, full) {
+  if ("alert" in st) S.alert = st.alert || null;
+  if ("trade" in st) {
+    const t = st.trade || null;
+    if (t && t.status === "CLOSED") { S.lastClosed = t; S.trade = null; } else S.trade = t;
   }
-  if (S.anim) { finishMinute(); return; }
-  S.acc += dtMs / 1000 * S.speed;
-  const n = minutesToAsk(S.speed, S.acc);
-  if (n > 0) { S.acc -= n * 60; runFast(n); }
+  if (st.summary) S.summary = st.summary;
+  if (st.trades) { S.trades = st.trades; renderTrades(); }
+  if (full && S.trade && S.trade.status === "OPEN" && !S.mark) S.mark = null;
+  renderNumbers();
 }
-function setPlaying(on) {
-  if (!S.id || S.over) on = false;
-  S.playing = on; S.pausedByAlert = false;
-  if (on) { S.note = ""; S.acc = 0; S.liveAcc = 4500; }
-  render();
+function run(what) {
+  if (what === "play") setPlaying(true);
+  else if (what === "step") forward(1, null);
+  else if (what === "candle") forward(C.stepMinutes(S.drawn, ctfm()), "alert");
+  else if (what === "next") forward(390, "alert");
 }
-async function stepOnce() {
-  if (!S.id || S.over || S.busy || S.mode === "live") return;
-  S.playing = false;
-  if (S.anim) { finishMinute(); return; }
-  await runFast(stepMinutes(S.cursorIso, S.tfm));
+
+/* ── the replay clock ───────────────────────────────────────────────── */
+function setPlaying(on, note) {
+  if (on && (whyNoPlay() || S.over)) on = false;
+  if (on && !sessReady()) { ensureSession("play"); renderAll(); return; }
+  if (on && S.dayOver) { S.dayOver = null; renderDock(); }
+  S.playing = !!on; S.pausedByAlert = false; S.owe = 0; S.liveAcc = live() ? 4500 : 0;
+  S.lastFrame = performance.now();
+  if (on) { flag(null); tick(); }
+  if (note) status(note);
+  renderAll();
 }
-/* What an action revealed: its minutes go on the chart, its events into the log ("What happened"). */
-function applyAction(res) {
-  if (!res) return;
-  pushMinutes(res.minutes || []);
+let raf = 0;
+function tick() { if (!raf) raf = requestAnimationFrame(frame); }
+function frame(now) {
+  raf = 0;
+  const dt = Math.min(250, Math.max(0, now - S.lastFrame)); S.lastFrame = now;
+  if (!S.playing) return;
+  if (!OL.tabShown("sim") || document.hidden) { setPlaying(false, "Paused: you left the Simulator."); return; }
+  if (live()) { liveTick(dt); tick(); return; }
+  if (!S.hold) {
+    S.owe += C.playMinutes(dt, force());
+    drain();
+    maybeFetch();
+  }
+  renderClock();
+  if (!S.hover) renderLegend();
+  if (S.playing) tick();
+}
+/* Reveal what the clock owes, minute by minute, from the queued chunks. Events apply at a chunk's end (rule 8). */
+function drain() {
+  while (S.owe > 0 && S.playing) {
+    const ch = S.chunks[0];
+    if (!ch) { if (!S.inflight && !sessReady()) S.owe = 0; return; }
+    const bar = ch.bars[ch.i];
+    if (!bar) { S.chunks.shift(); applyChunk(ch); continue; }
+    const need = 1 - S.frac;
+    if (S.owe >= need) {
+      S.owe -= need; S.frac = 0; finishMinute(ch, bar);
+      if (ch.i >= ch.bars.length) { S.chunks.shift(); applyChunk(ch); }
+    } else {
+      S.frac += S.owe; S.owe = 0;
+      if (S.view.smooth) S.chart.drawMinute(bar, S.frac);
+    }
+  }
+  if (!S.playing) S.owe = 0;
+}
+function finishMinute(ch, bar) {
+  S.chart.drawMinute(bar, 1);
+  S.drawn = bar[0]; ch.i += 1;
+  const m = ch.marks && ch.marks.get(bar[0]);
+  if (m) { S.mark = m; renderPositionLive(); }
+}
+const undrawn = () => S.chunks.reduce((a, ch) => a + ch.bars.length - ch.i, 0) - S.frac;
+function maybeFetch() {
+  if (!S.playing || S.inflight || !sessReady() || S.over || S.dayOver) return;
+  const last = S.chunks[S.chunks.length - 1];
+  if (last && ((last.res.events || []).length || last.res.day_end || last.res.over)) return;   // the user may need to act first
+  if (undrawn() * 60 / force() > 0.5) return;
+  const busy = !!(S.alert || S.trade);
+  fetchChunk(Math.min(30, C.chunkSize(force(), busy) + Math.floor(S.owe)), "event");
+}
+function fetchChunk(n, until) {
+  const id = S.sess.id, my = S.req;
+  const p = (async () => {
+    let res;
+    try { res = await post(`/api/sim/sessions/${id}/advance`, { minutes: Math.max(1, Math.min(390, Math.round(n))), until: until || null }); }
+    catch (e) {
+      if (my === S.req && S.sess && S.sess.id === id) {
+        S.playing = false;
+        status(`The engine did not answer: ${(e && e.message) || "error"}. Press Play to try again.`);
+        flag("The engine did not answer. Press Play to try again.", "lost", 6000);
+        renderAll();
+      }
+      return null;
+    }
+    if (my !== S.req || !S.sess || S.sess.id !== id) return null;
+    const ch = { bars: res.minutes || [], i: 0, res, marks: new Map((res.marks || []).map(m => [m[0], m])) };
+    S.chunks.push(ch);
+    return ch;
+  })();
+  S.inflight = p;
+  p.finally(() => { if (S.inflight === p) S.inflight = null; if (S.playing) tick(); });
+  return p;
+}
+/* Draw every queued minute at once and apply the chunks (Step, Next alert, an action: rule 9). */
+async function settle() { while (S.inflight) await S.inflight; }
+function flushAll() {
+  while (S.chunks.length) {
+    const ch = S.chunks[0];
+    while (ch.i < ch.bars.length) finishMinute(ch, ch.bars[ch.i]);
+    S.frac = 0; S.chunks.shift(); applyChunk(ch);
+  }
+  S.frac = 0;
+}
+/* Step, Shift+Right and Next alert: up to n minutes, from the queue first, stopping where the user is needed. */
+async function forward(n, until) {
+  if (S.moving || live()) return;
+  if (!sessReady()) { await ensureSession(n === 1 ? "step" : (until === "alert" && n === 390 ? "next" : "candle")); return; }
+  if (S.over) return;
+  S.moving = true; S.playing = false; S.dayOver = null; renderAll();
+  try {
+    await settle();
+    let left = n;
+    while (left > 0 && S.chunks.length) {
+      const ch = S.chunks[0];
+      if (ch.i < ch.bars.length) { finishMinute(ch, ch.bars[ch.i]); S.frac = 0; left -= 1; }
+      if (ch.i >= ch.bars.length) {
+        S.chunks.shift();
+        const stop = applyChunk(ch);
+        if (stop && until) { left = 0; break; }
+      }
+    }
+    if (left > 0 && sessReady() && !S.over) {
+      const ch = await fetchChunk(left, until);
+      if (ch) flushAll();
+    }
+  } finally { S.moving = false; renderAll(); renderLegend(); }
+}
+/* Apply a chunk's answer: the state after its minutes, its events, the strategy's lines. Returns true when it needs the user. */
+function applyChunk(ch) {
+  const res = ch.res || {};
+  let needs = false, closed = null;
+  const before = S.trade;
+  takeState(res, false);
   for (const ev of res.events || []) {
-    S.events.unshift(ev);
-    if (ev.kind === "CLOSED") { S.wantClosed = true; S.reveal = "result"; toast(ev.text || "The trade is closed."); }
-    else if (ev.kind === "CANCELLED") { S.lastClosed = null; toast(ev.text || "The trade was cancelled."); }
+    logEvent(ev, false);
+    if (ev.kind === "ALERT") {
+      needs = true; S.lastClosed = null; S.exitSignal = false; beep();
+      if (S.view.pauseOnAlert && S.playing) { S.playing = false; S.pausedByAlert = true; S.owe = 0; status("Paused: an alert to take or skip."); }
+      flashCard("sim-ticket");
+    } else if (ev.kind === "FILLED") {
+      const d = ev.data || {};
+      flag(`Filled: in at ₹${C.num(d.entry_price ?? d.entry)}` + (S.trade && C.isOption(S.trade) ? ` (index ${C.num(d.entry)})` : ""), "info", 3500);
+    } else if (ev.kind === "EXIT_SIGNAL") { S.exitSignal = true; needs = true; status("The strategy says close this trade."); }
+    else if (ev.kind === "CLOSED") { needs = true; S.exitSignal = false; closed = closedTrade(ev, before); }
+    else if (ev.kind === "CANCELLED") { needs = true; flag("The trade was cancelled before it filled.", "info", 4000); }
+    else if (ev.kind === "ALERT_EXPIRED") status("The alert ran out of time.");
+    else if (ev.kind === "DAY_END") needs = true;
+    else if (ev.kind === "DATA_END") needs = true;
   }
-  S.events = S.events.slice(0, 60);
+  if ((res.events || []).length) { S.chart.setMarkers(S.markers); renderLogCount(); }
+  if (res.marks && res.marks.length) S.mark = res.marks[res.marks.length - 1];
+  if (!tradeOpen()) S.mark = null;
+  const ov = res.overlays || {};
+  Object.keys(ov).forEach(k => { if ((ov[k] || []).length) { S.overlays[k] = (S.overlays[k] || []).concat(ov[k]); if (overlaysOn()) S.chart.addOverlay(k, ov[k]); } });
+  if (closed) {
+    S.lastClosed = closed;
+    const r = C.resultModel(closed);
+    flag(`${r.reason} · ${r.net}` + (r.r !== "–" ? ` · ${r.r}` : ""), closed.net >= 0 ? "won" : "lost", 5000);
+    flashCard("sim-res");
+    refreshTrades();
+  }
+  if (res.day_end) {
+    const day = S.drawn !== null ? C.isoOf(S.drawn).slice(0, 10) : null;
+    if (S.hidden) { S.hidden = false; S.chart.hideDates(false); renderDay(); }
+    if (S.view.autoNextDay) status(`${day ? C.dayText(day) : "The day"} is over. Going on to the next day.`);
+    else { S.dayOver = day || "today"; S.playing = false; S.owe = 0; status("The trading day is over. Press Play to go on to the next day."); }
+    if (day) { S.choice.day = day; saveChoice(); }
+  }
+  if (res.over) { S.over = true; S.playing = false; status("The stored data has ended. Choose another day to go on practising."); }
+  syncChart(); renderAll(); renderLegend();
+  return needs;
 }
+function closedTrade(ev, before) {
+  const d = ev.data || {};
+  const fromList = (S.trades || []).find(t => String(t.id) === String(d.trade_id));
+  if (fromList) return fromList;
+  const t = before || {};
+  return { ...t, status: "CLOSED", exit: d.exit ?? t.mark, exit_price: d.exit_price ?? t.mark_price, exit_reason: d.exit_reason, net: d.net, r_multiple: d.r_multiple ?? null, exit_ts: ev.ts };
+}
+function refreshTrades() {
+  if (!S.sess) return;
+  const id = S.sess.id, my = S.req;
+  getJson(`/api/sim/trades?${q({ session_id: id, limit: 200 })}`).then((r) => {
+    if (my !== S.req || !S.sess || S.sess.id !== id) return;
+    S.trades = (r && r.trades) || S.trades;
+    const lc = S.lastClosed && S.trades.find(t => String(t.id) === String(S.lastClosed.id));
+    if (lc) S.lastClosed = lc;
+    renderTrades(); renderDock(); renderNumbers();
+  }).catch(() => {});
+}
+function liveTick(dt) {
+  S.liveAcc += dt;
+  if (S.liveAcc < 5000 || S.inflight || !sessReady()) return;
+  S.liveAcc = 0;
+  fetchChunk(1, null).then((ch) => { if (ch) flushAll(); renderClock(); });
+}
+
+/* ── actions: take, skip, close, end ────────────────────────────────── */
 async function act(kind) {
-  if (!S.id || S.acting) return;
-  if (kind === "end" && !S.over && typeof confirm === "function" && !confirm("End this practice session? The replay stops and cannot be resumed.")) return;
+  if (!S.sess || S.acting) return;
+  if (kind === "take" || kind === "skip") { if (!S.alert || S.trade) return; }
+  if (kind === "close" && !S.trade) return;
+  if (kind === "end" && !S.over && !(await confirm("End this practice session? An open trade closes at the next minute's open, and the replay of this session stops.", "End it", "Keep going"))) return;
   S.acting = true;
-  try { await actNow(kind); } finally { S.acting = false; }
+  try { await actNow(kind); } finally { S.acting = false; renderAll(); }
 }
 async function actNow(kind) {
-  const base = `/api/sim/sessions/${S.id}`;
-  if (S.anim) finishMinute();   // the minute being drawn belongs before whatever the action reveals
-  let res = null;
+  const wasPlaying = S.playing || S.pausedByAlert;
+  await settle(); flushAll();   // the action follows the last minute on screen (rule 9)
+  if ((kind === "take" || kind === "skip") && !S.alert) { flag("The alert has already ended.", "info", 3000); return; }
+  const base = `/api/sim/sessions/${S.sess.id}`, my = S.req;
+  let res;
   try {
-    if (kind === "take" && S.alert) res = await post(base + "/take", { alert_id: S.alert.id });
-    else if (kind === "skip" && S.alert) res = await post(base + "/skip", { alert_id: S.alert.id });
+    if (kind === "take") res = await post(base + "/take", { alert_id: S.alert.id });
+    else if (kind === "skip") res = await post(base + "/skip", { alert_id: S.alert.id });
     else if (kind === "close") res = await post(base + "/close", {});
-    else if (kind === "end") { res = await post(base + "/end", {}); S.playing = false; S.note = "The session has ended."; S.over = true; }
-  } catch (e) { return; }
-  applyAction(res);
-  const resume = S.pausedByAlert && (kind === "take" || kind === "skip");
-  if (kind === "take") S.lastClosed = null;
-  if (S.anim) S.needRefresh = true; else await refresh();
-  if (kind === "close") S.note = "Closing at the next minute's open. Press Play.";
-  if (resume) setPlaying(true);
-  render();
+    else if (kind === "end") res = await post(base + "/end", {});
+  } catch (e) { flag(`Not done: ${(e && e.message) || "error"}`, "lost", 5000); return; }
+  if (my !== S.req) return;
+  const ch = { bars: res.minutes || [], i: 0, res, marks: new Map((res.marks || []).map(m => [m[0], m])) };
+  while (ch.i < ch.bars.length) finishMinute(ch, ch.bars[ch.i]);
+  applyChunk(ch);
+  if (kind === "take") { S.lastClosed = null; status("Taken: it fills at the next minute's open."); flag("Taken: it fills at the next minute's open.", "info", 3000); }
+  if (kind === "skip") status("Skipped.");
+  if (kind === "close") status("Closing at the next minute's open.");
+  if (kind === "end") { S.over = true; S.playing = false; status("The session has ended. Change anything above to start a new one."); }
+  if ((kind === "take" || kind === "skip") && wasPlaying && !S.over) setPlaying(true);
+  renderAll();
 }
 
-/* ── rendering ──────────────────────────────────────────────────────── */
-function renderSpeeds() {
-  const sp = (S.opts && S.opts.speeds) || [1, 2, 5, 10, 60, 300];
-  $("sim-speeds").innerHTML = S.mode === "live" ? "" : sp.map(v => `<span class="chip${v === S.speed ? " active" : ""}" data-speed="${v}" role="button" tabindex="0" aria-pressed="${v === S.speed}" aria-label="Speed ${v} times">${v}x</span>`).join("");
+/* ── the dock ───────────────────────────────────────────────────────── */
+function flashCard(id) { const el = $(id); if (!el) return; el.classList.remove("sim-flash"); void el.offsetWidth; el.classList.add("sim-flash"); }
+function renderHint(h) {
+  const c = S.choice, strat = stratOf(c.strategy), inst = instOf(c.instrument);
+  if (!h) {
+    if (S.offline) h = { tag: "Engine off", title: "The simulator's engine is not running in this build.", text: "The rest of the desk works as usual." };
+    else if (!S.opts) h = { tag: "Loading", title: "Loading the simulator…", text: "" };
+    else if (S.empty) h = { tag: "No data", title: `No stored bars for ${inst ? inst.label : c.instrument}`, text: NO_HISTORY + "." };
+    else if (!c.strategy) h = { tag: "No rule", title: "No strategy fits this instrument yet.", text: "Choose another instrument." };
+    else if (S.error) h = { tag: "Error", title: "The chart could not be loaded", text: S.error, btns: [["retry", "Try again", "primary"]] };
+    else if (S.loading) h = { tag: "Loading", title: `Loading ${inst ? inst.label : ""} · ${S.view.ctf}`, text: "" };
+    else if (S.starting || (S.sess && S.sess.status === "BUILDING")) h = { tag: "Preparing", title: "Preparing the strategy", text: S.build ? `Step: ${S.build.step}. Play starts by itself when it is ready.` : "This takes a moment the first time." };
+    else if (live() && !C.marketOpenAt(Date.now())) h = { tag: "Closed", title: "The market is closed", text: "Live practice starts at 09:15 on a trading day. Choose Past to practise on a stored day now." };
+    else if (S.over) h = { tag: "Ended", title: "This session has ended", text: "Choose another day, instrument or strategy above to start a new one.", btns: [["day-rand", "A random day", ""], ["day-next", "The next day", ""]] };
+    else if (!S.sess) h = { tag: "Ready", title: live() ? "Practise on the live feed" : `Replay ${S.hidden ? "a hidden day" : C.dayText(c.day)} from 09:15`,
+      text: `<p>Press <b>Play</b> or <kbd>Space</kbd>. The chart shows the market one minute at a time; alerts from <b>${C.esc(strat ? strat.label : c.strategy)} · ${C.esc(c.timeframe)}</b> appear here.</p><p><kbd>N</kbd> jumps to the next alert, <kbd>→</kbd> moves one minute.</p>`, html: true };
+    else h = { tag: "Watching", title: "No alert yet", text: `<p>Waiting for ${C.esc(strat ? strat.label : c.strategy)} · ${C.esc(c.timeframe)}.</p><p><kbd>N</kbd> jumps to the next alert.</p>`, html: true };
+  }
+  set("sim-hint-tag", h.tag); set("sim-hint-title", h.title);
+  const tx = $("sim-hint-text");
+  if (h.html) { if (tx.innerHTML !== h.text) tx.innerHTML = h.text; } else set("sim-hint-text", h.text || "");
+  const btns = (h.btns || []).map(([a, w, k]) => `<button type="button" class="sim-btn ${k}" data-act="${a}">${C.esc(w)}</button>`).join("");
+  if ($("sim-hint-btns").innerHTML !== btns) $("sim-hint-btns").innerHTML = btns;
 }
-function renderClock() { $("sim-clock").textContent = clockText(S.shownUnix); }
-function renderLog() {
-  const common = [
-    { l: "In", f: t => esc(hhmm(t.entry_ts)) }, { l: "Out", f: t => esc(hhmm(t.exit_ts)) },
-    { l: "Traded", f: t => esc(tradedBy(t)) + ` <span class="sim-src ${esc(sourceWord(t.source))}">${esc(sourceWord(t.source))}</span>` },
-    { l: "Entry", n: 1, f: t => fmt(t.entry) }, { l: "Exit", n: 1, f: t => fmt(t.exit) },
-    { l: "Reason", f: t => esc(reasonText(t.exit_reason)) },
-    { l: "Gross", n: 1, c: t => cls(t.gross), f: t => money(t.gross) }, { l: "Charges", n: 1, f: t => money(t.charges) },
-    { l: "Net", n: 1, c: t => cls(t.net), f: t => money(t.net) }, { l: "R", n: 1, f: t => t.r_multiple == null ? "–" : fmt(t.r_multiple, 2) },
-  ];
-  const all = S.view === "all";
-  const cols = all ? [{ l: "Day", f: t => esc(String(t.entry_ts || "").slice(0, 10)) }, { l: "Instrument", f: t => esc(t.instrument || "") }, { l: "Strategy", f: t => esc((t.strategy || "") + " " + (t.timeframe || "")) }].concat(common) : common;
-  const rows = all ? S.allTrades : S.trades;
-  $("sim-log").innerHTML = rows === null ? `<div class="muted">Loading…</div>` : table(cols, rows, { empty: all ? "No simulator trades yet." : "No closed trades in this session yet." });
-  $("sim-view-session").classList.toggle("active", !all); $("sim-view-all").classList.toggle("active", all);
-  $("sim-events").innerHTML = S.events.length ? S.events.slice(0, 12).map(eventLine).join("") : `<div class="muted">Nothing yet.</div>`;
+function fillTicket() {
+  const m = C.ticketModel(S.alert, S.drawn === null ? null : C.isoOf(S.drawn));
+  if (!m) return;
+  set("sim-tk-left", m.left); set("sim-tk-action", m.action); set("sim-tk-what", m.what);
+  const src = $("sim-tk-src"); src.textContent = m.source; src.className = "sim-src " + m.source;
+  set("sim-tk-buy", m.buy); set("sim-tk-stop", m.stop); set("sim-tk-target", m.target);
+  set("sim-tk-risk", m.risk); set("sim-tk-reward", m.reward); set("sim-tk-costs", m.costs); set("sim-tk-ratio", m.ratio);
+  set("sim-tk-trig", m.triggers); set("sim-tk-implied", m.implied);
+  const ul = $("sim-tk-reasons"), key = S.alert.id;
+  if (ul.dataset.alert !== key) { ul.dataset.alert = key; ul.innerHTML = ""; m.reasons.forEach(r => { const li = document.createElement("li"); li.textContent = r; ul.appendChild(li); }); }
 }
-function render() {
-  if (!S.id) return;
-  renderClock();
-  $("sim-badge").textContent = S.mode === "live" ? "LIVE" : (S.over ? "ENDED" : (S.playing ? "PLAYING" : "PAUSED"));
-  $("sim-badge").className = "sim-badge " + (S.mode === "live" ? "live" : (S.playing ? "on" : ""));
-  $("sim-play").textContent = S.playing ? "Pause" : "Play";
-  $("sim-play").disabled = S.over;
-  $("sim-step").hidden = S.mode === "live"; $("sim-step").disabled = S.over;
-  renderSpeeds();
-  $("sim-premium").textContent = S.session && S.session.premium_note ? "Prices: " + S.session.premium_note : "";
-  const stale = S.mode === "live" && S.cursorIso && Date.now() / 1000 - (unixOf(S.cursorIso) + 60) > liveStaleSeconds();
-  $("sim-status").textContent = (stale ? `Waiting for live minutes: the newest one the engine has is from ${clockText(unixOf(S.cursorIso) + 60)}. ` : "") + (S.note || (S.session ? `${S.session.instrument.label} · ${S.session.strategy} · ${S.session.timeframe}` : ""));
-  $("sim-alert").innerHTML = S.trade ? "" : alertCardHtml(S.alert, S.cursorIso);
-  $("sim-pos").innerHTML = positionCardHtml(S.trade || S.lastClosed, S.exitSignal);
-  $("sim-summary").innerHTML = summaryTilesHtml(S.summary, S.session && S.session.capital);
-  renderLog(); syncLines(); syncMarkers();
-  revealCard();
+function renderPositionLive() {
+  if (!S.trade || $("sim-pos").hidden) return;
+  const m = C.positionModel(S.trade, S.trade.status === "OPEN" ? S.mark : null, S.exitSignal);
+  if (!m) return;
+  set("sim-ps-action", m.action); set("sim-ps-what", m.what);
+  const src = $("sim-ps-src"); src.textContent = m.source; src.className = "sim-src " + m.source;
+  show("sim-ps-pending", m.pending); show("sim-ps-live", !m.pending);
+  set("sim-ps-tag", m.pending ? "Waiting for the fill" : "Open trade");
+  if (m.pending) { set("sim-ps-mins", ""); return; }
+  set("sim-ps-pnl", m.pnl); setTone("sim-ps-pnl", m.pnlTone); set("sim-ps-pct", m.pct); set("sim-ps-r", m.r);
+  set("sim-ps-inout", m.inOut); set("sim-ps-index", m.index); set("sim-ps-stage", m.stage);
+  set("sim-ps-stop", m.stop); set("sim-ps-target", m.target); set("sim-ps-mins", m.minutes); set("sim-ps-way", m.way);
+  const at = (id, pct) => { const el = $(id); el.hidden = pct === null; if (pct !== null) el.style.left = pct.toFixed(1) + "%"; };
+  at("sim-ps-mprice", m.bar.price); at("sim-ps-mstop", m.bar.stop); at("sim-ps-mentry", m.bar.entry);
+  at("sim-ps-t25", m.bar.ticks[0]); at("sim-ps-t50", m.bar.ticks[1]); at("sim-ps-t80", m.bar.ticks[2]);
+  show("sim-ps-exit", !!m.exitSignal);
+  if (phone()) renderActbar();
 }
-/* An alert or a result the user could miss: scroll its card into view and flash it. */
-function revealCard() {
-  if (!S.reveal) return;
-  const card = S.reveal === "alert" ? $("sim-alert").querySelector(".sim-alertcard") : $("sim-pos").querySelector(".sim-poscard.closed");
-  if (!card) return;
-  S.reveal = null;
-  const r = card.getBoundingClientRect();
-  if (cardNeedsScroll(r.top, r.bottom, window.innerHeight || document.documentElement.clientHeight)) card.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  card.classList.remove("sim-flash"); void card.offsetWidth; card.classList.add("sim-flash");
-  setTimeout(() => card.classList.remove("sim-flash"), 2200);
+function fillResult() {
+  const r = C.resultModel(S.lastClosed);
+  if (!r) return;
+  $("sim-res").className = "sim-card sim-res " + (r.won ? "won" : "lost");
+  const tag = $("sim-rs-tag"); tag.textContent = r.won ? "Won" : "Lost"; tag.className = "sim-tag " + (r.won ? "won" : "lost");
+  set("sim-rs-r", r.r); set("sim-rs-reason", r.reason); set("sim-rs-net", r.net); setTone("sim-rs-net", r.netTone);
+  set("sim-rs-charges", r.charges); set("sim-rs-what", `${r.action} ${r.what}`); set("sim-rs-inout", r.inOut); set("sim-rs-rule", r.rule);
 }
-async function showView(v) {
-  S.view = v;
-  if (v === "all") { S.allTrades = null; renderLog(); try { S.allTrades = (await getJson("/api/sim/trades?limit=200")).trades || []; } catch (e) { S.allTrades = []; } }
-  renderLog();
+function fillDay() {
+  const day = S.dayOver, list = (S.trades || []).filter(t => String(t.exit_ts || "").slice(0, 10) === day);
+  const net = list.reduce((a, t) => a + (Number(t.net) || 0), 0);
+  set("sim-dy-title", `${day && day !== "today" ? C.dayText(day) : "The day"} is over`);
+  set("sim-dy-net", C.signedMoney(net)); setTone("sim-dy-net", C.tone(net));
+  set("sim-dy-trades", list.length ? `${list.length} trade${list.length === 1 ? "" : "s"} that day` : "no trades that day");
+}
+function renderDock() {
+  const resume = !!S.resume && !S.sess;
+  const ticket = !resume && sessReady() && !!S.alert && !S.trade;
+  const pos = !resume && !!S.trade;
+  const day = !resume && !ticket && !pos && !!S.dayOver;
+  const res = !resume && !ticket && !pos && !day && !!S.lastClosed;
+  show("sim-ticket", ticket); show("sim-pos", pos); show("sim-dayc", day); show("sim-res", res);
+  show("sim-hint", resume || (!ticket && !pos && !day && !res));
+  if (resume) renderHint({ tag: "Welcome back", title: "Continue your last session?", text: C.resumeLine(S.resume.session), btns: [["resume", "Continue", "primary"], ["dismiss", "No thanks", ""]] });
+  else if (ticket) fillTicket();
+  else if (pos) renderPositionLive();
+  else if (day) fillDay();
+  else if (res) fillResult();
+  else renderHint();
+  renderFlag();
+  renderActbar();
+}
+function renderFlag() {
+  const el = $("sim-flag");
+  if (sessReady() && S.alert && !S.trade) {
+    clearTimeout(S.flagTimer);
+    el.textContent = `Alert: ${S.alert.action} · take it (T) or skip it (S)`; el.className = "sim-flag"; el.hidden = false;
+  } else if (el.className === "sim-flag" && !el.hidden) el.hidden = true;
+}
+function renderActbar() {
+  const bar = $("sim-actbar");
+  if (!phone()) { bar.hidden = true; return; }
+  const a = sessReady() && S.alert && !S.trade, t = !!S.trade;
+  bar.hidden = !(a || t);
+  show("sim-ab-take", a); show("sim-ab-skip", a); show("sim-ab-close", t);
+  if (a) set("sim-ab-text", `${S.alert.action} · risk ${C.money(S.alert.risk_inr)}`);
+  else if (t) { const m = C.positionModel(S.trade, S.mark, false); set("sim-ab-text", m.pending ? "Waiting for the fill" : `${m.pnl} · ${m.r}`); }
+}
+function renderNumbers() {
+  const s = S.summary || {}, cap = S.sess && S.sess.session && S.sess.session.capital;
+  set("sim-n-trades", String(s.trades || 0));
+  set("sim-n-win", s.trades ? `${s.winners || 0} of ${s.trades}` : "–");
+  set("sim-n-net", C.signedMoney(s.net || 0)); setTone("sim-n-net", C.tone(s.net));
+  set("sim-n-eq", C.money(s.equity ?? cap));
+  const grid = C.numbersModel(s, cap).map(([l, v, t]) => `<div><span>${C.esc(l)}</span><b class="${t}">${C.esc(v)}</b></div>`).join("");
+  if ($("sim-numgrid").innerHTML !== grid) $("sim-numgrid").innerHTML = grid;
+  const nets = (S.trades || []).slice().reverse().map(t => t.net);
+  $("sim-equity-path").setAttribute("d", C.equityPath(nets, cap || 100000, 600, 90));
+}
+
+/* ── the bottom panel ───────────────────────────────────────────────── */
+function renderTrades() {
+  const all = S.tview === "all", rows = all ? (S.allTrades || []) : (S.trades || []);
+  const html = rows.map((t, i) => {
+    const c = C.tradeCells(t), mine = !all || (S.sess && t.session_id === S.sess.id);
+    return `<tr data-i="${i}" data-ts="${C.esc(t.entry_ts || "")}" class="${mine ? "" : "other"}" title="${mine ? "Show this trade on the chart" : "From another session"}">`
+      + `<td>${C.esc(c.when)}<small>${C.esc(all ? `${c.day} · ${t.instrument || ""}` : c.day)}</small></td>`
+      + `<td class="w">${C.esc(c.what)}<small>${C.esc(c.source)}</small></td>`
+      + `<td class="n">${C.esc(c.price)}</td><td class="n">${C.esc(c.index || "–")}</td>`
+      + `<td class="w">${C.esc(c.reason)}</td><td class="n ${c.netTone}">${C.esc(c.net)}</td><td class="n">${C.esc(c.r)}</td></tr>`;
+  }).join("");
+  $("sim-trades").innerHTML = html;
+  show("sim-trades-empty", !rows.length);
+  set("sim-trades-empty", all ? (S.allTrades === null ? "Loading…" : "No simulator trades yet.") : "No closed trades in this session yet.");
+  set("sim-pt-trades-n", (S.trades || []).length ? String(S.trades.length) : "");
+  $("sim-view-session").setAttribute("aria-pressed", String(!all));
+  $("sim-view-all").setAttribute("aria-pressed", String(all));
+}
+/* One event into the log (appended at its own minute; the list is never rebuilt) and its marker. */
+function logEvent(ev, restoring) {
+  S.events.push(ev);
+  const side = (ev.data && ev.data.side) || (S.trade && S.trade.side) || (S.alert && S.alert.side) || "LONG";
+  const mk = C.markerFor(ev, side);
+  if (mk) S.markers.push(mk);
+  const c = C.eventCells(ev), li = document.createElement("li"), list = $("sim-log");
+  li.className = c.kind;
+  const a = document.createElement("span"); a.textContent = `${c.time} · ${c.day}`;
+  const b = document.createElement("b"); b.textContent = c.word;
+  const t = document.createElement("span"); t.textContent = c.text;
+  li.append(a, b, t);
+  const pane = list.parentElement, atEnd = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 30;
+  list.appendChild(li);
+  while (list.children.length > 500) list.removeChild(list.firstChild);
+  if (!restoring && atEnd && !$("sim-p-log").hidden) pane.scrollTop = pane.scrollHeight;
+}
+function renderLogCount() {
+  set("sim-pt-log-n", S.events.length ? String(S.events.length) : "");
+  show("sim-log-empty", !S.events.length);
+}
+function showPanelTab(name) {
+  S.view.ptab = name; saveView();
+  ["trades", "log", "numbers", "how"].forEach(t => {
+    $("sim-pt-" + t).setAttribute("aria-selected", String(t === name));
+    $("sim-p-" + t).hidden = t !== name;
+  });
+  if (!panelOpen()) { S.view.panel = true; saveView(); renderPanelOpen(); fitRoot(); }
+  if (name === "log") { const pane = $("sim-log").parentElement; pane.scrollTop = pane.scrollHeight; }
+}
+async function showTradesView(v) {
+  S.tview = v;
+  if (v === "all") {
+    S.allTrades = null; renderTrades();
+    try { S.allTrades = (await getJson("/api/sim/trades?limit=200")).trades || []; } catch (e) { S.allTrades = []; }
+  }
+  renderTrades();
+}
+
+/* ── everything that depends on the state, not per frame ────────────── */
+function renderAll() {
+  renderPlay(); renderClock(); renderDock(); renderDay();
+  disable("sim-inst", S.offline ? "The engine is not running" : null);
+}
+
+/* ── the chart timeframe (a view only: the session, the clock and the trade stay) ── */
+async function setChartTf(tf) {
+  if (!tf || tf === S.view.ctf) return;
+  S.view.ctf = tf; saveView(); renderSpeeds();
+  if (!S.chart || S.empty) return;
+  const my = ++S.tfReq, req = S.req;
+  if (S.drawn === null) { await loadPicture(); return; }
+  S.hold = true;
+  set("sim-build-text", `Loading the ${tf} candles…`); show("sim-build", true);
+  try {
+    const r = await getJson(`/api/sim/candles?${q({ instrument: S.choice.instrument, timeframe: tf, until: C.isoOf(S.drawn), count: 300 })}`);
+    if (my !== S.tfReq || req !== S.req) return;
+    S.chart.setCandles(tf, C.tfMinutes(tf), r.candles || [], r.forming || null);
+    S.chart.startView();
+    drawOverlays(); resetLegendLines(); syncChart();
+  } catch (e) {
+    if (my === S.tfReq) flag(`The ${tf} candles could not be loaded.`, "lost", 4000);
+  } finally {
+    if (my === S.tfReq) { S.hold = false; show("sim-build", S.sess && S.sess.status === "BUILDING"); S.lastFrame = performance.now(); }
+  }
+  renderLegend(); renderClock();
 }
 
 /* ── start-up ───────────────────────────────────────────────────────── */
-function bannerHtml() {
-  $("sim-banner").innerHTML = S.fake ? `<div class="card sim-demo"><b>Demo data, not market data.</b> This tab is running on a built-in fake of the engine (?simfake=1).</div>` : "";
-}
-async function offerResume() {
-  const last = store.get("sim.last", null);
-  if (!last || !last.id || S.id) return;
-  let st;
-  try { st = await getJson(`/api/sim/sessions/${last.id}`); } catch (e) {
-    if (String(e.message) === "404") store.set("sim.last", null);   // a database that no longer has it: stop asking
-    return;
-  }
-  if (!st || !st.session || st.session.status === "ENDED") return;
-  const s = st.session;
-  $("sim-resume").innerHTML = `<div class="card sim-resumecard">Resume your last session? ${esc(resumeLine(s))} `
-    + `<button class="btn primary small" data-act="resume">Resume</button> <button class="btn small" data-act="dismiss">No thanks</button></div>`;
-  S.resumeState = st;
-}
-function resume() {
-  const st = S.resumeState;
-  if (!st) return;
-  resetRun(st.session);
-  S.candles = st.candles || [];
-  $("sim-run").hidden = false;
-  drawAll(); markPartial(); takeState(st);
-  S.note = "Resumed at the server's clock. Press Play.";
-  $("sim-resume").innerHTML = ""; S.resumeState = null;
-  render();
-}
 async function loadTab() {
-  bannerHtml();
-  if (S.opts || S.offline) { if (S.chart) S.chart.timeScale().fitContent(); return; }
+  fitRoot(); renderPanelOpen();
+  if (S.booted) { renderAll(); if (S.chart && !S.hover) renderLegend(); return; }
+  S.booted = true;
+  ensureChart();
+  if (S.fake) { set("sim-banner", "Demo data, not market data"); show("sim-banner", true); window.SimPage = { chart: () => S.chart, state: () => S }; }
+  buildSpeeds(); renderSpeeds(); showPanelTab(S.view.ptab || "trades"); renderPanelOpen();
+  setChecks();
+  renderAll();
+  // never a blank page: the stored choice draws at once while the options and the days load
+  const c = S.choice;
+  if (c.instrument && c.day && !live()) { S.startIso = C.startIsoOf(c.day); loadPicture(); }
   try {
     S.opts = await getJson("/api/sim/options");
     if (!S.opts || !S.opts.instruments) throw new Error("no options");
   } catch (e) {
     S.opts = null;
-    // A 404 means this build has no engine; any other failure (the desk still starting, a 503) may pass, so the next visit tries again.
-    if (e && e.message === "404") { S.offline = true; $("sim-note").textContent = "The simulator's engine is not running in this build."; }
-    else $("sim-note").textContent = "The simulator is not answering yet (the desk may still be starting). Open this tab again to retry.";
-    $("sim-go").disabled = true;
+    if (e && (e.status === 404 || e.message === "404")) { S.offline = true; veil("The simulator's engine is not running in this build.", "The rest of the desk works as usual.", "info"); }
+    else veil("The simulator is not answering yet", "The desk may still be starting. Open this tab again to retry.", "err");
+    S.booted = !!S.offline;   // a failure other than 404 may pass: the next visit tries again
+    renderAll(); return;
+  }
+  buildSpeeds(); renderSpeeds();
+  settleChoice();
+  const days = await daysOf(S.choice.instrument);
+  const want = S.choice.day && days.includes(S.choice.day) ? S.choice.day : C.defaultDay(days);
+  const drew = S.startIso && S.choice.day === want && S.choice.instrument === c.instrument;
+  S.choice.day = want;
+  if (!live()) S.startIso = C.startIsoOf(want); else S.startIso = null;
+  saveChoice(); renderChoice();
+  if (!drew) await loadPicture(); else { S.meta = { ...S.meta, ...(instOf(S.choice.instrument) || {}) }; renderAll(); }
+  prepare();
+  offerResume();
+}
+async function offerResume() {
+  const last = store.get("sim.last", null);
+  if (!last || !last.id || S.sess) return;
+  let st;
+  try { st = await getJson(`/api/sim/sessions/${encodeURIComponent(last.id)}`); } catch (e) {
+    if (e && (e.status === 404 || e.message === "404")) store.set("sim.last", null);   // a database that no longer has it: stop asking
     return;
   }
-  S.speed = Number(S.setup.speed) || 1;
-  S.pauseOnAlert = S.setup.pauseOnAlert !== false; S.sound = S.setup.sound !== false;
-  $("sim-pause-alert").checked = S.pauseOnAlert; $("sim-sound").checked = S.sound;
-  renderSetup();
-  offerResume();
+  if (!st || !st.session || /^(ENDED|FAILED)$/.test(st.session.status) || S.sess) return;
+  const strat = stratOf(st.session.strategy);
+  S.resume = { ...st, session: { ...st.session, strategy_label: strat ? strat.label : st.session.strategy } };
+  renderDock();
+}
+async function resume() {
+  const st = S.resume;
+  if (!st) return;
+  S.resume = null;
+  const s = st.session, cursor = C.unixOf(s.cursor);
+  dropSession();
+  Object.assign(S.choice, { instrument: s.instrument.key, strategy: s.strategy, timeframe: s.timeframe, mode: s.mode });
+  settleChoice();
+  S.hidden = false;
+  S.startIso = s.mode === "live" ? null : C.isoOf(cursor + 60);
+  S.choice.day = S.startIso ? S.startIso.slice(0, 10) : S.choice.day;
+  await daysOf(S.choice.instrument);
+  saveChoice(); renderChoice();
+  await loadPicture();
+  if (s.mode !== "live") S.drawn = cursor;
+  await adopt(st, true);
+}
+function setChecks() {
+  const v = S.view;
+  $("sim-o-smooth").checked = v.smooth; $("sim-o-pause").checked = v.pauseOnAlert; $("sim-o-slow").checked = v.slowInTrade;
+  $("sim-o-nextday").checked = v.autoNextDay; $("sim-o-hide").checked = v.hideDate; $("sim-o-sound").checked = v.sound;
+}
+function openSheet(id) {
+  ["sim-settings", "sim-keys"].forEach(x => { if (x !== id) $(x).hidden = true; });
+  const el = $(id), open = el.hidden;
+  el.hidden = !open;
+  $("sim-gear").setAttribute("aria-expanded", String(id === "sim-settings" && open));
+  if (open) setPlaying(false, "Paused while a sheet is open.");
+}
+function closeSheets() {
+  let closed = false;
+  ["sim-settings", "sim-keys"].forEach(x => { if (!$(x).hidden) { $(x).hidden = true; closed = true; } });
+  $("sim-gear").setAttribute("aria-expanded", "false");
+  if (S.answer) { S.answer(false); closed = true; }
+  return closed;
+}
+function speedTo(v) {
+  if (!Number.isFinite(v) || live()) return;
+  S.view.speed = v; saveView(); renderPlay();
+}
+function dayMove(kind) {
+  const days = daysNow(S.choice.instrument);
+  if (!days || !days.length || live()) return;
+  if (kind === "day-prev") { const d = C.shiftDay(days, S.choice.day, -1); if (d) choose({ day: d }); }
+  else if (kind === "day-next") { const d = C.shiftDay(days, S.choice.day, 1); if (d) choose({ day: d }); }
+  else if (kind === "day-rand") choose({ day: C.randomDay(days, S.choice.day) }, { random: true });
+}
+function dispatch(a) {
+  if (a === "play") { if (S.dayOver) { S.dayOver = null; setPlaying(true); } else setPlaying(!S.playing); }
+  else if (a === "step") forward(1, null);
+  else if (a === "candle") forward(S.drawn === null ? ctfm() : C.stepMinutes(S.drawn, ctfm()), "alert");
+  else if (a === "next") forward(390, "alert");
+  else if (a === "nextday") { S.dayOver = null; setPlaying(true); }
+  else if (a === "take" || a === "skip" || a === "close" || a === "end") act(a);
+  else if (a === "fit") { if (S.chart) S.chart.fit(); }
+  else if (a === "tonow") { if (S.chart) S.chart.toNow(); }
+  else if (a === "settings") openSheet("sim-settings");
+  else if (a === "help") openSheet("sim-keys");
+  else if (a === "sheet-close") closeSheets();
+  else if (a === "full") { const r = $("sim-root"); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); else if (r.requestFullscreen) r.requestFullscreen().catch(() => {}); }
+  else if (a === "panel") { S.view.panel = !panelOpen(); saveView(); renderPanelOpen(); fitRoot(); }
+  else if (a === "day-prev" || a === "day-next" || a === "day-rand") dayMove(a);
+  else if (a === "day-pick") { const inp = $("sim-day-input"); try { inp.showPicker(); } catch (e) { inp.focus(); inp.click(); } }
+  else if (a === "mode-past") { if (live()) choose({ mode: "past" }); }
+  else if (a === "mode-live") { if (!live()) choose({ mode: "live" }); }
+  else if (a === "retry") { if (S.error || S.empty) loadPicture().then(prepare); else loadTab(); }
+  else if (a === "retry-session") { renderHint(); ensureSession("play"); }
+  else if (a === "view-session") showTradesView("session");
+  else if (a === "view-all") showTradesView("all");
+  else if (a === "resume") resume();
+  else if (a === "dismiss") { S.resume = null; store.set("sim.last", null); renderDock(); }
 }
 function wire() {
   const root = $("sim-root");
-  root.addEventListener("change", (e) => {
-    const id = e.target.id;
-    if (id === "sim-mode" || id === "sim-inst" || id === "sim-strat" || id === "sim-tf" || id === "sim-start") {
-      readSetup();
-      if (id === "sim-inst") S.setup.start = "";
-      renderSetup();
-    } else if (id === "sim-pause-alert" || id === "sim-sound") {
-      S.pauseOnAlert = $("sim-pause-alert").checked; S.sound = $("sim-sound").checked;
-      S.setup.pauseOnAlert = S.pauseOnAlert; S.setup.sound = S.sound; store.set("sim.setup", S.setup);
-    }
-  });
   root.addEventListener("click", (e) => {
     const sp = e.target.closest("[data-speed]");
-    if (sp) { S.speed = Number(sp.dataset.speed); S.setup.speed = S.speed; store.set("sim.setup", S.setup); S.acc = 0; render(); return; }
+    if (sp) { speedTo(Number(sp.dataset.speed)); return; }
+    const tf = e.target.closest("[data-ctf]");
+    if (tf) { setChartTf(tf.dataset.ctf); return; }
+    const pt = e.target.closest("[data-ptab]");
+    if (pt) { showPanelTab(pt.dataset.ptab); return; }
+    const row = e.target.closest("#sim-trades tr");
+    if (row && !row.classList.contains("other") && row.dataset.ts && S.chart) {
+      root.querySelectorAll("#sim-trades tr.sel").forEach(r => r.classList.remove("sel"));
+      row.classList.add("sel"); S.chart.scrollTo(C.unixOf(row.dataset.ts)); return;
+    }
+    const csv = e.target.closest("#sim-csv");
+    if (csv && S.fake) {
+      e.preventDefault();
+      S.fake.handle("/api/sim/trades.csv").then(r => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([r.csv], { type: "text/csv" })); a.download = "sim_trades_demo.csv"; a.click(); });
+      return;
+    }
     const b = e.target.closest("[data-act]");
-    if (!b) return;
-    const a = b.dataset.act;
-    if (a === "start") startSession();
-    else if (a === "play") setPlaying(!S.playing);
-    else if (a === "step") stepOnce();
-    else if (a === "view-session") showView("session");
-    else if (a === "view-all") showView("all");
-    else if (a === "resume") resume();
-    else if (a === "dismiss") { $("sim-resume").innerHTML = ""; store.set("sim.last", null); }
-    else act(a);
+    if (b && !b.disabled) dispatch(b.dataset.act);
+  });
+  root.addEventListener("change", (e) => {
+    const id = e.target.id;
+    if (id === "sim-inst") choose({ instrument: e.target.value });
+    else if (id === "sim-strat") choose({ strategy: e.target.value });
+    else if (id === "sim-tf") choose({ timeframe: e.target.value });
+    else if (id === "sim-ctf") setChartTf(e.target.value);
+    else if (id === "sim-speed-sel") speedTo(Number(e.target.value));
+    else if (id === "sim-day-input") { if (e.target.value) choose({ day: e.target.value }); }
+    else if (/^sim-o-/.test(id)) {
+      const v = S.view;
+      v.smooth = $("sim-o-smooth").checked; v.pauseOnAlert = $("sim-o-pause").checked; v.slowInTrade = $("sim-o-slow").checked;
+      v.autoNextDay = $("sim-o-nextday").checked; v.hideDate = $("sim-o-hide").checked; v.sound = $("sim-o-sound").checked;
+      saveView(); renderPlay();
+    }
   });
   document.addEventListener("keydown", (e) => {
     if (!OL.tabShown("sim")) return;
-    if ((e.key === "Enter" || e.code === "Space") && e.target && e.target.closest && e.target.closest("[data-speed]")) { e.preventDefault(); e.target.click(); return; }
-    if (!S.id) return;
-    const tag = (e.target && e.target.tagName) || "";
-    if (/^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(tag) || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.code === "Space") { e.preventDefault(); setPlaying(!S.playing); }
-    else if (e.code === "ArrowRight") { e.preventDefault(); stepOnce(); }
+    const t = e.target || {};
+    const a = C.keyAction({ key: e.key, code: e.code, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, tag: t.tagName, editable: !!t.isContentEditable });
+    if (!a) return;
+    if (a === "escape") { if (closeSheets()) e.preventDefault(); return; }
+    if (!$("sim-ask").hidden) return;
+    e.preventDefault();
+    if (a === "help") openSheet("sim-keys");
+    else if (a === "faster" || a === "slower") speedTo(C.speedStep(speeds(), S.view.speed, a === "faster" ? 1 : -1));
+    else if (a === "tf-down" || a === "tf-up") setChartTf(C.tfStep(chartTfs(), S.view.ctf, a === "tf-up" ? 1 : -1));
+    else if (a === "panel") dispatch("panel");
+    else if (a === "play") { if (!$("sim-play").disabled) dispatch("play"); }
+    else if ((a === "step" || a === "candle" || a === "next") && !$("sim-step").disabled) dispatch(a);
+    else if (a === "take" || a === "skip" || a === "close" || a === "fit") dispatch(a);
   });
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden && S.playing) { S.playing = false; S.note = "Paused while this tab was in the background."; render(); }
-  });
-  new MutationObserver(retheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-  let prev = performance.now();
-  setInterval(() => { const now = performance.now(), dt = Math.min(now - prev, 1000); prev = now; tick(dt); }, 100);
+  document.addEventListener("visibilitychange", () => { if (document.hidden && S.playing) setPlaying(false, "Paused while the window was hidden."); });
+  window.addEventListener("hashchange", () => { if (!OL.tabShown("sim") && S.playing) setPlaying(false, "Paused: you left the Simulator."); });
+  window.addEventListener("resize", () => { requestAnimationFrame(() => { fitRoot(); renderPanelOpen(); renderActbar(); }); });
+  document.addEventListener("fullscreenchange", () => requestAnimationFrame(fitRoot));
+  if (typeof ResizeObserver === "function") {
+    const ro = new ResizeObserver(() => requestAnimationFrame(fitRoot));
+    [document.querySelector("header.top"), $("warnings"), root].forEach(el => { if (el) ro.observe(el); });
+  }
+  new MutationObserver(() => { if (S.chart) { S.chart.theme(); resetLegendLines(); renderLegend(); } }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 }
 function boot() {
   if (!$("sim-root")) return;
