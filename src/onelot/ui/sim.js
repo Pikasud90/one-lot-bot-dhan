@@ -9,6 +9,7 @@ const OL = window.OneLot, C = window.SimCore, SC = window.SimChart;
 if (!OL || !C || !SC) return;
 const { $, store, toast, api } = OL;
 const cssv = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const errText = (e) => String((e && e.message) || "no answer").replace(/\.\s*$/, "");
 const NO_HISTORY = "No stored history for this instrument yet: run the backfill on the Data tab, or use Live";
 
 /* ── state ──────────────────────────────────────────────────────────── */
@@ -247,6 +248,7 @@ function renderPlay() {
   if (S.offline) { word = "Engine off"; k = "bad"; }
   else if (S.error) { word = "Error"; k = "bad"; }
   else if (S.starting || (S.sess && S.sess.status === "BUILDING")) { word = "Preparing"; k = "wait"; }
+  else if (S.failed && !S.sess) { word = "Not prepared"; k = "bad"; }
   else if (busy) { word = "Moving…"; k = "wait"; }
   else if (S.playing) { word = live() ? "Live" : `Playing ${force()}x` + (force() < S.view.speed ? " (in a trade)" : ""); k = "on"; }
   else if (S.alert && !S.trade && sessReady()) { word = "Alert: your move"; k = "wait"; }
@@ -329,7 +331,7 @@ async function loadPicture() {
   try { performance.mark("sim-switch-start"); } catch (e) {}
   const c = S.choice, inst = instOf(c.instrument) || { key: c.instrument, label: c.instrument || "–", kind: "INDEX" };
   S.meta = { key: inst.key, label: inst.label, kind: inst.kind, tick: inst.tick, hasVolume: inst.kind !== "INDEX" };
-  S.loading = true; S.error = null; S.empty = false; status("");
+  S.loading = true; S.error = null; S.empty = false; S.failed = null; status("");
   S.chart.reset();
   resetLegendLines(); flag(null); show("sim-build", false);
   veil(`Loading ${inst.label} · ${S.view.ctf} …`, live() ? "Live feed" : (S.hidden ? "A hidden day" : (c.day ? C.dayText(c.day) : "")), "load");
@@ -345,7 +347,7 @@ async function loadPicture() {
     r = await getJson(`/api/sim/candles?${q({ instrument: inst.key, timeframe: S.view.ctf, until, count: 300 })}`, S.ac && S.ac.signal);
   } catch (e) {
     if (my !== S.req || (e && e.name === "AbortError")) return;
-    S.loading = false; S.error = (e && e.message) || "error";
+    S.loading = false; S.error = errText(e);
     veil("The chart could not be loaded", `The engine said: ${S.error}`, "err");
     renderAll(); return;
   }
@@ -431,13 +433,13 @@ async function ensureSession(want) {
   if (S.sess && S.sess.status === "BUILDING") return false;
   if (whyNoPlay()) return false;
   const c = S.choice, my = S.req;
-  S.starting = true; renderAll();
+  S.starting = true; S.failed = null; renderAll();
   let r;
   try {
     r = await post("/api/sim/sessions", { instrument: c.instrument, strategy: c.strategy, timeframe: c.timeframe, mode: c.mode, start: live() ? null : S.startIso, params: {} });
   } catch (e) {
     S.starting = false;
-    if (my === S.req) { status(`The session could not start: ${(e && e.message) || "error"}.`); flag(`The session could not start: ${(e && e.message) || "error"}`, "lost", 6000); }
+    if (my === S.req) { status(`The session could not start: ${errText(e)}.`); flag(`The session could not start: ${errText(e)}`, "lost", 6000); }
     renderAll(); return false;
   }
   S.starting = false;
@@ -479,11 +481,9 @@ function pollBuild(my) {
 function failed(detail) {
   show("sim-build", false);
   S.sess = null; S.want = null;
-  S.error = detail || "The session could not be prepared.";
-  status("The session could not be prepared: " + S.error);
+  S.failed = detail || "The engine gave no reason.";   // the picture stays usable: Play or Try again starts it again
+  status("The session could not be prepared: " + errText({ message: S.failed }) + ".");
   renderAll();
-  S.error = null;   // the picture stays usable: Play tries again
-  renderHint({ tag: "Failed", title: "The session could not be prepared", text: detail || "The engine gave no reason.", btns: [["retry-session", "Try again", "primary"]] });
 }
 /* A RUNNING session: take its whole state (resume restores the log and the markers), then do what was asked. */
 async function running(st, r, resumed) {
@@ -611,7 +611,7 @@ function fetchChunk(n, until) {
     catch (e) {
       if (my === S.req && S.sess && S.sess.id === id) {
         S.playing = false;
-        status(`The engine did not answer: ${(e && e.message) || "error"}. Press Play to try again.`);
+        status(`The engine did not answer: ${errText(e)}. Press Play to try again.`);
         flag("The engine did not answer. Press Play to try again.", "lost", 6000);
         renderAll();
       }
@@ -750,7 +750,7 @@ async function actNow(kind) {
     else if (kind === "skip") res = await post(base + "/skip", { alert_id: S.alert.id });
     else if (kind === "close") res = await post(base + "/close", {});
     else if (kind === "end") res = await post(base + "/end", {});
-  } catch (e) { flag(`Not done: ${(e && e.message) || "error"}`, "lost", 5000); return; }
+  } catch (e) { flag(`Not done: ${errText(e)}`, "lost", 5000); return; }
   if (my !== S.req) return;
   const ch = { bars: res.minutes || [], i: 0, res, marks: new Map((res.marks || []).map(m => [m[0], m])) };
   while (ch.i < ch.bars.length) finishMinute(ch, ch.bars[ch.i]);
@@ -774,6 +774,7 @@ function renderHint(h) {
     else if (!c.strategy) h = { tag: "No rule", title: "No strategy fits this instrument yet.", text: "Choose another instrument." };
     else if (S.error) h = { tag: "Error", title: "The chart could not be loaded", text: S.error, btns: [["retry", "Try again", "primary"]] };
     else if (S.loading) h = { tag: "Loading", title: `Loading ${inst ? inst.label : ""} · ${S.view.ctf}`, text: "" };
+    else if (S.failed && !S.sess) h = { tag: "Failed", title: "The session could not be prepared", text: S.failed, btns: [["retry-session", "Try again", "primary"]] };
     else if (S.starting || (S.sess && S.sess.status === "BUILDING")) h = { tag: "Preparing", title: "Preparing the strategy", text: S.build ? `Step: ${S.build.step}. Play starts by itself when it is ready.` : "This takes a moment the first time." };
     else if (live() && !C.marketOpenAt(Date.now())) h = { tag: "Closed", title: "The market is closed", text: "Live practice starts at 09:15 on a trading day. Choose Past to practise on a stored day now." };
     else if (S.over) h = { tag: "Ended", title: "This session has ended", text: "Choose another day, instrument or strategy above to start a new one.", btns: [["day-rand", "A random day", ""], ["day-next", "The next day", ""]] };

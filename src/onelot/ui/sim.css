@@ -237,7 +237,8 @@
   border:1px solid var(--line2);box-shadow:0 18px 50px -12px color-mix(in srgb,var(--text) 45%,transparent)}
 #sim-root .sim-sheet-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font:700 18px/1 var(--ui);letter-spacing:.06em;text-transform:uppercase}
 #sim-root .sim-sheet-head .sim-ib{width:36px;height:36px;font-size:16px;background:transparent;border-color:transparent}
-#sim-root .sim-check{display:flex;gap:10px;align-items:flex-start;padding:8px 0;font-size:16px;line-height:1.35;border-bottom:1px solid var(--line);cursor:pointer}
+#sim-root .sim-check{display:flex;gap:10px;align-items:flex-start;padding:8px 0;font:400 16px/1.35 var(--ui);letter-spacing:0;text-transform:none;color:var(--text);border-bottom:1px solid var(--line);cursor:pointer}
+#sim-root .sim-check b{font-weight:700}
 #sim-root .sim-check input{width:20px;height:20px;margin-top:2px;flex:none;accent-color:var(--cyan-ink)}
 #sim-root .sim-sheet-foot{margin-top:12px;display:flex;gap:8px}
 #sim-root .sim-keysheet{left:50%;right:auto;transform:translateX(-50%);width:540px}
