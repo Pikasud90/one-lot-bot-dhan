@@ -120,8 +120,11 @@ function fitRoot() {
   const root = $("sim-root");
   if (!root || !OL.tabShown("sim")) return;
   if (document.fullscreenElement === root || phone()) { root.style.removeProperty("--sim-h"); return; }
-  const top = root.getBoundingClientRect().top + window.scrollY;
-  root.style.setProperty("--sim-h", Math.max(460, Math.floor(window.innerHeight - top - 10)) + "px");
+  const top = root.getBoundingClientRect().top + window.scrollY, h = Math.max(460, Math.floor(window.innerHeight - top - 8));
+  root.style.setProperty("--sim-h", h + "px");
+  // the open panel gives way so the chart keeps its height (at least 530px wide-screen, 390px with the dock as a row)
+  const wide = window.innerWidth >= 1200, strip = $("sim-strip").offsetHeight;
+  root.style.setProperty("--panel-h", Math.max(128, Math.min(212, h - strip - (wide ? 16 + 530 : 18 + 118 + 390))) + "px");
 }
 function panelOpen() { return S.view.panel === null ? window.innerHeight >= 800 : !!S.view.panel; }
 function renderPanelOpen() {
@@ -162,7 +165,8 @@ function renderChoice() {
 }
 function renderDay() {
   const c = S.choice, days = daysNow(c.instrument), hidden = S.hidden;
-  set("sim-day", live() ? "Live today" : (hidden ? "A hidden day" : (c.day ? C.dayText(c.day) : "–")));
+  set("sim-day", live() ? "Live today" : (hidden ? "A hidden day" : (c.day ? C.dayText(c.day, false) : "–")));
+  $("sim-day").title = live() ? "Live practice follows today" : (hidden ? "The date shows when the day is over" : (c.day ? `Replaying ${C.dayText(c.day)}: choose another day` : "Choose the day to replay"));
   const i = days && c.day ? days.indexOf(c.day) : -1;
   disable("sim-day-prev", live() ? "Live practice follows today" : (!days || i <= 0 ? "No stored day before this one" : null));
   disable("sim-day-next", live() ? "Live practice follows today" : (!days || i < 0 || i >= days.length - 1 ? "No stored day after this one" : null));
@@ -212,8 +216,8 @@ function clockUnix() {
 }
 function renderClock() {
   const t = clockUnix();
-  const txt = t === null ? "–" : (!S.sess && !live() ? C.readyText(t, S.hidden) : C.clockText(t, { hidden: S.hidden }));
-  set("sim-clock", txt);
+  set("sim-clock", t === null ? "–" : C.clockText(t, { hidden: S.hidden }));
+  $("sim-clock").title = t === null ? "" : (!S.sess && !live() ? C.readyText(t, S.hidden) : "The replay clock (Indian time)");
   set("sim-countdown", t === null ? "" : (C.countdownText(t, ctfm()) ? "closes in " + C.countdownText(t, ctfm()) : ""));
 }
 function whyNoPlay() {
@@ -248,7 +252,7 @@ function renderPlay() {
   else if (S.alert && !S.trade && sessReady()) { word = "Alert: your move"; k = "wait"; }
   else if (S.over) word = "Ended";
   else if (S.dayOver) word = "Day over";
-  else if (!S.sess) word = "Ready";
+  else if (!S.sess) word = live() ? "Ready: live" : "Ready: press Play";
   st.textContent = word; st.className = "sim-state " + k;
   renderSpeeds();
 }
@@ -545,14 +549,14 @@ function setPlaying(on, note) {
   S.playing = !!on; S.pausedByAlert = false; S.owe = 0; S.liveAcc = live() ? 4500 : 0;
   S.lastFrame = performance.now();
   if (on) { flag(null); tick(); }
-  if (note) status(note);
+  if (note) status(note); else if (on) status("");
   renderAll();
 }
 let raf = 0;
 function tick() { if (!raf) raf = requestAnimationFrame(frame); }
 function frame(now) {
   raf = 0;
-  const dt = Math.min(250, Math.max(0, now - S.lastFrame)); S.lastFrame = now;
+  const dt = Math.min(1000, Math.max(0, now - S.lastFrame)); S.lastFrame = now;   // a slow frame still pays its time
   if (!S.playing) return;
   if (!OL.tabShown("sim") || document.hidden) { setPlaying(false, "Paused: you left the Simulator."); return; }
   if (live()) { liveTick(dt); tick(); return; }

@@ -63,11 +63,12 @@ function barsFor(inst) {
   if (inst.empty) return [];
   if (barCache.has(inst.key)) return barCache.get(inst.key);
   const out = [], b = inst.base;
+  let px = b;
   DAYS.forEach((d, di) => {
-    const rnd = rng(7919 * (di + 1) + Math.round(b)), t0 = dayOpen(d);
-    let px = b * (1 + (rnd() - 0.5) * 0.01 + di * 0.0008);
+    const rnd = rng(7919 * (di + 1) + Math.round(b)), t0 = dayOpen(d), aim = b * (1 + (rnd() - 0.5) * 0.02);
+    px = px * (1 + (rnd() - 0.5) * 0.004);   // a small overnight gap from the close before
     for (let i = 0; i < DAY_MIN; i++) {
-      const drift = i >= 15 && i < 75 ? b * 0.00045 : (i >= 75 && i < 110 ? -b * 0.0006 : (i >= 161 && i < 200 ? b * 0.0003 : 0));
+      const drift = i >= 15 && i < 75 ? b * 0.00045 : (i >= 75 && i < 110 ? -b * 0.0006 : (i >= 161 && i < 200 ? b * 0.0003 : (i >= 230 ? (aim - px) * 0.02 : 0)));
       const o = px, c = o + drift + (rnd() - 0.5) * b * 0.0004;
       const h = Math.max(o, c) + rnd() * b * 0.00015, l = Math.min(o, c) - rnd() * b * 0.00015;
       const v = inst.vol ? Math.round(inst.vol * (0.5 + rnd()) * (1 + 2 * Math.exp(-i / 20))) : 0;

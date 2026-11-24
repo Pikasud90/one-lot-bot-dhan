@@ -426,14 +426,6 @@
             <button type="button" id="sim-mode-live" data-act="mode-live" aria-pressed="false" title="Practise on the live feed">Live</button>
           </div>
         </div>
-        <div class="sim-grp sim-g-view">
-          <div class="sim-seg sim-ctfs" id="sim-ctfs" role="group" aria-label="Chart timeframe ([ down, ] up)"></div>
-          <select id="sim-ctf" class="sim-sel sim-sel-ctf" aria-label="Chart timeframe" title="Chart timeframe ([ down, ] up)"></select>
-          <button type="button" class="sim-ib" id="sim-fit" data-act="fit" title="Fit the chart: about 120 candles, the newest at the right (F)" aria-label="Fit the chart"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-          <button type="button" class="sim-ib" id="sim-gear" data-act="settings" title="Settings" aria-label="Settings" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="16" cy="7" r="2.4" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="10" cy="17" r="2.4" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>
-          <button type="button" class="sim-ib sim-ib-word" id="sim-help" data-act="help" title="The keys (?)" aria-label="The keys">?</button>
-          <button type="button" class="sim-ib" id="sim-full" data-act="full" title="Full screen" aria-label="Full screen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10V4h6M14 4h6v6M20 14v6h-6M10 20H4v-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-        </div>
         </div>
         <div class="sim-grp sim-g-play">
           <button type="button" class="sim-play" id="sim-play" data-act="play" title="Play or pause (Space)" aria-label="Play">
@@ -449,12 +441,19 @@
             <div class="sim-clock" id="sim-clock">–</div>
             <div class="sim-state" id="sim-state">Paused</div>
           </div>
+          <button type="button" class="sim-ib" id="sim-gear" data-act="settings" title="Settings" aria-label="Settings" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="16" cy="7" r="2.4" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="10" cy="17" r="2.4" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>
         </div>
       </div>
 
       <div class="sim-chartbox" id="sim-chartbox">
         <div id="sim-chart" class="sim-chart" tabindex="0" aria-label="Replay chart"></div>
         <div id="sim-banner" class="sim-banner" hidden></div>
+        <div class="sim-chartbar" role="toolbar" aria-label="Chart">
+          <div class="sim-seg sim-ctfs" id="sim-ctfs" role="group" aria-label="Chart timeframe ([ down, ] up)"></div>
+          <select id="sim-ctf" class="sim-sel sim-sel-ctf" aria-label="Chart timeframe" title="Chart timeframe ([ down, ] up)"></select>
+          <button type="button" class="sim-ib" id="sim-fit" data-act="fit" title="Fit the chart: about 120 candles, the newest at the right (F)" aria-label="Fit the chart"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button type="button" class="sim-ib" id="sim-full" data-act="full" title="Full screen" aria-label="Full screen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10V4h6M14 4h6v6M20 14v6h-6M10 20H4v-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        </div>
         <div class="sim-legend" id="sim-legend" aria-live="off">
           <div class="sim-lg-row">
             <b class="sim-lg-head" id="sim-lg-head">–</b>
@@ -496,12 +495,12 @@
               <div class="sim-buy" id="sim-tk-buy">–</div>
               <div class="sim-pair"><span class="neg" id="sim-tk-stop">–</span><span class="pos" id="sim-tk-target">–</span></div>
               <div class="sim-pair"><span>Risk <b class="neg" id="sim-tk-risk">–</b></span><span>Reward <b class="pos" id="sim-tk-reward">–</b></span></div>
-              <div class="sim-pair sim-quiet"><span>Charges <b id="sim-tk-costs">–</b></span><span>Reward to risk <b id="sim-tk-ratio">–</b></span></div>
+              <div class="sim-pair sim-quiet"><span>Charges <b id="sim-tk-costs">–</b></span><span><b id="sim-tk-ratio">–</b> reward to risk</span></div>
             </div>
+            <div class="sim-btns"><button type="button" class="sim-btn take" data-act="take" title="Take this trade (T)">Take <kbd>T</kbd></button><button type="button" class="sim-btn" data-act="skip" title="Skip this alert (S)">Skip <kbd>S</kbd></button></div>
             <div class="sim-trig" id="sim-tk-trig"></div>
             <div class="sim-quiet" id="sim-tk-implied"></div>
             <details class="sim-why"><summary>Why this alert</summary><ul id="sim-tk-reasons"></ul></details>
-            <div class="sim-btns"><button type="button" class="sim-btn take" data-act="take" title="Take this trade (T)">Take <kbd>T</kbd></button><button type="button" class="sim-btn" data-act="skip" title="Skip this alert (S)">Skip <kbd>S</kbd></button></div>
           </div>
 
           <div class="sim-card sim-pos" id="sim-pos" hidden>
@@ -626,7 +625,7 @@
         <label class="sim-check"><input type="checkbox" id="sim-o-nextday"> <span><b>Go on to the next day</b> by itself at the close.</span></label>
         <label class="sim-check"><input type="checkbox" id="sim-o-hide"> <span><b>Hide the date</b> of a random day until the day is over.</span></label>
         <label class="sim-check"><input type="checkbox" id="sim-o-sound"> <span><b>Sound</b> on an alert.</span></label>
-        <div class="sim-sheet-foot"><button type="button" class="sim-btn danger" id="sim-end" data-act="end" title="End this practice session">End this session</button></div>
+        <div class="sim-sheet-foot"><button type="button" class="sim-btn" id="sim-help" data-act="help" title="The keys (?)">The keys <kbd>?</kbd></button><button type="button" class="sim-btn danger" id="sim-end" data-act="end" title="End this practice session">End this session</button></div>
       </div>
 
       <div class="sim-sheet sim-keysheet" id="sim-keys" role="dialog" aria-label="Keys" hidden>

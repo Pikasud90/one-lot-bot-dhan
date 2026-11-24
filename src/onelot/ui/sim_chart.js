@@ -16,9 +16,10 @@ function zonesPrimitive(cssv) {
   let chart = null, series = null, requestUpdate = null, z = null;
   const renderer = {
     draw(target) {
-      if (!z || !chart || !series) return;
+      if (!z || !chart || !series || !Number.isFinite(z.t0)) return;
       const ts = chart.timeScale();
-      let x0 = ts.timeToCoordinate(z.t0);
+      let x0 = null;
+      try { x0 = ts.timeToCoordinate(z.t0); } catch (e) { return; }
       if (x0 === null) x0 = 0;
       const yE = series.priceToCoordinate(z.entry), yS = series.priceToCoordinate(z.stop), yT = series.priceToCoordinate(z.target);
       if (yE === null) return;
@@ -30,8 +31,11 @@ function zonesPrimitive(cssv) {
           const top = Math.round(Math.min(ya, yb) * vr), h = Math.round(Math.abs(yb - ya) * vr);
           ctx.fillStyle = colour; ctx.fillRect(x, top, w, Math.max(1, h));
         };
-        rect(yE, yT, cssv("--ok-bg"));
-        rect(yE, yS, cssv("--bad-bg"));
+        // the stop on the losing side: risk (entry to stop) and reward (entry to target); once it has passed the entry the
+        // band from the entry to the stop is profit locked in, drawn as reward twice over
+        const losing = (z.target - z.entry) * (z.stop - z.entry) < 0;
+        if (losing) { rect(yE, yT, cssv("--ok-bg")); rect(yE, yS, cssv("--bad-bg")); }
+        else { rect(yE, yT, cssv("--ok-bg")); rect(yE, yS, cssv("--ok-bg")); }
       });
     },
   };
@@ -158,6 +162,7 @@ function create(el, LW, opts = {}) {
       candles.setData(state.bars.map(barOf));
       volume.setData(hasVolume() ? state.bars.map(volOf) : []);
       ctl.redrawMarkers();
+      if (state.zones) ctl.setZones(state.zones);
     },
     startView() {
       const n = state.bars.length;
@@ -202,7 +207,8 @@ function create(el, LW, opts = {}) {
       }
       try { chart.priceScale("right").applyOptions({ autoScale: true }); } catch (e) {}
     },
-    setZones(z) { state.zones = z; zones.set(z); },
+    /* z: {minute (the entry's minute, unix), entry, stop, target} or null; drawn from the entry's candle in this timeframe */
+    setZones(z) { state.zones = z; zones.set(z ? { ...z, t0: C.binStart(z.minute, state.tfm) } : null); },
     /* Markers: records {t (unix of the minute's candle in the chart timeframe is computed here), ...} from SimCore.markerFor */
     setMarkers(list) { state.markers = (list || []).slice(); ctl.redrawMarkers(); },
     redrawMarkers() {
@@ -248,7 +254,7 @@ function create(el, LW, opts = {}) {
       if (k) LEVELS.forEach((n) => { const o = lines[n].options(); if (o.lineVisible) lines[n].applyOptions(lineStyle(n, k.startsWith("alert") ? "alert" : "trade")); });
       state.levelKey = k;
       ctl.redrawMarkers();
-      zones.set(state.zones);
+      if (state.zones) ctl.setZones(state.zones);
     },
     /* Scroll the chart so the candle of unix time t is in the middle. */
     scrollTo(t) {

@@ -404,7 +404,7 @@ function levelLabels(src, kind) {
 function markerFor(ev, side) {
   const long = side !== "SHORT", d = ev.data || {}, t = eventMinute(ev);
   if (ev.kind === "ALERT") return { minute: t, position: long ? "belowBar" : "aboveBar", shape: long ? "arrowUp" : "arrowDown", color: "--accent2", text: "Alert" };
-  if (ev.kind === "FILLED") return { minute: t, position: long ? "belowBar" : "aboveBar", shape: "circle", color: "--cyan", text: "In " + num(d.entry_price ?? d.entry) };
+  if (ev.kind === "FILLED") return { minute: t, position: long ? "aboveBar" : "belowBar", shape: "circle", color: "--cyan", text: "In " + num(d.entry_price ?? d.entry) };
   if (ev.kind === "STAGE") return { minute: t, position: long ? "belowBar" : "aboveBar", shape: "square", color: "--violet", text: STAGE_SHORT[d.stage] || "Stop" };
   if (ev.kind === "CLOSED") {
     const net = Number(d.net);
