@@ -659,7 +659,7 @@ class TestTheFake:
     ):
         r = run_fake(f"return {self._create()};")
         s = r["session"]
-        assert s["status"] == "RUNNING" and s["cursor"] == "2026-11-12T15:29:00+05:30"
+        assert s["status"] == "RUNNING" and s["cursor"] == "2026-11-13T09:14:00+05:30"
         assert s["chart"] == {"tick": 0.05, "lot": 75, "unit": "lot"}
         assert 0 < len(r["candles"]) <= 300 and len(r["candles"][0]) == 6
         assert list(r["overlays"]) == ["ema"] and r["events"] == [] and r["marks"] == []
