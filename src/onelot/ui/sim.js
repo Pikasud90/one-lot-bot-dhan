@@ -557,7 +557,7 @@ let raf = 0;
 function tick() { if (!raf) raf = requestAnimationFrame(frame); }
 function frame(now) {
   raf = 0;
-  const dt = Math.min(1000, Math.max(0, now - S.lastFrame)); S.lastFrame = now;   // a slow frame still pays its time
+  const dt = Math.min(5000, Math.max(0, now - S.lastFrame)); S.lastFrame = now;   // a slow frame still pays its time (a hidden window pauses)
   if (!S.playing) return;
   if (!OL.tabShown("sim") || document.hidden) { setPlaying(false, "Paused: you left the Simulator."); return; }
   if (live()) { liveTick(dt); tick(); return; }

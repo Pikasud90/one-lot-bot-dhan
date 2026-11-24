@@ -168,7 +168,7 @@ function alertView(s) {
   return { ...a, expires_in_min: left };
 }
 function sessionView(s) {
-  const cur = s.idx > 0 ? s.bars[s.idx - 1][0] : s.bars[s.startIdx][0] - 60;
+  const cur = s.idx > s.startIdx ? s.bars[s.idx - 1][0] : s.bars[s.startIdx][0] - 60;   // the minute before the start, until one is revealed
   return { id: s.id, instrument: { key: s.inst.key, label: s.inst.label, kind: s.inst.kind }, strategy: s.strategy, timeframe: s.timeframe, tf_minutes: s.tfm, mode: s.mode,
     start: iso(s.bars[s.startIdx][0]), cursor: iso(cur), status: s.status, capital: 100000, chart: { tick: s.inst.tick, lot: s.inst.lot, unit: s.inst.unit },
     params: { stop_atr_k: 1.5, target_r: 3.0, extend: true, auto_exit: true, stop_atr_tf: "60m" }, premium_note: isIndex(s) ? "demo: modelled premiums only" : "share prices from the demo bars" };
