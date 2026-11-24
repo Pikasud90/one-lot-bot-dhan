@@ -216,7 +216,7 @@ function clockUnix() {
 }
 function renderClock() {
   const t = clockUnix();
-  set("sim-clock", t === null ? "–" : C.clockText(t, { hidden: S.hidden }));
+  set("sim-clock", t === null ? "–" : (phone() ? C.hhmmOf(t) : C.clockText(t, { hidden: S.hidden })));   // a phone has the day in the strip
   $("sim-clock").title = t === null ? "" : (!S.sess && !live() ? C.readyText(t, S.hidden) : "The replay clock (Indian time)");
   set("sim-countdown", t === null ? "" : (C.countdownText(t, ctfm()) ? "closes in " + C.countdownText(t, ctfm()) : ""));
 }

@@ -3,12 +3,12 @@
    the strip on top, the chart left of a 340px dock, the bottom panel. 700 to 1199px: the dock is one row of two cards
    under the strip. Under 700px: the chart first under a two-row strip, Take, Skip and Close in a bar at the bottom. */
 
+/* the startup warnings stay on the other tabs and in the header's badges: here the room goes to the chart */
+.shell:has(section[data-tab="sim"].active) #warnings{display:none}
 /* the tab owns the window on a desktop: no page scroll, no footer under it */
 @media (min-width:700px){
   .shell:has(section[data-tab="sim"].active){padding-bottom:0}
   .shell:has(section[data-tab="sim"].active) .foot{display:none}
-  /* the startup warnings stay on the other tabs and in the header's badges: here every pixel goes to the chart */
-  .shell:has(section[data-tab="sim"].active) #warnings{display:none}
   .shell:has(section[data-tab="sim"].active) header.top{margin-bottom:6px}
 }
 /* 700 to 1199px wide: the header's status badges (shown on every other tab) give their row to the chart */
@@ -43,7 +43,7 @@
   background:var(--panel2);border:1px solid var(--line2);cursor:pointer;font:700 18px/1 var(--ui)}
 #sim-root .sim-ib svg{width:20px;height:20px}
 #sim-root .sim-ib:disabled,#sim-root .sim-seg button:disabled,#sim-root .sim-play:disabled,#sim-root .sim-btn:disabled,#sim-root .sim-sel:disabled,#sim-root .sim-daybtn:disabled{opacity:.42;cursor:not-allowed}
-#sim-root .sim-date{display:flex;align-items:center}
+#sim-root .sim-date{position:relative;display:flex;align-items:center}
 #sim-root .sim-date #sim-day-prev{border-right-width:0}
 #sim-root .sim-date #sim-day-next{border-left-width:0}
 #sim-root .sim-date #sim-day-rand{margin-left:6px}
@@ -321,21 +321,24 @@
   #sim-root .sim-chartbar{right:64px}
   #sim-root .sim-clockbox{width:auto}
   #sim-root .sim-sel-speed,#sim-root .sim-sel-ctf{display:block}
-  #sim-root .sim-play{min-width:0;width:52px;padding:0}
+  #sim-root .sim-play{min-width:0;width:48px;padding:0;flex:none}
+  #sim-root .sim-g-play>*{flex:none}
+  #sim-root .sim-sel-speed{width:66px}
   #sim-root .sim-play span{display:none}
-  #sim-root .sim-clockbox{min-width:0;margin-left:auto;padding-left:8px}
+  #sim-root .sim-g-play>.sim-clockbox{flex:1 1 auto;min-width:0;margin-left:0;padding-left:8px}
   #sim-root .sim-clock{font-size:16px}
   #sim-root .sim-chartbox{order:2;height:50svh;min-height:300px;flex:none}
-  #sim-root .sim-legend{right:8px;font-size:14px}
+  #sim-root .sim-legend{right:150px;font-size:14px}
   #sim-root .sim-lg-ohlc i:nth-of-type(-n+3),#sim-root .sim-lg-ohlc b:nth-of-type(-n+3),#sim-root .sim-lg-vol,#sim-root .sim-lg-lines{display:none}
-  #sim-root .sim-flag{top:auto;bottom:40px;font-size:16px;max-width:calc(100% - 20px)}
+  #sim-root .sim-flag{display:none}   /* the bar at the bottom says it */
   #sim-root .sim-tonow{right:76px}
   #sim-root .sim-pin{right:72px}
-  #sim-root .sim-banner{right:64px}
+  #sim-root .sim-banner{top:auto;bottom:36px;right:auto;left:8px}
   #sim-root .sim-dock{order:3;overflow:visible}
   #sim-root .sim-panel{order:4;height:auto}
   #sim-root .sim-pbody{max-height:60svh}
   #sim-root .sim-ptabs{overflow-x:auto}
+  #sim-root .sim-ptab{padding:0 8px;font-size:14px;letter-spacing:.04em}
   #sim-root .sim-status{display:none}
   #sim-root .sim-howgrid{grid-template-columns:1fr}
   #sim-root .sim-log li{grid-template-columns:64px 100px minmax(0,1fr)}
