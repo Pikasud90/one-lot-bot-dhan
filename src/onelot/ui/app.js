@@ -147,7 +147,7 @@ function showTab(name) {
   if (tabLoaders[name]) tabLoaders[name]();
 }
 window.addEventListener("hashchange", () => showTab(location.hash.slice(1) || "home"));
-// Number keys 1 to 8 switch tabs, in the bar's order; never while typing in a field or with a modifier held.
+// Number keys 1 to 9 switch tabs, in the bar's order; never while typing in a field or with a modifier held.
 const tabForKey = (key, tag, editable, mods, tabs) => (mods || editable || /^(INPUT|TEXTAREA|SELECT)$/.test(String(tag || "").toUpperCase()) || !/^[1-9]$/.test(String(key))) ? null : (tabs[Number(key) - 1] ?? null);
 document.addEventListener("keydown", (e) => {
   const t = e.target || {}, tabs = [...document.querySelectorAll("#tabs a")].map(a => a.dataset.tab);

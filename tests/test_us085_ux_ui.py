@@ -27,10 +27,10 @@ def test_every_filter_control_has_a_label() -> None:
             assert "aria-label=" in tag, ident.group(1)
 
 
-def test_the_eight_tabs_and_the_keys_agree() -> None:
+def test_the_nine_tabs_and_the_keys_agree() -> None:
     nav = re.search(r'<nav class="tabs".*?</nav>', HTML, re.S)
-    assert nav and len(re.findall(r"<a href=", nav.group(0))) == 8
-    assert "Number keys 1 to 8" in APP
+    assert nav and len(re.findall(r"<a href=", nav.group(0))) == 9
+    assert "Number keys 1 to 9" in APP
 
 
 def test_the_clock_opens_the_calendar_from_the_keyboard() -> None:
