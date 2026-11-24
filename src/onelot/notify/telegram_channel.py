@@ -12,13 +12,13 @@ import logging
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from ..clock import now_ist
 from ..config import NotifyCfg
 from .base import NOTHING_DUE, Notification, NotificationLevel, SendOutcome
 from .telegram import TelegramClient, _plain
-from .telegram_outbox import TelegramOutbox, _time_of
+from .telegram_outbox import OutboxKind, TelegramOutbox, _time_of
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +30,9 @@ EXIT_EPISODE_GAP = dt.timedelta(minutes=60)
 _PHONE_LEVELS = frozenset(
     (NotificationLevel.SIGNAL, NotificationLevel.EXIT, NotificationLevel.CRITICAL)
 )
+# US-087: a WARNING reaches the phone only when it is one of these kinds (the Dhan token
+# reminders, the Volume Watch and the "move your stop" notes of a taken position). Any other WARNING stays on the page and the computer.
+PHONE_WARNING_KINDS = frozenset(("token", "volume", "stop"))
 
 
 @dataclass
@@ -59,7 +62,7 @@ class TelegramChannel:
 
     `send` is ONE short INSERT into the outbox (the Desk holds its lock while it runs):
     no HTTP, no Notifier call. SIGNAL, EXIT and CRITICAL only, as `notify.telegram_levels`
-    allows. Silent (no sound, never dropped): a risk-blocked SIGNAL always; SIGNAL and EXIT
+    allows, plus the WARNINGs of kind `token`, `volume` and `stop` (US-087). Silent (no sound, never dropped): a risk-blocked SIGNAL always; SIGNAL and EXIT
     outside the session when `notify.telegram_quiet_outside_session`; CRITICAL never.
 
     EXIT advice is raised on every Desk poll. The phone gets the first message at once,
@@ -107,6 +110,8 @@ class TelegramChannel:
         return self._client.available
 
     def accepts(self, n: Notification) -> bool:
+        if n.level is NotificationLevel.WARNING:
+            return n.kind in PHONE_WARNING_KINDS  # not gated by `telegram_levels`
         return n.level in _PHONE_LEVELS and n.level.value in self._levels
 
     def status(self) -> dict[str, Any]:
@@ -136,6 +141,8 @@ class TelegramChannel:
                 outcome = self._send_signal(n)
             elif n.level is NotificationLevel.EXIT:
                 outcome = self._send_exit(n)
+            elif n.level is NotificationLevel.WARNING:
+                outcome = self._send_warning(n)
             else:
                 outcome = self._send_critical(n)
         except Exception as exc:
@@ -242,6 +249,25 @@ class TelegramChannel:
         ]
         for pid in stale:
             del self._episodes[pid]
+
+    def _send_warning(self, n: Notification) -> bool:
+        """A `token` reminder, a `volume` watch note or a `stop` move: one row each, under the notification's
+        own dedup key (a repeat of the same key is held back by the outbox, a new key is
+        never held back). A token stage reminder expires with the token (`valid_until`);
+        the Volume Watch is muted outside the session like a SIGNAL; a token reminder never
+        is. Both are plain titled messages."""
+        now = self._clock()
+        payload = n.payload if isinstance(n.payload, Mapping) else {}
+        expires = _time_of(payload.get("valid_until")) if n.kind == "token" else None
+        return self._outbox.enqueue(
+            dedup_key=n.dedup_key or f"{n.kind}:{n.notification_id}",
+            kind=cast(OutboxKind, n.kind),  # accepts() only lets the kinds above through
+            alert_id=n.notification_id,
+            payload={"title": n.title, "body": n.body},
+            alert_created_at=n.created_at or now,
+            expires_at=expires,
+            silent=False if n.kind == "token" else self._silent(n, now),  # token: always a sound
+        )
 
     def _send_critical(self, n: Notification) -> bool:
         now = self._clock()

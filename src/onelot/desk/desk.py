@@ -1514,6 +1514,8 @@ class Desk:
                 body=body,
                 level=NotificationLevel.WARNING,
                 position_id=pid,
+                kind="stop",  # US-087: the phone gets "move your stop"; one row per move
+                dedup_key=f"desk:ratchet:{pid}:{st.stop:.4f}:{st.target:.4f}",
             ),
             dedup_key=f"desk:ratchet:{pid}:{st.stop:.4f}:{st.target:.4f}",
         )

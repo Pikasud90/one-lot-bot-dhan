@@ -64,9 +64,31 @@ from .telegram import (
 
 log = logging.getLogger(__name__)
 
-OutboxKind = Literal["alert", "exit", "critical", "paper_close", "test", "missed", "digest"]
+OutboxKind = Literal[
+    "alert",
+    "exit",
+    "critical",
+    "paper_close",
+    "test",
+    "missed",
+    "digest",
+    "token",
+    "volume",
+    "stop",
+]
 OUTBOX_KINDS: frozenset[str] = frozenset(
-    ("alert", "exit", "critical", "paper_close", "test", "missed", "digest")
+    (
+        "alert",
+        "exit",
+        "critical",
+        "paper_close",
+        "test",
+        "missed",
+        "digest",
+        "token",
+        "volume",
+        "stop",
+    )
 )
 
 SPACING_S = 1.0  # one HTTP request per second per chat (Telegram's own limit)
@@ -94,7 +116,9 @@ TELEGRAM_MAX_CHARS = 4096
 _CAP_TITLE = 200
 _CAP_BODY = 3000
 _NO_MARKER = ("missed", "digest")  # notes about other rows: a resend marker would mislead
-_RANK = {"exit": 0, "critical": 0, "alert": 1}  # everything else (notes) ranks 2
+# The token reminders (US-087) rank with the alerts: a reminder is not an alert, but it must not
+# wait behind a note. Everything else (notes, the Volume Watch) ranks 2.
+_RANK = {"exit": 0, "critical": 0, "alert": 1, "token": 1, "stop": 1}
 
 
 # ── pure helpers ──────────────────────────────────────────────────────────────

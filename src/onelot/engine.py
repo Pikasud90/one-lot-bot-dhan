@@ -41,6 +41,7 @@ from .notify.manager import Notifier
 from .notify.telegram import TelegramClient
 from .notify.telegram_channel import TelegramChannel
 from .notify.telegram_outbox import TelegramOutbox
+from .notify.token_reminders import ReminderMemory, TokenReminderStep
 from .ratelimit import RateLimiter
 from .risk.governor import RiskGovernor
 from .store import init_database
@@ -152,6 +153,14 @@ class Engine:
         # Phone alerts (US-004): built in start() when notify.telegram is on and configured.
         self.telegram_client: TelegramClient | None = None
         self.telegram_outbox: TelegramOutbox | None = None
+        self._telegram_lock = threading.Lock()  # a Settings save rebuilds the channel in place
+        self._token_reminders = TokenReminderStep(
+            ReminderMemory(self.db.engine),
+            self.notifier.send,
+            self.token_expiry,
+            self.calendar.is_trading_day,
+            lambda: self.secrets.can_self_renew,
+        )
         self._last_renew_at: dt.datetime | None = None
         self._last_renew_error: str | None = None
 
@@ -281,23 +290,117 @@ class Engine:
         """notify.telegram is the master switch (US-004): off, nothing is built; on, the
         channel and its outbox worker are added when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID
         are usable, otherwise one INFO line says why (never the values)."""
+        reason = self._build_telegram()
+        if reason:
+            log.info(
+                "Telegram not configured (%s); alerts stay on the page and the computer", reason
+            )
+
+    def _build_telegram(self) -> str | None:
+        """Build the phone channel from the environment and put it in use. None when it is on;
+        otherwise why it is not (words that never repeat a value). Caller holds no lock."""
         if not self.cfg.notify.telegram:
-            return
+            return "notify.telegram is off in config.yaml"
         client = TelegramClient.from_env()
         if not client.available:
-            log.info(
-                "Telegram not configured (%s); alerts stay on the dashboard and the OS toast",
-                client.unavailable_reason,
-            )
+            reason = client.unavailable_reason or "not configured"
             client.close()
-            return
+            return reason
         outbox = TelegramOutbox(self.db.engine, client)
-        self.notifier.add_channel(
-            TelegramChannel(client, outbox, self.cfg.notify, self._in_session)
+        self.notifier.replace_channel(
+            "telegram", TelegramChannel(client, outbox, self.cfg.notify, self._in_session)
         )
         self.telegram_client, self.telegram_outbox = client, outbox
         outbox.start()
         log.info("Telegram alerts on for %s", ", ".join(self.cfg.notify.telegram_levels))
+        return None
+
+    # ── Telegram setup from the Settings tab (US-087) ─────────────────────
+    def telegram_state(self) -> dict:
+        """What Settings may show: the token as 'set' / 'not set' / 'wrong shape', the chat id
+        as set or not, whether the phone channel is in use and why not. No value, no part."""
+        masked = self.secrets.masked()
+        token = masked["telegram_bot_token"]
+        client = self.telegram_client
+        return {
+            "token": {None: "not set", "set": "set", "invalid": "wrong shape"}[token],
+            "chat_id_set": masked["telegram_chat_id"] == "set",
+            "in_use": client is not None and client.available,
+            "master_switch_on": bool(self.cfg.notify.telegram),
+            "problem": None if client is not None and client.available else self._telegram_why(),
+        }
+
+    def _telegram_why(self) -> str:
+        if not self.cfg.notify.telegram:
+            return "Telegram is switched off in config/config.yaml (notify.telegram)."
+        token = self.secrets.masked()["telegram_bot_token"]
+        if token is None:
+            return "Paste the bot token and save."
+        if token == "invalid":
+            return "The saved token is not in the shape Telegram uses. Paste it again."
+        if not self.secrets.telegram_chat_id:
+            return "Find your chat id (step 4) or type it, then save."
+        return "The phone channel is not running. Press Save again."
+
+    def update_telegram(self, bot_token: str | None, chat_id: str | None) -> dict:
+        """Save the Telegram keys to `.env` (shapes already checked by the caller), take them
+        into use in place, and answer with `telegram_state()`. A key left None is unchanged."""
+        from .config import Secrets
+        from .logging_setup import register_secrets
+
+        updates: dict[str, str] = {}
+        if bot_token is not None:
+            updates["TELEGRAM_BOT_TOKEN"] = bot_token
+        if chat_id is not None:
+            updates["TELEGRAM_CHAT_ID"] = chat_id
+        with self._telegram_lock:
+            if updates:
+                Secrets.write_env(self.cfg.project_root, updates)
+                new = Secrets.load(self.cfg.project_root)
+                new.api_token = self.secrets.api_token
+                self.secrets = new
+                register_secrets(new.secret_values())
+            self._stop_telegram()
+            if self._build_telegram() and self.notifier.remove_channel("telegram"):
+                log.info("Telegram channel removed (not usable now)")
+        return self.telegram_state()
+
+    def find_telegram_chats(self) -> dict:
+        from .notify.telegram_setup import find_chats
+
+        return find_chats(self.secrets.telegram_bot_token).as_dict()
+
+    def send_telegram_test(self) -> dict:
+        """Send one test message with the saved keys, right now, and say 'sent' or why not."""
+        from .notify.telegram_setup import send_test
+
+        client = TelegramClient.from_env()
+        try:
+            ok, words = send_test(client)
+        finally:
+            client.close()
+        return {"ok": ok, "message": words}
+
+    def telegram_status(self) -> dict:
+        """The phone channel in four facts, no secret: configured, last sent, the class of the
+        last error, the queue length."""
+        import re
+
+        entry: dict = next(
+            (c for c in self.notifier.status()["channels"] if c["name"] == "telegram"), {}
+        )
+        last_error = entry.get("last_error")
+        klass = None
+        if last_error:
+            m = re.match(r"HTTP \d{3}", str(last_error))
+            klass = m.group(0) if m else str(last_error).split(":")[0][:40]
+        return {
+            "configured": bool(entry) and bool(entry.get("configured", entry.get("available"))),
+            "in_use": self.telegram_client is not None and self.telegram_client.available,
+            "last_sent_at": entry.get("last_ok_at"),
+            "last_error_class": klass,
+            "queue_length": int(entry.get("queue_depth") or 0),
+        }
 
     def _stop_telegram(self) -> None:
         """Stop and join the outbox worker (before the database goes), then close the client."""
@@ -564,6 +667,14 @@ class Engine:
             snap = self.account.snapshot()
             return bool(snap.get("token_expired"))
         return (exp - now_ist()) < dt.timedelta(minutes=90)
+
+    def _remind_about_the_token(self, now: dt.datetime) -> None:
+        """US-087: the 60/30/15/5-minute and expired reminders. Runs from the housekeeping
+        loop (it throttles itself to about once a minute) and only when there are Dhan
+        credentials: with none there is no token to run out."""
+        if not self.secrets.has_broker_creds:
+            return
+        self._token_reminders.look(now)
 
     def _maybe_auto_renew(self, now: dt.datetime) -> None:
         if not self.secrets.can_self_renew:
@@ -1117,6 +1228,7 @@ class Engine:
                         self.notifier.critical("Index feed disagreement", why)
                         self.health.note_api_error(why)
                 self._maybe_auto_renew(now)
+                self._remind_about_the_token(now)
                 today = now.date().isoformat()
                 if today != last_iv_record and self.chain and self.chain.snapshot:
                     iv = self.chain.atm_iv()
