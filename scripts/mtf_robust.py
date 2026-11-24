@@ -35,6 +35,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mtf_bruteforce as h  # noqa: E402
 import mtf_stage2 as s2  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from onelot.clock import IST  # noqa: E402  (the one zone object, US-096)
+
 OUT = h.OUT
 STORE = OUT / "robust"
 DEST = OUT / "mtf_robust.txt"
@@ -233,7 +236,7 @@ def drawdown(df: pd.DataFrame) -> tuple[float, str, str, int]:
     dd = eq - peak
     j = int(np.argmin(dd))
     i = int(np.argmax(np.maximum(eq[: j + 1], 0.0) == peak[j])) if peak[j] > 0 else 0
-    ts = pd.to_datetime(d["xns"].to_numpy(), utc=True).tz_convert("Asia/Kolkata")
+    ts = pd.to_datetime(d["xns"].to_numpy(), utc=True).tz_convert(IST)
     under_start, longest = None, 0
     for k in range(len(eq)):
         if dd[k] < 0 and under_start is None:
@@ -286,7 +289,7 @@ def depth(w, df: pd.DataFrame, unit: str, stocks: bool) -> None:  # noqa: ANN001
       f"{srt[k1:].mean():+.3f}; without the best 5% {srt[max(int(round(n * 0.05)), 1):].mean():+.3f}; "
       f"without the worst 1% {srt[: n - k1].mean():+.3f}")  # fmt: skip
     dd, d0, d1, under = drawdown(df)
-    month = pd.to_datetime(df["xns"].to_numpy(), utc=True).tz_convert("Asia/Kolkata")
+    month = pd.to_datetime(df["xns"].to_numpy(), utc=True).tz_convert(IST)
     m = df.groupby(month.strftime("%Y-%m"))["inr"].sum()
     w(f"    rupees at one {unit} per signal: total {total:+,.0f}; deepest fall {dd:+,.0f} "
       f"({d0} to {d1}); longest time below an earlier high {under} days")  # fmt: skip

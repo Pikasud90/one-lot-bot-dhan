@@ -18,6 +18,9 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mtf_bruteforce as h  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from onelot.clock import IST  # noqa: E402  (the one zone object, US-096)
+
 OUT = h.ROOT / "data" / "research" / "alpha_2026-11-12"
 CACHE = OUT / "cache"
 GRID0 = 9 * 60 + 15
@@ -27,7 +30,6 @@ YEAR_ORDS = np.array([d.toordinal() for d in h.YEAR_STARTS])
 PERIOD_OF_YEAR = np.array([0, 0, 0, 1, 2])  # TUNE, TUNE, TUNE, CHOOSE, TEST
 PERIODS = ("TUNE", "CHOOSE", "TEST")
 INDICES = ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX")
-IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 
 
 def M(hhmm: str) -> int:  # noqa: N802

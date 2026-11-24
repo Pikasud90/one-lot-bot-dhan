@@ -38,7 +38,6 @@ SECOND_MIN_N = 60  # the second-order context is shown from this many cases
 WALK_START = 250  # first stated session the walk-forward names
 RECENT = 60
 THIN_BELOW = 250  # fewer stated sessions than this: the page shows no evidence
-IST_OFFSET = "Asia/Kolkata"
 
 
 # ── the state of a session ───────────────────────────────────────────────

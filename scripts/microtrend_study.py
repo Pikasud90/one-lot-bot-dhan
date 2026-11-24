@@ -44,7 +44,9 @@ REAL_SERIES = {"NIFTY_OPT": "NIFTY", "BANKNIFTY_OPT": "BANKNIFTY"}
 
 
 def now_ist() -> dt.datetime:
-    return dt.datetime.now(dt.timezone(dt.timedelta(hours=5, minutes=30)))
+    from onelot.clock import now_ist as now
+
+    return now()
 
 
 # ───────────────────────────── trades and features ─────────────────────────

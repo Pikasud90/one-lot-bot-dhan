@@ -41,6 +41,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from onelot.clock import IST  # noqa: E402  (the one zone object, US-096)
+
 STOCKS = [
     "RELIANCE", "MM", "SBIN", "HDFCBANK", "ITC", "TMPV", "MARUTI", "ICICIBANK", "HEROMOTOCO",
     "INFY", "TCS", "AXISBANK", "KOTAKBANK", "LT", "BAJFINANCE", "BHARTIARTL", "TATASTEEL", "SUNPHARMA",
@@ -156,10 +159,8 @@ def key_of(params: dict) -> str:
 
 
 # ── scoring ──────────────────────────────────────────────────────────────────────────────
-_EDGES = [pd.Timestamp(x, tz="Asia/Kolkata").value for x in (T0, TRAIN_END, VALID_END, T_END)]
-_TRAIN_YEARS = [
-    pd.Timestamp(x, tz="Asia/Kolkata").value for x in (T0, "2022-11-08", "2023-11-08", TRAIN_END)
-]
+_EDGES = [pd.Timestamp(x, tz=IST).value for x in (T0, TRAIN_END, VALID_END, T_END)]
+_TRAIN_YEARS = [pd.Timestamp(x, tz=IST).value for x in (T0, "2022-11-08", "2023-11-08", TRAIN_END)]
 
 
 def period_stats(per_inst: dict[str, tuple], basket: str) -> dict:

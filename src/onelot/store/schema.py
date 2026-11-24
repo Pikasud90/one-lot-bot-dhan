@@ -9,7 +9,6 @@ the replay harness reproduce a live session exactly.
 from __future__ import annotations
 
 import datetime as dt
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
     JSON,
@@ -29,8 +28,9 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 
+from ..clock import IST
+
 UTC = dt.timezone.utc
-IST = ZoneInfo("Asia/Kolkata")
 
 
 class TZDateTime(TypeDecorator):

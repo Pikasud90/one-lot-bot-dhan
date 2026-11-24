@@ -22,6 +22,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd  # type: ignore[import-untyped]
 
+from ..clock import IST
 from ..data.resample import minutes_of, normalize_resolution, resample_bars
 from .core import supertrend
 
@@ -34,7 +35,7 @@ ST_MULT = 1.7
 WARMUP_FACTOR = 5
 
 _NS_PER_MINUTE = 60 * 1_000_000_000
-_IST = "Asia/Kolkata"  # the exchange's time zone: what the desk shows
+_IST = IST  # the exchange's time zone: what the desk shows
 
 
 def index_ns(index: pd.DatetimeIndex) -> np.ndarray:

@@ -297,6 +297,8 @@ def run(workers: int) -> None:
 
 def _lab_trades(per_inst: dict, variant: str) -> pd.DataFrame:
     """The Lab's trades of `variant` inside the replay windows, all instruments."""
+    from onelot.clock import IST
+
     frames = []
     for inst, runs in per_inst.items():
         tr = runs.get(variant)
@@ -304,16 +306,16 @@ def _lab_trades(per_inst: dict, variant: str) -> pd.DataFrame:
             continue
         tr = tr.copy()
         tr["instrument"] = inst
-        tr["entry_ts"] = pd.to_datetime(tr["entry_ts"]).dt.tz_convert("Asia/Kolkata")
-        tr["exit_ts"] = pd.to_datetime(tr["exit_ts"], utc=True).dt.tz_convert("Asia/Kolkata")
+        tr["entry_ts"] = pd.to_datetime(tr["entry_ts"]).dt.tz_convert(IST)
+        tr["exit_ts"] = pd.to_datetime(tr["exit_ts"], utc=True).dt.tz_convert(IST)
         frames.append(tr)
     if not frames:
         return pd.DataFrame()
     lab = pd.concat(frames, ignore_index=True)
     keep = pd.Series(False, index=lab.index)
     for a, b in WINDOWS:
-        lo = pd.Timestamp(a, tz="Asia/Kolkata")
-        hi = pd.Timestamp(b, tz="Asia/Kolkata") + pd.Timedelta(days=1)
+        lo = pd.Timestamp(a, tz=IST)
+        hi = pd.Timestamp(b, tz=IST) + pd.Timedelta(days=1)
         keep |= (lab["entry_ts"] >= lo) & (lab["entry_ts"] < hi)
     return lab[keep].sort_values(["instrument", "entry_ts"]).reset_index(drop=True)
 
