@@ -17,8 +17,8 @@
 checkout). Stores read-only; private tables never read. The line-up split is at 13 Nov: every
 slot but pullback was paused on 12 Nov at 11:06 (after that day's 4 alerts) and `microtrend`
 ran from 13 Nov. Entry in parts C and D is the open of the minute after the alert.
-Model premiums are `h.pnl`'s. Part D's hypotheses were written into the script after parts A
-to C were read and before the history stage ran. Three numbers in a row: TUNE / CHOOSE / TEST.
+Model premiums are `h.pnl`'s. Part D's hypotheses were written after parts A to C were read,
+before the history stage ran. Three numbers in a row: TUNE / CHOOSE / TEST.
 
 ## Part A: what happened
 **A1. Inventory.** 153 alerts on 10 days: 127 stock (one share), 26 index options (18 calls,
@@ -31,11 +31,11 @@ expired, 3 taken, 2 skipped. Data: 74 on Dhan bars, 14 on delayed Yahoo bars, 65
 |---|---|---|---|---|
 | 29 Oct to 5 Nov (6 days) | 144 | 18 / 126 | Dhan and Yahoo | alerts from 09:30 to 14:40 |
 | 6 Nov | 1 | 0 / 1 | Yahoo | one alert |
-| 9 Nov | 0 | | | no alert, no quote: down or silent |
+| 9 Nov | 0 | | | up (market pulse 09:15 to 15:29), no alert; quotes not yet recorded |
 | 11, 12 Nov | 6 | 6 / 0 | Dhan, live | quotes 09:15 to 15:26 |
 | 13 Nov | 0 | | | up all day (quotes 09:15 to 15:29), no micro-trend signal |
-| 16 to 20 Nov | 0 | | | no alert, no quote: down |
-| 23 Nov | 2 | 2 / 0 | Dhan, regraded delayed | up from 11:07 (token renewed); 2-minute bars until 10:57 |
+| 16 to 20 Nov | 0 | | | no pulse, quote or event all week: not running |
+| 23 Nov | 2 | 2 / 0 | Dhan, regraded delayed | up from 11:01 (token renewed); nothing recorded before; 2-minute bars to 10:57 |
 
 **A2. Paper trades as recorded** (152 closed, 1 no fill). % of premium (options) or of price
 (stocks), t with one entry day as one draw, rupees a trade.
@@ -64,8 +64,6 @@ the alert's target where it had one (27 trades), else 3 risks (125).
 | Index, from 13 Nov | 2 | +0.62% / −0.15% | 0.15 / −0.03 | 112 of 119 | 0 / 0 / 0 / 0 |
 | Stocks | 127 | +0.24% / −0.21% | 0.54 / −0.45 | 10 of 25 | 37% (34%) / 13% (0%) / 6% (0%) / 5% (0%) |
 
-Index trades seldom went a quarter of the way; 2 of 3 that went half way still lost.
-
 **A4. Fill costs** from `fill_quotes` (11, 12, 13 and 23 Nov only; 2,522 option quotes of the
 monthly ~0.65-delta call and put, every 5 minutes). Model: half spread 0.6% + 2 ticks a side.
 
@@ -77,11 +75,11 @@ monthly ~0.65-delta call and put, every 5 minutes). Model: half spread 0.6% + 2 
 | SENSEX | 510 | 1,514 | 21.73 (679.2) | 1.47 (22.51) | 0.61 |
 | MIDCPNIFTY (training) | 507 | 323 | 2.00 (6.4) | 0.60 (1.74) | 0.63 |
 
-The median widens through the day (0.62% before 10:00, 0.77% after 13:00); SENSEX before
-10:00: 7.5%. Alerted contracts at the alert: median 0.91% (8); live-chain alerts with bid and
-ask: median 0.49% (13), one 17%. Stocks: 0.007% (0.003 to 0.011) against the model's 0.03%.
-The model should assume NIFTY and BANKNIFTY about 0.3%, FINNIFTY and SENSEX about 1.5% (p90 10
-to 22%), stocks 0.01%. Four sessions only: a proposal.
+The median widens through the day (0.62% before 10:00, 0.77% after 13:00); SENSEX before 10:00:
+7.5% (53 quotes, 3 sessions: 24%, 10% and 1% by day). Alerted contracts at the alert: median
+0.91% (8); live-chain alerts with bid and ask: median 0.49% (13), one 17%. Stocks: 0.007%
+(0.003 to 0.011) against the model's 0.03%. The model should assume NIFTY and BANKNIFTY about
+0.3%, FINNIFTY and SENSEX about 1.5% (p90 10 to 22%), stocks 0.01%. Four sessions: a proposal.
 
 ## Part B: live against the backtest
 The product's `microtrend` slot (settings of `config/desk.yaml`, `sim/engine.build_signals`,
@@ -97,16 +95,16 @@ time per index, out at the 3 of 7 exit or 15:15. Model premiums.
 | From 13 Nov, all | 17, +24.82 (+1.4) | 3, −12.5 | | 2 |
 
 Matched: BANKNIFTY 23 Nov, same signal bar (13:12), side and exit (15:15); the desk filled a
-minute later (13:16), 3.8 bp of index worse. Missed: 16 trades while the desk was down 16 to 20
-Nov. Extra: the MIDCPNIFTY put is not on the stored bars (3 of 7 down at 13:12); the desk's bars
-that morning were 2-minute bars until 10:57 (its paper trade was regraded), the likely cause.
-In one sentence: on clean one-minute bars the desk is a faithful copy, but it ran on 2 of the 7
-sessions since the rule went live, so the live record of the rule is one trade.
+minute later (13:16), 3.8 bp worse. Missed: 16 trades while the desk was down 16 to 20 Nov.
+Extra: the MIDCPNIFTY put is not on the stored bars (3 of 7 down at 13:12); cause not found
+(its 2-minute morning bars do not reproduce it, see the check). In one sentence: on clean
+one-minute bars the desk is a faithful copy, but it ran on 2 of the 7 sessions (one from 11:01),
+so the live record of the rule is one trade.
 
 ## Part C: the same alerts under other rules
-22 index alerts on 6 days (no MIDCPNIFTY), 109 stock alerts on 7 days. "less 1.0": the model
-less the 1.0 point real premiums ran below it in the micro-trend study. The option store (to
-7 Nov) priced 2 of the 22 index alerts: real −4.02% against model −2.24% on those two.
+22 index alerts on 6 days (no MIDCPNIFTY), 109 stock alerts on 7 days. "less 1.0": the model less
+1.0 point (real premiums ran below it). The option store (to 7 Nov) priced 2 of the 22: real
+−4.02% against model −2.24%.
 
 | Rule | Index % a trade (t) | less 1.0 | Winners | Stocks % a trade (t) | Winners |
 |---|---|---|---|---|---|
@@ -116,15 +114,13 @@ less the 1.0 point real premiums ran below it in the micro-trend study. The opti
 | Out after 15 / 30 / 60 minutes | −2.21 / −2.44 / −1.87 | −3.2 / −3.4 / −2.9 | 27 / 23 / 32% | −0.11 / −0.14 / −0.10 | 28 / 26 / 41% |
 | Fade (the opposite side) | +0.45 (+0.1) | −0.55 | 36.4% | −0.26 (−3.8) | 39.4% |
 | Entry 1 / 3 / 5 minutes late | −2.71 / −2.80 / −2.60 | −3.7 / −3.8 / −3.6 | 45.5% | −0.07 / −0.10 / −0.12 | 35 / 33 / 30% |
-| Entry in the first hour (paper / model) | −9.31 / −6.39 (11 tr) | | 27.3% | +0.23 / +0.17 (12) | 50.0% |
-| Middle of the day | +0.26 / +1.67 (8 tr) | | 75.0% | −0.15 / −0.12 (84) | 29.8% |
-| Last 90 minutes | −4.13 / −4.14 (3 tr) | | 0% | +0.05 / +0.03 (13) | 46.2% |
+| First hour / middle / last 90 min (paper / model) | −9.31 / −6.39 (11 tr); +0.26 / +1.67 (8); −4.13 / −4.14 (3) | | 27 / 75 / 0% | +0.23 / +0.17 (12); −0.15 / −0.12 (84); +0.05 / +0.03 (13) | 50 / 30 / 46% |
 | Previous session active / calm (model) | +1.56 (14) / −11.40 (8) | | | −0.14 (47) / −0.02 (62) | |
 | India VIX rose / fell in the previous session (model) | −7.82 (4) / +1.50 (12) | | | +0.07 (46) / −0.18 (63) | |
 
-The ratchet stopped 3 of 22 index trades. A minute of delay cost nothing measurable; the
-quotes agree: 1, 2 and 5 minutes after 8 alerts the ask was better by a median 0.9%, 0.7% and
-0.4% of premium (worse in 1, 1, 2). On this sample no number can be told from chance.
+The ratchet stopped 3 of 22 index trades. A minute of delay cost nothing measurable; the quotes
+agree: 1, 2 and 5 minutes after 8 alerts the ask was better by a median 0.9%, 0.7% and 0.4%.
+On this sample no number can be told from chance.
 
 ## Part D: hypotheses from the live record, tested on five years
 The rule's 3,065 trades on the four owner indices (`microtrend_2026-11-13`), model premiums;
@@ -140,35 +136,38 @@ real-like: NIFTY and BANKNIFTY, real where priced, else the model less the measu
 | H3 opposite (calm) | 960 / 361, +0.59 (+0.9) | 339, −0.22 (−0.2) | 313, −0.14 | +0.28 (+0.6) | −0.44 | examined |
 | H4 VIX fell the session before | 962 / 314, +0.21 (+0.3) | 358, +0.54 (+0.4) | 313, −1.12 | +0.03 (+0.1) | −0.99 | examined |
 | H4 opposite (VIX rose) | 858 / 268, −0.66 (−0.9) | 282, −0.50 (−0.4) | 292, −1.66 | −0.83 (−1.4) | −1.64 | examined |
-| H5 entry 3 minutes late | 1,820 / 582, −0.13 (−0.2) | 640, −0.15 (−0.2) | 605, −1.52 | −0.41 (−1.0) | −1.33 | examined |
-| (same trades on time) | 1,820 / 582, −0.20 (−0.4) | 640, +0.08 (+0.1) | 605, −1.38 | −0.37 (−0.9) | −1.29 | reference |
+| H5 entry 3 minutes late (on time: −0.20, +0.08, −1.38) | 1,820 / 582, −0.13 (−0.2) | 640, −0.15 (−0.2) | 605, −1.52 | −0.41 (−1.0) | −1.33 | examined |
 
 Counts: 9 examined, 0 discovered, confirmed, passed or AVOID. Luck: 9 x 0.6% x 16% x 50% =
 0.004 passes; placebo (day labels shuffled over days, trade labels over trades, inside index
 and year, 20 shuffles): 0.00 of each. No higher than luck: nothing here is a finding.
 
 H1 (first hour), H2 (puts) and H4 (VIX fell) are flat in history; H3 is reversed (after an
-active session the rule loses more, −1.10, t −1.9). All four are dropped. H5 holds in substance:
-3 minutes late costs 0.04 points a trade. No filter is proposed for the rule. MIDCPNIFTY
-(training, apart): every cell positive, +0.66 to +3.11% a trade, as in earlier work.
+active session the rule loses more, −1.10, t −1.9): all four dropped. H5 holds: 3 minutes late
+costs 0.04 points a trade. No filter is proposed. MIDCPNIFTY (training, apart): every cell
+positive, +0.66 to +3.11% a trade, as in earlier work.
 
 ## What this says about the desk
-On clean one-minute bars the desk raises the alerts the backtest says it should. Its live
-record of the micro-trend rule is one trade: it was down on 5 of 7 sessions, and the missed
-week was the best the replay has seen. The old slots lost, mean-reversion on stocks clearly so.
-NIFTY and BANKNIFTY fills cost half what the model assumes; FINNIFTY and SENSEX twice. Late
-entries do not hurt; no time of day, side or market state from the live record holds up.
-
-Proposals (no product code changed): (1) a heartbeat event, so a day the desk did not run is
-a fact; (2) no alert while an instrument's live bars mix resolutions; (3) per-index option
-spreads in the cost model (0.3% NIFTY, BANKNIFTY; 1.5% FINNIFTY, SENSEX) after more quotes.
+On clean one-minute bars the desk raises the alerts the backtest says it should. Its live record
+of the micro-trend rule is one trade: it was down on 5 of 7 sessions, and the missed week was
+the best the replay has seen. The old slots lost, mean-reversion on stocks clearly so. NIFTY and
+BANKNIFTY fills cost half what the model assumes, FINNIFTY and SENSEX twice; late entries do not
+hurt; no time of day, side or market state from the live record holds up. Proposals (no product
+code changed): record the market pulse as a heartbeat event; no alert while live bars mix
+resolutions; per-index option spreads in the cost model.
 
 ## What I could not do, and what I doubt
-- Real premiums: 2 of 22 index alerts; the rest is the model less 1.0 point.
-- India VIX in the store ends on 6 Nov: later premiums use that VIX; 6 alerts lack "VIX rose".
-- Down days are inferred from missing alerts and quotes. The stored bars may have been topped
-  up after the session, so the replay may see cleaner bars than the desk did.
-- Fill quotes cover 4 sessions. The old slots are retired, so their record is of dead rules.
+- Real premiums: 2 of 22 index alerts; the rest is the model less 1.0 point. India VIX in the
+  store ends on 6 Nov: later premiums use that VIX; 6 alerts lack "VIX rose".
+- Down days are read from the desk's own pulse, quotes and events; the stored bars may have
+  been topped up later, so the replay may see cleaner bars than the desk did. Fill quotes
+  cover 4 sessions. The old slots are retired: their record is of dead rules.
+
+## Independent check (own code, `scripts/live_alerts_check.py`, run 24 Nov)
+Recomputed without the study's functions: Part A results and alert counts, the A4 spreads, the
+delay row, H1, H3 and H4 (flags rebuilt from daily bars; cutting data at the entry day changed
+none of 250) all agree. Corrected above: 9 Nov was up; SENSEX 7.5% rests on 3 sessions; the 23 Nov
+MIDCPNIFTY alert is unexplained. Not rechecked: Part B replay, A3, H2, H5, real premiums.
 
 ## Rows for the setup book
 | Instrument | Kind | Setup and preset | Timeframe | Condition | Exit | Trades a year | % a trade TUNE / CHOOSE / TEST (t whole span) | Real-premium or cost note | Status | Remark |
