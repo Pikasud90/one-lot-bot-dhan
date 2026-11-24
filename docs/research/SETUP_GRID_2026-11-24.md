@@ -70,7 +70,10 @@ TEST (to 2024-11-07, to 2025-11-07, to 2026-11-07).
   with 60 TUNE trades on 30 entry days counts as examined. Placebo: 20 shuffles; day-level
   labels shuffled over the sessions of each instrument and calendar year; the trade-level C6
   and C8 shuffled over the trades of each instrument and calendar year. In the placebo the
-  real-premium test is replaced by the model less the penalty below.
+  real-premium test is replaced by the model less the penalty below. "Clearly above luck"
+  (for CANDIDATE), fixed here: the PASSED count is at least twice luck's count (arithmetic
+  over all examined cells plus the placebo mean for the conditioned ones) and above the
+  highest count of the 20 shuffles.
 - Real-premium reading for an option cell that passes on the model: real one-minute bars from
   `data/expired_options.db` where the strike traded (store only), otherwise the model less the
   larger of 1.0 point of premium and 1.0% of the premium.
