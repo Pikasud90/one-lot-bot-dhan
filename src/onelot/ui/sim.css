@@ -1,57 +1,334 @@
-/* The Simulator tab (US-076). Theme variables only: no colour literals. Type is never below 13px. */
-#sim-root .sim-setup{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 14px;align-items:end}
-#sim-root .sim-go-wrap{padding-bottom:2px}
-#sim-root .sim-note{margin-top:12px;font-size:15px}
-#sim-root .sim-demo{border-left:5px solid var(--warn);background:var(--warn-bg);font-size:16px}
-#sim-root .sim-resumecard{border-left:5px solid var(--cyan);font-size:16px}
-#sim-root .sim-bar{display:flex;flex-direction:column;gap:10px}
-#sim-root .sim-clock{font-family:var(--mono);font-size:26px;font-weight:700;letter-spacing:-.01em}
-#sim-root .sim-badge{display:inline-block;margin-left:10px;padding:4px 12px;font-size:14px;font-weight:700;letter-spacing:.1em;color:var(--muted);background:var(--panel2);border:1px solid var(--line2)}
-#sim-root .sim-badge.on{color:var(--ok);border-color:var(--ok);background:var(--ok-bg)}
-#sim-root .sim-badge.live{color:var(--bad);border-color:var(--bad);background:var(--bad-bg)}
-#sim-root .sim-status{font-size:15px;min-height:1.4em}
-#sim-root .sim-chart-card{padding:8px}
-#sim-root .sim-chart{height:460px;width:100%}
-#sim-root .sim-pad{padding:14px}
-#sim-root .sim-main{display:block}
-#sim-root .sim-side .card{scroll-margin:16px}
-@media (min-width:1100px){#sim-root .sim-main{display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,30%);gap:0 18px;align-items:start}}
-#sim-root .sim-flash{animation:sim-flash 2s ease-out 1}
-@keyframes sim-flash{0%{box-shadow:0 0 0 5px var(--accent2);background:var(--warn-bg)}70%{box-shadow:0 0 0 5px var(--accent2);background:var(--warn-bg)}100%{box-shadow:0 0 0 0 transparent}}
-#sim-root .sim-alertcard{border-left:5px solid var(--accent)}
-#sim-root .sim-alertcard.long{border-left-color:var(--ok)}
-#sim-root .sim-alertcard.short{border-left-color:var(--bad)}
-#sim-root .sim-do{font-size:22px;margin-bottom:6px}
-#sim-root .sim-do .muted{font-size:15px}
-#sim-root .sim-levels{display:flex;flex-wrap:wrap;gap:6px 26px;font-size:16px;margin:6px 0}
-#sim-root .sim-levels b{font-family:var(--mono)}
-#sim-root .sim-traded{font-size:16px;margin:6px 0}
-#sim-root .sim-src{display:inline-block;padding:1px 9px;font-size:14px;font-weight:700;letter-spacing:.06em;border:1px solid var(--line2);background:var(--panel2);color:var(--muted)}
+/* The Simulator tab (US-094): a replay workspace. Theme variables only (no colour literals); type is never below 14px.
+   Desktop: a grid that fills the window under the app's header (sim.js sets --sim-h from where the tab starts):
+   the strip on top, the chart left of a 340px dock, the bottom panel. 700 to 1199px: the dock is one row of two cards
+   under the strip. Under 700px: the chart first under a two-row strip, Take, Skip and Close in a bar at the bottom. */
+
+/* the tab owns the window on a desktop: no page scroll, no footer under it */
+@media (min-width:700px){
+  .shell:has(section[data-tab="sim"].active){padding-bottom:0}
+  .shell:has(section[data-tab="sim"].active) .foot{display:none}
+}
+#sim-root{--dock-w:340px;--panel-h:212px;--ctl:40px;position:relative;display:grid;gap:8px;
+  grid-template-columns:minmax(0,1fr) var(--dock-w);grid-template-rows:auto minmax(0,1fr) auto;
+  grid-template-areas:"strip strip" "chart dock" "panel panel";
+  height:var(--sim-h,calc(100vh - 140px));min-height:460px;font-size:16px;color:var(--text)}
+#sim-root:fullscreen{height:100vh;padding:8px;background:var(--bg)}
+#sim-root .neg{color:var(--bad)} #sim-root .pos{color:var(--ok)}
+#sim-root kbd{display:inline-block;min-width:22px;padding:1px 5px;margin-left:8px;font:700 14px/1.2 var(--mono);border:1px solid currentColor;opacity:.75}
+#sim-root .sim-quiet{color:var(--muted);font-size:15px}
+
+/* ── the strip ─────────────────────────────────────────────────────── */
+#sim-root .sim-strip{grid-area:strip;display:flex;flex-wrap:wrap;align-items:center;gap:6px 16px;padding:6px 10px;min-height:56px;
+  background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow)}
+#sim-root .sim-row1{display:contents}
+#sim-root .sim-grp{display:flex;align-items:center;gap:6px;min-width:0}
+#sim-root .sim-g-choose{order:1}
+#sim-root .sim-g-play{order:2;flex:1 1 auto;justify-content:center}
+#sim-root .sim-g-view{order:3;margin-left:auto}
+#sim-root .sim-sel{height:var(--ctl);margin:0;width:auto;max-width:220px;padding:0 6px;font:600 16px/1 var(--ui);letter-spacing:.02em;color:var(--text);
+  background:var(--panel2);border:1px solid var(--line2);cursor:pointer;text-overflow:ellipsis}
+#sim-root .sim-sel-inst{max-width:180px}
+#sim-root .sim-sel-strat{max-width:180px}
+#sim-root .sim-sel-tf,#sim-root .sim-sel-ctf,#sim-root .sim-sel-speed{font-family:var(--mono);font-size:15px}
+#sim-root .sim-sel-speed,#sim-root .sim-sel-ctf{display:none}
+#sim-root .sim-sel:hover,#sim-root .sim-ib:hover:not(:disabled),#sim-root .sim-daybtn:hover:not(:disabled){border-color:var(--cyan)}
+#sim-root .sim-ib{display:inline-grid;place-items:center;width:var(--ctl);height:var(--ctl);padding:0;flex:none;color:var(--text);
+  background:var(--panel2);border:1px solid var(--line2);cursor:pointer;font:700 18px/1 var(--ui)}
+#sim-root .sim-ib svg{width:20px;height:20px}
+#sim-root .sim-ib:disabled,#sim-root .sim-seg button:disabled,#sim-root .sim-play:disabled,#sim-root .sim-btn:disabled,#sim-root .sim-sel:disabled,#sim-root .sim-daybtn:disabled{opacity:.42;cursor:not-allowed}
+#sim-root .sim-date{display:flex;align-items:center}
+#sim-root .sim-date #sim-day-prev{border-right-width:0}
+#sim-root .sim-date #sim-day-next{border-left-width:0}
+#sim-root .sim-date #sim-day-rand{margin-left:6px}
+#sim-root .sim-daybtn{height:var(--ctl);min-width:148px;padding:0 10px;font:700 16px/1 var(--ui);letter-spacing:.03em;color:var(--text);
+  background:var(--panel2);border:1px solid var(--line2);cursor:pointer;white-space:nowrap}
+#sim-root .sim-dayinput{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;margin:0;padding:0;border:0}
+#sim-root .sim-seg{display:inline-flex;flex:none;border:1px solid var(--line2);background:var(--panel2)}
+#sim-root .sim-seg button{height:calc(var(--ctl) - 2px);min-width:36px;padding:0 8px;font:700 15px/1 var(--mono);color:var(--muted);background:transparent;border:0;cursor:pointer}
+#sim-root .sim-seg button+button{border-left:1px solid var(--line)}
+#sim-root .sim-seg button:hover:not(:disabled){color:var(--text)}
+#sim-root .sim-seg button[aria-pressed="true"]{color:var(--panel);background:var(--text)}
+#sim-root .sim-mode button{font-family:var(--ui);font-size:16px;letter-spacing:.04em}
+#sim-root .sim-speeds button.chosen:not([aria-pressed="true"]){box-shadow:inset 0 -3px 0 var(--accent2);color:var(--text)}
+#sim-root .sim-play{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:44px;min-width:108px;padding:0 16px;font:700 17px/1 var(--ui);
+  letter-spacing:.08em;text-transform:uppercase;color:var(--panel);background:var(--cyan-ink);border:0;cursor:pointer}
+#sim-root .sim-play svg{width:20px;height:20px}
+#sim-root .sim-play .i-pause{display:none}
+#sim-root .sim-play.on .i-pause{display:block} #sim-root .sim-play.on .i-play{display:none}
+#sim-root .sim-play.on{background:var(--accent2)}
+#sim-root .sim-clockbox{display:flex;flex-direction:column;justify-content:center;min-width:172px;padding:0 4px 0 10px;border-left:1px solid var(--line)}
+#sim-root .sim-clock{font:700 18px/1.15 var(--mono);letter-spacing:-.01em;white-space:nowrap}
+#sim-root .sim-state{font:600 14px/1.25 var(--ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
+#sim-root .sim-state.on{color:var(--ok)} #sim-root .sim-state.wait{color:var(--warn-ink)} #sim-root .sim-state.bad{color:var(--bad)}
+
+/* ── the chart ─────────────────────────────────────────────────────── */
+#sim-root .sim-chartbox{grid-area:chart;position:relative;min-height:0;min-width:0;background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow);overflow:hidden}
+#sim-root .sim-chart{position:absolute;inset:0}
+#sim-root .sim-chart:focus{outline:none}
+#sim-root .sim-chart:focus-visible{outline:3px solid var(--accent);outline-offset:-3px}
+#sim-root .sim-legend{position:absolute;z-index:3;top:6px;left:8px;right:100px;pointer-events:none;font:500 15px/1.35 var(--mono)}
+#sim-root .sim-lg-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 12px}
+#sim-root .sim-lg-row>*,#sim-root .sim-lg-lines>*{background:color-mix(in srgb,var(--panel) 84%,transparent)}
+#sim-root .sim-lg-head{font:700 16px/1.35 var(--ui);letter-spacing:.03em}
+#sim-root .sim-lg-ohlc i{font-style:normal;color:var(--muted);margin:0 4px 0 9px}
+#sim-root .sim-lg-ohlc i:first-child{margin-left:0}
+#sim-root .sim-lg-ohlc b{font-weight:600}
+#sim-root .sim-lg-vol,#sim-root .sim-countdown{color:var(--muted)}
+#sim-root .sim-lg-lines{display:flex;flex-wrap:wrap;gap:2px 14px;margin-top:2px;font-size:14px;color:var(--muted)}
+#sim-root .sim-lg-lines i{display:inline-block;width:14px;height:3px;margin-right:6px;vertical-align:middle;background:var(--sw)}
+#sim-root .sim-lg-lines b{color:var(--text);font-weight:600;margin-left:6px}
+#sim-root .sim-flag{position:absolute;z-index:4;top:64px;left:50%;transform:translateX(-50%);max-width:calc(100% - 200px);padding:8px 16px;
+  font:700 17px/1.3 var(--ui);letter-spacing:.03em;text-align:center;color:var(--text);background:var(--panel);border:2px solid var(--accent2);box-shadow:var(--shadow)}
+#sim-root .sim-flag.won{border-color:var(--ok)} #sim-root .sim-flag.lost{border-color:var(--bad)} #sim-root .sim-flag.info{border-color:var(--cyan)}
+#sim-root .sim-build{position:absolute;z-index:4;bottom:44px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;padding:8px 16px;
+  font:600 16px/1.3 var(--ui);color:var(--text);background:var(--panel);border:1px solid var(--line2);box-shadow:var(--shadow);white-space:nowrap}
+#sim-root .sim-banner{position:absolute;z-index:4;bottom:40px;left:10px;padding:4px 10px;font:700 14px/1.3 var(--ui);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--warn-ink);background:var(--warn-bg);border:1px solid var(--warn);pointer-events:none}
+#sim-root .sim-tonow{position:absolute;z-index:4;right:100px;bottom:40px;display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 12px;
+  font:700 15px/1 var(--ui);letter-spacing:.06em;text-transform:uppercase;color:var(--text);background:var(--panel);border:1px solid var(--line2);box-shadow:var(--shadow);cursor:pointer}
+#sim-root .sim-tonow svg{width:16px;height:16px}
+#sim-root .sim-pins{position:absolute;inset:0;pointer-events:none;z-index:3}
+#sim-root .sim-pin{position:absolute;right:96px;padding:3px 9px;font:700 14px/1.3 var(--mono);background:var(--panel);border:1px solid var(--line2);color:var(--text)}
+#sim-root .sim-pin.top{top:calc(64px + var(--slot,0) * 30px)}
+#sim-root .sim-pin.bottom{bottom:calc(40px + var(--slot,0) * 30px)}
+#sim-root .sim-pin.stop{color:var(--bad);border-color:var(--bad)} #sim-root .sim-pin.target{color:var(--ok);border-color:var(--ok)} #sim-root .sim-pin.entry{color:var(--cyan-ink);border-color:var(--cyan)}
+#sim-root .sim-veil{position:absolute;inset:0;z-index:6;display:grid;place-items:center;background:color-mix(in srgb,var(--panel) 86%,transparent)}
+#sim-root .sim-veil-box{display:flex;flex-direction:column;align-items:center;gap:10px;max-width:540px;padding:20px 24px;text-align:center}
+#sim-root .sim-veil-text{font:700 21px/1.3 var(--ui);letter-spacing:.02em}
+#sim-root .sim-veil-sub{font-size:16px;color:var(--muted)}
+#sim-root .sim-veil.err .sim-veil-text{color:var(--bad)}
+#sim-root .sim-veil .sim-btn{flex:none;min-width:160px}
+#sim-root .sim-spin{display:inline-block;width:22px;height:22px;flex:none;border:3px solid var(--line2);border-top-color:var(--cyan);border-radius:50%;animation:sim-spin .8s linear infinite}
+@keyframes sim-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){#sim-root .sim-spin{animation-duration:2.4s}}
+
+/* ── the dock ──────────────────────────────────────────────────────── */
+#sim-root .sim-dock{grid-area:dock;display:flex;flex-direction:column;gap:8px;min-height:0;min-width:0;overflow:auto}
+#sim-root .sim-slot{display:flex;flex-direction:column;gap:8px;flex:1 1 auto;min-height:0}
+#sim-root .sim-card{background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow);padding:14px 16px;min-width:0}
+#sim-root .sim-tagrow{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
+#sim-root .sim-tag{display:inline-block;padding:3px 10px;font:700 14px/1.2 var(--ui);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:var(--panel2);border:1px solid var(--line2)}
+#sim-root .sim-tag.alert{color:var(--warn-ink);background:var(--warn-bg);border-color:var(--warn)}
+#sim-root .sim-tag.open{color:var(--cyan-ink);background:var(--cyan-bg);border-color:var(--cyan)}
+#sim-root .sim-tag.won{color:var(--ok);background:var(--ok-bg);border-color:var(--ok)}
+#sim-root .sim-tag.lost{color:var(--bad);background:var(--bad-bg);border-color:var(--bad)}
+#sim-root .sim-left{font:600 15px/1.2 var(--ui);color:var(--muted);text-align:right}
+#sim-root .sim-action{font:34px/1 var(--display);letter-spacing:.05em;margin:2px 0 4px}
+#sim-root .sim-action.sm{font-size:28px}
+#sim-root .sim-what{font-size:16px;color:var(--muted);margin-bottom:8px}
+#sim-root .sim-what>span:first-child{color:var(--text);font-weight:600}
+#sim-root .sim-src{display:inline-block;padding:0 8px;font:700 14px/1.5 var(--ui);letter-spacing:.06em;border:1px solid var(--line2);background:var(--panel2);color:var(--muted)}
 #sim-root .sim-src.real{color:var(--ok);border-color:var(--ok);background:var(--ok-bg)}
 #sim-root .sim-src.modelled{color:var(--warn-ink);border-color:var(--warn);background:var(--warn-bg)}
-#sim-root .sim-reasons{margin:8px 0;padding-left:22px;font-size:15px}
-#sim-root .sim-poscard{border-left:5px solid var(--cyan)}
-#sim-root .sim-poscard.closed.won{border-left-color:var(--ok)}
-#sim-root .sim-poscard.closed.lost{border-left-color:var(--bad)}
-#sim-root .sim-result{font-size:18px;margin:6px 0}
-#sim-root .sim-exitsignal{margin:6px 0;padding:8px 12px;font-size:16px;font-weight:700;color:var(--warn-ink);background:var(--warn-bg);border:1px solid var(--warn)}
-#sim-root .sim-stage{font-size:16px;margin:6px 0;color:var(--muted)}
-#sim-root .sim-progress{position:relative;height:14px;margin:8px 0 2px;background:var(--panel2);border:1px solid var(--line2)}
-#sim-root .sim-progress .sim-fill{height:100%;background:var(--ok)}
-#sim-root .sim-progress i{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--text)}
-#sim-root .sim-marks{position:relative;height:20px;font-size:14px;color:var(--muted);margin-bottom:8px}
-#sim-root .sim-marks span{position:absolute;transform:translateX(-50%)}
-#sim-root .sim-marks span.end{right:0;transform:none}
-#sim-root .sim-log-head{justify-content:space-between;margin-bottom:10px}
-#sim-root .sim-csv{font-size:15px;font-weight:700;color:var(--cyan)}
-#sim-root .sim-log{overflow-x:auto}
-#sim-root .sim-h{margin:16px 0 6px;font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
-#sim-root .sim-ev{font-size:15px;padding:3px 0;border-bottom:1px solid var(--line)}
-#sim-root .sim-ev.alert b{color:var(--accent2)}
-#sim-root .sim-ev.closed b{color:var(--accent)}
+#sim-root .sim-plan{padding:10px 12px;background:var(--panel2);border:1px solid var(--line)}
+#sim-root .sim-buy{font:700 22px/1.2 var(--mono);margin-bottom:6px}
+#sim-root .sim-pair{display:flex;justify-content:space-between;gap:10px;font:600 16px/1.5 var(--mono)}
+#sim-root .sim-pair b{font-weight:700}
+#sim-root .sim-pair.sim-quiet{font-size:15px}
+#sim-root .sim-trig{margin-top:8px;font:500 15px/1.4 var(--mono);color:var(--muted)}
+#sim-root .sim-why{margin-top:8px;font-size:15px}
+#sim-root .sim-why summary{cursor:pointer;font-weight:700;color:var(--muted);letter-spacing:.04em}
+#sim-root .sim-why ul{margin:6px 0 0;padding-left:20px}
+#sim-root .sim-btns{display:flex;gap:8px;margin-top:12px}
+#sim-root .sim-btn{flex:1 1 0;display:inline-flex;align-items:center;justify-content:center;min-height:46px;padding:0 14px;font:700 17px/1 var(--ui);
+  letter-spacing:.08em;text-transform:uppercase;color:var(--text);background:var(--panel2);border:1px solid var(--line2);cursor:pointer}
+#sim-root .sim-btn:hover:not(:disabled){border-color:var(--cyan)}
+#sim-root .sim-btn.take{color:var(--panel);background:var(--ok);border-color:var(--ok)}
+#sim-root .sim-btn.close,#sim-root .sim-btn.danger{color:var(--panel);background:var(--bad);border-color:var(--bad)}
+#sim-root .sim-btn.primary{color:var(--panel);background:var(--cyan-ink);border-color:var(--cyan-ink)}
+#sim-root .sim-ticket{border-top:4px solid var(--accent2)}
+#sim-root .sim-pos{border-top:4px solid var(--cyan)}
+#sim-root .sim-res.won{border-top:4px solid var(--ok)} #sim-root .sim-res.lost{border-top:4px solid var(--bad)}
+#sim-root .sim-day{border-top:4px solid var(--violet)}
+#sim-root .sim-hint{border-top:4px solid var(--line2)}
+#sim-root .sim-hint-title{font:700 20px/1.3 var(--ui);letter-spacing:.02em;margin:4px 0}
+#sim-root .sim-hint-text{font-size:16px;color:var(--muted)}
+#sim-root .sim-hint-text p{margin:6px 0}
+#sim-root .sim-hint-btns{display:flex;gap:8px;margin-top:10px}
+#sim-root .sim-hint-btns:empty{display:none}
+#sim-root .sim-pnl{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 14px;margin:6px 0;font:600 16px/1.2 var(--mono);color:var(--muted)}
+#sim-root .sim-pnl b{font-size:28px;color:var(--text)}
+#sim-root .sim-pnl b.pos{color:var(--ok)} #sim-root .sim-pnl b.neg{color:var(--bad)}
+#sim-root .sim-line{font:500 16px/1.45 var(--mono)}
+#sim-root .sim-line.sim-quiet{font-size:15px;font-family:var(--ui)}
+#sim-root .sim-pending{margin:8px 0;font-size:16px;color:var(--muted)}
+#sim-root .sim-meter{position:relative;height:12px;margin:14px 0 4px;background:linear-gradient(90deg,var(--bad-bg),var(--panel2) 40%,var(--ok-bg));border:1px solid var(--line2)}
+#sim-root .sim-tick{position:absolute;top:-4px;bottom:-4px;width:2px;margin-left:-1px;background:var(--dim)}
+#sim-root .sim-mk{position:absolute;top:-6px;width:4px;height:22px;margin-left:-2px}
+#sim-root .sim-mk.stop{background:var(--bad)} #sim-root .sim-mk.entry{background:var(--cyan)}
+#sim-root .sim-mk.price{top:-7px;width:14px;height:24px;margin-left:-7px;background:var(--text);border:2px solid var(--panel)}
+#sim-root .sim-meter-words{display:flex;justify-content:space-between;font-size:14px;color:var(--muted)}
+#sim-root .sim-meter-words span:nth-child(2){color:var(--text);font-weight:600}
+#sim-root .sim-stage{margin:8px 0 4px;font:700 16px/1.3 var(--ui);letter-spacing:.02em;color:var(--violet)}
+#sim-root .sim-exitsig{margin-top:8px;padding:8px 12px;font-size:16px;font-weight:700;color:var(--warn-ink);background:var(--warn-bg);border:1px solid var(--warn)}
+#sim-root .sim-nums{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;padding:12px 16px;flex:none}
+#sim-root .sim-nums span{display:block;font:600 14px/1.2 var(--ui);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+#sim-root .sim-nums b{font:700 19px/1.3 var(--mono)}
+#sim-root .sim-flash{animation:sim-flash 1.6s ease-out 1}
+@keyframes sim-flash{0%{box-shadow:0 0 0 4px var(--accent2)}70%{box-shadow:0 0 0 4px var(--accent2)}100%{box-shadow:var(--shadow)}}
+
+/* ── the bottom panel ──────────────────────────────────────────────── */
+#sim-root .sim-panel{grid-area:panel;display:flex;flex-direction:column;height:var(--panel-h);min-height:0;min-width:0;background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow)}
+#sim-root[data-panel="closed"] .sim-panel{height:auto}
+#sim-root[data-panel="closed"] .sim-pbody{display:none}
+#sim-root[data-panel="closed"] .sim-ptoggle svg{transform:rotate(180deg)}
+#sim-root .sim-ptabs{display:flex;align-items:center;gap:2px;min-height:44px;padding:0 6px 0 4px;border-bottom:1px solid var(--line);flex:none}
+#sim-root[data-panel="closed"] .sim-ptabs{border-bottom:0}
+#sim-root .sim-ptab{height:42px;padding:0 14px;font:700 15px/1 var(--ui);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);background:transparent;border:0;border-bottom:3px solid transparent;cursor:pointer;white-space:nowrap}
+#sim-root .sim-ptab[aria-selected="true"]{color:var(--text);border-bottom-color:var(--accent)}
+#sim-root[data-panel="closed"] .sim-ptab[aria-selected="true"]{border-bottom-color:transparent}
+#sim-root .sim-ptab:hover{color:var(--text)}
+#sim-root .sim-count{font-family:var(--mono);color:var(--muted)}
+#sim-root .sim-status{flex:1 1 auto;min-width:0;padding:0 10px;text-align:right;font-size:15px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#sim-root .sim-ptoggle{width:36px;height:36px;background:transparent;border-color:transparent}
+#sim-root .sim-pbody{flex:1 1 auto;min-height:0;overflow:auto;padding:8px 14px 12px}
+#sim-root .sim-phead{display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px;margin-bottom:6px}
+#sim-root .sim-phead .sim-seg button{font-family:var(--ui);font-size:15px;height:34px;padding:0 12px}
+#sim-root .sim-csv{margin-left:auto;font-size:15px;font-weight:700;color:var(--cyan-ink)}
+#sim-root .sim-table{font-size:15px}
+#sim-root .sim-table th{font-size:14px;padding:6px 10px}
+#sim-root .sim-table td{padding:7px 10px;font-family:var(--mono)}
+#sim-root .sim-table td.w{font-family:var(--ui);font-size:16px}
+#sim-root .sim-table .n{text-align:right}
+#sim-root .sim-table tbody tr{cursor:pointer}
+#sim-root .sim-table tbody tr:hover,#sim-root .sim-table tbody tr.sel{background:var(--panel2)}
+#sim-root .sim-table td small{display:block;font-size:14px;color:var(--muted)}
+#sim-root .sim-empty{padding:10px 2px;font-size:16px;color:var(--muted)}
+#sim-root .sim-log{list-style:none;margin:0;padding:0}
+#sim-root .sim-log li{display:grid;grid-template-columns:150px 130px minmax(0,1fr);gap:10px;padding:5px 2px;border-bottom:1px solid var(--line);font-size:15px}
+#sim-root .sim-log li span:first-child{font-family:var(--mono);color:var(--muted)}
+#sim-root .sim-log li b{font-weight:700}
+#sim-root .sim-log li.alert b{color:var(--warn-ink)} #sim-root .sim-log li.filled b{color:var(--cyan-ink)}
+#sim-root .sim-log li.closed b{color:var(--accent)} #sim-root .sim-log li.stage b{color:var(--violet)}
+#sim-root .sim-log li.day_end b,#sim-root .sim-log li.data_end b{color:var(--muted)}
+#sim-root .sim-numgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px 18px}
+#sim-root .sim-numgrid div{padding:6px 0;border-bottom:1px solid var(--line)}
+#sim-root .sim-numgrid span{display:block;font:600 14px/1.2 var(--ui);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+#sim-root .sim-numgrid b{font:700 19px/1.3 var(--mono)}
+#sim-root .sim-equity{margin-top:10px}
+#sim-root .sim-equity svg{display:block;width:100%;height:90px;background:var(--panel2);border:1px solid var(--line)}
+#sim-root .sim-equity path{fill:none;stroke:var(--cyan);stroke-width:2;vector-effect:non-scaling-stroke}
 #sim-root .sim-how{font-size:15px}
-#sim-root .sim-how summary{cursor:pointer;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--accent2);font-size:14px}
-#sim-root .sim-how li{margin:6px 0}
-@media (max-width:700px){#sim-root .sim-chart{height:340px}#sim-root .sim-clock{font-size:21px}}
-#sim-root #sim-summary .tile b{font-size:21px}
-#sim-root #sim-summary{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+#sim-root .sim-howgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr);gap:8px 28px}
+#sim-root .sim-how h4{margin:4px 0 6px;font:700 15px/1.2 var(--ui);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+#sim-root .sim-how ul{margin:0;padding-left:20px}
+#sim-root .sim-how li{margin:3px 0}
+#sim-root .sim-how li:empty{display:none}
+#sim-root .sim-keylist{list-style:none;padding-left:0!important}
+#sim-root .sw{display:inline-block;width:22px;height:0;margin-right:8px;vertical-align:middle;border-top:3px solid var(--cyan)}
+#sim-root .sw.stop{border-top-color:var(--bad)} #sim-root .sw.target{border-top-color:var(--ok)} #sim-root .sw.faint{border-top:2px dashed var(--dim)}
+#sim-root .sw.zone{height:12px;border:0;background:linear-gradient(180deg,var(--ok-bg) 50%,var(--bad-bg) 50%)}
+
+/* ── sheets ────────────────────────────────────────────────────────── */
+#sim-root .sim-sheet{position:absolute;z-index:30;top:64px;right:10px;width:420px;max-width:calc(100% - 20px);padding:14px 18px;background:var(--panel);
+  border:1px solid var(--line2);box-shadow:0 18px 50px -12px color-mix(in srgb,var(--text) 45%,transparent)}
+#sim-root .sim-sheet-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font:700 18px/1 var(--ui);letter-spacing:.06em;text-transform:uppercase}
+#sim-root .sim-sheet-head .sim-ib{width:36px;height:36px;font-size:16px;background:transparent;border-color:transparent}
+#sim-root .sim-check{display:flex;gap:10px;align-items:flex-start;padding:8px 0;font-size:16px;line-height:1.35;border-bottom:1px solid var(--line);cursor:pointer}
+#sim-root .sim-check input{width:20px;height:20px;margin-top:2px;flex:none;accent-color:var(--cyan-ink)}
+#sim-root .sim-sheet-foot{margin-top:12px;display:flex}
+#sim-root .sim-keysheet{left:50%;right:auto;transform:translateX(-50%);width:540px}
+#sim-root .sim-keys{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;margin:0 0 10px;font-size:16px}
+#sim-root .sim-keys dt{text-align:right}
+#sim-root .sim-keys dt kbd{margin:0;opacity:1}
+#sim-root .sim-keys dd{margin:0;line-height:1.6}
+#sim-root .sim-ask{top:30%;left:50%;right:auto;transform:translateX(-50%);width:500px;padding:20px 22px;box-shadow:0 0 0 100vmax color-mix(in srgb,var(--text) 28%,transparent)}
+#sim-root .sim-ask-text{font:600 18px/1.4 var(--ui)}
+
+/* ── the bar at the bottom of a phone ──────────────────────────────── */
+#sim-root .sim-actbar{display:none}
+
+/* 1200px and up with a short window: a smaller panel */
+@media (max-height:860px) and (min-width:1200px){#sim-root{--panel-h:180px}}
+
+/* 1200 to 1599px: the chart timeframe is a list, not chips, so the strip stays one row at 1440px */
+@media (max-width:1599px) and (min-width:700px){
+  #sim-root .sim-ctfs{display:none}
+  #sim-root .sim-sel-ctf{display:block}
+}
+/* under 1350px the strip wraps: choosing and viewing on the first row, playing on the second */
+@media (max-width:1349px) and (min-width:700px){
+  #sim-root .sim-g-play{order:4;flex:1 1 100%;justify-content:flex-start}
+}
+/* 700 to 1199px: the dock is one row of two cards under the strip */
+@media (max-width:1199px) and (min-width:700px){
+  #sim-root{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr) auto;grid-template-areas:"strip" "dock" "chart" "panel";--ctl:38px;gap:6px}
+  #sim-root .sim-strip{gap:5px 10px;padding:5px 8px}
+  #sim-root .sim-sel-inst,#sim-root .sim-sel-strat{max-width:160px}
+  #sim-root .sim-daybtn{min-width:136px}
+  #sim-root .sim-dock{flex-direction:row;height:118px;overflow:visible}
+  #sim-root .sim-slot{flex:1 1 0;min-width:0;overflow:auto}
+  #sim-root .sim-slot .sim-card{padding:8px 12px;min-height:100%}
+  #sim-root .sim-nums{flex:0 0 290px;padding:8px 12px;gap:4px 12px}
+  #sim-root .sim-nums b{font-size:17px}
+  #sim-root .sim-tagrow{margin-bottom:2px}
+  #sim-root .sim-ticket:not([hidden]),#sim-root .sim-pos:not([hidden]){display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr) 140px;gap:0 12px;align-items:start}
+  #sim-root .sim-ticket .sim-tagrow,#sim-root .sim-ticket .sim-action,#sim-root .sim-ticket .sim-what{grid-column:1}
+  #sim-root .sim-ticket .sim-action{font-size:26px}
+  #sim-root .sim-ticket .sim-what,#sim-root .sim-pos .sim-what{font-size:15px;margin:0}
+  #sim-root .sim-ticket .sim-plan{grid-column:2;grid-row:1 / span 3;padding:4px 10px}
+  #sim-root .sim-ticket .sim-buy{font-size:17px;margin:0}
+  #sim-root .sim-ticket .sim-pair{font-size:15px;line-height:1.35}
+  #sim-root .sim-ticket .sim-trig,#sim-root .sim-ticket .sim-why,#sim-root .sim-ticket #sim-tk-implied{display:none}
+  #sim-root .sim-ticket .sim-btns,#sim-root .sim-pos .sim-btns{grid-column:3;grid-row:1 / span 4;flex-direction:column;margin:0}
+  #sim-root .sim-ticket .sim-btn,#sim-root .sim-pos .sim-btn{min-height:44px;flex:none}
+  #sim-root .sim-pos .sim-tagrow,#sim-root .sim-pos .sim-action,#sim-root .sim-pos .sim-what,#sim-root .sim-pos .sim-pending{grid-column:1}
+  #sim-root .sim-pos .sim-action{font-size:22px}
+  #sim-root .sim-pos #sim-ps-live{grid-column:2;grid-row:1 / span 4}
+  #sim-root .sim-pos .sim-pnl{margin:0} #sim-root .sim-pos .sim-pnl b{font-size:22px}
+  #sim-root .sim-pos .sim-meter,#sim-root .sim-pos .sim-meter-words,#sim-root .sim-pos #sim-ps-index,#sim-root .sim-pos #sim-ps-target,#sim-root .sim-pos #sim-ps-stop{display:none}
+  #sim-root .sim-pos .sim-line{font-size:15px;line-height:1.35}
+  #sim-root .sim-pos .sim-stage{margin:2px 0;font-size:15px}
+  #sim-root .sim-pos .sim-exitsig{grid-column:1 / span 2;margin-top:4px;padding:4px 8px}
+  #sim-root .sim-res .sim-action,#sim-root .sim-day .sim-action{font-size:22px;margin:0}
+  #sim-root .sim-res .sim-pnl,#sim-root .sim-day .sim-pnl{margin:2px 0} #sim-root .sim-res .sim-pnl b,#sim-root .sim-day .sim-pnl b{font-size:22px}
+  #sim-root .sim-res .sim-line{font-size:15px;line-height:1.35}
+  #sim-root .sim-res #sim-rs-rule{display:none}
+  #sim-root .sim-day .sim-btns{margin-top:4px}
+  #sim-root .sim-hint-title{font-size:18px;margin:0}
+  #sim-root .sim-hint-text{font-size:15px}
+  #sim-root .sim-hint-text p{margin:2px 0}
+  #sim-root .sim-hint-btns{margin-top:4px}
+  #sim-root .sim-howgrid{grid-template-columns:1fr}
+  #sim-root .sim-flag{top:58px}
+}
+
+/* under 700px: a phone. The page scrolls; the chart comes first under a two-row strip. */
+@media (max-width:699px){
+  #sim-root{--ctl:44px;display:flex;flex-direction:column;height:auto;min-height:0;gap:8px;padding-bottom:80px}
+  #sim-root .sim-strip{order:1;flex-direction:column;align-items:stretch;flex-wrap:nowrap;gap:6px;padding:6px}
+  #sim-root .sim-row1{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
+  #sim-root .sim-row1::-webkit-scrollbar{display:none}
+  #sim-root .sim-g-view{margin-left:0}
+  #sim-root .sim-g-play{justify-content:flex-start;gap:6px}
+  #sim-root .sim-sel,#sim-root .sim-daybtn{height:44px}
+  #sim-root .sim-seg button{height:42px}
+  #sim-root .sim-daybtn{min-width:128px}
+  #sim-root .sim-speeds,#sim-root .sim-ctfs,#sim-root #sim-full,#sim-root #sim-help{display:none}
+  #sim-root .sim-sel-speed,#sim-root .sim-sel-ctf{display:block}
+  #sim-root .sim-play{min-width:0;width:52px;padding:0}
+  #sim-root .sim-play span{display:none}
+  #sim-root .sim-clockbox{min-width:0;margin-left:auto;padding-left:8px}
+  #sim-root .sim-clock{font-size:16px}
+  #sim-root .sim-chartbox{order:2;height:50svh;min-height:300px;flex:none}
+  #sim-root .sim-legend{right:8px;font-size:14px}
+  #sim-root .sim-lg-ohlc i:nth-of-type(-n+3),#sim-root .sim-lg-ohlc b:nth-of-type(-n+3),#sim-root .sim-lg-vol,#sim-root .sim-lg-lines{display:none}
+  #sim-root .sim-flag{top:auto;bottom:40px;font-size:16px;max-width:calc(100% - 20px)}
+  #sim-root .sim-tonow{right:76px}
+  #sim-root .sim-pin{right:72px}
+  #sim-root .sim-banner{bottom:auto;top:40px}
+  #sim-root .sim-dock{order:3;overflow:visible}
+  #sim-root .sim-panel{order:4;height:auto}
+  #sim-root .sim-pbody{max-height:60svh}
+  #sim-root .sim-ptabs{overflow-x:auto}
+  #sim-root .sim-status{display:none}
+  #sim-root .sim-howgrid{grid-template-columns:1fr}
+  #sim-root .sim-log li{grid-template-columns:64px 100px minmax(0,1fr)}
+  #sim-root .sim-ticket .sim-btns,#sim-root .sim-pos .sim-btns{display:none}
+  #sim-root .sim-actbar{position:fixed;z-index:35;left:0;right:0;bottom:0;display:flex;align-items:center;gap:8px;padding:8px 12px calc(8px + env(safe-area-inset-bottom));
+    background:var(--panel);border-top:1px solid var(--line2);box-shadow:0 -8px 24px -12px color-mix(in srgb,var(--text) 40%,transparent)}
+  #sim-root .sim-actbar[hidden]{display:none}
+  #sim-root .sim-ab-text{flex:1 1 auto;min-width:0;font:700 16px/1.2 var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #sim-root .sim-actbar .sim-btn{flex:0 0 auto;min-height:48px;min-width:88px}
+  #sim-root .sim-sheet,#sim-root .sim-keysheet,#sim-root .sim-ask{position:fixed;top:auto;bottom:0;left:0;right:0;transform:none;width:auto;max-width:none;max-height:80svh;overflow:auto}
+}

@@ -399,15 +399,16 @@ function levelLabels(src, kind) {
     stop0: "First stop", target0: "First target",
   };
 }
-/* A chart marker for an event (null when the event has none): its candle in the chart timeframe and its words. */
-function markerFor(ev, tfm, side) {
-  const long = side !== "SHORT", d = ev.data || {}, t = binStart(eventMinute(ev), tfm);
-  if (ev.kind === "ALERT") return { t, position: long ? "belowBar" : "aboveBar", shape: long ? "arrowUp" : "arrowDown", color: "--accent2", text: "Alert" };
-  if (ev.kind === "FILLED") return { t, position: long ? "belowBar" : "aboveBar", shape: "circle", color: "--cyan", text: "In " + num(d.entry_price ?? d.entry) };
-  if (ev.kind === "STAGE") return { t, position: long ? "belowBar" : "aboveBar", shape: "square", color: "--violet", text: STAGE_SHORT[d.stage] || "Stop" };
+/* A chart marker for an event (null when the event has none): the minute it belongs to (the chart puts it on that
+   minute's candle in its own timeframe), where, which shape, which theme colour, and its words. */
+function markerFor(ev, side) {
+  const long = side !== "SHORT", d = ev.data || {}, t = eventMinute(ev);
+  if (ev.kind === "ALERT") return { minute: t, position: long ? "belowBar" : "aboveBar", shape: long ? "arrowUp" : "arrowDown", color: "--accent2", text: "Alert" };
+  if (ev.kind === "FILLED") return { minute: t, position: long ? "belowBar" : "aboveBar", shape: "circle", color: "--cyan", text: "In " + num(d.entry_price ?? d.entry) };
+  if (ev.kind === "STAGE") return { minute: t, position: long ? "belowBar" : "aboveBar", shape: "square", color: "--violet", text: STAGE_SHORT[d.stage] || "Stop" };
   if (ev.kind === "CLOSED") {
     const net = Number(d.net);
-    return { t, position: long ? "aboveBar" : "belowBar", shape: "square", color: net >= 0 ? "--ok" : "--bad",
+    return { minute: t, position: long ? "aboveBar" : "belowBar", shape: "square", color: net >= 0 ? "--ok" : "--bad",
       text: [reasonShort(d.exit_reason), isNum(d.net) ? rupees(net) : null, isNum(d.r_multiple) ? rText(d.r_multiple).replace(" R", "R") : null].filter(Boolean).join(" · ") };
   }
   return null;

@@ -13,6 +13,7 @@
   --head:#0c1328; --head2:#17213f; --head-text:#f4f7ff; --head-muted:#a7b3cf;
   --shadow:0 1px 2px rgba(15,23,42,.06),0 10px 26px -14px rgba(15,23,42,.22);
   --grid:#dfe4ee; --plot-font:#4a5974;
+  --vol-up:rgba(18,131,71,.34); --vol-dn:rgba(212,31,62,.30); /* US-094: the simulator's volume bars */
   --display:'Bebas Neue','Oswald',Impact,sans-serif;
   --ui:'Rajdhani','Segoe UI',system-ui,sans-serif;
   --mono:'JetBrains Mono','SFMono-Regular',Menlo,Consolas,monospace;
@@ -30,6 +31,7 @@
   --head:#090e1c; --head2:#131c33;
   --shadow:0 10px 30px -16px rgba(0,0,0,.7);
   --grid:#2a3650; --plot-font:#a9b6d0;
+  --vol-up:rgba(61,220,138,.34); --vol-dn:rgba(255,90,121,.34); /* US-094: the simulator's volume bars */
   color-scheme:dark;
 }
 /* Three more palettes (US-070), colours only: the same variable names as Day; fonts and the cut come from :root. */
@@ -44,6 +46,7 @@
   --head:#6e0b1d; --head2:#9c1430; --head-text:#fff4d6; --head-muted:#f2c9a0;
   --shadow:0 1px 2px rgba(110,11,29,.08),0 10px 26px -14px rgba(110,11,29,.25);
   --grid:#f0dcb6; --plot-font:#6b3a2c;
+  --vol-up:rgba(17,112,61,.32); --vol-dn:rgba(196,18,47,.28); /* US-094: the simulator's volume bars */
   color-scheme:light;
 }
 :root[data-theme="ramayana"]{
@@ -57,6 +60,7 @@
   --head:#173d26; --head2:#225536; --head-text:#fff1d6; --head-muted:#e8c98f;
   --shadow:0 1px 2px rgba(23,61,38,.08),0 10px 26px -14px rgba(23,61,38,.25);
   --grid:#efdcb9; --plot-font:#4f4a2a;
+  --vol-up:rgba(23,102,58,.32); --vol-dn:rgba(196,42,18,.28); /* US-094: the simulator's volume bars */
   color-scheme:light;
 }
 :root[data-theme="batman"]{
@@ -70,6 +74,7 @@
   --head:#050506; --head2:#15171b; --head-text:#f2f3f5; --head-muted:#a9b0bb;
   --shadow:0 10px 30px -16px rgba(0,0,0,.8);
   --grid:#2a2d33; --plot-font:#a9b0bb;
+  --vol-up:rgba(63,214,138,.32); --vol-dn:rgba(255,95,109,.32); /* US-094: the simulator's volume bars */
   color-scheme:dark;
 }
 *{box-sizing:border-box}
