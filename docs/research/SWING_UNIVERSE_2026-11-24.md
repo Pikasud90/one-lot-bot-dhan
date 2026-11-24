@@ -18,34 +18,20 @@ the RSI(2) dip does not cover the 0.50% round trip.
   ICICIPRULI is ICICILIFE. Not in the master: PEL (merged), GUJGASLTD. Adani Green excluded.
 - **222 stocks**: 18 desk, 43 alpha, 161 new. Daily bars from 2010-01-04 for 170 of them, later
   listings from 2011 to 2023 (each needs bars before 2023-11-08; all have).
-- **New names**: HDFCLIFE SBILIFE JIOFIN BANKBARODA CANBK UNIONBANK INDIANB BANKINDIA FEDERALBNK
-  IDFCFIRSTB AUBANK BANDHANBNK YESBANK RBLBANK CHOLAFIN BAJAJHLDNG MUTHOOTFIN MANAPPURAM
-  LICHSGFIN M&MFIN SBICARD HDFCAMC ABCAPITAL PFC RECLTD ICICIGI ICICIPRULI MFSL LTF IIFL ANGELONE
-  BSE MCX CDSL IRFC LICI POONAWALLA TVSMOTOR ASHOKLEY BALKRISIND BHARATFORG ESCORTS EXIDEIND
-  MOTHERSON MRF APOLLOTYRE TIINDIA BOSCHLTD UNOMINDA SONACOMS ABB HAL BDL MAZDOCK COCHINSHIP
-  CGPOWER CUMMINSIND POLYCAB KEI SUZLON THERMAX GMRAIRPORT IRB NBCC NCC RVNL CONCOR INDIGO
-  HINDPETRO IOC PETRONET IGL MGL OIL NHPC SJVN TORNTPOWER JSWENERGY ADANIPOWER NLCINDIA CESC
-  ADANIENSOL NATIONALUM NMDC HINDZINC JSL APLAPOLLO HINDCOPPER SHREECEM DALBHARAT RAMCOCEM
-  JKCEMENT PIDILITIND BERGEPAINT KANSAINER ASTRAL SUPREMEIND DABUR MARICO GODREJCP COLPAL UNITDSPR
-  UBL VBL JUBLFOOD PAGEIND BATAINDIA VOLTAS HAVELLS CROMPTON WHIRLPOOL BLUESTARCO DIXON TRENT DMART
-  INDHOTEL IRCTC ETERNAL KALYANKJIL NAUKRI LTIM MPHASIS COFORGE PERSISTENT LTTS TATAELXSI OFSS
-  KPITTECH TATACOMM IDEA INDUSTOWER SUNTV ZEEL TORNTPHARM ZYDUSLIFE ALKEM LUPIN AUROPHARMA BIOCON
-  GLENMARK IPCALAB LAURUSLABS ABBOTINDIA FORTIS MAXHEALTH SYNGENE GRANULES GODREJPROP OBEROIRLTY
-  PRESTIGE PHOENIXLTD LODHA SRF PIIND UPL DEEPAKNTR AARTIIND TATACHEM NAVINFLUOR CHAMBLFERT
-  COROMANDEL.
+- **New names**: the 161 are the list `NEW` in `scripts/swing_universe.py` (banks and finance,
+  autos, capital goods, energy, metals, cement, consumer, IT, pharma, realty, chemicals).
 - **Data.** 223 Dhan requests (1 master, 222 daily), none refused, one a second, cached in
   `data/research/swing_2026-11-24/daily.sqlite`. Bars after 2026-11-07 are not used. NIFTY: the
   store's daily closes (from 2017-01-02) and, before that, the alpha study's cached Yahoo closes.
 - **Adjustments.** Dhan's daily bars are split, bonus and demerger adjusted: on the 61 stocks the
   Dhan to Yahoo close ratio is constant except at demergers Yahoo leaves unadjusted (Tata Motors,
-  Vedanta, Siemens) and rights issues of 5% to 11% Dhan leaves unadjusted (Bharti, Tata Steel,
-  Grasim, Tata Power). Five one-day moves over 35% that never reverse are corporate actions Dhan
-  missed (Adani Enterprises 2015, Jindal Stainless 2015, Tata Chemicals 2020, two before the first
-  entry): earlier prices are rescaled. Other such moves are real (2017 bank recap, 2020, Yes Bank).
-- **Survivorship.** The list is today's survivors: companies delisted or merged away (PEL, for
-  one) are in no group, and the 13 leavers still trade. Three counters, each reported: excess over
-  the same stock's average hold of the same length; 200 runs of random entry dates in the same
-  stock and calendar year with the same holding days; the 13 leavers apart.
+  Vedanta, Siemens) and 5% to 11% rights issues Dhan leaves unadjusted (Bharti, Tata Steel, more).
+  Five one-day moves over 35% that never reverse are corporate actions Dhan missed (Adani
+  Enterprises 2015, Jindal Stainless 2015, Tata Chemicals 2020, Britannia 2010, Tata Motors 2011):
+  earlier prices are rescaled. Other such moves are real (2017 bank recap, 2020, Yes Bank).
+  Other such moves are real (2017 bank recap, 2020, Yes Bank).
+- **Survivorship.** The list is today's survivors (PEL, merged away, is in no group). Counters:
+  excess over the same stock's hold; 200 runs of random entry dates; the 13 leavers apart.
 
 ## What was fixed in advance
 
@@ -65,9 +51,6 @@ DIVISLAB, OFSS) and trade one share. Cells: each setup on the pool, and by group
 (tertiles of median rupee turnover in TUNE) and by NIFTY above or below SMA200 (only where the
 setup does not already require it). t by entry week. Selection: RESEARCH-RULES section 5.
 
-No look-ahead: for every setup 60 random signals and 20 other bars read the same on bars cut after
-the signal day (stock and NIFTY); for M3 the top 10% of 30 of 30 random rebalance days.
-
 ## P1 on the new names (the headline)
 
 | Stocks | Trades | Entry days | % a trade (t) | Win | Payoff | TUNE / CHOOSE / TEST (n) | Excess (t) | Random dates [5% to 95%], runs at or above |
@@ -78,15 +61,13 @@ the signal day (stock and NIFTY); for M3 the top 10% of 30 of 30 random rebalanc
 | 13 leavers | 599 | 410 | +0.41 (1.0) | 66% | 0.61 | +0.39 (573) / +0.32 (19) / +2.13 (7) | +0.54 (1.3) | +0.49 [−0.02, +1.04], 116 of 200 |
 | All 222 | 8,085 | 2,049 | +0.77 (4.0) | 68% | 0.67 | +0.79 (7,729) / +0.20 (250) / +1.25 (106) | +0.54 (2.7) | +0.58 [+0.44, +0.72], 1 of 200 |
 
-- The rule holds out of sample in size: the new names give what the desk 18 gave, and the result
-  beats both the same-stock hold and random dates in the same stock and year.
+- The new names give what the desk 18 gave and beat the same-stock hold and random dates.
 - It fails the confirm step: CHOOSE (Nov 2024 to Nov 2025) is +0.10% (t 0.2) on 209 trades. The
   NIFTY filter kept it out most of that year; 96% of all trades fall in TUNE.
-- By entry year, new names: 2010 −1.81, 2011 −7.69, 2012 +0.70, 2013 −1.07, 2014 +1.95, 2015 +0.63,
-  2016 +0.18, 2017 +1.90, 2018 −1.65, 2019 −0.39, 2020 +0.63, 2021 +1.51, 2022 +0.28, 2023 +2.15,
-  2024 +1.06, 2025 +0.34, 2026 +1.04. Six of 17 years below zero on the pool.
-- By size (pool): small +1.01 (t 5.4), mid +0.61, large +0.62. Strongest stocks: KALYANKJIL, VBL,
-  IRCTC, PETRONET, CDSL; weakest: BAJAJ-AUTO, WHIRLPOOL, MARUTI, AUBANK. 171 of 214 above zero.
+- By entry year, new names: below zero in 2010, 2011 (−7.69), 2013, 2018 (−1.65), 2019; +0.18 to
+  +2.15 in the other 12 years (2024 +1.06, 2025 +0.34, 2026 +1.04).
+- By size (pool): small +1.01 (t 5.4), mid +0.61, large +0.62. Strongest: KALYANKJIL, VBL, IRCTC;
+  weakest: BAJAJ-AUTO, WHIRLPOOL, MARUTI. 171 of 214 stocks above zero.
 - P1b (10%) is larger in TUNE and TEST (+1.31 / −0.26 / +2.57 on the pool; new names +1.36, t 4.8,
   excess +0.98, t 3.4, 0 of 200 random runs at or above) but negative in CHOOSE: REJECTED by
   the rule. Deeper is better again, as in the alpha study.
@@ -105,9 +86,8 @@ the signal day (stock and NIFTY); for M3 the top 10% of 30 of 30 random rebalanc
 - **M1a and M3** look strong in TUNE because the universe rose: a random entry in the same stock
   and year, held as long, makes more (+6.33 against +4.12; +18.85 against +11.62). Both are
   negative in TEST. M3 is +2.40% a trade on the desk 18 and −1.96 under a same-stock hold there.
-  Doubt: a year-matched placebo is harsh on momentum, because a stock that makes a new high is
-  in a rising year partly after the signal; the excess column is the fairer test, and it fails
-  in TEST all the same. REJECTED.
+  Doubt: a year-matched placebo is harsh on momentum; the excess column is the fairer test, and
+  it fails in TEST all the same. REJECTED.
 - **M1b**: the ratchet cuts the new-high trade to 8 sessions and nothing is left (+0.13%). The
   ratchet study found the same on the pullback rule. REJECTED.
 - **M2** is rare (26 trades a year on 222 stocks). M2b is confirmed (CHOOSE +6.19, t 2.0, 21
@@ -115,7 +95,6 @@ the signal day (stock and NIFTY); for M3 the top 10% of 30 of 30 random rebalanc
   is below its SMA200, M2b makes +7.68 / +8.10 / +0.76 but on 8 and 18 trades in CHOOSE and TEST.
 - **R1** beats its random dates by 0.13 points but stays near zero after 0.50% of costs, and is
   negative in CHOOSE and TEST. REJECTED (the alpha study said the same on 18 stocks).
-- Losing calendar years: P1 6 of 17, P1b 5, M1a 5 of 16, M1b 9, M2a 9, M2b 7, M3 3 of 16, R1 9.
 
 ## What the owner would live with (P1, the WATCH setup; no setup passed)
 
@@ -125,7 +104,7 @@ A book that takes every P1 signal on the 222 stocks at Rs 10,000 each, 2010 to 2
 |---|---|---|
 | Signals a month | 42 | 25 |
 | Trades open at once, median and worst | 12 and 134 | 7 and 96 |
-| Longest run of losing trades | 30 | 16 |
+| Longest run of losing trades | 29 to 30 | 16 |
 | Worst month (by exit) | −Rs 63,445 (March 2020) | −Rs 41,969 (March 2020) |
 | Worst calendar year | −Rs 89,075 (2018) | −Rs 34,415 (2018) |
 | Total over 16 years | +Rs 6.33 lakh | +Rs 6.14 lakh |
@@ -146,10 +125,32 @@ counts are no higher than luck's. The NIFTY label is shuffled over the days insi
 year; group and size are labels of a stock, so they are shuffled over the stocks. No AVOID cell:
 no TUNE t reaches −2.5.
 
+## Independent check (2026-11-25, `scripts/swing_universe_check.py`, own code, same data)
+
+- **Rule.** My P1 from the product's definition reproduces all 247 reference trades on the
+  fixture's own bars. On Dhan's bars it gives 250: 214 with the same entry and exit day (the study's
+  file the same), 232 the same entry; 226 and 235 once Dhan's extra sessions are dropped. Causes:
+  Dhan has 20 weekend sessions (budget, Muhurat, test days) the fixture lacks; single closes differ
+  by 1% to 11% (Bharti 2017-11-13: x1.11); 25 of 235 entry opens differ by over 0.5%. Mean before
+  the depository charge: +1.058 reference and mine on fixture bars, +1.101 on Dhan's.
+- **161 new names.** 6,102 trades, +0.81%, t 4.2 (cluster t 4.5), TUNE / CHOOSE / TEST +0.83 /
+  +0.10 / +1.19: the same. All 222 and P1b agree; 8,083 of 8,085 trades identical (2 differ by a tie
+  in a moving average). Costs: Rs 15.41 buy, 13.91 sell, 14.75 depository, 6.00 slippage = 0.501%.
+- **Benchmarks.** Excess +0.55 (t 2.8) agrees. My random dates (100 runs): +0.57 [+0.42, +0.71],
+  0 of 100 at or above, against the note's +0.60. The runs skip 138 trades with no candidate day
+  (first year); on the same trades real is +0.87. Plainly: of the +0.81, about +0.57 to +0.60 is
+  what any entry in those stocks and years earned and about +0.2 to +0.3 is the rule's timing.
+- **Look-ahead.** All eight setups read: bars to D, entry D+1 open. Truncation: 0 of 100 change.
+- **Data.** The five rescalings are single-day demerger or restructuring gaps (move 0.17 to 1.86
+  times, volume jump, no reversal); not rescaling Adani Enterprises moves its mean from +0.22 to
+  −1.03, the others by at most one trade. Other moves over 35%: bank recap, Covid, Yes Bank,
+  Idea, Zee. No duplicate, zero or negative price; 4 gaps over 7 days.
+- **Book.** 42 signals a month, 12 and 134 open, March 2020 −Rs 63,445, total Rs 6.33 lakh
+  agree; the longest losing run is 29 or 30 by the order of same-day sales (note said 30).
+
 ## What could not be done
 
-- Stocks delisted or merged away before today are missing; the leavers group is the only check,
-  and its 13 stocks still trade. Rights issues of 5% to 11% are not adjusted in Dhan's bars.
+- Stocks delisted or merged away before today are missing; the leavers group is the only check.
 - Sectors are not in the instrument master (stocks are named instead); earnings dates are not
   stored, so M2 is a stand-in; a cap on open trades was not part of the story.
 - TEST was seen before for P1 on the desk 18 and the 43 (alpha and ratchet studies); for the
@@ -176,5 +177,4 @@ two a second), and about 10 alerts a week at 8% depth (6 at 10%), up to 94 (75) 
 | 222 stocks | stock delivery | M3 strongest 10% | 1d, monthly | NIFTY above SMA200 | next month's first session | 57 | +12.81 / +0.65 / −4.77 (4.4) | as above | REJECTED | Survivorship: below random dates (+18.85), negative in TEST |
 | 222 stocks | stock delivery | R1 RSI(2) under 10 | 1d | close above SMA200 | close above SMA5 or 7 sessions | 1,355 | +0.10 / −0.34 / −0.15 (0.7) | as above | REJECTED | The dip edge (+0.13 over random) is smaller than the costs |
 
-Reproduce: `scripts/swing_universe.py <stage>` run as RESEARCH-RULES section 1 says (stages:
-universe fetch check p1 m1 m2 m3 r1 select placebo lookahead report; outputs git-ignored).
+Reproduce: `scripts/swing_universe.py <stage>` as RESEARCH-RULES section 1 says (outputs ignored).

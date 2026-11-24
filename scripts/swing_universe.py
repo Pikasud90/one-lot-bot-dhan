@@ -249,7 +249,7 @@ def stage_fetch() -> None:
 
 
 # One-day moves over 35% that are corporate actions Dhan's daily bars do not adjust (stage
-# `check`: demergers of 2015 and 2020, and two moves before the first entry). The prices before
+# `check`: demergers of 2015 and 2020, and two moves in the first year). The prices before
 # the day are put on the later scale by that day's close ratio. Every other such move (bank
 # recapitalisation of 2017, March 2020, Yes Bank, Vodafone Idea, Zee) is a real price move.
 CORP_ACTIONS = {"ADANIENT": ["2015-06-03"], "JSL": ["2015-11-19"], "TATACHEM": ["2020-03-04"],
