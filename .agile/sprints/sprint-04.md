@@ -35,14 +35,17 @@ Data changed in the live folder, both approved by the owner and done after marke
 
 ## Open, in the order to take it
 1. US-103, a stock that stops trading frees its place. Branch `story/US-103-wide-no-data`,
-   head `d416f23`, based on `95672be` (older than `fe14a03`). Three reviews asked for changes;
-   the builder reports every point done (the story file has the list and a "State on 25 Nov"
-   section). NOT yet verified by the lead and NOT merged. To do: an independent check of the
-   fix round, the money and rule points first (a release for review books no money; a release
-   on a later try of the evening gives the place to that session's signal; an evening counts
-   toward the confirmation only once the missing sessions reach the threshold; a stock the
-   try never asked is not counted). Then merge into the sprint branch (small conflicts are
-   likely in `docs/04_OPERATIONS.md` and `src/onelot/ui/app.js`), the full gate, the push.
+   head `d416f23`, rebased on `fe14a03`, local only (not pushed). Three reviews asked for
+   changes; the builder reports every point done, 1,435 focused tests passed and 42 broken
+   variants of the new code each caught by a test (the story file on that branch has the
+   list under "State on 25 Nov, 21:40"). NOT yet verified by the lead and NOT merged. To
+   do: an independent check of the fix round (commits `b329f97` and `d8cb12c`), the money
+   and rule points first: a release for review books no money; a release on a later try of
+   the evening gives the place to that session's signal; an evening counts toward the
+   confirmation only once the missing sessions reach the threshold (the release then falls
+   on the round of the 12th session); a stock the try never asked is not counted. Then merge
+   into the sprint branch (it sits on `fe14a03`, so no conflict is expected beyond this note
+   and the US-106 story), the full gate, the push.
 2. US-106, the wide list reads each day the same evening from Dhan's quote answer. The owner
    approved it on 25 Nov. Contract: `.agile/stories/US-106.md`. Its first step is a data
    check that needs no code change. Build it after US-103 (both change the same file), with
