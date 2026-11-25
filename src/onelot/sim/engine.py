@@ -63,7 +63,26 @@ HISTORY_DAYS = 120  # calendar days of one-minute bars before the start (the 4h 
 #: shorter history gives the SAME signals as 120 days (`tests/sim/test_warmup.py` proves each
 #: on fixture bars); a strategy not named here keeps `HISTORY_DAYS`. The plan's ATR always
 #: reads `HISTORY_DAYS` (its 60m ATR(14) converges to the last digit only after months).
-WARMUP_DAYS: dict[str, int] = {}
+WARMUP_DAYS: dict[str, int] = {
+    # single-timeframe strategies: equal signals from 20 days on in the study of 25 Nov
+    # (two seeds, the default and the 60m timeframe); 45 keeps more than twice that
+    "ema_cross": 45,
+    "supertrend_vol": 45,
+    "supertrend_adx": 45,
+    "orb": 45,
+    "vwap_pullback": 45,
+    "squeeze": 45,
+    "donchian_breakout": 45,
+    "mean_reversion": 45,
+    "intraday_momentum": 45,
+    "cpr_breakout": 45,
+    "nr7_breakout": 45,
+    "turtle_soup": 45,
+    # the 4h trend of the seven timeframes: equal from 60 days on (not at 45)
+    "microtrend": 90,
+    # kept at 120: supertrend_mtf (its daily Supertrend differs even at 90 days), gap_fade and
+    # ema_pullback (too few signals on the fixture bars to prove a shorter history)
+}
 #: a past session's window: from its block's first day (minus the history) to the end of the
 #: NEXT block; the next window is prepared in the background once the cursor reaches the
 #: window's last block (US-095: the reload never runs inside an `advance`)
