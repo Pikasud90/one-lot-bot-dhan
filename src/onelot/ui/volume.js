@@ -83,7 +83,8 @@ const minuteReadout = (row, idx) => !row ? "" :
 const bookIsEmpty = (b) => !b || !Array.isArray(b.stocks) || !b.stocks.length;
 const stateChip = (s) => `<span class="vol-chip ${esc(STATE_TEXT[s] ? s : "normal")}" title="${esc(STATE_HELP[s] || "")}">${esc(stateWord(s))}</span>`;
 const shareBar = (s) => `<span class="vol-bs" title="${esc(buyersText(s))}"><i style="width:${sharePct(s)}%"></i><u></u></span>`;
-const pressureWord = (p) => num(p) === null ? "–" : (p > 0.05 ? "Buying pressure" : (p < -0.05 ? "Selling pressure" : "Balanced"));
+const PRESSURE_FLOOR = 0.05;   // only the fallback for a demo answer without settings: the engine's own floor comes in settings.pressure_floor
+const pressureWord = (p, floor = PRESSURE_FLOOR) => num(p) === null ? "–" : (p > floor ? "Buying pressure" : (p < -floor ? "Selling pressure" : "Balanced"));
 const pressBar = (p5, pd) => `<div class="vol-press" aria-hidden="true"><i class="${num(p5) < 0 ? "sell" : "buy"}" style="${num(p5) < 0 ? "right" : "left"}:50%;width:${Math.abs(clampHalf(p5))}%"></i><b class="${num(pd) < 0 ? "sell" : "buy"}" style="${num(pd) < 0 ? "right" : "left"}:50%;width:${Math.abs(clampHalf(pd))}%"></b><u></u></div>`;
 const nameOf = (stocks, key) => { const s = (stocks || []).find(x => x.key === key); return s ? s.label : key; };
 const directionWord = (d) => d === "BUYING" ? "mostly buying" : (d === "SELLING" ? "mostly selling" : "two-way trade");
@@ -124,11 +125,11 @@ function stocksTableHtml(stocks, sort) {
     + `<td class="b">${shareBar(s.flow_share_5m)} <span class="vol-bp">${esc(buyersPct(s.flow_share_5m))}</span></td><td class="l">${stateChip(s.state)}</td></tr>`).join("");
   return `<div class="scroll"><table class="vol-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
-function indexCardHtml(ix, stocks) {
+function indexCardHtml(ix, stocks, floor) {
   const top = (ix.top || []).map(t => `${esc(nameOf(stocks, t[0]))} ${Math.round(Number(t[1]) * 100)}%`).join(", ");
   const train = ix.trade === false ? ` <span class="vol-train">Training only</span>` : "";
   return `<div class="card vol-index"><h3>${esc(ix.label || ix.key)}${train}</h3>`
-    + `<div class="vol-pword ${num(ix.pressure_5m) < 0 ? "neg" : (num(ix.pressure_5m) > 0 ? "pos" : "")}">${esc(pressureWord(ix.pressure_5m))}</div>`
+    + `<div class="vol-pword ${num(ix.pressure_5m) < 0 ? "neg" : (num(ix.pressure_5m) > 0 ? "pos" : "")}">${esc(pressureWord(ix.pressure_5m, floor))}</div>`
     + `<div class="vol-presslabels"><span>Selling</span><span>Buying</span></div>${pressBar(ix.pressure_5m, ix.pressure_day)}`
     + `<div class="muted vol-pnums">Last 5 minutes (thick bar): ${esc(signed(ix.pressure_5m))}. Day so far (thin bar): ${esc(signed(ix.pressure_day))}. Net buying or selling in units of normal volume.</div>`
     + (num(ix.r2) === null ? "" : `<div>The basket explains ${Math.round(ix.r2 * 100)}% of its minute moves.</div>`)
@@ -136,7 +137,7 @@ function indexCardHtml(ix, stocks) {
 }
 function indicesHtml(d) {
   const list = d.indices || [];
-  return list.length ? `<div class="vol-grid">${list.map(ix => indexCardHtml(ix, d.stocks)).join("")}</div>` : `<div class="card muted">No index pressure yet.</div>`;
+  return list.length ? `<div class="vol-grid">${list.map(ix => indexCardHtml(ix, d.stocks, d.settings && d.settings.pressure_floor)).join("")}</div>` : `<div class="card muted">No index pressure yet.</div>`;
 }
 function bookHtml(book) {
   if (bookIsEmpty(book)) return `<p class="vol-nobook">${esc(NO_BOOK)}</p>`;
@@ -191,12 +192,18 @@ function notesHtml(notes) {
 const LEGEND = [
   ["Turnover", "Rupees traded: the number of shares times their price. Rupees can be added across stocks, shares cannot."],
   ["Volume against normal (relative volume)", "How much was traded compared with the usual for this same minute of the day, taken from the last 20 full sessions. 1.0 times is usual, 2.0 times is double."],
-  ["Buyers' share", "Each one-minute bar's turnover is split by where it closed between its low and high: a close near the high counts as buying. It is an estimate from one-minute bars, not a count of buyers."],
+  ["Buyers' share", ""],
   ["Spike", "The last 5 minutes are far above what the last 60 sessions had at this time of day. It says unusual, not up or down."],
   ["Pressure on an index", "The net buying or selling of the stocks that move the index, weighted by how much each moves it, in units of normal volume. Above zero is net buying, below zero net selling."],
   ["Order book", "Orders waiting at the best five price steps. It shows intentions, which can be pulled at any moment, so treat it as a hint only."],
 ];
-const legendHtml = () => `<dl class="vol-legend">${LEGEND.map(([t, x]) => `<dt>${esc(t)}</dt><dd>${esc(x)}</dd>`).join("")}</dl><p class="vol-warn">${esc(WATCH_NOT_ALERT)}</p>`;
+const SPLIT_TEXT = {
+  bvc: "Each one-minute bar's turnover is split by the minute's price move against the usual size of recent minute moves: a move well above the usual counts mostly as buying, a fall mostly as selling. It is an estimate from one-minute bars, not a count of buyers.",
+  clv: "Each one-minute bar's turnover is split by where it closed between its low and high: a close near the high counts as buying. It is an estimate from one-minute bars, not a count of buyers.",
+  tick: "Each one-minute bar's turnover counts as buying when the minute closed above where it opened, as selling when it closed below, and half and half when unchanged. It is an estimate from one-minute bars, not a count of buyers.",
+};
+const splitText = (rule) => SPLIT_TEXT[rule] || "Each one-minute bar's turnover is split into buying and selling by its price move. It is an estimate from one-minute bars, not a count of buyers.";
+const legendHtml = (rule) => `<dl class="vol-legend">${LEGEND.map(([t, x]) => `<dt>${esc(t)}</dt><dd>${esc(t === "Buyers' share" ? splitText(rule) : x)}</dd>`).join("")}</dl><p class="vol-warn">${esc(WATCH_NOT_ALERT)}</p>`;
 const demoHtml = () => `<div class="card vol-demo"><b>Demo data, not market data.</b> This tab is running on a built-in fake of the engine (?volfake=1).</div>`;
 const errorText = (e, have) => `${have ? "Could not refresh: " : "The volume watch is not answering: "}${String((e && e.message) || e).replace(/\.+$/, "")}${have ? ". Showing the last picture." : "."}`;
 const indexOptions = (d, sel) => {
@@ -237,7 +244,7 @@ const volumeUrl = () => "/api/volume?index=" + encodeURIComponent(S.index) + (S.
 /* ── charts ─────────────────────────────────────────────────────────── */
 function chartOpts() {
   return {
-    layout: { background: { type: "solid", color: cssv("--panel") }, textColor: cssv("--plot-font"), fontFamily: "JetBrains Mono, Menlo, monospace", fontSize: 13, attributionLogo: false },
+    layout: { background: { type: "solid", color: cssv("--panel") }, textColor: cssv("--plot-font"), fontFamily: "JetBrains Mono, Menlo, monospace", fontSize: 14, attributionLogo: false },
     grid: { vertLines: { color: cssv("--grid") }, horzLines: { color: cssv("--grid") } },
     rightPriceScale: { borderColor: cssv("--line2") },
     leftPriceScale: { visible: true, borderColor: cssv("--line2") },
@@ -357,6 +364,7 @@ function render() {
   const h = sectionsHtml(d, S.sort, S.date);
   set("vol-banner", h.banner); $("vol-status").innerHTML = h.status; set("vol-headline", h.headline); set("vol-tiles", h.tiles);
   set("vol-stocks", h.stocks); set("vol-indices", h.indices); set("vol-book", h.book); set("vol-alerts", h.alerts); set("vol-notes", h.notes);
+  set("vol-legend", legendHtml(d.settings && d.settings.rule));
   drawMain();
   if (S.prof && S.profToday) { S.profToday.setData(todayPoints()); S.profToday.applyOptions({ title: S.date ? "this day" : "today" }); } else if (S.profile) drawProfile();
 }

@@ -45,7 +45,9 @@ log = logging.getLogger(__name__)
 EVIDENCE_PATH = Path(__file__).with_name("evidence.json")
 HISTORY_DAYS = 100  # calendar days read before a session: about 65 sessions
 BASKET_FULL = 0.8  # a session is full for the basket when this part of its stocks are full
-PRESSURE_WORDS = 0.1  # |pressure_5m| below this reads "no clear pressure"
+PRESSURE_WORDS = (
+    ind.LIKELY_FLOOR
+)  # |pressure_5m| below this reads "no clear pressure": the one floor
 BOOK_KEEP_DAYS = 60
 BOOK_FRESH = dt.timedelta(minutes=3)
 BOOK_MAX_FAILURES = 3
@@ -709,7 +711,7 @@ class VolumeWatch:
         if size is None or hit is None:
             return None
         return (
-            f"After such spikes NIFTY's next 15 minutes were {size:.1f} times as large as usual; "
+            f"Measured on NIFTY only, not on the other indices: after such spikes NIFTY's next 15 minutes were {size:.1f} times as large as usual; "
             f"the direction followed the flow {hit * 100:.0f}% of the time."
         )
 
@@ -911,7 +913,8 @@ class VolumeWatch:
     def settings(self) -> dict[str, Any]:
         c = self.cfg
         return {"z_alert": c.z_alert, "stock_z_alert": c.stock_z_alert,
-                "cooldown_min": c.cooldown_min, "alerts_on": c.alerts_on, "notify": c.notify}  # fmt: skip
+                "cooldown_min": c.cooldown_min, "alerts_on": c.alerts_on, "notify": c.notify,
+                "rule": c.rule, "pressure_floor": PRESSURE_WORDS}  # fmt: skip
 
     def book_view(self) -> dict[str, Any] | None:
         b = self.book_last

@@ -287,3 +287,40 @@ def test_index_choice_and_options(shared):
     with pytest.raises(VolumeError) as e:
         shared.body(DAYS[-2].isoformat(), "RELIANCE")
     assert e.value.status == 400 and "MIDCPNIFTY" in e.value.message
+
+
+def test_settings_name_the_rule_in_use(shared):
+    assert shared.body(DAYS[40].isoformat())["settings"]["rule"] == shared.cfg.rule
+
+
+def test_one_floor_decides_the_pressure_word_on_the_server_and_the_page(
+    store_template, monkeypatch
+):
+    """A pressure of 0.07 reads as buying in the sentence, and the settings hand the page the
+    very floor the sentence used, which is the floor the alerts use for "likely to move"."""
+    from sqlalchemy import create_engine
+
+    engine = create_engine(f"sqlite:///{store_template}")
+    try:
+        day = DAYS[40].isoformat()
+        monkeypatch.setattr(ind, "pressure", lambda *a, **k: 0.07)
+        body = stored_watch(engine).body(day)
+        assert body["settings"]["pressure_floor"] == ind.LIKELY_FLOOR
+        assert body["indices"]
+        for row in body["indices"]:
+            assert row["text"].startswith("Buying pressure"), row["text"]
+        monkeypatch.setattr(ind, "pressure", lambda *a, **k: 0.03)
+        for row in stored_watch(engine).body(day)["indices"]:
+            assert row["text"] == "No clear pressure."
+    finally:
+        engine.dispose()
+
+
+def test_the_evidence_line_says_it_was_measured_on_nifty(shared):
+    """The study followed NIFTY only, so an alert that names another index as likely to move
+    must not let the figures read as that index's own."""
+    alerts = [a for a in shared.body(SPIKE_DAY.isoformat())["alerts"] if a["scope"] == "MARKET"]
+    assert alerts
+    for a in alerts:
+        assert a["evidence"].startswith("Measured on NIFTY only, not on the other indices"), a
+        assert "NIFTY's next 15 minutes" in a["evidence"]

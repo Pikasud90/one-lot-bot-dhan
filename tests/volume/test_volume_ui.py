@@ -51,14 +51,17 @@ VOL_ONE_LINERS = [
     "bookIsEmpty",
     "stateChip",
     "shareBar",
+    "PRESSURE_FLOOR",
     "pressureWord",
+    "splitText",
+    "legendHtml",
     "pressBar",
     "nameOf",
     "newestFirst",
     "errorText",
     "tile",
 ]
-VOL_BLOCKS = ["STATE_HELP", "SORT_COLS", "LEGEND"]
+VOL_BLOCKS = ["STATE_HELP", "SORT_COLS", "LEGEND", "SPLIT_TEXT"]
 VOL_CONST_BLOCKS = ["statusLine", "indexOptions"]
 VOL_WRAPPED = ["minuteReadout"]  # one statement over several lines
 VOL_FUNCTIONS = [
@@ -413,6 +416,59 @@ class TestRules:
         )
         assert out[:8] == ["Selling pressure", "Buying pressure", "Balanced", "–", -21, 50, -50, 0]
         assert "right:50%;width:21%" in out[8] and "left:50%;width:5%" in out[8]
+
+
+@needs_node
+class TestOnePressureFloor:
+    def test_the_word_in_the_heading_follows_the_floor_of_the_settings(self):
+        out = run(
+            "return [pressureWord(0.07, 0.05), pressureWord(0.07, 0.1), pressureWord(-0.07, 0.05),"
+            " pressureWord(0.03, 0.05), pressureWord(0.07), pressureWord(null, 0.05)];"
+        )
+        assert out == [
+            "Buying pressure",
+            "Balanced",
+            "Selling pressure",
+            "Balanced",
+            "Buying pressure",
+            "–",
+        ]
+
+    def test_the_card_heading_uses_the_floor_it_is_given(self):
+        card = run(
+            "const ix = {key:'N', label:'N', pressure_5m: 0.07, pressure_day: 0, text:'x', top:[]};"
+            " return [indexCardHtml(ix, [], 0.05), indexCardHtml(ix, [], 0.1)];"
+        )
+        assert "Buying pressure</div>" in card[0] and "Balanced</div>" in card[1]
+
+    def test_the_page_reads_the_floor_from_the_settings(self):
+        assert "d.settings && d.settings.pressure_floor" in VOL_JS.read_text("utf-8")
+
+
+@needs_node
+class TestLegendFollowsTheRule:
+    def test_each_rule_has_its_own_plain_sentence(self):
+        out = run("return ['bvc', 'clv', 'tick', 'zzz', null].map(r => splitText(r));")
+        assert "recent minute moves" in out[0] and "low and high" not in out[0]
+        assert "low and high" in out[1]
+        assert "opened" in out[2]
+        assert len({out[0], out[1], out[2]}) == 3
+        assert (
+            out[3] == out[4]
+            and "low and high" not in out[3]
+            and "recent minute moves" not in out[3]
+        )
+
+    def test_the_legend_shows_the_active_rule_only(self):
+        bvc = run("return legendHtml('bvc');")
+        clv = run("return legendHtml('clv');")
+        assert "recent minute moves" in bvc and "low and high" not in bvc
+        assert "low and high" in clv and "recent minute moves" not in clv
+        assert "Buyers&#39; share" in bvc or "Buyers' share" in bvc
+
+    def test_the_page_passes_the_rule_of_the_settings(self):
+        src = VOL_JS.read_text("utf-8")
+        assert "legendHtml(d.settings && d.settings.rule)" in src
 
 
 @needs_node
