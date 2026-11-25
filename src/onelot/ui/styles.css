@@ -556,3 +556,20 @@ a:focus-visible,button:focus-visible,select:focus-visible,input:focus-visible,[t
 /* US-090: nine tabs on one row at 1024px: tighter spacing, never smaller type */
 @media(min-width:900px) and (max-width:1299px){ .tabs a{padding:6px 5px 5px;letter-spacing:.01em} }
 .clockbox:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+
+/* US-120: the cheat sheet at the top of every tab (closed by default) */
+.cheat{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--cyan);margin-bottom:14px;max-width:100%;min-width:0}
+.cheat>summary{cursor:pointer;padding:11px 14px;font-size:14.5px;font-weight:600;color:var(--text);list-style-position:inside;overflow-wrap:anywhere}
+.cheat[open]>summary{border-bottom:1px solid var(--line)}
+.cheat-body{padding:6px 16px 14px;font-size:14.5px;color:var(--text);overflow-wrap:anywhere;min-width:0}
+.cheat-part h4{margin:14px 0 6px;font-size:15px;color:var(--text)}
+.cheat-list{margin:0;padding-left:20px}
+.cheat-list li{margin:4px 0}
+.cheat-terms{display:grid;grid-template-columns:minmax(120px,max-content) 1fr;gap:6px 16px;margin:0}
+.cheat-terms dt{font-weight:600;color:var(--text)}
+.cheat-terms dd{margin:0;color:var(--muted)}
+.cheat-tag{font-weight:700;font-size:14px}
+.cheat-tag-real{color:var(--ok)}
+.cheat-tag-estimate{color:var(--warn)}
+.cheat-tag-gap{color:var(--bad)}
+@media(max-width:700px){.cheat-terms{grid-template-columns:1fr;gap:2px}.cheat-terms dd{margin-bottom:8px}}

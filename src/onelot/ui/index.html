@@ -91,6 +91,7 @@
 
   <!-- ───────────────────────────── HOME ───────────────────────────── -->
   <section data-tab="home" class="tab">
+    <details class="cheat" data-cheat="home"><summary>Cheat sheet: how to read this tab and how far to trust it</summary><div class="cheat-body"></div></details>
     <!-- 0. Today: the status strip (session, feed, token, the two rules, the next thing to do) -->
     <div class="card today" id="today-card" aria-label="Today at a glance">
       <div class="row between"><h2>Today <small>alerts and paper trades only · the system never places an order</small></h2><span class="muted" id="today-updated"></span></div>
@@ -145,6 +146,7 @@
 
   <!-- ──────────────────────────── LIVE DESK ────────────────────────── -->
   <section data-tab="live" class="tab">
+    <details class="cheat" data-cheat="live"><summary>Cheat sheet: how to read this tab and how far to trust it</summary><div class="cheat-body"></div></details>
     <div class="updated-line"><span class="muted" id="desk-updated" aria-live="polite"></span></div>
     <div class="card strip" id="desk-positions-card">
       <div class="row between"><h2>Open positions <small>alerts you took · one lot (index options) · each closes at its exit alert's price · delivery trades are on Home</small></h2><span class="muted" id="desk-risk-line"></span></div>
@@ -203,6 +205,7 @@
 
   <!-- ──────────────────────────── BACKTEST LAB ─────────────────────── -->
   <section data-tab="lab" class="tab">
+    <details class="cheat" data-cheat="lab"><summary>Cheat sheet: how to read this tab and how far to trust it</summary><div class="cheat-body"></div></details>
     <div class="lab-layout">
       <div class="card lab-form">
         <h2>Backtest <small>one unit per trade: 1 lot, or 1 share (the desk itself trades stocks as delivery of about ₹10,000)</small></h2>
@@ -312,6 +315,7 @@
 
   <!-- ─────────────────────────────── DATA ──────────────────────────── -->
   <section data-tab="data" class="tab">
+    <details class="cheat" data-cheat="data"><summary>Cheat sheet: how to read this tab and how far to trust it</summary><div class="cheat-body"></div></details>
     <div class="grid2">
       <div class="card">
         <h2>Backfill the corpus</h2>
@@ -357,6 +361,7 @@
 
   <!-- ──────────────────────────── NEWS & SENTIMENT ─────────────────── -->
   <section data-tab="news" class="tab">
+    <details class="cheat" data-cheat="news"><summary>Cheat sheet: how to read this tab and how far to trust it</summary><div class="cheat-body"></div></details>
     <div class="card">
       <div class="row between"><h2>Market pulse <small>rule-based baseline from data the desk already has · 0 bearish · 0.5 chop · 1 bullish</small></h2>
         <button class="btn small" id="pulse-refresh">recompute</button></div>
@@ -408,6 +413,7 @@
 
   <!-- ─────────────────────────── SIMULATOR (US-075, US-076, US-094) ──── -->
   <section data-tab="sim" class="tab">
+    <details class="cheat" data-cheat="sim"><summary>Cheat sheet: how to read this tab and how far to trust it</summary><div class="cheat-body"></div></details>
     <div id="sim-root" class="sim-ws" data-panel="open">
       <div class="sim-strip" id="sim-strip" role="toolbar" aria-label="Replay controls">
         <div class="sim-row1">
@@ -645,11 +651,13 @@
 
   <!-- ─────────────────────────── VOLUME (US-090) ─────────────────────── -->
   <section data-tab="volume" class="tab">
+    <details class="cheat" data-cheat="volume"><summary>Cheat sheet: how to read this tab and how far to trust it</summary><div class="cheat-body"></div></details>
     <div id="volume-root"><div class="card"><div class="muted">Loading the volume watch…</div></div></div>
   </section>
 
   <!-- ─────────────────────── MACHINE LEARNING LAB ─────────────────── -->
   <section data-tab="mllab" class="tab">
+    <details class="cheat" data-cheat="mllab"><summary>Cheat sheet: how to read this tab and how far to trust it</summary><div class="cheat-body"></div></details>
     <div id="mlstates-root"><div class="card"><div class="muted">Loading the market states…</div></div></div>
     <div class="card">
       <div class="row between"><h2>Machine Learning Lab <small>the next candle's close, five statistical models</small></h2>
@@ -662,6 +670,7 @@
 
   <!-- ─────────────────────────────── SETTINGS ──────────────────────── -->
   <section data-tab="settings" class="tab">
+    <details class="cheat" data-cheat="settings"><summary>Cheat sheet: how to read this tab and how far to trust it</summary><div class="cheat-body"></div></details>
     <div class="grid2">
       <div class="card">
         <h2>Dhan credentials</h2>
@@ -732,6 +741,7 @@
 </div>
 
 <script>window.ONELOT_TOKEN = "__API_TOKEN__";</script>
+<script src="/static/cheats.js" defer></script>
 <script src="/static/app.js" defer></script>
 <script src="/static/sim_core.js" defer></script>
 <script src="/static/sim_chart.js" defer></script>
