@@ -82,10 +82,85 @@ def test_routes_without_a_desk_read_the_store(store):
     engine.desk = None
     c = TestClient(create_app(engine, "t"), raise_server_exceptions=False)
     body = strict(c.get(f"/api/volume?date={DAYS[-2]}"))
+    # US-097 (on purpose): the first view of a session answers at once while it is prepared
+    deadline = time.monotonic() + 60
+    while body.get("building") and time.monotonic() < deadline:
+        time.sleep(0.1)
+        body = strict(c.get(f"/api/volume?date={DAYS[-2]}"))
+    assert body["building"] is False
     # the shipped config's basket: the fixture holds three of its stocks, the rest are missing
     assert set(BASKET) <= {s["key"] for s in body["stocks"]}
     assert len(body["basket"]["missing"]) == body["basket"]["count"] - 3
     assert c.get("/api/volume/profile").status_code == 200
+
+
+# ── US-097: the first view of a session never waits for its baselines ─────────────
+def _background_watch(store, after):
+    return VolumeWatch(store, None, desk_cfg=desk_cfg(), sync=False, clock=lambda: after)
+
+
+def _until_built(watch, day, limit_s=60.0):
+    deadline = time.monotonic() + limit_s
+    while time.monotonic() < deadline:
+        with watch._lock:
+            if day in watch._bases or day in watch._build_errors:
+                return
+        time.sleep(0.05)
+    raise AssertionError("the baselines were not built in time")
+
+
+def test_the_first_request_answers_at_once_and_a_later_one_has_the_full_body(store):
+    after = at(SPIKE_DAY + dt.timedelta(days=3), "08:00")
+    watch = _background_watch(store, after)
+    engine = MagicMock()
+    engine.db.engine = store
+    engine.desk = SimpleNamespace(volume=watch)
+    c = TestClient(create_app(engine, "t"), raise_server_exceptions=False)
+    url = f"/api/volume?date={DAYS[-2]}"
+    t0 = time.perf_counter()
+    first = strict(c.get(url))
+    took = time.perf_counter() - t0
+    assert took < 0.1, f"the first request took {took:.3f} s"
+    assert first["building"] is True and first["now"] is None
+    assert first["minutes"] == [] and first["stocks"] == [] and first["indices"] == []
+    assert first["alerts"] == [] and first["notes"] == ["Preparing this session\u2026"]
+    assert first["session"] == DAYS[-2].isoformat()
+    _until_built(watch, DAYS[-2])
+    later = strict(c.get(url))
+    assert later["building"] is False and later["now"]["minute"] == "15:29"
+    assert {s["key"] for s in later["stocks"]} == set(BASKET)
+
+
+def test_the_live_first_view_is_building_too(store, frames):
+    now = at(SPIKE_DAY, "11:00")
+    bars = {k: frames[k][frames[k].index < now] for k in (*BASKET, "NIFTY")}
+    desk = SimpleNamespace(trackers={k: SimpleNamespace(bars=v) for k, v in bars.items()},
+                           context_bars={}, fine_minutes=1, _market_open=lambda _n: True)  # fmt: skip
+    watch = VolumeWatch(store, desk, desk_cfg=desk_cfg(), sync=False, clock=lambda: now)
+    body = watch.body()
+    assert body["building"] is True and body["source"] == "live" and body["now"] is None
+    _until_built(watch, SPIKE_DAY)
+    assert watch.body()["building"] is False
+
+
+def test_an_exception_in_the_build_is_caught_and_said_in_the_notes(store, monkeypatch):
+    import onelot.volume.service as svc
+
+    def boom(*a, **k):
+        raise RuntimeError("store unreadable")
+
+    monkeypatch.setattr(svc, "build_baselines", boom)
+    after = at(SPIKE_DAY + dt.timedelta(days=3), "08:00")
+    watch = _background_watch(store, after)
+    assert watch.body(DAYS[-2].isoformat())["building"] is True
+    _until_built(watch, DAYS[-2])
+    body = watch.body(DAYS[-2].isoformat())
+    assert body["building"] is False
+    assert any("could not be built (RuntimeError)" in n for n in body["notes"])
+    with watch._lock:
+        retries = list(watch._building.values())
+    for th in retries:  # the retry the second request started: done before the patch is undone
+        th.join(timeout=30)
 
 
 # ── AC4: the desk's poll survives the watch ──────────────────────────────

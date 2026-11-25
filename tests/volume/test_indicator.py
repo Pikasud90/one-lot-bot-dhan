@@ -329,3 +329,40 @@ def test_row_versions_equal_the_matrix_versions():
         rm, rs = ind.zstats_row(hist, f)
         assert np.allclose(rm, mu.to_numpy()[r], equal_nan=True)
         assert np.allclose(rs, sd.to_numpy()[r], equal_nan=True)
+
+
+# ── US-097: "Likely to move" names an index by its own pressure in the spike ─────────────
+W = {
+    "NIFTY": {"ITC": 0.10, "HDFCBANK": 0.30, "RELIANCE": 0.60},
+    "BANKNIFTY": {"HDFCBANK": 0.55, "ICICIBANK": 0.45},
+    "FINNIFTY": {"HDFCBANK": 0.40, "ICICIBANK": 0.30, "BAJFINANCE": 0.30},
+    "SENSEX": {"ITC": 0.08, "RELIANCE": 0.92},
+}
+EXP = {k: 1e7 for k in ("ITC", "HDFCBANK", "ICICIBANK", "RELIANCE", "BAJFINANCE")}
+
+
+def test_a_spike_led_by_itc_does_not_name_the_bank_indices():
+    net = {"ITC": -8e7, "HDFCBANK": 1e5, "ICICIBANK": -1e5, "RELIANCE": 0.0, "BAJFINANCE": 0.0}
+    got = ind.likely_indices(W, net, EXP)
+    assert got == ["NIFTY", "SENSEX"]  # ITC x 8 units of normal: 0.8 and 0.64
+    assert "BANKNIFTY" not in got and "FINNIFTY" not in got
+
+
+def test_a_bank_spike_names_the_bank_indices_by_size():
+    net = {"ITC": 0.0, "HDFCBANK": -3e7, "ICICIBANK": -2e7, "RELIANCE": 0.0, "BAJFINANCE": 0.0}
+    assert ind.likely_indices(W, net, EXP) == ["BANKNIFTY", "FINNIFTY"]
+
+
+def test_the_sum_runs_over_all_basket_stocks_and_signs_can_cancel():
+    net = {"HDFCBANK": 2e7, "ICICIBANK": -2.444e7, "RELIANCE": 0.0, "ITC": 0.0, "BAJFINANCE": 0.0}
+    # BANKNIFTY: 0.55 x 2 - 0.45 x 2.444 = 0.0002: the flows cancel; FINNIFTY 0.8 - 0.733
+    got = ind.likely_indices(W, net, EXP)
+    assert "BANKNIFTY" not in got
+    assert got == ["NIFTY", "FINNIFTY"]  # 0.6 and 0.067
+
+
+def test_nothing_above_the_floor_names_nothing():
+    net = {k: 1e4 for k in EXP}
+    assert ind.likely_indices(W, net, EXP) == []
+    assert ind.likely_indices({}, net, EXP) == []
+    assert ind.likely_indices(W, {}, EXP) == []

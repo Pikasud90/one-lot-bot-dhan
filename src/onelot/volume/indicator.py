@@ -488,6 +488,28 @@ def pressure(
     return total if used else None
 
 
+LIKELY_FLOOR = 0.05  # |pressure| below this never names an index as likely to move (US-097)
+
+
+def likely_indices(
+    weights: Mapping[str, Mapping[str, float]],
+    net: Mapping[str, float],
+    expected: Mapping[str, float],
+    floor: float = LIKELY_FLOOR,
+    most: int = 2,
+) -> list[str]:
+    """The indices a market-wide spike is likely to move (US-097): each index's own pressure
+    in the spike (influence x net flow over expected turnover, summed over ALL the basket's
+    stocks), the `most` largest by size, each only when its size is at least `floor`. A spike
+    led by a stock without influence on an index (ITC for the bank indices) names none."""
+    got: dict[str, float] = {}
+    for key, w in weights.items():
+        p = pressure(w, net, expected)
+        if p is not None and math.isfinite(p) and abs(p) >= floor:
+            got[key] = abs(p)
+    return sorted(got, key=lambda k: -got[k])[:most]
+
+
 # ── alert decisions ──────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class Candidate:
