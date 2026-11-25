@@ -151,14 +151,14 @@ each `_2026-11-24.md`); earlier work is listed in `STRATEGIES_TESTED_2026-11-12.
 |---|---|---|
 | `microtrend` 3m, options on NIFTY, BANKNIFTY, FINNIFTY, SENSEX | no edge shown | The owner's chosen paper test. Since it went live the desk ran on 2 of 7 sessions, so the live record is 2 alerts. |
 | `pullback` delivery, 18 stocks, about Rs 10,000 | WATCH | Keeps its own exits. Few alerts with 18 stocks. |
+| `pullback` wide list, 204 more stocks, daily bars (US-099) | WATCH, paper test | Since 25 Nov 2026: every signal recorded, at most 10 open within the cap (the desk 18 counted), only those alerted. About ten signals a week. The product's round reproduces the study's trades on the research file (`docs/04_OPERATIONS.md`). |
 | Stop, target and trail rule on micro-trend trades | neutral | Five years: it costs nothing measurable and adds nothing; the entries decide. |
 | Volume Watch alerts | information | A spike means a larger move is likely, never a direction. Not a trade alert. |
 
 ## 6. What to test next, most promising first
 
-1. The pullback rule on the wide universe as a PAPER test on the desk: daily bars for about
-   200 more stocks, a cap on open trades, about 10 alerts a week. This is the quickest way
-   to real evidence, because the 18-stock test trades too rarely to judge.
+1. The pullback rule on the wide universe as a PAPER test on the desk: built (US-099, see
+   section 5); what is left is to let it run and read its score in both tiers each month.
 2. Real put prices from the broker's history, to settle the long-volatility question and to
    price the Simulator's put trades exactly.
 3. The four WATCH option cells, followed on paper with real quotes for three months.

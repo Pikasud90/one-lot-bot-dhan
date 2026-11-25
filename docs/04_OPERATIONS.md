@@ -132,6 +132,54 @@ paper trades only: the system never places an order.
   tries in a window, 20 minutes apart, stopped at 09:00; its errors show on Home. Otherwise run
   a backfill from the Data tab.
 
+### The wide list: a paper test on 222 stocks (US-099)
+Owner, 2026-11-25: the same pullback rule as a PAPER test on a wide list of stocks. It never
+places an order, and the desk 18 keep working exactly as above.
+
+- The list is data: `config/delivery_universe.yaml` (key, name, Dhan's symbol, security id and
+  segment, group desk, alpha or new), written by `scripts/write_delivery_universe.py` from the
+  swing-universe study. The 204 stocks that are not desk instruments are delivery-only: daily
+  bars only, no feed, no intraday bars, no card.
+- The switch: on the pullback slot in `config/desk.yaml`, `wide: true`, `cap_open: 10`,
+  `evening_round: true` and `universe:` (the file above). With `wide: false` the desk is as
+  before this story; reload or restart after a change.
+- The evening round, once per finished session, after the close (never between 09:00 and
+  15:35), on its own thread: it fetches the last 30 or so daily bars of each delivery-only
+  stock through the desk's adapter (Data API on; at most two requests a second; an error is
+  noted and the others go on; a resumed round fetches only what is missing), then reads the
+  rule on each stock with the desk 18's own code. A signal on a close is a paper trade filled
+  at the next session's open, taken from that session's daily bar in the next round; open
+  trades are managed on the daily bars with the rule's own exits. Up to four tries a session,
+  30 minutes apart; a round waits for NIFTY's session to be complete.
+- Adjustments: when the fetched closes differ from the stored ones by more than 0.5% on the
+  overlap (a split, a bonus, a demerger), the stock's whole history is fetched again and
+  replaces the stored one, and the round says so. If that refetch fails, the stock is stale:
+  it is not read until a later round agrees or refetches.
+- Two tiers. Every signal is a paper trade (tier "all"). At most `cap_open` trades are open
+  within the cap at a time, the desk 18's active trades counted. A signal of the round's own
+  session takes a free place, the desk group first, then the deepest pullback first; a trade
+  keeps its tier for life. Only a within-the-cap trade is alerted (Home, the computer,
+  Telegram: "wide list"), to enter and to exit. The others are recorded: "recorded for the
+  test, not alerted: the cap of 10 is full". A signal read late (a round that did not run)
+  is recorded and never alerted.
+- Where to look: Home and the Live Desk's Stocks card show the Wide list block (the last
+  round, the places in use, the open trades of both tiers, the score of both tiers beside the
+  backtest's figure, the closed trades and the stocks closest to a signal). The same as data:
+  `GET /api/delivery/wide` (reads only). Its own tables: `wide_trades`, `wide_state`,
+  `wide_rounds`; the desk 18's `delivery_trades` is never written by the round.
+- History: the lead copies the study's daily bars into the store once, with the desk running:
+
+      PYTHONPATH=src .venv/bin/python scripts/import_daily_universe.py \
+          --from data/research/swing_2026-11-24/daily.sqlite --store data/onelot.db --dry-run
+
+  then the same without `--dry-run`. It adds only the delivery-only stocks' bars the store
+  lacks, 500 bars a commit, never a desk instrument's, never a bar twice. Without it the first
+  round fetches each stock's whole history (204 requests, about two minutes).
+- The replay: `scripts/pullback_wide_replay.py --daily FILE --nifty-store STORE` runs the
+  product's round day by day over a research file and compares its tier "all" with the
+  study's trades (dates and exit reasons; sizes differ on purpose: the product buys the
+  number of shares nearest Rs 10,000).
+
 ## Index options: the micro-trend rule (US-068)
 - The only rule on the four traded indices (NIFTY, BANKNIFTY, FINNIFTY, SENSEX). MIDCPNIFTY is
   tracked for training only (`trade: false` in `config/desk.yaml`): it raises no alert and opens
