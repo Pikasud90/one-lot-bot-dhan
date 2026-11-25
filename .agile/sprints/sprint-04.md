@@ -45,7 +45,13 @@ Data changed in the live folder, both approved by the owner and done after marke
    confirmation only once the missing sessions reach the threshold (the release then falls
    on the round of the 12th session); a stock the try never asked is not counted. Then merge
    into the sprint branch (it sits on `fe14a03`, so no conflict is expected beyond this note
-   and the US-106 story), the full gate, the push.
+   and the US-106 story), the full gate, the push. The full gate already PASSES on `d416f23`
+   as it stands (9,108 passed, 1 skipped, run by the lead on 25 Nov at 21:05): what is
+   missing is the independent check, not the tests. Three choices of the builder go beyond
+   the lead's list and need a judgement: an exit held for review is released on the same
+   count as a silent stock (the round of the 12th held session); the owner's note on a
+   release opens in the page's words ("no daily price for N trading days after ..."); a
+   release can fall on the round of a day that is not a market session.
 2. US-106, the wide list reads each day the same evening from Dhan's quote answer. The owner
    approved it on 25 Nov. Contract: `.agile/stories/US-106.md`. Its first step is a data
    check that needs no code change. Build it after US-103 (both change the same file), with
@@ -65,7 +71,7 @@ Data changed in the live folder, both approved by the owner and done after marke
 
 ## Facts found on 25 Nov that change how things work
 - Dhan's daily history ends at the previous trading day (its support page says so; the day's
-  bar was not there at 15:42, 18:11, 19:22 or 20:52). Dhan's quote answer holds the day's
+  bar was not there at 15:42, 18:11, 19:22 or 21:12). Dhan's quote answer holds the day's
   open, high, low, closing price and volume after the close, for every stock in one request.
 - The institute's network blocks api.telegram.org and at times GitHub: on it no phone message
   leaves the desk (they wait in the queue) and a push can time out.
