@@ -158,6 +158,54 @@ def test_t4_a_row_with_open_interest_but_no_two_sided_quote_is_never_picked(bid,
     assert nifty_put([bad, good]).option["security_id"] == "good"
 
 
+@pytest.mark.parametrize("ltp", [None, 0.0], ids=["no-ltp", "zero-ltp"])
+def test_t4_a_quoted_row_without_a_last_price_is_never_picked(ltp):
+    bad = ChainRow(25900.0, "PE", "bad", ltp=ltp, bid=329.0, ask=331.0, oi=5e4, delta=-0.65)
+    good = live_pe(25700.0, -0.52, "good", 205.0)
+    assert not tradeable(bad, 10.0)
+    assert nifty_put([bad, good]).option["security_id"] == "good"
+
+
+@pytest.mark.parametrize("delta", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "-inf"])
+def test_t4_a_row_with_a_broken_delta_put_first_is_never_picked(delta):
+    # `min` keeps a NaN key that comes first: the row must be dropped before the choice
+    bad = ChainRow(25850.0, "PE", "bad", ltp=4931.0, bid=4900.0, ask=4962.0, oi=5.0, delta=delta)
+    good = live_pe(25800.0, -0.61, "good", 262.0)
+    assert not tradeable(bad, 10.0)
+    assert pick_contract([bad, good], "PE", 25653.2, 0.65, 10.0) is good
+    assert nifty_put([bad, good]).option["security_id"] == "good"
+
+
+def _row(**kw) -> ChainRow:
+    base = dict(
+        strike=25800.0, opt_type="PE", security_id="x", ltp=262.0, bid=261.0, ask=263.0,
+        oi=50_000.0, iv=0.13, delta=-0.61,
+    )  # fmt: skip
+    base.update(kw)
+    return ChainRow(**base)
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("oi", -5.0),
+        ("oi", math.nan),
+        ("iv", -0.1),
+        ("iv", math.nan),
+        ("strike", -100.0),
+        ("strike", math.nan),
+        ("strike", 0.0),
+        ("ltp", math.nan),
+        ("ltp", -1.0),
+        ("bid", math.nan),
+        ("ask", math.inf),
+    ],
+)
+def test_c1_a_bad_number_in_any_field_makes_the_row_not_tradeable(field, value):
+    assert tradeable(_row(), 10.0) is True
+    assert tradeable(_row(**{field: value}), 10.0) is False
+
+
 # ── T5 the spread cap ────────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize(
     "bid, ask, ok",
@@ -321,6 +369,43 @@ def test_t8_with_nothing_tradeable_the_watcher_watches_nothing_new():
     assert rec._options == {}
 
 
+def test_t8_the_watcher_reads_its_spread_cap():
+    rows = [
+        ChainRow(45000.0, "CE", "wide", ltp=420.0, bid=360.0, ask=424.0, oi=900.0, delta=0.65),
+        ChainRow(45100.0, "CE", "narrow", ltp=345.0, bid=344.0, ask=346.0, oi=900.0, delta=0.52),
+    ]  # "wide": a spread of 15.1%
+    rec = recorder()
+    rec._refresh_options(ChainOnly(rows), NOW)
+    assert set(rec._options) == {"narrow"}
+    rec = recorder()
+    rec.max_spread_pct = 20.0
+    rec._refresh_options(ChainOnly(rows), NOW)
+    assert set(rec._options) == {"wide"}
+
+
+def test_c6_the_desk_hands_the_alert_and_the_watcher_one_setting(app_cfg, db, monkeypatch):
+    """A desk whose settings differ from the defaults: the alert and the watcher both read the
+    desk's own `backtest` settings, so they pick the same contract."""
+    bt = app_cfg.backtest.model_copy(
+        update={"option_max_spread_pct": 20.0, "option_target_delta": 0.55}
+    )
+    d, _, _ = new_desk(app_cfg.model_copy(update={"backtest": bt}), db)
+    assert d.fillcost.max_spread_pct == 20.0
+    assert d.fillcost.target_delta == 0.55
+    rows = [
+        ChainRow(45000.0, "CE", "d65", ltp=420.0, bid=419.0, ask=421.0, oi=900.0, delta=0.65),
+        ChainRow(45100.0, "CE", "wide", ltp=345.0, bid=300.0, ask=350.0, oi=900.0, delta=0.55),
+    ]  # "wide": a spread of 14.3%, allowed at 20%, and the delta nearest 0.55
+    t = d.trackers["BANKNIFTY"]
+    snap = ChainSnapshot(NOW, "BANKNIFTY", "2026-12-29", 45210.0, rows)
+    monkeypatch.setattr(d, "_live_chain", lambda tracker, now: snap)
+    v = Verdict("long", "x", NOW, 45110.0, 45210.0, 60.0, [], True)
+    eco = d._economics(t, t.slots[0], v, NOW)
+    assert eco.synthetic is False and eco.option["security_id"] == "wide"
+    d.fillcost._refresh_options(ChainOnly(rows), NOW)
+    assert "wide" in d.fillcost._options and "d65" not in d.fillcost._options
+
+
 # ── T9 a healthy chain gives exactly the old pick ────────────────────────────────────────
 def old_pick(rows, opt, entry, target=0.65):
     """The rule before US-104, as the oracle."""
@@ -403,6 +488,23 @@ ROW = st.builds(
 )
 
 
+def oracle_tradeable(r, cap: float, need_oi: bool) -> bool:
+    """C1 written out again, independent of the code under test."""
+
+    def fin(v):
+        return isinstance(v, float | int) and math.isfinite(v)
+
+    if not all(fin(v) and v > 0 for v in (r.strike, r.ltp, r.bid, r.ask)):
+        return False
+    if need_oi and not (fin(r.oi) and r.oi > 0):
+        return False
+    if r.delta is not None and not fin(r.delta):
+        return False
+    if r.iv is not None and not (fin(r.iv) and r.iv >= 0):
+        return False
+    return r.ask >= r.bid and (r.ask - r.bid) / r.ask * 100.0 <= cap + 1e-9
+
+
 @settings(max_examples=400, deadline=None)
 @given(rows=st.lists(ROW, max_size=8), direction=st.sampled_from(["long", "short"]))
 def test_t10_wild_rows_never_raise_and_a_pick_is_always_tradeable(rows, direction):
@@ -411,7 +513,9 @@ def test_t10_wild_rows_never_raise_and_a_pick_is_always_tradeable(rows, directio
     need_oi = any(r.oi is not None for r in side)
     got = pick_contract(rows, opt, 45000.0, 0.65, 10.0)
     if got is not None:
-        assert got in side and tradeable(got, 10.0, need_oi=need_oi)
+        assert got in side and oracle_tradeable(got, 10.0, need_oi)
+    # nothing tradeable by the oracle gives no pick, and the other way round
+    assert (got is None) == (not any(oracle_tradeable(r, 10.0, need_oi) for r in side))
     res = chain_economics(
         SPECS["BANKNIFTY_OPT"], direction, 45000.0, 44950.0, 2.0, chain(rows, 45000.0), NOW, BT
     )

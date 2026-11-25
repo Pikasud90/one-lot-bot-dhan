@@ -46,6 +46,7 @@ def tradeable(row: Any, max_spread_pct: float, need_oi: bool = True) -> bool:
         if not (_positive(row.strike) and _positive(row.ltp)):
             return False
         bid, ask = _num(row.bid), _num(row.ask)
+        # the cap (at most 50%) would also turn away a zero bid; the test stays for clarity
         if bid is None or ask is None or bid <= 0 or ask <= 0 or ask < bid:
             return False
         if need_oi and not _positive(row.oi):

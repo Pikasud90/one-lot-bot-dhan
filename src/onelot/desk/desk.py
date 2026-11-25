@@ -302,6 +302,8 @@ class Desk:
             self._fill_stocks,
             self._fill_indices,
             roll_days=self.cfg.option_roll_days,
+            # US-104: the alert's own settings, so both name the same contract
+            target_delta=self.app_cfg.backtest.option_target_delta,
             max_spread_pct=self.app_cfg.backtest.option_max_spread_pct,
         )
 
@@ -1342,7 +1344,10 @@ class Desk:
         untradeable = False  # US-104: the chain had rows of the side, none tradeable
         if chain is not None:
             try:
-                got = chain_economics(t.instrument, v.direction, close, stop, target_r, chain, now)
+                got = chain_economics(
+                    t.instrument, v.direction, close, stop, target_r, chain, now,
+                    self.app_cfg.backtest,
+                )  # fmt: skip
                 eco = got.economics
                 if eco is not None:
                     if eco.option is not None:  # where its own bars live (real premiums)

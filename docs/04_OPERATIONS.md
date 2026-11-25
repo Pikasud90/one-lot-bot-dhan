@@ -224,8 +224,8 @@ places an order, and the desk 18 keep working exactly as above.
   price, a two-sided quote (bid and ask above 0), open interest above 0 and a spread of at
   most 10% (`backtest.option_max_spread_pct`, 1 to 50). The bid, the ask and the spread shown
   are that contract's own. A contract with no quote or no open interest is never named, however
-  near 0.65 its delta reads (on 25 Nov 2026 three alerts named such dead contracts, 10% to 14%
-  away from the index). When the nearest tradeable delta is more than 0.10 from 0.65 the alert
+  near 0.65 its delta reads (between 23 and 25 Nov 2026 three alerts named such dead contracts,
+  10% to 14% away from the index). When the nearest tradeable delta is more than 0.10 from 0.65 the alert
   notes "nearest tradeable contract: delta 0.52 (wanted about 0.65)". When nothing in the chain
   trades the model prices the alert ("est.") and its first note says "no tradeable contract in
   the live chain". The fill-cost recorder watches the same contract.
