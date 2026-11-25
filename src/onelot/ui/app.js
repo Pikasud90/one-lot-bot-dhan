@@ -864,7 +864,7 @@ loadSnaps();
 
 async function loadUptime() {
   try { uptimeBody = await fetch("/api/desk/uptime?days=30").then((r) => r.ok ? r.json() : null); } catch (e) { return; }
-  renderToday();
+  if (latest) renderToday(); // before the first state load the strip would say "not running"
 }
 setInterval(loadUptime, 600000);
 setTimeout(loadUptime, 1500);

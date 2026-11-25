@@ -35,7 +35,9 @@ class Unclean:
     detail: str
 
     def text(self) -> str:
-        return f"waiting for clean one-minute bars since {self.since:%H:%M}: {self.detail}"
+        return (
+            f"waiting for clean one-minute bars today: {self.detail}; clean from {self.since:%H:%M}"
+        )
 
 
 def _ist(ts: pd.Timestamp) -> pd.Timestamp:
@@ -97,10 +99,12 @@ def problem(
                 "today's bars before that came from the delayed feed, not one-minute live bars",
             )
         )
-    if stamps:
-        prev = pd.Timestamp(dt.datetime.combine(day, session_open), tz=IST)
+    opens = pd.Timestamp(dt.datetime.combine(day, session_open), tz=IST)
+    in_session = [ts for ts in stamps if ts >= opens]  # a bar before the open makes no hole
+    if in_session:
+        prev = opens
         first = True
-        for ts in sorted(stamps):
+        for ts in sorted(in_session):
             start = prev if first else prev + pd.Timedelta(minutes=1)  # the first minute missing
             if ts - start > pd.Timedelta(minutes=HOLE_MINUTES):
                 found.append(Unclean(ts, f"no bar from {start:%H:%M} to {ts:%H:%M}"))

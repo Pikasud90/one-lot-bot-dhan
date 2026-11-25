@@ -56,7 +56,8 @@ def test_a_morning_of_delayed_two_minute_bars_holds_the_rule_and_says_since_when
     bars = pd.concat([delayed, live])
     u = clean_bars.problem(bars, unclean, D, ts("12:00"))
     assert u is not None and u.since == ts("10:57")
-    assert u.text().startswith("waiting for clean one-minute bars since 10:57")
+    assert u.text().startswith("waiting for clean one-minute bars today: today's bars")
+    assert u.text().endswith("; clean from 10:57")
 
 
 def test_live_bars_that_replace_the_delayed_ones_make_the_day_clean_again():
@@ -93,6 +94,15 @@ def test_a_hole_after_the_signal_does_not_count_and_a_late_first_bar_does():
     assert u is not None and "no bar from 09:15 to 09:40" in u.detail
 
 
+def test_a_bar_before_the_open_makes_no_hole_at_the_open():
+    """Review F4: a pre-open bar at 09:08 then bars from 09:15 on is clean."""
+    bars = pd.concat([minute_bars("09:08", "09:08"), minute_bars("09:15", "11:00")])
+    assert clean_bars.problem(bars, {}, D, ts("11:00")) is None
+    late = pd.concat([minute_bars("09:08", "09:08"), minute_bars("09:40", "11:00")])
+    u = clean_bars.problem(late, {}, D, ts("11:00"))
+    assert u is not None and "no bar from 09:15 to 09:40" in u.detail
+
+
 def test_only_the_micro_trend_strategy_needs_one_minute_bars():
     from types import SimpleNamespace
 
@@ -113,14 +123,24 @@ def test_only_the_micro_trend_strategy_needs_one_minute_bars():
 class MixedSource:
     """The 23 Nov morning: the delayed feed serves until 10:57 (the same minutes, labelled
     Yahoo), then the live source serves from its last bar on, as `DhanBars` does after a renewal.
-    `hole` drops a stretch of minutes from what the live source serves."""
+    `hole` drops a stretch of minutes from what the live source serves; `blip` is a stretch of
+    polls served by the delayed feed (one REST error falls back to Yahoo for the whole day);
+    `floor` is the first minute the live source has at all (it cannot refill before it)."""
 
     name, delayed, resolution, primary, last_error = "dhan+yahoo", False, "1m", None, None
 
-    def __init__(self, live_from: str | None = "10:57", hole: tuple[str, str] | None = None):
+    def __init__(
+        self,
+        live_from: str | None = "10:57",
+        hole: tuple[str, str] | None = None,
+        blip: tuple[str, str] | None = None,
+        floor: str | None = None,
+    ):
         self.served_by: dict[str, str] = {}
         self.live_from = live_from
         self.hole = hole
+        self.blip = blip
+        self.floor = floor
 
     def fetch(self, specs, days, since=None):
         live = BARS[BARS.index.date >= weekdays(DAY, 3)[0]]
@@ -129,15 +149,23 @@ class MixedSource:
             a, b = (ts(x, DAY) for x in self.hole)
             live = live[(live.index < a) | (live.index >= b)]
         switch = ts(self.live_from, DAY) if self.live_from else None
+        yahoo = switch is not None and Clock.now < switch
+        if self.blip is not None:
+            a, b = (ts(x, DAY) for x in self.blip)
+            yahoo = yahoo or a <= Clock.now < b
         out = {}
         for k in specs:
-            if switch is not None and Clock.now < switch:
+            if yahoo:
                 self.served_by[k] = "yahoo"
                 out[k] = live
             else:
                 self.served_by[k] = "dhan"
                 start = (since or {}).get(k)
-                out[k] = live if start is None else live[live.index >= start - pd.Timedelta("5min")]
+                got = live if start is None else live[live.index >= start - pd.Timedelta("5min")]
+                if self.floor is not None:
+                    floor = ts(self.floor, DAY)
+                    got = got[(got.index.date != DAY) | (got.index >= floor)]
+                out[k] = got
         return out
 
 
@@ -179,22 +207,24 @@ def test_with_clean_bars_the_rule_alerts_as_before(make_rig):
 
 
 def test_a_morning_on_the_delayed_feed_raises_nothing_and_the_card_says_why(make_rig):
-    desk, notifier, db = make_rig(MixedSource(live_from="10:57"))
+    # the live source has nothing before 10:52, so it cannot replace the delayed morning
+    desk, notifier, db = make_rig(MixedSource(live_from="10:57", floor="10:52"))
     poll_through(desk, "15:30")
     assert not [n for n in notifier.sent if "microtrend" in n.title]
     assert _trades(db) == []
     t = desk.trackers["NIFTY"]
     assert t.unclean_bars, "the delayed bars of the morning are remembered"
-    # the live source served from 5 minutes before its first poll at 10:57: clean from 10:49
+    # the live source served from 10:52 on (its first minute), and the delayed bars before
+    # it stay: the last of them is the 10:51 bar (two minutes wide), clean from 10:53
     assert t.clean_note is not None
-    assert t.clean_note.startswith("waiting for clean one-minute bars since 10:49: today's bars")
+    assert t.clean_note.startswith("waiting for clean one-minute bars today: today's bars")
 
 
 def test_the_card_note_while_the_market_is_open(make_rig):
-    desk, notifier, db = make_rig(MixedSource(live_from="10:57"))
+    desk, notifier, db = make_rig(MixedSource(live_from="10:57", floor="10:52"))
     poll_through(desk, "12:30")
     card = next(d for d in desk.snapshot()["indices"] if d["key"] == "NIFTY")
-    assert card["health"]["clean_note"].startswith("waiting for clean one-minute bars since 10:49")
+    assert card["health"]["clean_note"].startswith("waiting for clean one-minute bars today: ")
     assert "waiting for clean one-minute bars" in (card["trend"]["note"] or "")
 
 
@@ -203,7 +233,10 @@ def test_a_hole_in_the_live_bars_before_the_signal_raises_nothing(make_rig):
     poll_through(desk, "15:30")
     assert not [n for n in notifier.sent if "microtrend" in n.title]
     note = desk.trackers["NIFTY"].clean_note
-    assert note == "waiting for clean one-minute bars since 10:20: no bar from 10:00 to 10:20"
+    assert (
+        note
+        == "waiting for clean one-minute bars today: no bar from 10:00 to 10:20; clean from 10:20"
+    )
 
 
 def test_a_failing_check_holds_nothing(make_rig, monkeypatch):
@@ -216,3 +249,35 @@ def test_a_failing_check_holds_nothing(make_rig, monkeypatch):
     poll_through(desk, "15:30")
     assert [n for n in notifier.sent if "microtrend" in n.title]  # as before this story
     assert desk.hook_errors > 0
+
+
+def test_a_delayed_morning_the_live_source_can_refill_alerts_again(make_rig):
+    """Review F1: once the live source serves, the desk asks it for the day from the first
+    delayed bar; its one-minute bars replace the delayed ones and the rule alerts as on a
+    clean day (the 12:15 call)."""
+    desk, notifier, db = make_rig(MixedSource(live_from="10:57"))
+    poll_through(desk, "15:30")
+    assert [n for n in notifier.sent if "microtrend" in n.title]
+    t = desk.trackers["NIFTY"]
+    assert t.unclean_bars == {} and t.clean_note is None
+
+
+def test_one_poll_on_the_delayed_feed_holds_the_rule_only_until_the_live_bars_are_back(
+    make_rig,
+):
+    """Review F1: live, one poll served by Yahoo at 10:30 (a REST error), live again: the
+    marks are refilled and the 12:15 call is raised as on a clean day."""
+    desk, notifier, db = make_rig(MixedSource(live_from=None, blip=("10:30", "10:31")))
+    poll_through(desk, "11:00")
+    assert desk.trackers["NIFTY"].unclean_bars == {}
+    poll_through_from(desk, "11:03", "15:30")
+    assert [n for n in notifier.sent if "microtrend" in n.title]
+    assert desk.trackers["NIFTY"].clean_note is None
+
+
+def poll_through_from(desk, start: str, until: str, every: int = 3) -> None:
+    t, end = ts(start, DAY).to_pydatetime(), ts(until, DAY).to_pydatetime()
+    while t <= end:
+        Clock.now = t
+        desk.poll()
+        t += dt.timedelta(minutes=every)

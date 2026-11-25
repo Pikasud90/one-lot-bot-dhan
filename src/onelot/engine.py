@@ -731,13 +731,13 @@ class Engine:
                 self._uptime.beat(now)
         except Exception:  # noqa: BLE001
             log.exception("desk uptime: the heartbeat failed")
-        started = self._desk_start_pending
-        if started is not None and now - started >= DESK_START_SETTLE:
-            self._desk_start_pending = None
-            try:
+        try:
+            started = self._desk_start_pending
+            if started is not None and now - started >= DESK_START_SETTLE:
+                self._desk_start_pending = None
                 self._desk_messages.started(started, now)
-            except Exception:  # noqa: BLE001
-                log.exception("desk messages: the start message failed")
+        except Exception:  # noqa: BLE001
+            log.exception("desk messages: the start message failed")
         try:
             self._desk_messages.look(now)
         except Exception:  # noqa: BLE001

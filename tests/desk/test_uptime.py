@@ -169,12 +169,12 @@ def messages(sent: Sent, expiry=None, feed="live") -> DeskMessages:
     return DeskMessages(sent, CLOCK, CAL.is_trading_day, lambda: expiry, lambda: feed)
 
 
-def test_the_start_message_is_a_desk_warning_with_a_key_per_day() -> None:
+def test_the_start_message_is_a_desk_warning_with_a_key_per_start() -> None:
     sent = Sent()
     m = messages(sent, at(25, "21:31"))
     key = m.started(at(25, "09:02"), at(25, "09:03"))
     (n,) = sent.items
-    assert key == "desk:start:2026-11-25" and n.dedup_key == key
+    assert key == "desk:start:2026-11-25:0902" and n.dedup_key == key
     assert n.kind == "desk" and n.level == NotificationLevel.WARNING
     assert n.body == "Desk started 09:02. Token valid until 21:31. Feed: live."
 
@@ -188,6 +188,18 @@ def test_a_start_after_09_15_on_a_trading_day_says_late_and_after_the_close_not(
     late, evening, holiday = sent.items
     assert "Started late: alerts before 10:57 were missed." in late.body
     assert "Started late" not in evening.body and "Started late" not in holiday.body
+
+
+def test_a_restart_later_the_same_day_is_sent_too_and_says_late() -> None:
+    """Review F2: a start at 09:02, a crash and a restart at 10:57 sends two messages with
+    two keys; the second says the alerts before 10:57 were missed."""
+    sent = Sent()
+    m = messages(sent, at(25, "21:31"))
+    first = m.started(at(25, "09:02"))
+    again = m.started(at(25, "10:57"))
+    assert first != again
+    assert [n.dedup_key for n in sent.items] == [first, again]
+    assert "Started late: alerts before 10:57 were missed." in sent.items[1].body
 
 
 def test_the_morning_check_comes_once_a_trading_day_between_09_05_and_09_15() -> None:

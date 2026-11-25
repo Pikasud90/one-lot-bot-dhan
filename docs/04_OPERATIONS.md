@@ -19,9 +19,9 @@
 6. On the phone (US-097): about a minute after every start the desk sends "Desk started 09:02.
    Token valid until 21:31. Feed: live."; a start after 09:15 on a trading day adds "Started
    late: alerts before 10:57 were missed." At 09:05 IST on a trading day a running desk sends
-   the same three facts ("Desk up at 09:05. ..."). Each comes once a day (its own key). Nothing
-   can be sent while the laptop sleeps or the desk is stopped: treat a missing 09:05 message
-   as "the desk is down" and start it.
+   the same three facts ("Desk up at 09:05. ..."). Every start is sent, a restart later the
+   same day too; the 09:05 check comes once a day. Nothing can be sent while the laptop sleeps
+   or the desk is stopped: treat a missing 09:05 message as "the desk is down" and start it.
 
 **During the session**
 
@@ -159,10 +159,13 @@ paper trades only: the system never places an order.
 - Clean bars (US-097): the rule raises no alert for an index while the bars it reads today are
   not all one-minute bars of the live source: a bar of today from the delayed Yahoo feed (a
   desk started on Yahoo before the token was renewed), or a hole of more than five minutes
-  before the signal (the open counts). The card says "waiting for clean one-minute bars since
-  10:57" with the reason, under the trends and in the slot's "Why". A live bar of the same
-  minute replaces a delayed one; a desk that switches source starts its bars afresh. On such a
-  day the rule usually stays quiet until the next session. The pullback rule is not affected.
+  before the signal (the open counts; a bar before 09:15 does not). The card says "waiting for
+  clean one-minute bars today: ..." with the reason and from when the bars are clean, under the
+  trends and in the slot's "Why". A live bar of the same minute replaces a delayed one: while
+  the live source serves, the desk asks it again for the day from the first delayed bar (at
+  most every five minutes), so one poll that fell back to Yahoo holds the rule only until the
+  live bars are back. A desk that switches source starts its bars afresh. A hole the live
+  source cannot fill holds the rule for the rest of the day. The pullback rule is not affected.
 - Spread (US-097): when a quote of the alerted contract not older than 60 seconds is at hand
   (the option chain the alert was priced on, or the fill-cost recorder's last quote), the alert
   carries `spread_pct`, half the bid-ask spread in % of the mid, and from 1% on the line "Wide
@@ -294,7 +297,7 @@ the whole channel off; the card then says so.
 | Critical desk states | CRITICAL | token expired at start, feed dead, index disagreement, halt. Always with sound. The same title is not sent again within 30 minutes of the last one sent. |
 | Dhan token reminders | WARNING, kind `token` | the ladder below. Always with sound. A stage reminder is dropped if it could not be delivered before the token ran out. |
 | Volume Watch | WARNING, kind `volume` | each note under its own key; a repeat of the same key is held back, a new key never. Muted outside the session. |
-| Desk start and 09:05 check (US-097) | WARNING, kind `desk` | "Desk started 09:02. Token valid until 21:31. Feed: live." about a minute after a start (with "Started late: ..." after 09:15 on a trading day), and "Desk up at 09:05. ..." on a trading day; each once a day by its own key. Always with sound. |
+| Desk start and 09:05 check (US-097) | WARNING, kind `desk` | "Desk started 09:02. Token valid until 21:31. Feed: live." about a minute after a start (with "Started late: ..." after 09:15 on a trading day), and "Desk up at 09:05. ..." on a trading day; every start is sent (a restart the same day too), the 09:05 check once a day. Always with sound. |
 
 Everything else (INFO, other warnings) stays on the page and the computer. Every message is a
 row in `telegram_outbox` before it is a request, sent in order (exit and critical first),

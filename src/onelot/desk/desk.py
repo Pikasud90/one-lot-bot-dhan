@@ -61,6 +61,7 @@ from .tracker import InstrumentTracker, StrategySlot, Verdict, needs_one_minute
 if TYPE_CHECKING:  # annotation only: the paper package is never imported by the desk
     from ..paper.book import PaperBook
 
+REFILL_EVERY = dt.timedelta(minutes=5)  # how often the live source is asked to refill a day
 log = logging.getLogger(__name__)
 
 # Leads the title of a SIGNAL notification built on delayed (Yahoo) bars, so a truncated
@@ -216,6 +217,7 @@ class Desk:
         # notification or the poll. Its failures are counted here (Manager decision 5).
         self.paper = paper
         self.hook_errors = 0
+        self._refill_at: dict[str, dt.datetime] = {}  # review F1 of US-097
         self._training_logged: set[str] = set()
         self.app_cfg = cfg_app
         self.notifier = notifier
@@ -508,6 +510,7 @@ class Desk:
         self._delivery_history(now)
         specs = self._all_specs()
         since = {k: t.bars.index[-1] for k, t in self.trackers.items() if not t.bars.empty}
+        self._refill_unclean(since, now)
         got = self.source.fetch(specs, self.cfg.history_days, since)
         self.last_fetch_at = now
         self.last_error = self.source.last_error
@@ -869,6 +872,34 @@ class Desk:
         except Exception:  # noqa: BLE001 - a record for the gate, never stops the poll
             self.hook_errors += 1
             log.exception("desk: the bar source of %s could not be noted", t.cfg.key)
+
+    def _refill_unclean(self, since: dict[str, pd.Timestamp], now: dt.datetime) -> None:
+        """Review F1 of US-097: one poll served by the delayed feed (one REST error) marks the
+        whole day of an instrument unclean, and the next live polls ask only from their last
+        bar, so the marks would hold the micro-trend rule until the close. While the source
+        serves live one-minute bars, ask the live source again from the first unclean bar of
+        today (at most once every `REFILL_EVERY` per instrument): the live bars then replace
+        the delayed ones and clear their marks. A failure changes nothing."""
+        try:
+            if getattr(self.source, "delayed", False) or self.fine_minutes != 1:
+                return
+            day = now.astimezone(IST).date()
+            for k, t in self.trackers.items():
+                if not t.unclean_bars or k not in since:
+                    continue
+                last = self._refill_at.get(k)
+                if last is not None and now - last < REFILL_EVERY:
+                    continue
+                marks = [clean_bars._ist(x) for x in t.unclean_bars]
+                marks = [x for x in marks if x.date() == day]
+                if not marks:
+                    continue
+                self._refill_at[k] = now
+                # a source asks from `since` minus 5 minutes (DhanBars): from the first mark on
+                since[k] = min(clean_bars._ist(since[k]), min(marks) + pd.Timedelta(minutes=5))
+        except Exception:  # noqa: BLE001 - a refill for the gate, never stops the poll
+            self.hook_errors += 1
+            log.exception("desk: the refill of unclean bars could not be planned")
 
     def _unclean(self, t: InstrumentTracker, until: pd.Timestamp) -> clean_bars.Unclean | None:
         now = until.tz_convert(IST) if until.tzinfo is not None else until.tz_localize(IST)

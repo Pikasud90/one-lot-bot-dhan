@@ -76,6 +76,8 @@ NO_TOP_UP = (dt.time(9, 0), dt.time(15, 35))
 #: the top-up: at most this many tries in a window, this far apart (lead's ruling)
 TOP_UP_TRIES = 3
 TOP_UP_GAP = dt.timedelta(minutes=20)
+#: the other series the top-up writes are read at most this often while none is behind
+OTHERS_EVERY = dt.timedelta(minutes=10)
 #: an alert no channel accepted is tried again after this long
 RETELL = dt.timedelta(minutes=5)
 REASON_WORDS = {
@@ -156,6 +158,7 @@ class DeliveryDesk:
         self._reload = threading.Event()
         self._loader: threading.Thread | None = None
         self._top_up_tries: list[dt.datetime] = []
+        self._others_fresh_at: tuple[dt.datetime, dt.date | None] | None = None
         self._top_up_thread: threading.Thread | None = None
         self.top_up_note: str | None = None
         self.notes: dict[str, str] = {}  # series key -> why an entry cannot be read now
@@ -244,7 +247,13 @@ class DeliveryDesk:
             if (to := self._stored_to(k)) is None or (last is not None and to < last)
         ]
         if not behind:
+            # review F6 of US-097: the other series (about 24) are read at most once every
+            # `OTHERS_EVERY` while none of them is behind, not on every poll of the night
+            fresh_at = self._others_fresh_at
+            if fresh_at is not None and fresh_at[1] == last and now - fresh_at[0] < OTHERS_EVERY:
+                return
             behind = self._others_behind(last)
+            self._others_fresh_at = None if behind else (now, last)
         if not behind:
             return
         self._top_up_tries = [*tries, now]

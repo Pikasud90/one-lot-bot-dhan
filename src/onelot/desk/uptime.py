@@ -11,8 +11,8 @@ The desk was not running on 5 of the 7 sessions after the micro-trend rule went 
 * `DeskMessages` sends, through the Notifier (kind `desk`, which the Telegram channel
   forwards), "Desk started 09:02. Token valid until 21:31. Feed: live." at a start, with
   "Started late: alerts before 10:57 were missed." when the start is after 09:15 on a trading
-  day, and the same three facts at 09:05 IST on a trading day when the desk is up; each once
-  a day by its own dedup key. Nothing can be sent while the laptop sleeps or the desk is
+  day, and the same three facts at 09:05 IST on a trading day when the desk is up. Each start
+  has its own dedup key (a restart the same day is sent too); the 09:05 check is once a day. Nothing can be sent while the laptop sleeps or the desk is
   stopped: a missing 09:05 message means the desk is down.
 
 Every step here is guarded by its caller: a failure never stops the desk or an alert.
@@ -197,7 +197,7 @@ def start_text(
 
 
 class DeskMessages:
-    """The start message and the 09:05 check, each once a day (dedup key per day)."""
+    """The start message (a key per start) and the 09:05 check (a key per day)."""
 
     def __init__(
         self,
@@ -230,13 +230,15 @@ class DeskMessages:
 
     def started(self, at: dt.datetime, now: dt.datetime | None = None) -> str:
         """The message of a start at `at` (sent at `now`, a little later: the token reading
-        is then current); returns its dedup key (`desk:start:<day>`)."""
+        is then current); returns its dedup key (`desk:start:<day>:<HHMM>`). The key names
+        the minute of the start, so a restart later the same day is sent too: that is the
+        start the owner most needs to hear of (the desk was down, alerts were missed)."""
         at = to_ist(at)
         day = at.date()
         w = self.session_clock.window_for(day)
         late = bool(self.is_trading_day(day)) and w.open_at < at < w.close_at
         title, body = start_text(at, self._read_expiry(), self._read_feed(), late)
-        key = f"desk:start:{day.isoformat()}"
+        key = f"desk:start:{day.isoformat()}:{at:%H%M}"
         self._notify(title, body, key)
         return key
 
