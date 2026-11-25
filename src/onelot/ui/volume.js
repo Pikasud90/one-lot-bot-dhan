@@ -244,7 +244,7 @@ const volumeUrl = () => "/api/volume?index=" + encodeURIComponent(S.index) + (S.
 /* ── charts ─────────────────────────────────────────────────────────── */
 function chartOpts() {
   return {
-    layout: { background: { type: "solid", color: cssv("--panel") }, textColor: cssv("--plot-font"), fontFamily: "JetBrains Mono, Menlo, monospace", fontSize: 13, attributionLogo: false },
+    layout: { background: { type: "solid", color: cssv("--panel") }, textColor: cssv("--plot-font"), fontFamily: "JetBrains Mono, Menlo, monospace", fontSize: 14, attributionLogo: false },
     grid: { vertLines: { color: cssv("--grid") }, horzLines: { color: cssv("--grid") } },
     rightPriceScale: { borderColor: cssv("--line2") },
     leftPriceScale: { visible: true, borderColor: cssv("--line2") },

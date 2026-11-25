@@ -18,7 +18,7 @@ CSS = (UI / "styles.css").read_text("utf-8")
 # the Machine Learning Lab's, and the inline styles of the page and the tab scripts.
 FLOOR_PX = 14.0
 FLOOR_STYLESHEETS = ("styles.css", "mlstates.css")
-FLOOR_SCRIPTS = ("app.js", "charts.js", "mlstates.js")
+FLOOR_SCRIPTS = ("app.js", "charts.js", "mlstates.js", "volume.js", "sim_chart.js")
 SMALL_KEYWORDS = {"xx-small", "x-small", "small", "smaller"}
 SIZE_TOKEN = re.compile(
     r"(?<![\w.-])(max\([^)]*\)|min\([^)]*\)|clamp\([^)]*\)|var\([^)]*\)|[\d.]+(?:px|em|rem|%|pt)"
