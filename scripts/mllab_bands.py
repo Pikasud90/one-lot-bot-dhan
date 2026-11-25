@@ -285,7 +285,9 @@ def main() -> None:
         return
     raw = OUT / "bands.pkl"
     if raw.exists():
-        df = pd.read_pickle(raw)
+        from onelot.clock import as_ist
+
+        df = as_ist(pd.read_pickle(raw))  # a cache from before US-096: one zone object
     else:
         insts = list(h.INDEX_OPTIONS) + list(h.STOCKS)
         tasks = [(i, tf) for tf in mc.TFS for i in insts]

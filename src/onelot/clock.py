@@ -1,5 +1,5 @@
 """Time, sessions and trading calendar. Every timestamp in this system is
-timezone-aware and anchored to Asia/Kolkata.
+timezone-aware and anchored to India Standard Time (UTC+05:30).
 
 Fixes v1 defect C5: `datetime.now()` on a machine set to any other timezone
 silently shifts every candle boundary, corrupting warm-up and repainting bars.
@@ -11,13 +11,18 @@ import datetime as dt
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import yaml
 
 log = logging.getLogger(__name__)
 
-IST = ZoneInfo("Asia/Kolkata")
+#: India Standard Time as a FIXED offset, the one zone object of the whole app (US-096).
+#: India has kept +05:30 with no daylight saving since 1945, so this is exact for every bar
+#: the app holds. Not ZoneInfo("Asia/Kolkata"): pandas has no fast path for zoneinfo zones
+#: and calls Python once per stamp WITHOUT releasing the interpreter lock (36,000 one-minute
+#: stamps: normalize() 2.35 s against 0.001 s here), which froze the whole app. The name
+#: keeps `%Z` printing "IST"; isoformat() keeps "+05:30".
+IST = dt.timezone(dt.timedelta(hours=5, minutes=30), "IST")
 
 
 def now_ist() -> dt.datetime:
@@ -30,6 +35,49 @@ def to_ist(ts: dt.datetime) -> dt.datetime:
     if ts.tzinfo is None:
         return ts.replace(tzinfo=IST)
     return ts.astimezone(IST)
+
+
+def as_ist(obj):
+    """Put every pandas time in `obj` that is on India's +05:30 under the one `IST` zone
+    object: for frames read back from a pickle or cache written before US-096 (they carry
+    ZoneInfo's "Asia/Kolkata"). Joined to a new frame, two zone objects make pandas fall back
+    to plain objects. Walks dicts, lists and tuples; frames are converted in place and
+    returned; naive and UTC times, and anything not pandas, come back as they were."""
+    import pandas as pd  # type: ignore[import-untyped]  # lazy: clock stays light
+
+    probe = dt.datetime(2020, 1, 1)
+    want = IST.utcoffset(None)
+
+    def zoned(tz) -> bool:  # noqa: ANN001
+        return tz is not None and tz.utcoffset(probe) == want
+
+    if isinstance(obj, pd.DataFrame):
+        if isinstance(obj.index, pd.DatetimeIndex) and zoned(obj.index.tz):
+            obj.index = obj.index.tz_convert(IST)
+        for col in obj.columns:
+            s = obj[col]
+            if isinstance(s, pd.Series) and isinstance(s.dtype, pd.DatetimeTZDtype):
+                if zoned(s.dt.tz):
+                    obj[col] = s.dt.tz_convert(IST)
+        return obj
+    if isinstance(obj, pd.Series):
+        if isinstance(obj.index, pd.DatetimeIndex) and zoned(obj.index.tz):
+            obj.index = obj.index.tz_convert(IST)
+        if isinstance(obj.dtype, pd.DatetimeTZDtype) and zoned(obj.dt.tz):
+            obj = obj.dt.tz_convert(IST)
+        return obj
+    if isinstance(obj, pd.DatetimeIndex):
+        return obj.tz_convert(IST) if zoned(obj.tz) else obj
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            obj[k] = as_ist(v)
+        return obj
+    if isinstance(obj, list):
+        obj[:] = [as_ist(v) for v in obj]
+        return obj
+    if isinstance(obj, tuple):
+        return tuple(as_ist(v) for v in obj)
+    return obj
 
 
 def parse_hhmm(value: str) -> dt.time:

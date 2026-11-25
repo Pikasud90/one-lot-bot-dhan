@@ -45,6 +45,7 @@ import numpy as np
 import pandas as pd
 import us001_helpers as H
 
+from onelot.clock import IST
 from onelot.config import BacktestCfg
 
 # ── the worked scenarios, in paise ────────────────────────────────────────────────────
@@ -387,9 +388,7 @@ def history_stamps(sessions: int = 80, last_day: dt.date = H.DAY) -> list[pd.Tim
     out: list[pd.Timestamp] = []
     for day in days:
         out += list(
-            pd.date_range(
-                day + pd.Timedelta(hours=9, minutes=15), periods=375, freq="min", tz="Asia/Kolkata"
-            )
+            pd.date_range(day + pd.Timedelta(hours=9, minutes=15), periods=375, freq="min", tz=IST)
         )
     return out
 

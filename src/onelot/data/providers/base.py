@@ -7,6 +7,8 @@ from typing import Protocol
 
 import pandas as pd
 
+from ...clock import IST
+
 BAR_COLUMNS = ["open", "high", "low", "close", "volume"]
 
 
@@ -28,5 +30,5 @@ class HistoryProvider(Protocol):
 
 def empty_bars() -> pd.DataFrame:
     df = pd.DataFrame(columns=BAR_COLUMNS, dtype="float64")
-    df.index = pd.DatetimeIndex([], tz="Asia/Kolkata", name="ts")
+    df.index = pd.DatetimeIndex([], tz=IST, name="ts")
     return df

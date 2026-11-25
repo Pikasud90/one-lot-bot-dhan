@@ -118,6 +118,9 @@ def report() -> None:
             continue
         with path.open("rb") as fh:
             per_inst = pickle.load(fh)  # noqa: S301 - our own file
+        from onelot.clock import as_ist
+
+        per_inst = as_ist(per_inst)  # a cache from before US-096: one zone object
         lines += [basket, "-" * 100]
         for name, params, harness in variants:
             df = d.pool(per_inst, name)

@@ -575,7 +575,7 @@ MIN = dt.timedelta(minutes=1)
 
 
 def days(close: float = 1000.0, n: int = 3) -> pd.DataFrame:
-    idx = pd.date_range("2026-11-02 09:15", periods=n, freq="B", tz="Asia/Kolkata", name="ts")
+    idx = pd.date_range("2026-11-02 09:15", periods=n, freq="B", tz=IST, name="ts")
     return pd.DataFrame(
         {"open": close, "high": close + 5, "low": close - 5, "close": close, "volume": 1e5},
         index=idx,
@@ -729,7 +729,7 @@ def test_an_instrument_dropped_while_its_days_were_read_is_skipped(cfg, db, monk
 def test_the_poll_reads_the_days_the_store_holds(cfg, db):
     """Through the real reader: daily bars in the store reach the tracker at the first poll,
     and an instrument without any says so."""
-    last = pd.Timestamp.now(tz="Asia/Kolkata").normalize() - pd.Timedelta(days=1)
+    last = pd.Timestamp.now(tz=IST).normalize() - pd.Timedelta(days=1)
     idx = pd.bdate_range(end=last, periods=80) + pd.Timedelta(hours=9, minutes=15)
     close = 900.0 + pd.Series(range(80), index=idx, dtype=float)
     stored = pd.DataFrame(
