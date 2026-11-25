@@ -1396,3 +1396,21 @@ def test_switching_dormant_after_to_0_keeps_a_held_trade_held():
         a = by_key(w)["AAA"]
         assert a.status == "OPEN" and a.exit_reason is None and "exit held for review" in a.note
         assert reading(w)["trade"]["held_rounds"] == 0 and "released" not in reading(w)["trade"]
+
+
+def test_two_trades_that_end_on_the_same_session_are_listed_with_the_higher_id_first():
+    last = SIG + 1
+    frames = {
+        "AAA": cut(slow(SIG), last),
+        "CCC": cut(slow(SIG), last),
+        "BBB": PLAIN,
+    }
+    w, broker = desk(frames, dormant_after=3)
+    for i in range(SIG - 1, SIG + 7):
+        r = go(w, broker, i)
+    assert sorted(r.summary["released"]) == ["AAA (no data)", "CCC (no data)"]  # one evening
+    t = by_key(w)
+    assert t["AAA"].exit_session == t["CCC"].exit_session == DATES[SIG + 6]
+    assert t["AAA"].id < t["CCC"].id
+    assert [x.id for x in w.book.closed()] == [t["CCC"].id, t["AAA"].id]
+    assert [x["series_key"] for x in w.view()["closed"]] == ["CCC", "AAA"]
