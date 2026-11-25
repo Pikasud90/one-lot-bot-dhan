@@ -98,3 +98,38 @@ class TestTheCutMessage:
         past = [closed(alert_id="a"), closed(alert_id="b", void_reason=REASON)]
         s = {"date": "2026-10-28", "totals": {"closed": 1}}
         assert js("paperCut(P.s, P.past)", {"s": s, "past": past}) == ""
+
+
+class TestADayOfVoidClosesOnly:
+    """Review finding: with only void closes today, `closed` is 0, and the panel fell back to
+    the last session, hid today's left-out line and said "nothing closed today yet"."""
+
+    def payload(self, left):
+        today_row = closed(alert_id="v", void_reason=REASON, closed_at="2026-10-29T11:00:00+05:30")
+        return {
+            "enabled": True,
+            "status": {},
+            "trades": [today_row],
+            "totals_today": {**TOTALS, "closed": 0, "wins": 0, "losses": 0, "left_out": left},
+            "last_session": {"date": "2026-10-28", "totals": TOTALS},
+        }
+
+    def test_it_does_not_fall_back_and_prints_todays_left_out_line(self):
+        p = self.payload({"trades": 2, "net": "-1.00", "reason": NOTE})
+        assert js("paperFallback(P)", p) is False
+        meta = js('paperMeta(P, "today")', p)
+        assert meta.startswith("today: 0 closed")
+        assert "Left out of the score: 2 trades" in meta and "nothing closed" not in meta
+        panel = js('paperPanel(P, "today")', p)
+        assert "nothing closed today yet" not in panel and TAG in text(panel)
+
+    def test_a_quiet_day_still_falls_back(self):
+        p = self.payload(None)
+        p["trades"] = []
+        p["totals_today"].pop("left_out")
+        assert js("paperFallback(P)", p) is True
+        assert "today: nothing closed yet" in js('paperMeta(P, "today")', p)
+
+    def test_zero_left_out_still_falls_back(self):
+        p = self.payload({"trades": 0})
+        assert js("paperFallback(P)", p) is True

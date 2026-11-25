@@ -22,6 +22,10 @@ Privacy: the tables desk_positions, positions, trade_journal, account_cache and 
 are never read. `desk_signals.status` is read only to count it; no output names it per alert.
 The stores are opened through SQLite URIs with mode=ro; nothing is written to them. Outputs go
 to data/research/live_alerts_2026-11-24/ in the main checkout.
+
+US-105 note (25 Nov 2026): this script counts every paper trade as recorded, including the
+three whose contract had no open interest (see `onelot.void.void_reason`); the desk's scores
+leave them out. Read its tables with that in mind.
 """
 
 from __future__ import annotations

@@ -81,6 +81,16 @@ class TestTheArchiveRow:
         stripped = re.sub(r' <span class="void-tag"[^>]*>[^<]*</span>', "", html)
         assert stripped == step(plain, 0)["html"]
 
+    def test_the_tag_sits_in_the_head_and_in_the_body_of_the_row(self, rig, tmp_path):
+        rows = real_archive(rig)
+        void_id = next(r["id"] for r in rows if r.get("exit"))
+        next(r for r in rows if r["id"] == void_id)["void_reason"] = REASON
+        html = step(run_ui(tmp_path, scenario(rows, steps=READ)), 0)["html"]
+        row = next(p for p in re.split(r'(?=<div class="alert-row)', html) if void_id in p)
+        head, body = row.split('<div class="alert-body', 1)
+        assert head.count(TAG) == 1 and body.count(TAG) == 1
+        assert 'class="alert-head"' in head
+
 
 class TestTheLeftOutLine:
     def test_the_paper_scoreboard_prints_the_line_once(self, rig, tmp_path):

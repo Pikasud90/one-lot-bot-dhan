@@ -678,13 +678,14 @@ class PaperBook:
             if void_id is None
         )
         left = [
-            self._paise_or_unknown(i, "net_paise", net)
+            n
             for i, _gross, net, void_id in rows
             if void_id is not None
+            and (n := self._paise_or_unknown(i, "net_paise", net)) is not None
         ]
-        if left:  # US-105: said only when something was left out; a net unknown counts as 0
+        if left:  # US-105: said only when something was left out; the ledger's rule: a net known
             totals["left_out_trades"] = len(left)
-            totals["left_out_net_paise"] = sum(n for n in left if n is not None)
+            totals["left_out_net_paise"] = sum(left)
         return totals
 
     def last_session(self, now: dt.datetime) -> dt.date | None:
@@ -927,7 +928,8 @@ class PaperBook:
     def _mark_void(self) -> int:
         """Mark every trade whose alert is void (`onelot.void.void_reason`) that has no mark.
 
-        Idempotent: a trade already in `paper_void` is never a candidate, so a second pass
+        Idempotent: a trade already in `paper_void` is never a candidate (nor is a STOCK trade, so
+        the pass does not read every sound stock plan again at each start), so a second pass
         changes nothing, and no mark is ever removed. The alert is read from the trade's own
         plan snapshot (the copy taken at open), so it needs no desk_signals row. One
         unreadable plan is skipped, never fatal. Returns how many marks were written.
@@ -936,7 +938,7 @@ class PaperBook:
         stmt = (
             select(t.id, t.alert_id, type_coerce(t.plan, Text))
             .select_from(paper_trades.outerjoin(paper_void, paper_void.c.trade_id == t.id))
-            .where(paper_void.c.trade_id.is_(None))
+            .where(paper_void.c.trade_id.is_(None), t.kind == "INDEX")  # only INDEX can be void
             .order_by(t.id)
         )
         try:

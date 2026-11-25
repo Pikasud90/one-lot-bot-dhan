@@ -2786,6 +2786,12 @@ class Desk:
             # US-067: pending delivery alerts and carried delivery trades (None: no slot)
             "delivery": self.delivery.view() if self.delivery is not None else None,
             "scoreboard": self.scoreboard,
+            # US-105: said whenever the scoreboard above left a void alert out
+            **(
+                {"scoreboard_left_out": self.scoreboard_left_out}
+                if self.scoreboard_left_out
+                else {}
+            ),
             "counts": {
                 "instruments": len(trackers),
                 "strategies": sum(len(t.slots) for t in self.trackers.values()),

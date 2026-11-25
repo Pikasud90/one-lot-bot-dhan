@@ -7,6 +7,10 @@ desk_positions, positions, trade_journal, account_cache and app_settings are nev
 Stages: paper, down, spread, midcp, delay, history. Run from the main checkout:
   PYTHONPATH=src:scripts:. nice -n 10 .venv/bin/python -W ignore \
       <worktree>/scripts/live_alerts_check.py <stage>
+
+US-105 note (25 Nov 2026): this script counts every paper trade as recorded, including the
+three whose contract had no open interest (see `onelot.void.void_reason`); the desk's scores
+leave them out. Read its tables with that in mind.
 """
 
 from __future__ import annotations

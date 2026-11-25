@@ -18,7 +18,7 @@ import pytest
 from sqlalchemy import delete, select
 
 from onelot.store.schema import paper_events, paper_trades, paper_void
-from onelot.void import VOID_REASON, void_reason
+from onelot.void import LEFT_OUT_NOTE, VOID_REASON, void_reason
 
 from .conftest import THU, ist, make_alert, table_rows
 from .test_book_manage import at, bars, feed
@@ -92,7 +92,7 @@ class TestVoidReason:
     def test_a_stock_alert_is_never_void(self):
         assert void_reason(stock_alert_with_zero_oi()) is None
 
-    @pytest.mark.parametrize("oi", [True, "0", "", [], {}, float("nan"), -0.0001, 1, 0.5])
+    @pytest.mark.parametrize("oi", [True, False, "0", "", [], {}, float("nan"), -0.0001, 1, 0.5])
     def test_only_a_number_equal_to_zero_is_void(self, oi):
         alert = index_alert("x", {"oi": oi})
         assert void_reason(alert) is None
@@ -318,7 +318,10 @@ class TestScoresLeaveThemOut:
         assert ledger.by_slot() == {} and ledger.totals().trades == 0
         assert ledger.left_out() == (1, -500)
 
-    def test_a_void_no_fill_is_not_a_no_fill_of_the_slot(self, make_book, engine):
+    def test_a_void_no_fill_stays_in_the_no_fill_figure(self, make_book, engine):
+        """Review: a void NO_FILL used to leave the "No fill" column silently. It carries no
+        money, so no score changes by keeping it: the figure counts every alert that never
+        filled, and 04_OPERATIONS says so."""
         from onelot.paper.ledger import PaperLedger
 
         book = make_book()
@@ -332,7 +335,20 @@ class TestScoresLeaveThemOut:
                 .values(status="NO_FILL", close_reason="NO_FILL", updated_at=ist(THU, 10, 30))
             )
         (row,) = PaperLedger(engine).by_slot().values()
-        assert row.no_fill == 0 and row.left_out_trades == 0
+        assert row.no_fill == 1 and row.trades == 1 and row.net_paise == 100
+        assert row.left_out_trades == 0 and PaperLedger(engine).left_out() == (0, 0)
+
+    def test_a_void_close_with_an_unknown_net_is_left_out_by_neither_figure(
+        self, make_book, engine
+    ):
+        """Review: the day's line counted it (net as 0) while the ledger's did not."""
+        from onelot.paper.ledger import PaperLedger
+
+        book = make_book()
+        open_index(book, "v0", {"oi": 0.0})
+        write_closed(engine, "v0", exit_ts=ist(THU, 11, 0), gross_paise=-500, net_paise=None)
+        assert "left_out_trades" not in book.day_totals(THU)
+        assert PaperLedger(engine).left_out() == (0, 0)
 
     def test_a_day_made_only_of_void_trades_is_not_the_last_session(self, make_book, engine):
         book = make_book()
@@ -380,6 +396,73 @@ class TestAnOpenVoidTradeIsStillManaged:
         got = {r["alert_id"]: r for r in table_rows(engine, paper_trades)}
         for key in ("status", "close_reason", "entry_paise", "exit_paise", "net_paise"):
             assert got["v0"][key] == got["s0"][key]
+
+
+class TestTheStartPass:
+    def test_a_new_unmarked_void_trade_is_marked_beside_one_already_marked(
+        self, make_book, engine, caplog
+    ):
+        """Review: without the guard the batch hits the existing mark, fails whole, and the new
+        trade stays unmarked (the error was only logged)."""
+        book = make_book()
+        open_index(book, "v1", {"oi": 0.0})
+        open_index(book, "v2", {"oi": 0.0}, ist(THU, 10, 6, 3))
+        with engine.begin() as conn:
+            conn.execute(delete(paper_void).where(paper_void.c.alert_id == "v2"))
+        with caplog.at_level("WARNING"):
+            assert book._mark_void() == 1
+        assert [m["alert_id"] for m in marks(engine)] == ["v1", "v2"]
+        assert not [r for r in caplog.records if r.levelname == "WARNING"]
+        assert book._mark_void() == 0
+
+    def test_a_sound_trade_is_never_marked_and_a_stock_trade_is_never_a_candidate(
+        self, make_book, engine
+    ):
+        book = make_book()
+        open_index(book, "s1", {"oi": 500.0})
+        book.on_alert(make_alert("STOCK", alert_id="k1"), ist(THU, 10, 5, 3))
+        assert book._mark_void() == 0 and marks(engine) == []
+
+
+class TestTheApiFigures:
+    """The functions the routes call, on a real book (no HTTP needed)."""
+
+    def desk(self, book):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(paper=book, delivery=None)
+
+    def test_a_void_open_trade_is_not_in_the_open_column(self, make_book, engine):
+        from onelot.api.server import _paper_scoreboard
+
+        book = make_book()
+        open_index(book, "s0", {"oi": 500.0})
+        close(engine, "s0", 100, ist(THU, 11, 0))
+        open_index(book, "s1", {"oi": 500.0}, ist(THU, 10, 6, 3))  # open, sound
+        open_index(book, "v1", {"oi": 0.0}, ist(THU, 10, 7, 3))  # open, void
+        (row,) = _paper_scoreboard(self.desk(make_book()))  # a restart: the book reloads its open
+        assert row["open"] == 1 and row["trades"] == 1
+
+    def test_the_paper_payload_carries_left_out_for_today_and_the_last_session(
+        self, make_book, engine
+    ):
+        from onelot.api.server import _paper_payload
+
+        book = make_book()
+        open_index(book, "w0", {"oi": 0.0}, ist(WED, 10, 5, 3))
+        close(engine, "w0", -700, ist(WED, 11, 0))
+        open_index(book, "w1", {"oi": 500.0}, ist(WED, 10, 6, 3))
+        close(engine, "w1", 300, ist(WED, 11, 1))
+        open_index(book, "v0", {"oi": 0.0})
+        close(engine, "v0", -500, ist(THU, 11, 0))
+        body = _paper_payload(self.desk(book), ist(THU, 16, 0))
+        left = {"trades": 1, "net": "-5.00", "reason": LEFT_OUT_NOTE}
+        assert body["totals_today"]["left_out"] == left and body["totals_today"]["closed"] == 0
+        assert sorted(t["alert_id"] for t in body["trades"] if "void_reason" in t) == ["v0", "w0"]
+        later = _paper_payload(self.desk(book), ist(dt.date(2026, 10, 30), 9, 0))
+        assert later["last_session"]["totals"]["closed"] == 1
+        assert later["last_session"]["totals"]["left_out"]["net"] == "-7.00"
+        assert "left_out" not in later["totals_today"]
 
 
 def test_paper_void_is_one_row_per_trade(make_book, engine):

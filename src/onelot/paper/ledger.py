@@ -18,7 +18,7 @@ exit was never priced (net NULL) are not trades the ledger counts.
 US-105: a trade marked in `paper_void` (its contract was not tradeable) is left out of every
 figure here. The CLOSED ones with a net are counted apart (`PaperLedger.left_out()` and
 `StrategyTotals.left_out_*`), so a score can say how many it left out; a void NO_FILL has no money
-and is simply not counted.
+and stays in the slot's No fill count (nothing is scored by it).
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import threading
+import weakref
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -81,6 +82,10 @@ class LedgerTotals:
     net_paise: int
 
 
+# engines whose paper_void table was already checked (weak: a new engine is checked afresh)
+_VOID_TABLE_SEEN: weakref.WeakSet[Engine] = weakref.WeakSet()
+
+
 @dataclass
 class StrategyTotals:
     """One strategy's closed paper trades that have a net (owner feedback OF-5): the same
@@ -112,7 +117,9 @@ class PaperLedger:
         self.engine = engine
         self._warned: OrderedDict[tuple[object, str], None] = OrderedDict()
         self._warn_lock = threading.Lock()
-        METADATA.create_all(engine, tables=[paper_void])  # no-op if present (US-105)
+        if engine not in _VOID_TABLE_SEEN:  # once per engine: a request builds a ledger
+            METADATA.create_all(engine, tables=[paper_void])  # no-op if present (US-105)
+            _VOID_TABLE_SEEN.add(engine)
 
     def left_out(
         self,
@@ -280,8 +287,10 @@ class PaperLedger:
         out: dict[K, StrategyTotals] = {}
         left: dict[K, list[int]] = {}  # US-105: void closes per key: [count, net]
         for trade_id, strategy, timeframe, kind, status, exit_ts, void_id, raw_risk, *raw in rows:
-            if void_id is not None:  # marked void: never in a figure, counted apart
-                if status == "CLOSED" and raw[-1] is not None:
+            if void_id is not None:  # marked void: never in a money figure, counted apart
+                if status == "NO_FILL":  # no money: it stays in the No fill count, said in the docs
+                    out.setdefault(key(strategy, timeframe, kind), StrategyTotals()).no_fill += 1
+                elif status == "CLOSED" and raw[-1] is not None:
                     money = self._money(trade_id, raw)
                     if money is not None:
                         pair = left.setdefault(key(strategy, timeframe, kind), [0, 0])

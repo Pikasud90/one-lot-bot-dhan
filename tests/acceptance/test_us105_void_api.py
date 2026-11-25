@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 
+import us001_helpers as H
 from sqlalchemy import select
 from test_of5_alert_lifecycle import (  # noqa: F401  (fixtures)
     _offline,
@@ -143,3 +144,68 @@ class TestTheDeskAndTheApi:
         (t,) = [t for t in body["trades"] if t["alert_id"] == alert["id"]]
         assert t["status"] == "CLOSED" and t["net"] is not None  # listed, as recorded
         assert t["void_reason"] == VOID_REASON
+
+
+def archive_rows(strategy: str, now: dt.datetime, voids: int, sound: int) -> list[dict]:
+    """Closed archive outcomes of one strategy, created a day before `now`."""
+    made = (now - dt.timedelta(days=1)).isoformat()
+    rows = []
+    for i in range(voids + sound):
+        row = closed_alert(
+            None, strategy, f"{strategy}{i}", -100.0 if i < voids else 40.0, i < voids
+        )
+        row.update(created_at=made, series_key="SBIN", instrument_key="SBIN", horizon="intraday")
+        rows.append(row)
+    return rows
+
+
+class TestTheRealDeskPath:
+    """Review findings: the left-out figure and the confidence record were never checked on the
+    real Desk (mutating them away left every test green)."""
+
+    def seeded(self, rig, monkeypatch, voids=2, sound=4):
+        now = H.mid_session(rig.desk, "SBIN")
+        rig.desk.archive = archive_rows("zz", now, voids, sound)
+        rig.desk._audit_archive(now)
+        monkeypatch.setattr("onelot.desk.desk.now_ist", lambda: now)
+        return now
+
+    def test_signals_view_and_the_route_say_what_the_audit_scoreboard_left_out(
+        self, rig, monkeypatch
+    ):
+        self.seeded(rig, monkeypatch)
+        want = {"trades": 2, "net": -200.0, "reason": LEFT_OUT_NOTE}
+        assert rig.desk.scoreboard["zz"]["n"] == 4
+        assert rig.desk.signals_view()["scoreboard_left_out"] == want
+        assert api(rig.desk).get("/api/desk/signals").json()["scoreboard_left_out"] == want
+
+    def test_the_snapshot_carries_it_beside_the_scoreboard(self, rig, monkeypatch):
+        now = self.seeded(rig, monkeypatch)
+        rig.desk._rebuild_snapshot(now, None)
+        snap = rig.desk.snapshot()
+        assert snap["scoreboard"]["zz"]["n"] == 4
+        assert snap["scoreboard_left_out"] == {"trades": 2, "net": -200.0, "reason": LEFT_OUT_NOTE}
+
+    def test_with_nothing_void_neither_key_appears(self, rig, monkeypatch):
+        now = self.seeded(rig, monkeypatch, voids=0)
+        rig.desk._rebuild_snapshot(now, None)
+        assert "scoreboard_left_out" not in rig.desk.snapshot()
+        assert "scoreboard_left_out" not in rig.desk.signals_view()
+
+    def test_a_new_alerts_confidence_reads_the_unfiltered_record(self, rig, monkeypatch):
+        """No alert text changes (V5): the confidence of a new alert is computed from the record
+        with the void alerts kept, and differs from what the filtered scoreboard would give."""
+        t = rig.desk.trackers["SBIN"]
+        name = t.slots[0].cfg.name
+        now = H.mid_session(rig.desk, "SBIN")
+        rig.desk.archive = archive_rows(name, now, voids=5, sound=1)
+        rig.desk._audit_archive(now)
+        assert rig.desk.scoreboard[name]["n"] == 1  # the filtered score has too little evidence
+        seen: list = []
+        import onelot.desk.desk as desk_module
+
+        real = desk_module.confidence
+        monkeypatch.setattr(desk_module, "confidence", lambda *a: (seen.append(a[2]), real(*a))[1])
+        alert = H.raise_alert(rig.desk, "SBIN", now=now)
+        assert seen[0]["n"] == 6  # all six, void ones kept
+        assert alert["confidence"]["parts"]["live_note"].startswith("6 archived alerts")

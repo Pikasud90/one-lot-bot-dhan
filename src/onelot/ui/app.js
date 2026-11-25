@@ -707,7 +707,8 @@ const paperShown = (trades, today) => [...paperOpen(trades), ...paperClosedOn(tr
 // US-032: a session date "2026-10-30" -> "Fri 30 Oct", read from the string itself (never the browser's zone); anything else is shown as it came.
 const paperDay = (d) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d ?? "")); const t = m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])) : null; return t && t.getUTCMonth() === +m[2] - 1 && t.getUTCDate() === +m[3] ? `${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][t.getUTCDay()]} ${+m[3]} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][+m[2] - 1]}` : (d == null ? "–" : String(d)); };
 const paperSession = (p) => (p && p.last_session && typeof p.last_session === "object" && /^\d{4}-\d{2}-\d{2}$/.test(String(p.last_session.date))) ? p.last_session : null;
-const paperFallback = (p) => !!paperSession(p) && !!p.totals_today && p.totals_today.closed === 0;
+// US-105: a day whose only closes were left out of the score is not a quiet day: it says so, with its left-out line.
+const paperFallback = (p) => !!paperSession(p) && !!p.totals_today && p.totals_today.closed === 0 && !(p.totals_today.left_out && Number(p.totals_today.left_out.trades) > 0);
 const paperEmpty = (msg) => `<div class="empty-inline"><svg class="mascot sm"><use href="#m-cow-sleep"/></svg> ${esc(msg)}</div>`;
 const paperGroup = (label) => `<tr class="pgroup"><td colspan="10">${esc(label)}</td></tr>`;
 const paperHead = (s, note) => `<div class="paper-head"><b>Last session · ${esc(paperDay(s.date))}</b>${note ? ` <span class="dim">${esc(note)}</span>` : ""}</div>`;

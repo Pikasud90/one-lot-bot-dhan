@@ -294,6 +294,10 @@ with an unknown open interest (older ones), model estimates and stock alerts are
   its row carries the tag "not counted: the contract had no open interest". The paper trade is
   still listed, with the same tag.
 - A marked trade that is still open is managed and exits as usual; it is only never counted.
+- A marked trade that never filled (NO_FILL) carries no money, so it stays in its slot's "No
+  fill" count. Only closes with a known net are counted in the left-out line.
+- A day whose only closes were marked shows that day, with its left-out line, not "nothing
+  closed today yet".
 - The mark is written when the trade opens, and a pass at every desk start marks the ones
   already stored (a second pass changes nothing). The code never removes a mark.
 - The delivery and wide-list books, the Simulator and the fill-cost report are not changed.
