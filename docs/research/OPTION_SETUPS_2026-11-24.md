@@ -10,8 +10,8 @@ main checkout. Read only; no Dhan request. Three numbers in a row are TUNE / CHO
    intraday: on real premiums 32 of them lose and the best earns +4.33% (t +0.5).
 3. Long volatility: the buyer of both at-the-money options did not earn on any day type. Pooled
    09:20 to 15:20, −1.13% a trade (t −2.0) on 2,801 priced trades; best day type +0.31% (t +0.1).
-   An independent recompute gets −0.7 to −1.0 (t −1.2 to −1.7); the put is a parity value, so
-   "the buyer paid" is likely but not shown (Independent check).
+   Settled on real puts of NIFTY and BANKNIFTY (25 Nov): the buyer lost 2.61% a pair (t −5.2,
+   95% −3.59 to −1.63) on 2,444 trades, worse than the parity put said (section at the end).
 4. India VIX: it tells the SIZE of the next move (|open to close| with the previous VIX level,
    r +0.29), not its direction, and not what a straddle earns (r −0.03); a straddle earns only
    on days VIX itself rises during the session, which is not known at 09:20.
@@ -163,16 +163,67 @@ other setup 0 (placebo 0 to 0.05). No real count exceeds luck's.
   2022-08 are right; NIFTY 2025-05 (Wed 28) is a day early (real Thursday 29): three S3 rows. All
   116 priced S4 days sit on store expiries (two borderline at 0.26% and 0.155% time value).
 
+## Settled on real puts (25 Nov)
+US-098: `scripts/real_puts_fetch.py`, `long_vol_real.py`, `data/research/real_puts_2026-11-25/`.
+NIFTY and BANKNIFTY; both legs are their OWN real prints of the strike bought, at both ends.
+- Fetch: 11,079 requests by the app's adapter (3 before 15:40, then one a second to 19:55); none
+  refused, 3 failed in a network outage (17:38 to 17:48; stopped, resumed). At-the-money put and
+  call on 1,237 of 1,238 sessions of each index, and the strikes sold (up to ten steps away).
+- Checks: median 375 minutes a day; 09:20 put strike within half a step of Dhan's spot on 1,235
+  of 1,236 and 1,233 of 1,234 days; bad prints 0.26% and 0.17%; 8,770 of 9.8 million bars had
+  another index's spot (dropped); 302 day blocks the store held came back identical.
+- Left out: 32 of 2,476 sessions at 09:20 to 15:20, 17 with the strike over ten steps away at
+  15:20 (Dhan serves no further; at intrinsic value they move −2.61 to −2.66). The −30% / +60%
+  rule watches real closes of both legs 81% of the minutes, else the minute's real at-the-money
+  volatility; its fills are real.
+
+| cell (both legs real) | trades | % a pair (t) | win | TUNE / CHOOSE / TEST | parity put before | status |
+|---|---|---|---|---|---|---|
+| POOL 09:20 15:20 ALL | 2444 | −2.61 (−5.2) | 26% | −1.77 / −4.44 / −3.30 | −1.15 same trades, −0.94 all | REJECTED |
+| NIFTY 09:20 15:20 ALL | 1229 | −2.06 (−3.8) | 27% | −1.30 / −3.15 / −3.26 | −0.57 | REJECTED |
+| BANKNIFTY 09:20 15:20 ALL | 1215 | −3.17 (−5.2) | 24% | −2.25 / −5.72 / −3.35 | −1.30 | AVOID |
+| POOL 09:20 15:20 ACTIVE-EXP | 1205 | −3.46 (−6.1) | 25% | −2.53 / −4.74 / −4.94 | −1.52 | AVOID |
+| POOL 09:20 15:20 CALM-EXP | 1239 | −1.79 (−2.3) | 26% | −1.04 / −4.15 / −1.70 | −0.37 | REJECTED |
+| POOL 09:20 15:20 VIX-UP | 346 | −3.60 (−2.9) | 29% | −3.15 / −6.40 / −2.98 | −2.63 | REJECTED |
+| POOL 09:20 15:20 VIX-DOWN | 301 | −3.36 (−3.9) | 25% | −2.86 / −6.93 / −2.80 | −1.27 | AVOID |
+| POOL 09:20 15:20 EXPIRY | 116 | −5.70 (−0.7) | 35% | +10.38 / −31.18 / −25.80 | +2.27 | REJECTED |
+| POOL 09:20 12:00 ALL | 2463 | −2.09 (−7.3) | 25% | −1.69 / −2.28 / −3.10 | −1.57 | AVOID |
+| POOL 09:20 stop ALL | 2446 | −2.82 (−8.0) | 25% | −2.44 / −3.59 / −3.17 | −1.84 | AVOID |
+| POOL 09:45 15:20 ALL | 2452 | −2.85 (−6.4) | 24% | −2.09 / −5.05 / −2.95 | −1.36 | AVOID |
+| POOL 09:45 12:00 ALL | 2468 | −2.19 (−9.6) | 21% | −1.93 / −2.67 / −2.48 | −1.88 | AVOID |
+| POOL 09:45 stop ALL | 2457 | −2.76 (−8.2) | 23% | −2.36 / −3.74 / −2.98 | −1.94 | AVOID |
+
+Counts: 144 cells, 120 examined, 0 discovered / confirmed / passed; luck 0 / 0 / 0 (placebo),
+0.72 / 0.12 / 0.06 (arithmetic). 63 AVOID, placebo 59.9 (max 79): the loss belongs to the pair,
+not to a kind of day. All cells in `cells.csv` and `report.txt`. The three answers:
+1. Yes, the buyer of both options paid, on all days and on every kind of day: pooled 09:20 to
+   15:20 −2.61% a pair (95% −3.59 to −1.63), median −3.9%, negative in all three periods. No
+   kind of day is positive beyond luck: the best examined cell is NIFTY NR7 +0.48% (t +0.3;
+   +1.59 / −0.89 / −1.86); the earlier EXPIRY +2.27% is −5.70% on real puts (t −0.7, 116 trades).
+2. The parity put was a median +4.3% off the real put (IQR −5.1 to +14.9%) over 925,258 minutes
+   on 1,237 days (dividend yield 1.2%; at 0% the median is −0.3%); at 09:20 +3.1%, at 15:20
+   +5.8%. The 12-day sample's +13% was not typical. It biased the answer toward zero: on the
+   same 2,014 trades parity read −1.15%, real −1.93% (parity less real +0.78, t +3.7), because
+   it priced the put dearer at the exit than at the entry. The rest of the gap is the sample:
+   the 430 sessions the old store lacked lose −5.8% a pair; the old store was not a random draw.
+3. One leg alone, at the money, 09:20 to 15:20, one lot, real: the call −3.07% (t −2.7, 95% −5.32
+   to −0.82; −1.56 / −4.31 / −6.37), the put −2.17% (t −1.6, 95% −4.77 to +0.43; −2.32 / −4.39 /
+   +0.51). A buyer without a view pays about 2 to 3% of the premium a day.
+Doubts: monthly contracts of two indices only; the earlier expiry calendar; a partly estimated
+stop trigger; the model's spread and charges, not measured spreads.
+
 ## Rows for the setup book
 | Instrument | Kind | Setup and preset | Timeframe | Condition | Exit | Trades a year | % a trade TUNE / CHOOSE / TEST (t whole span) | Real-premium or cost note | Status | Remark |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 4 indices, pool | option same-day | S1 last-half-hour momentum, b | 1m | 14:30 to 14:59 agrees | 15:15 | 500 | −1.04 / −1.86 / −1.87 (−6.1) | real like for like −2.17 | AVOID | loses in every index and variant |
 | 4 indices, pool | option same-day | S1, size filter | 1m | first return above its 60-day median | 15:15 | 470 | −2.08 / −1.95 / −1.34 (−9.0) | real −2.73 | AVOID | larger first moves lose more |
 | 4 indices, pool | option same-day | S2 opening range 30m | 1m | gap over 0.5 sd | ratchet, 15:15 | 300 | +1.50 / −1.97 / −1.57 (+0.5) | real −0.38 | REJECTED | best of 50 cells, TUNE t +1.5 |
-| 4 indices, pool | option pair same-day | S3 long straddle 09:20 | 1m | any day type | 15:20 | 990 | real −0.33 / −2.12 / −1.99 (−2.0) | model +2.43 is a model artefact | REJECTED | two lots; pays on every day type |
-| 4 indices, pool | option pair same-day | S3 long straddle 09:45 | 1m | any | 12:00 | 590 | real −1.79 / −1.84 / −2.53 (−6.8) | real reading, put by parity | AVOID | morning IV fall costs the most |
-| 4 indices, pool | option pair same-day | S3 long straddle 09:20 | 1m | any | −30% / +60%, 15:20 | 570 | real −1.95 / −2.24 / −2.71 (−5.2) | real reading | AVOID | the stop locks in the IV fall |
-| 4 indices, pool | option pair same-day | S3 long straddle 09:20 | 1m | VIX-UP | 12:00 | 80 | real −3.81 / −2.65 / −4.25 (−4.5) | real reading | AVOID | after a VIX jump IV keeps falling |
+| NIFTY and BANKNIFTY, pool | option pair same-day | S3 long straddle 09:20 | 1m | any day type | 15:20 | 490 | −1.77 / −4.44 / −3.30 (−5.2) | both legs real (25 Nov); parity read −0.94 | REJECTED | two lots; pays on every day type, worst after an active day |
+| NIFTY and BANKNIFTY, pool | option pair same-day | S3 long straddle 09:45 | 1m | any | 12:00 | 490 | −1.93 / −2.67 / −2.48 (−9.6) | both legs real | AVOID | morning IV fall costs the most |
+| NIFTY and BANKNIFTY, pool | option pair same-day | S3 long straddle 09:20 | 1m | any | −30% / +60%, 15:20 | 490 | −2.44 / −3.59 / −3.17 (−8.0) | fills real, trigger 81% real | AVOID | the stop locks in the IV fall |
+| NIFTY and BANKNIFTY, pool | option pair same-day | S3 long straddle 09:20 | 1m | VIX-UP | 12:00 | 70 | −3.15 / −4.05 / −3.13 (−4.7) | both legs real | AVOID | after a VIX jump IV keeps falling |
+| NIFTY and BANKNIFTY, pool | option same-day | at-the-money call alone 09:20 | 1m | any | 15:20 | 490 | −1.56 / −4.31 / −6.37 (−2.7) | real, one lot | REJECTED | a buyer without a view pays about 3% a day |
+| NIFTY and BANKNIFTY, pool | option same-day | at-the-money put alone 09:20 | 1m | any | 15:20 | 490 | −2.32 / −4.39 / +0.51 (−1.6) | real, one lot | REJECTED | about 2% a day |
 | 4 indices, pool | option same-day | S4 expiry afternoon 14:30, 0.25 ATR | 1m | monthly EXPIRY | 15:15 or −40% | 30 | real +2.70 / +109.6 / −16.7 (+0.7) | model unusable on expiry day | REJECTED | few days, carried by a few winners |
 | 4 indices, pool | option same-day | S5 call after VIX-UP | 1m | VIX rose over 5% | ratchet, 15:15 | 140 | +1.49 / −3.20 / +0.85 (+0.5) | real −0.27 | REJECTED | TUNE t +0.8 |
 | 4 indices, pool | option same-day | S5 put after VIX-DOWN | 1m | VIX fell over 5% | ratchet, 15:15 | 120 | −2.15 / −6.82 / +0.03 (−1.9) | real −3.40 | REJECTED | falls after VIX drops are not there |

@@ -88,9 +88,12 @@ real premiums, and no filter suggested by the live record improves it.
 any edge found. `mean_reversion` at 5m, the desk's stock slot until 12 November, lost 0.16% a
 trade in every period, on every stock, under every condition, and lost the same live.
 
-**Buying both a call and a put (long volatility): it earned on no kind of day** known before
-the open. The size of the loss is not proven, because the store holds real put prices for
-only 12 days.
+**Buying both a call and a put (long volatility): it loses on every kind of day.** Settled on
+25 November with real prices of both legs of NIFTY and BANKNIFTY over five years: bought at
+09:20 and sold at 15:20, the pair lost 2.61% of its cost a day (95% interval −3.59 to −1.63,
+2,444 trades, negative in all three periods), more than the earlier parity estimate of the put
+said (−0.94). No kind of day known before the open is positive beyond luck. The call alone
+loses 3.1% a day and the put alone 2.2%: buying at the money without a view costs money.
 
 **Facts that held everywhere, and how to use them:**
 - The SIZE of the next move can be told: an active session tends to follow an active one
@@ -145,9 +148,9 @@ each `_2026-11-24.md`); earlier work is listed in `STRATEGIES_TESTED_2026-11-12.
 | SENSEX | option same-day | ema_cross high | 30m | VIX below its median | desk rule | 19 | +2.93 / +4.37 / +1.38 (+2.2) | model; live spreads wide | WATCH | 97 trades in five years | setup grid |
 | 4 indices, pool | option same-day | S1 last-half-hour momentum, b | 1m | 14:30 to 14:59 agrees | 15:15 | 500 | −1.04 / −1.86 / −1.87 (−6.1) | real like for like −2.17 | AVOID | loses in every index and variant | option setups |
 | 4 indices, pool | option same-day | S1, size filter | 1m | first return above its 60-day median | 15:15 | 470 | −2.08 / −1.95 / −1.34 (−9.0) | real −2.73 | AVOID | larger first moves lose more | option setups |
-| 4 indices, pool | option pair same-day | S3 long straddle 09:45 | 1m | any | 12:00 | 590 | real −1.79 / −1.84 / −2.53 (−6.8) | real reading, put by parity | AVOID | morning IV fall costs the most | option setups |
-| 4 indices, pool | option pair same-day | S3 long straddle 09:20 | 1m | any | −30% / +60%, 15:20 | 570 | real −1.95 / −2.24 / −2.71 (−5.2) | real reading | AVOID | the stop locks in the IV fall | option setups |
-| 4 indices, pool | option pair same-day | S3 long straddle 09:20 | 1m | VIX-UP | 12:00 | 80 | real −3.81 / −2.65 / −4.25 (−4.5) | real reading | AVOID | after a VIX jump IV keeps falling | option setups |
+| NIFTY and BANKNIFTY, pool | option pair same-day | S3 long straddle 09:45 | 1m | any | 12:00 | 490 | −1.93 / −2.67 / −2.48 (−9.6) | both legs real | AVOID | morning IV fall costs the most | option setups |
+| NIFTY and BANKNIFTY, pool | option pair same-day | S3 long straddle 09:20 | 1m | any | −30% / +60%, 15:20 | 490 | −2.44 / −3.59 / −3.17 (−8.0) | fills real, trigger 81% real | AVOID | the stop locks in the IV fall | option setups |
+| NIFTY and BANKNIFTY, pool | option pair same-day | S3 long straddle 09:20 | 1m | VIX-UP | 12:00 | 70 | −3.15 / −4.05 / −3.13 (−4.7) | both legs real | AVOID | after a VIX jump IV keeps falling | option setups |
 | Four indices | option same-day | intraday_momentum, any | any | all | desk rule | 800 | −1.83 / −1.20 / −1.20 (−9.5) | model | AVOID | loses in every period on every index | setup grid |
 | 18 stocks | stock same-day | mean_reversion, any | 5m | all | desk rule | 10,000 | −0.16 / −0.16 / −0.16 (−90) | 16.6 bp round trip | AVOID | no condition helps; the old desk slot | setup grid |
 | NIFTY, BANKNIFTY, FINNIFTY, SENSEX | option same-day | microtrend, Supertrend(14, 1.7) x 7 | 3m | entry before 10:15 | 3 of 7 or 15:15 | 146 | −0.20 / +1.92 / −1.86 (−0.1) | real-like N+BN −0.57 | REJECTED | TUNE not above zero; the live first-hour loss is not in the history | live alerts |
@@ -156,7 +159,9 @@ each `_2026-11-24.md`); earlier work is listed in `STRATEGIES_TESTED_2026-11-12.
 | NIFTY, BANKNIFTY, FINNIFTY, SENSEX | option same-day | microtrend | 3m | India VIX fell the session before | 3 of 7 or 15:15 | 327 | +0.21 / +0.54 / −1.12 (+0.1) | real-like −0.99 | REJECTED | about flat on the model, negative on real premiums | live alerts |
 | NIFTY, BANKNIFTY, FINNIFTY, SENSEX | option same-day | microtrend | 3m | entry 3 minutes late | 3 of 7 or 15:15 | 613 | −0.13 / −0.15 / −1.52 (−1.0) | real-like −1.33 | REJECTED | a delay costs 0.04 points a trade: harmless, but the rule has no edge to keep | live alerts |
 | 4 indices, pool | option same-day | S2 opening range 30m | 1m | gap over 0.5 sd | ratchet, 15:15 | 300 | +1.50 / −1.97 / −1.57 (+0.5) | real −0.38 | REJECTED | best of 50 cells, TUNE t +1.5 | option setups |
-| 4 indices, pool | option pair same-day | S3 long straddle 09:20 | 1m | any day type | 15:20 | 990 | real −0.33 / −2.12 / −1.99 (−2.0) | model +2.43 is a model artefact | REJECTED | two lots; pays on every day type | option setups |
+| NIFTY and BANKNIFTY, pool | option pair same-day | S3 long straddle 09:20 | 1m | any day type | 15:20 | 490 | −1.77 / −4.44 / −3.30 (−5.2) | both legs real (25 Nov); parity read −0.94 | REJECTED | two lots; pays on every day type, worst after an active day | option setups |
+| NIFTY and BANKNIFTY, pool | option same-day | at-the-money call alone 09:20 | 1m | any | 15:20 | 490 | −1.56 / −4.31 / −6.37 (−2.7) | real, one lot | REJECTED | a buyer without a view pays about 3% a day | option setups |
+| NIFTY and BANKNIFTY, pool | option same-day | at-the-money put alone 09:20 | 1m | any | 15:20 | 490 | −2.32 / −4.39 / +0.51 (−1.6) | real, one lot | REJECTED | about 2% a day | option setups |
 | 4 indices, pool | option same-day | S4 expiry afternoon 14:30, 0.25 ATR | 1m | monthly EXPIRY | 15:15 or −40% | 30 | real +2.70 / +109.6 / −16.7 (+0.7) | model unusable on expiry day | REJECTED | few days, carried by a few winners | option setups |
 | 4 indices, pool | option same-day | S5 call after VIX-UP | 1m | VIX rose over 5% | ratchet, 15:15 | 140 | +1.49 / −3.20 / +0.85 (+0.5) | real −0.27 | REJECTED | TUNE t +0.8 | option setups |
 | 4 indices, pool | option same-day | S5 put after VIX-DOWN | 1m | VIX fell over 5% | ratchet, 15:15 | 120 | −2.15 / −6.82 / +0.03 (−1.9) | real −3.40 | REJECTED | falls after VIX drops are not there | option setups |
@@ -203,8 +208,11 @@ each `_2026-11-24.md`); earlier work is listed in `STRATEGIES_TESTED_2026-11-12.
    the same exposure; a book that only matches the basket shows no edge. Since US-101 the rule's
    trades also trail the same stocks held over the same days (−0.16% a trade over the span; the
    basket carries no costs), so the test should score each trade against that basket too.
-2. Real put prices from the broker's history, to settle the long-volatility question and to
-   price the Simulator's put trades exactly.
+2. Done on 25 November: the real put and call prices of NIFTY and BANKNIFTY (monthly
+   contracts, 2021-11-08 to 2026-11-07) settled the long-volatility question (it loses on
+   real prices: section 2 and the register) and are merged into the option store, so the
+   Simulator prices those puts exactly (`scripts/merge_option_bars.py`: 21,279 day blocks
+   added, none replaced). Left: FINNIFTY and SENSEX puts, and the weekly contracts.
 3. The four WATCH option cells, followed on paper with real quotes for three months.
 4. Decided on 25 November: the four indices stay (the owner's rule). Each option alert now
    carries its live spread and warns from 1% a side, so the spreads on FINNIFTY and SENSEX are
@@ -228,3 +236,5 @@ each `_2026-11-24.md`); earlier work is listed in `STRATEGIES_TESTED_2026-11-12.
 - 2026-11-25: first edition. Five studies of 24 November 2026: the desk's own live alerts,
   new option setups and long volatility, delivery setups on 222 stocks, the volume study, and
   the setup grid (22 instruments, 3,948 cells).
+- 2026-11-25: long volatility settled on real puts of NIFTY and BANKNIFTY (US-098): the S3 rows
+  are corrected, the call alone and the put alone added.
