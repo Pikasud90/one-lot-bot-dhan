@@ -207,7 +207,7 @@ places an order, and the desk 18 keep working exactly as above.
   sessions without one (10, on the pullback slot in `config/desk.yaml`) the stock is dormant:
   - Its open paper trade is closed at its last stored close, booked as a sale, with the exit
     reason NO_DATA. An entry still pending is cancelled and never filled. The place within
-    the cap is free for a new signal of that same evening.
+    the cap is free for a new signal of that same evening, on whichever try releases.
   - The round stops waiting for the stock, so its missing bar costs no extra try. The stock
     is still asked for every evening, and it is read again when its bars return. A fetch
     now starts before the stock's last stored bar, so a long silence leaves no hole in the
@@ -217,26 +217,30 @@ places an order, and the desk 18 keep working exactly as above.
     holiday the calendar does not list, a special session off the calendar (a Muhurat) and
     an evening on which the bars of a few stocks only came are not counted. With no broker
     data at all nothing is ever released.
-  - Two guards. The desk must find the stock without a new bar on three evening rounds in
-    a row (two that count and the one that releases): after it was off for two weeks, one
-    bad evening releases nothing. And the stock turns dormant only at the round after the
-    one that counted its tenth session, if it still has no bar: that bar has had a day to
-    arrive. With the desk running every evening that is the eleventh evening. A new bar
-    starts both counts again. One case is left as it falls: a stock that trades again on
-    the very evening it is released, its bar coming after that round's first try, stays
-    released.
-  - An exit held for review is released on the same count: on the 10th session counted from
-    the one that first held it, once two evening rounds in a row before have seen it held,
-    at that session's close, with the exit reason REVIEW. Its result may be on another price
-    basis than its entry: check it by hand.
+  - When: two evening rounds must each find the stock with 10 missing sessions or more, and
+    the round of the next session releases it if it still has no bar. With the desk running
+    every evening the rounds of the 10th and the 11th session count and the round of the
+    12th releases. An evening that finds fewer than 10 confirms nothing: after the desk was
+    off for weeks, a failed request before the break and two bad evenings after it release
+    nothing; the third does. Only a stock the try asked the broker for is counted or
+    released: a round stopped at 09:00 says nothing of the stocks it did not reach. A new
+    bar starts both counts again. One case is left as it falls: a stock that trades again
+    on the very evening it is released, its bar coming after that try, stays released.
+  - An exit held for review is released on the same count of the sessions it is held: two
+    rounds that each see it held for 10 sessions or more, then the next round, with the
+    exit reason REVIEW. No money is booked for it (no exit price, no charges, no net): its
+    price basis is in doubt, and the page says "result not booked". Check it by hand.
   - Neither is the rule's own exit. The score counts these trades apart ("Not in the
-    score"), the round's line names them ("released without the rule's exit", "dormant, not
-    waited for", "daily bars are back") and the block lists the dormant stocks with their
-    last bar. Nothing is sent to the phone: if you hold the shares, decide by hand.
+    score"; its net is that of the NO_DATA releases, the ones with a booked result), the
+    round's line names them ("released without the rule's exit", "dormant, not waited for",
+    "daily bars are back") and the block lists the stocks with "No daily price for 10
+    trading days or more" and their last bar. The closed trades are listed by the session
+    they ended on. Nothing is sent to the phone: if you hold the shares, decide by hand.
   - Why 10: the longest hole in one stock's bars in the study's 16 years is 5 sessions, and
     one stock traded only once a week for months (4 sessions missing between its bars). A
-    small number would release trades of stocks that still trade. `dormant_after: 0`
-    switches all of this off: the desk as before US-103.
+    small number would release trades of stocks that still trade; the desk logs a warning
+    at its start for a value of 1 to 4. `dormant_after: 0` switches dormancy and the REVIEW
+    release off. It does not switch off the wider fetch (from before the last stored bar).
 - Where to look: Home and the Live Desk's Stocks card show the Wide list block (the last
   round, the places in use, the open trades of both tiers, the score of both tiers beside the
   backtest's figure, the closed trades and the stocks closest to a signal). The same as data:
