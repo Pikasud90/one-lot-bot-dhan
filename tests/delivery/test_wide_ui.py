@@ -24,9 +24,21 @@ from unittest.mock import MagicMock
 import pytest
 
 from onelot.api.server import create_app
+from onelot.data.store import save_bars
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from wide_helpers import BASE, START, at, closes, frame, source_of, stock, weekdays, wide_desk  # noqa: E402
+from wide_helpers import (
+    BASE,
+    START,
+    Broker,
+    at,
+    closes,
+    frame,
+    source_of,
+    stock,
+    weekdays,
+    wide_desk,
+)  # noqa: E402
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
@@ -161,3 +173,25 @@ def test_the_route_reads_the_wide_list_and_writes_nothing(tmp_path):
         .status_code
         == 405
     )
+
+
+@needs_node
+def test_a_round_waiting_for_the_broker_shows_not_finished_and_its_note(tmp_path):
+    # US-102: the round of a session the broker has not published yet, through the real desk
+    dates = weekdays(START, BASE + 5)
+    f = frame(dates, closes([], BASE + 5))
+    broker = Broker({"AAA": f})
+    broker.published = dates[BASE - 1]
+    w = wide_desk(
+        [stock("AAA")], dates, fetch=broker.fetch, data_api_active=lambda: True,
+        sleep=lambda s: None, path=tmp_path / "w.db",
+    )  # fmt: skip
+    save_bars(w.engine, "AAA", "1d", f.iloc[:BASE], "dhan")
+    w.maybe_round(at(dates[BASE], "15:42"))
+    note = (
+        f"Dhan has not published the daily bars of {dates[BASE].isoformat()} yet (checked "
+        "15:42): the round looks again every 30 minutes"
+    )
+    html = js("wideRound(P)", w.summary()["last_round"])
+    assert "not finished" in html and note in html
+    assert note in js("wideBlock(P, true)", w.summary())

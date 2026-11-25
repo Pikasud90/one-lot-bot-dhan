@@ -7,6 +7,16 @@ and 15:35), on the delivery desk's background thread:
 1. Fetch (when the Data API is on): the last 30 or so daily bars of each stock through the
    desk's own adapter, at most two requests a second, one stock at a time; an error is noted
    and the others go on; a stock fetched for the session is not fetched again (resumable).
+   The round reads a session when the broker's daily bars of that session are there. It
+   checks from just after 15:35 and then every 30 minutes, also through the night and before
+   09:00 the next morning (US-102). While no stock has the session's bar, a check stops after
+   `PROBE` stocks whose answer did not carry it: at most 5 requests (one a stock: a stored
+   history that disagrees is fetched again whole only once the session is there), nothing
+   evaluated, and not one of the `ROUND_TRIES` tries. Each check starts 5 stocks further down
+   the list than the one before, so a few stocks with no bar (suspended) hide nothing. Its
+   errors are not carried into the round that later reads the session. Measured on 25 Nov
+   2026: the bars of the day were not there at 15:42. Once one stock has the bar, every stock
+   not yet fetched is asked.
    ADJUSTMENTS: when the fetched closes differ from the stored ones on the overlap by more
    than 0.5% (a split, a bonus or a demerger re-based the history), the whole history is
    fetched again and replaces the stored one, and the round says so. When that refetch
@@ -71,9 +81,14 @@ ACTIVE = (PENDING_ENTRY, OPEN, EXIT_PENDING)
 CAP, TEST = "cap", "test"
 #: the round stays off between these times (IST), as the desk's top-up does
 NO_ROUND = (dt.time(9, 0), dt.time(15, 35))
-#: tries of one session's round, this far apart, before it is closed with what it has
+#: tries of one session's round, this far apart, before it is closed with what it has; a
+#: check that finds no stock with the session's bar (not published yet) is not a try, and the
+#: next check comes this far apart too, for as long as the session is the last finished one
 ROUND_TRIES = 4
 ROUND_GAP = dt.timedelta(minutes=30)
+#: while no stock has the session's bar, a check stops after this many answers without it
+#: (one request each); the next check starts this many stocks further down the list
+PROBE = 5
 #: requests to the broker at most this often (two a second)
 REQUEST_GAP_S = 0.5
 #: calendar days of daily bars a round fetches (about 30 sessions)
@@ -541,8 +556,10 @@ class WideDesk:
     def maybe_round(self, now: dt.datetime) -> None:
         """Start the evening round on its own thread when one is due: the switch on, outside
         09:00 to 15:35, the session's round not finished, at most `ROUND_TRIES` tries
-        `ROUND_GAP` apart. Without a broker (no adapter or the Data API off) a round runs only
-        when the store has daily bars of a wide-list stock to read."""
+        `ROUND_GAP` apart. A check that finds the session not published yet is not a try: it
+        is made again `ROUND_GAP` later, through the night too. Without a broker (no adapter or
+        the Data API off) a round runs only when the store has daily bars of a wide-list stock
+        to read."""
         if not self.evening_round or not self.stocks:
             return
         now = now.astimezone(IST)
@@ -640,8 +657,22 @@ class WideDesk:
             # built yet): nothing is read and nothing is finished; the round runs when it is on
             self.note = "no Dhan data now (the Data API is off): the evening round waits for it"
             return RoundResult(s, False, {"session": s.isoformat(), "note": self.note})
+        prev = dict(row["summary"] or {}) if row is not None else {}
+        checks = int(prev.get("checks") or 0)  # the checks made so far that found no bar
         if fetching:
-            self._fetch_all(s, now, summary, stop)
+            # each check starts `PROBE` stocks further down the list, so a few stocks that never
+            # carry the session's bar (suspended, a bad id) cannot hide the others for ever
+            there, asked, failed = self._fetch_all(s, now, summary, stop, checks * PROBE)
+            if not there:  # not published yet: not a try, nothing evaluated (US-102)
+                summary["note"] = (
+                    _not_yet(s, now, asked, failed)
+                    if asked
+                    else f"the check of {s.isoformat()} stopped at 09:00 before asking Dhan"
+                )
+                summary["check"], summary["checks"] = True, checks + 1
+                self.book.save_round(s, started, tries - 1, summary, None)
+                self.note = summary["note"]
+                return RoundResult(s, False, summary)
         elif self._source is None:
             summary["note"] = "no Dhan data: the round read the stored daily bars only"
         days = self._load(list(self.stocks))
@@ -654,8 +685,9 @@ class WideDesk:
             self.note = summary["note"]
             return RoundResult(s, False, summary)
         self._evaluate(s, days, nifty, states, now, summary)
-        if row is not None:  # a resumed round: what the earlier tries found stays in its record
-            prev = dict(row["summary"] or {})
+        if row is not None and not prev.get("check"):
+            # a resumed round: what the earlier tries found stays in its record (a check that
+            # found no bar is not a try: its errors are not carried into the reading)
             for k in ("signals", "alerted", "recorded", "late", "exits", "fetched", "scanned"):
                 summary[k] += int(prev.get(k) or 0)  # each stock is read once a session
             for k in ("refetched", "errors", "held", "jumps", "rebased"):
@@ -680,22 +712,46 @@ class WideDesk:
         self.requests += 1
 
     def _fetch_all(
-        self, s: dt.date, now: dt.datetime, summary: dict[str, Any], stop: Callable[[], bool] | None
-    ) -> None:
+        self,
+        s: dt.date,
+        now: dt.datetime,
+        summary: dict[str, Any],
+        stop: Callable[[], bool] | None,
+        start: int = 0,
+    ) -> tuple[bool, int, int]:
+        """Fetch each stock not yet fetched for `s`. Answers (there, asked, failed): whether a
+        stock of the list has the session's bar, and, while none has, the answers without it
+        and how many of them were errors. While none has, it stops after `PROBE` such answers
+        and writes no stock state (a check, not a try); such a check starts at the `start`-th
+        stock of the list (counted round the list) and makes one request for each answer."""
         states = self.book.states()
-        for key, stock in self.stocks.items():
+
+        def done(st: Mapping[str, Any]) -> bool:
+            return bool(st.get("fetched_for")) and str(st["fetched_for"]) >= s.isoformat()
+
+        there = any(done(states.get(k) or {}) for k in self.stocks)
+        asked = failed = 0
+        held: list[dict[str, Any]] = []  # states of the answers before the first bar of `s`
+        items = list(self.stocks.items())
+        if not there and items:
+            k = start % len(items)
+            items = items[k:] + items[:k]
+        for key, stock in items:
             if stop is not None and stop():
                 summary["errors"].append("stopped at 09:00: the next round goes on")
                 break
-            st = states.get(key) or {}
-            if st.get("fetched_for") and str(st["fetched_for"]) >= s.isoformat():
+            if done(states.get(key) or {}):
                 continue  # fetched for this session already (a resumed round)
+            if not there and asked >= PROBE:
+                break  # not published yet: the check has seen enough
             try:
-                outcome = self._fetch_one(stock, s)
+                outcome = self._fetch_one(stock, s, check=not there)
             except Exception as exc:  # noqa: BLE001 - one stock never stops the others
                 self.errors += 1
                 summary["errors"].append(f"{key}: {type(exc).__name__}: {str(exc)[:80]}")
                 log.warning("wide list: the daily bars of %s could not be fetched: %s", key, exc)
+                asked += not there
+                failed += not there
                 continue
             state: dict[str, Any] = {"series_key": key, "stale": outcome in ("stale",)}
             if outcome == "stale":
@@ -710,15 +766,27 @@ class WideDesk:
                 if outcome == "refetched":
                     summary["refetched"].append(key)
                     state["note"] = f"{s}: history re-based by the broker: fetched again whole"
-            self.book.save_states([state], now)
+            if outcome == "waiting" and not there:
+                # a "stale" answer carried the session's bar (in a check, only a short answer
+                # with the bar is fetched again whole): the session is there
+                asked += 1
+                held.append(state)
+                continue
+            there = True
+            self.book.save_states([*held, state], now)
+            held = []
+        return there, asked, failed
 
     def _stored(self, key: str) -> pd.DataFrame:
         from ..data.store import _read_bars
 
         return _read_bars(self.engine, key, "1d")
 
-    def _fetch_one(self, stock: UniverseStock, s: dt.date) -> str:
-        """Fetch, check the overlap, store. "ok", "refetched", "stale" or "waiting"."""
+    def _fetch_one(self, stock: UniverseStock, s: dt.date, check: bool = False) -> str:
+        """Fetch, check the overlap, store. "ok", "refetched", "stale" or "waiting". In a
+        `check` (no stock has the session's bar yet), a short answer without the session's bar
+        is "waiting" even when it disagrees: the whole history is fetched again only when the
+        session is there, so a check makes one request for each stock it asks."""
         if stock.key.upper() in self.protected:
             raise ValueError(f"{stock.key} is a desk instrument: the round never writes it")
         stored = self._stored(stock.key)
@@ -729,6 +797,8 @@ class WideDesk:
             self._pace()
             got = self._fetch(stock, s - dt.timedelta(days=FETCH_DAYS), s)  # type: ignore[misc]
             if _disagrees(stored, got):
+                if check and (got is None or not len(got) or _dates(got)[-1] < s):
+                    return "waiting"  # nothing stored: the refetch waits for the session
                 full = rebased = True
         if full:
             self._pace()
@@ -1194,6 +1264,19 @@ def replay_rounds(
             progress(n, s)
 
 
+def _not_yet(s: dt.date, now: dt.datetime, asked: int, failed: int) -> str:
+    """The round's note while the session's daily bars are not there (US-102)."""
+    gap = int(ROUND_GAP.total_seconds() // 60)
+    at = now.astimezone(IST).strftime("%H:%M")
+    if asked and failed == asked:
+        n = f"{failed} request{'' if failed == 1 else 's'} failed"
+        return f"Dhan did not answer ({n}, checked {at}): the round tries again every {gap} minutes"
+    return (
+        f"Dhan has not published the daily bars of {s.isoformat()} yet (checked {at}): "
+        f"the round looks again every {gap} minutes"
+    )
+
+
 def _round_view(row: Mapping[str, Any] | None) -> dict[str, Any] | None:
     if row is None:
         return None
@@ -1288,6 +1371,7 @@ __all__ = [
     "ACTIVE",
     "CAP",
     "EXIT_ORDER",
+    "PROBE",
     "TEST",
     "StockDays",
     "WideBook",
