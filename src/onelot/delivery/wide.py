@@ -33,6 +33,23 @@ and 15:35), on the delivery desk's background thread:
    first; a trade keeps its tier for life. Only a within-the-cap trade is ALERTED (entry and
    exit, "wide list"); the others are recorded, "not alerted: the cap of 10 is full". A
    signal read late (a catch-up of an earlier session) is recorded and never alerted.
+4. Dormant stocks (US-103). A stock that stops trading (a suspension, a merger, a delisting)
+   or stays stale gets no new daily bar. Its MISSING SESSIONS are counted from the stored
+   bars: the trading days of the app's calendar since its last bar on which at least half of
+   the list's other stocks did get a bar (never a holiday the calendar does not list, a
+   special session off the calendar or an evening on which the bars of a few stocks only
+   came). Once it has `dormant_after` missing sessions, found so on `CONFIRM_ROUNDS` evening
+   rounds in a row, and still has no bar at the next evening's round, the stock is DORMANT
+   (the bar of the last session counted has had a day to arrive; after the desk was off for
+   weeks, one bad evening releases nothing): an open trade is closed at its last stored
+   close with the exit reason NO_DATA, a pending entry is cancelled (never filled), the
+   place within the cap is free for a new signal of that very round, and the round no longer
+   waits for the stock's bar. It is asked for every evening all the same and read again when
+   bars return; a released trade stays released. An exit HELD FOR REVIEW (an unadjusted
+   action, step 2's guard) is released on the `dormant_after`-th session counted from the
+   one that first held it, once as many evening rounds in a row before have seen it held, at
+   that session's close, with the exit reason REVIEW. Neither is the rule's own exit: the
+   score counts them apart (`WideBook.score`, "released").
 
 State lives in three tables of its own (`wide_trades`, `wide_state`, `wide_rounds`): the desk
 18's `delivery_trades` is never written here. Every trade change is a compare-and-set on its
@@ -52,7 +69,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd  # type: ignore[import-untyped]
-from sqlalchemy import Engine, and_, delete, func, select, update
+from sqlalchemy import Engine, and_, delete, func, or_, select, update
 from sqlalchemy.dialects import sqlite
 from sqlalchemy.exc import IntegrityError
 
@@ -71,14 +88,32 @@ from .rule import (
     exit_reading,
     nifty_ok,
     quantity,
+    sma,
 )
 from .universe import UniverseStock
 
 log = logging.getLogger(__name__)
 
 PENDING_ENTRY, OPEN, EXIT_PENDING, CLOSED = "PENDING_ENTRY", "OPEN", "EXIT_PENDING", "CLOSED"
+#: a pending entry whose stock went dormant before its fill (US-103): never a trade
+CANCELLED = "CANCELLED"
 ACTIVE = (PENDING_ENTRY, OPEN, EXIT_PENDING)
+ENDED = (CLOSED, CANCELLED)
 CAP, TEST = "cap", "test"
+#: exit reasons that are NOT the rule's own (US-103): no daily bar for `dormant_after` market
+#: sessions; an exit held for review that long. The score counts such trades apart.
+NO_DATA, REVIEW = "NO_DATA", "REVIEW"
+RELEASES = (NO_DATA, REVIEW)
+#: market sessions with no new daily bar after which a stock is dormant (the slot's
+#: `dormant_after`; the study file's longest hole in one stock's bars is 5 sessions)
+DORMANT_AFTER = 10
+#: ... and the evening rounds in a row that must have found it so (or have seen an exit held
+#: for review) before the round that releases: after the desk was off for weeks, one bad
+#: evening releases nothing
+CONFIRM_ROUNDS = 2
+#: a trading day of the calendar is a market session when at least this share of the list's
+#: other stocks have its daily bar
+MARKET_SHARE = 0.5
 #: the round stays off between these times (IST), as the desk's top-up does
 NO_ROUND = (dt.time(9, 0), dt.time(15, 35))
 #: tries of one session's round, this far apart, before it is closed with what it has; a
@@ -93,6 +128,9 @@ PROBE = 5
 REQUEST_GAP_S = 0.5
 #: calendar days of daily bars a round fetches (about 30 sessions)
 FETCH_DAYS = 45
+#: a fetch starts at least this far before the stock's last stored bar (US-103): after a long
+#: silence the overlap check still has shared days and no hole is left in the history
+FETCH_BACK = dt.timedelta(days=10)
 #: a fetched close this far from the stored one on the overlap means a re-based history
 ADJUST_LIMIT = 0.005
 #: a session traded wholly this far below the close before (its high under it) reads as a
@@ -235,7 +273,8 @@ class WideBook:
         return sum(1 for t in self.active().values() if t.tier == CAP)
 
     def closed(self, limit: int | None = None) -> list[WideTrade]:
-        return self._select(wide_trades.c.status == CLOSED, limit=limit, newest=True)
+        """The trades that are over, newest first: the closed ones and the cancelled entries."""
+        return self._select(wide_trades.c.status.in_(ENDED), limit=limit, newest=True)
 
     def _changed(self) -> None:
         self.version += 1
@@ -314,6 +353,45 @@ class WideBook:
             t.id, (EXIT_PENDING,), now, status=CLOSED, exit_session=session.isoformat(),
             exit_paise=exit_paise, gross_paise=r.gross_paise, charges_paise=r.charges_paise,
             dp_paise=r.dp_paise, net_paise=r.net_paise, net_pct=r.net_pct,
+        )  # fmt: skip
+
+    def release(
+        self,
+        t: WideTrade,
+        session: dt.date,
+        price: float,
+        reason: str,
+        held: int | None,
+        note: str,
+        now: dt.datetime,
+    ) -> bool:
+        """A filled trade closed WITHOUT the rule's exit (US-103: `reason` is one of
+        `RELEASES`), on `session`, at `price` (its last stored close), booked as a sale is:
+        both legs' charges and the depository charge. An exit already signalled keeps its
+        signal date; `held` None keeps the session count."""
+        if t.entry_paise is None:
+            return False
+        exit_paise = rupees_to_paise(price)
+        r = trade_result(self.model, t.entry_paise, exit_paise, t.qty, self.dp_paise)
+        values: dict[str, Any] = {
+            "status": CLOSED, "exit_reason": reason, "exit_session": session.isoformat(),
+            "exit_paise": exit_paise, "gross_paise": r.gross_paise,
+            "charges_paise": r.charges_paise, "dp_paise": r.dp_paise, "net_paise": r.net_paise,
+            "net_pct": r.net_pct, "note": note[:500],
+        }  # fmt: skip
+        if t.exit_signal_date is None:
+            values["exit_signal_date"] = session.isoformat()
+        if held is not None:
+            values["sessions_held"] = int(held)
+        return self._cas(t.id, (OPEN, EXIT_PENDING), now, **values)
+
+    def cancel_entry(
+        self, t: WideTrade, session: dt.date, reason: str, note: str, now: dt.datetime
+    ) -> bool:
+        """A pending entry that can never fill (US-103): cancelled on `session`, no trade."""
+        return self._cas(
+            t.id, (PENDING_ENTRY,), now, status=CANCELLED, exit_reason=reason,
+            exit_session=session.isoformat(), note=note[:500],
         )  # fmt: skip
 
     def rescale(self, t: WideTrade, now: dt.datetime, **values: Any) -> bool:
@@ -409,22 +487,48 @@ class WideBook:
 
     # ── the score ──
     def score(self) -> dict[str, dict[str, Any]]:
-        """Closed trades of both tiers: "all" (every signal) and "cap" (within the cap)."""
+        """Closed trades of both tiers: "all" (every signal) and "cap" (within the cap). The
+        figures are the rule's own exits. A trade closed without one (US-103, `RELEASES`: no
+        data, held for review) is counted apart under "released" (how many of each reason,
+        their winners and their net at the last stored close), and an entry cancelled before
+        its fill is never a trade ("cancelled")."""
+        t = wide_trades.c
+        own = or_(t.exit_reason.is_(None), t.exit_reason.notin_(RELEASES))
         out: dict[str, dict[str, Any]] = {}
-        for tier, where in (("all", ()), ("cap", (wide_trades.c.tier == CAP,))):
-            stmt = select(
+        for tier, where in (("all", ()), ("cap", (t.tier == CAP,))):
+            figures = (
                 func.count(),
-                func.sum(wide_trades.c.net_paise > 0),
-                func.avg(wide_trades.c.net_pct),
-                func.sum(wide_trades.c.net_paise),
-            ).where(wide_trades.c.status == CLOSED, *where)
+                func.sum(t.net_paise > 0),
+                func.avg(t.net_pct),
+                func.sum(t.net_paise),
+            )
+            apart = (
+                select(t.status, t.exit_reason, *figures)
+                .where(or_(t.status == CANCELLED, and_(t.status == CLOSED, ~own)), *where)
+                .group_by(t.status, t.exit_reason)
+            )
             with self.engine.connect() as conn:
-                n, wins, avg, net = conn.execute(stmt).one()
+                n, wins, avg, net = conn.execute(
+                    select(*figures).where(t.status == CLOSED, own, *where)
+                ).one()
+                rows = conn.execute(apart).all()
+            released = {"trades": 0, "winners": 0, "net": 0.0, "no_data": 0, "review": 0}
+            cancelled = 0
+            for status, reason, rn, rwins, _avg, rnet in rows:
+                if status == CANCELLED:
+                    cancelled += int(rn or 0)
+                    continue
+                released["trades"] += int(rn or 0)
+                released["winners"] += int(rwins or 0)
+                released["net"] = round(released["net"] + (rnet or 0) / 100, 2)
+                released[str(reason).lower()] += int(rn or 0)
             out[tier] = {
                 "trades": int(n or 0),
                 "winners": int(wins or 0),
                 "net_pct": None if avg is None else round(float(avg), 3),
                 "net": round((net or 0) / 100, 2),
+                "released": released,
+                "cancelled": cancelled,
             }
         return out
 
@@ -473,6 +577,17 @@ class _Candidate:
     reading: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class _Quiet:
+    """A stock with daily bars but none of the round's session (US-103)."""
+
+    last: dt.date  # its last daily bar
+    sessions: int  # market sessions since then, up to the round's own
+    rounds: int  # evening rounds in a row that found it without a new bar, this one included
+    counted: dt.date | None  # the last session whose round was counted
+    since: dt.date | None  # the session it became dormant on; None: not dormant
+
+
 @dataclass
 class RoundResult:
     session: dt.date
@@ -495,6 +610,7 @@ class WideDesk:
         *,
         cap_open: int = 10,
         evening_round: bool = True,
+        dormant_after: int = DORMANT_AFTER,
         min_bars: int = 201,
         notifier: Any = None,
         fetch: FetchDaily | None = None,
@@ -518,6 +634,7 @@ class WideDesk:
         self.clock = clock
         self.cap = int(cap_open)
         self.evening_round = bool(evening_round)
+        self.dormant_after = max(0, int(dormant_after))  # 0: no stock is ever dormant
         self.floor = max(int(min_bars), params.min_bars)
         self.notifier = notifier
         self._fetch = fetch
@@ -649,7 +766,7 @@ class WideDesk:
             "session": s.isoformat(), "stocks": len(self.stocks), "fetched": 0, "refetched": [],
             "stale": [], "errors": [], "waiting": [], "scanned": 0, "signals": 0, "alerted": 0,
             "recorded": 0, "late": 0, "exits": 0, "held": [], "jumps": [], "rebased": [],
-            "note": None,
+            "dormant": [], "released": [], "returned": [], "note": None,
         }  # fmt: skip
         fetching = self._can_fetch()
         if self._fetch is not None and self._source is None and not fetching:
@@ -678,24 +795,33 @@ class WideDesk:
         days = self._load(list(self.stocks))
         states = self.book.states()
         summary["stale"] = sorted(k for k, st in states.items() if st.get("stale"))
+        summary["dormant"] = sorted(k for k, st in states.items() if k in self.stocks and _mark(st))
         nifty = self._nifty(now)
         if nifty is None or not len(nifty[0]) or nifty[0][-1] < s:
             summary["note"] = f"waiting for NIFTY's session of {s}"
             self.book.save_round(s, started, tries - 1, summary, None)  # not a try of its own
             self.note = summary["note"]
             return RoundResult(s, False, summary)
+        quiet = self._quiet(s, days, states)  # US-103: the stocks with no bar of `s`, counted
+        dormant = {k for k, q in quiet.items() if q.since is not None}
+        summary["dormant"] = sorted(dormant)
+        # before the evaluation: a place a dormant stock's trade gives up is free for a signal
+        # of this very session
+        self._release_dormant(s, days, quiet, now, summary)
         self._evaluate(s, days, nifty, states, now, summary)
+        self._mark_quiet(s, days, quiet, states, now, summary)
         if row is not None and not prev.get("check"):
             # a resumed round: what the earlier tries found stays in its record (a check that
             # found no bar is not a try: its errors are not carried into the reading)
             for k in ("signals", "alerted", "recorded", "late", "exits", "fetched", "scanned"):
                 summary[k] += int(prev.get(k) or 0)  # each stock is read once a session
-            for k in ("refetched", "errors", "held", "jumps", "rebased"):
+            for k in ("refetched", "errors", "held", "jumps", "rebased", "released", "returned"):
                 summary[k] = [*list(prev.get(k) or []), *summary[k]][-50:]
         waiting = [
             k for k, d in days.items() if d.index_of(s) is None and k not in summary["stale"]
         ]
-        summary["waiting"] = sorted(set(summary["waiting"]) | set(waiting))[:50]
+        # a dormant stock is not waited for: its missing bar never costs the round a try
+        summary["waiting"] = sorted((set(summary["waiting"]) | set(waiting)) - dormant)[:50]
         finished = (not fetching) or not summary["waiting"] or tries >= ROUND_TRIES
         self.book.save_round(s, started, tries, summary, now if finished else None)
         self.note = None
@@ -794,8 +920,11 @@ class WideDesk:
         rebased = False
         got: pd.DataFrame | None = None
         if not full:
+            # from before the last stored bar at least: after a long silence (a dormant stock
+            # whose bars return) the overlap is still checked and no hole is left
+            start = min(s - dt.timedelta(days=FETCH_DAYS), _dates(stored.iloc[-1:])[0] - FETCH_BACK)
             self._pace()
-            got = self._fetch(stock, s - dt.timedelta(days=FETCH_DAYS), s)  # type: ignore[misc]
+            got = self._fetch(stock, start, s)  # type: ignore[misc]
             if _disagrees(stored, got):
                 if check and (got is None or not len(got) or _dates(got)[-1] < s):
                     return "waiting"  # nothing stored: the refetch waits for the session
@@ -888,6 +1017,7 @@ class WideDesk:
         n_close = np.asarray(nifty[1], dtype=float)[: len(n_dates)]
         okmap = dict(zip(n_dates, nifty_ok(n_dates, n_dates, n_close, p).tolist(), strict=True))
         todo: dict[dt.date, list[tuple[str, int]]] = {}
+        newest: dict[str, int] = {}  # each stock's newest session read in this round
         for key, sd in days.items():
             st = states.get(key) or {}
             if key not in self.stocks or st.get("stale"):
@@ -903,12 +1033,16 @@ class WideDesk:
                 idxs = list(range(lo, i_s + 1))
             for i in idxs:
                 todo.setdefault(sd.dates[i], []).append((key, i))
+                newest[key] = i
         for d in sorted(todo):
             cands: list[_Candidate] = []
             rows: list[dict[str, Any]] = []
             for key, i in todo[d]:
+                seen = _held_rounds(states.get(key) or {})  # as the round found the stock
                 try:
-                    cand, reading = self._session(key, days[key], i, d, okmap, now, summary)
+                    cand, reading = self._session(
+                        key, days[key], i, d, okmap, now, summary, seen, i == newest[key]
+                    )
                 except Exception:  # noqa: BLE001 - one stock never stops the others
                     self.errors += 1
                     summary["errors"].append(f"{key} {d}: evaluation failed")
@@ -930,8 +1064,13 @@ class WideDesk:
         okmap: Mapping[dt.date, bool],
         now: dt.datetime,
         summary: dict[str, Any],
+        seen: int = 0,
+        own: bool = True,
     ) -> tuple[_Candidate | None, dict[str, Any]]:
-        """One stock, one session: fills at its open, exits and entry on its close."""
+        """One stock, one session: fills at its open, exits and entry on its close. `seen`:
+        the evening rounds in a row before this one that left the trade's exit held for
+        review; `own`: the session is the newest the round reads of this stock (not a
+        catch-up of an earlier one)."""
         p = self.params
         c = sd.close[: i + 1]
         t = self.book.active().get(key)
@@ -958,7 +1097,14 @@ class WideDesk:
                         f"exit held for review: the price moved {jump[1] * 100:+.1f}% on "
                         f"{jump[0]:%d %b %Y} (a split or bonus not adjusted?)"
                     )
+                    if own and self._release_held(
+                        t, sd, e, i, d, r.sessions, seen, held, now, summary
+                    ):
+                        reading["trade"]["released"] = REVIEW
+                        reading["busy"] = True  # no entry is read on the close it ended on
+                        return None, reading
                     reading["trade"]["held"] = held
+                    reading["trade"]["held_rounds"] = seen + 1  # this evening counts one
                     summary.setdefault("held", []).append(key)
                     if t.note != held:
                         self.book.set_note(t, held, now)
@@ -1074,6 +1220,257 @@ class WideDesk:
             log.warning("wide list: the desk 18's open trades could not be counted")
             return self.cap
 
+    # ── dormant stocks and released trades (step 4, US-103) ──────────────────
+    def _quiet(
+        self, s: dt.date, days: Mapping[str, StockDays], states: Mapping[str, Mapping[str, Any]]
+    ) -> dict[str, _Quiet]:
+        """The stocks of the list that have daily bars but none of session `s`, each with its
+        two counts.
+
+        SESSIONS: the market sessions since its last bar, read from the stored bars alone. A
+        market session is a trading day of the app's calendar on which at least `MARKET_SHARE`
+        of the list's other stocks (those with bars by then) have their bar. So a holiday the
+        calendar does not list (no stock has a bar), a special session off the calendar (a
+        Muhurat, a Budget weekend) and an evening on which the bars of a few stocks only came
+        are never counted.
+
+        ROUNDS: the evening rounds in a row that found the stock so, kept in its state and
+        started again by a new bar. The round of `s` counts one, once, when `s` is a market
+        session.
+
+        The stock turns DORMANT (`since`) at the round of a market session when both counts
+        were met on an evening BEFORE it (`dormant_after` sessions, `CONFIRM_ROUNDS` rounds)
+        and it still has no new bar. So the bar of the last session counted has had a day to
+        arrive, no particular try of the evening is needed, and after the desk was off for
+        weeks one bad evening releases nothing. (A stock that trades again on the very evening
+        it turns dormant, its bar coming after that try, is released all the same.) It stays
+        dormant until a new bar is stored."""
+        n = self.dormant_after
+        if n <= 0:
+            return {}
+        mine = {k: sd for k, sd in days.items() if k in self.stocks and len(sd.ords)}
+        known: dict[dt.date, bool] = {}
+
+        def market(d: dt.date) -> bool:
+            hit = known.get(d)
+            if hit is None:
+                o, have, listed = d.toordinal(), 0, 0
+                if self.calendar.is_trading_day(d):
+                    for sd in mine.values():
+                        if sd.ords[0] > o:
+                            continue  # not listed yet
+                        listed += 1
+                        j = int(np.searchsorted(sd.ords, o))
+                        have += int(j < len(sd.ords) and sd.ords[j] == o)
+                # asked for a stock that is listed and has no bar that day: the others are
+                # `listed - 1`
+                hit = known[d] = listed > 1 and have >= MARKET_SHARE * (listed - 1)
+            return hit
+
+        need = min(n, CONFIRM_ROUNDS)
+        out: dict[str, _Quiet] = {}
+        for key, sd in mine.items():
+            i = sd.last_at_or_before(s)
+            if i < 0 or sd.dates[i] == s:
+                continue
+            last = sd.dates[i]
+            reading = (states.get(key) or {}).get("reading")
+            reading = reading if isinstance(reading, Mapping) else {}
+            mark, was = reading.get("dormant"), reading.get("quiet")
+            if isinstance(mark, Mapping) and mark.get("last_bar") == last.isoformat():
+                out[key] = _Quiet(  # dormant already, no new bar since
+                    last, int(mark.get("sessions") or n), int(mark.get("rounds") or 0), None,
+                    _day(mark.get("since")) or s,
+                )  # fmt: skip
+                continue
+            before, rounds, counted = 0, 0, None  # as the evening before left them
+            if isinstance(was, Mapping) and was.get("last_bar") == last.isoformat():
+                before, rounds = int(was.get("sessions") or 0), int(was.get("rounds") or 0)
+                counted = _day(was.get("counted"))
+            fresh = market(s) and (counted is None or counted < s)  # this round counts one
+            asleep = fresh and before >= n and rounds >= need
+            if fresh:
+                rounds, counted = rounds + 1, s
+            sessions, d = 0, last + dt.timedelta(days=1)
+            while d <= s:
+                sessions += int(market(d))
+                d += dt.timedelta(days=1)
+            if sessions or rounds:
+                out[key] = _Quiet(last, sessions, rounds, counted, s if asleep else None)
+        return out
+
+    def _release_dormant(
+        self,
+        s: dt.date,
+        days: Mapping[str, StockDays],
+        quiet: Mapping[str, _Quiet],
+        now: dt.datetime,
+        summary: dict[str, Any],
+    ) -> None:
+        """The active trade of each dormant stock is released (once: a compare-and-set)."""
+        active = self.book.active()
+        for key in sorted(quiet):
+            q, t = quiet[key], active.get(key)
+            if q.since is None or t is None:
+                continue
+            try:
+                self._release_no_data(t, days[key], q, now, summary)
+            except Exception:  # noqa: BLE001 - one stock never stops the others
+                self.errors += 1
+                summary["errors"].append(f"{key} {s}: its trade could not be released")
+                log.exception("wide list: the trade of dormant %s could not be released", key)
+
+    def _mark_quiet(
+        self,
+        s: dt.date,
+        days: Mapping[str, StockDays],
+        quiet: Mapping[str, _Quiet],
+        before: Mapping[str, Mapping[str, Any]],
+        now: dt.datetime,
+        summary: dict[str, Any],
+    ) -> None:
+        """The stocks' state after the round, in `reading`: the counts of a stock that is not
+        dormant (`quiet`), the mark of a dormant one (`dormant`: since which session, its last
+        bar then, the sessions and rounds counted; what the page lists), and no mark on a
+        stock that was dormant before this round (`before`) and is so no more: its bars
+        returned. A stock the evaluation read has a new reading already. Idempotent."""
+        fresh = self.book.states()
+        rows: list[dict[str, Any]] = []
+        for key in sorted(quiet):
+            q = quiet[key]
+            st = fresh.get(key) or {}
+            reading = dict(st.get("reading") or {})
+            row = {"series_key": key, "stale": bool(st.get("stale"))}
+            if q.since is not None:
+                mark = {
+                    "since": q.since.isoformat(), "last_bar": q.last.isoformat(),
+                    "sessions": q.sessions, "rounds": q.rounds,
+                }  # fmt: skip
+                if reading.get("dormant") != mark:
+                    rows.append(
+                        {**row, "reading": {"session": q.last.isoformat(), "dormant": mark}}
+                    )
+                    log.warning(
+                        "wide list: %s is dormant: no daily bar for %d market sessions after %s",
+                        key, q.sessions, q.last,
+                    )  # fmt: skip
+                continue
+            count = {
+                "last_bar": q.last.isoformat(), "sessions": q.sessions, "rounds": q.rounds,
+                "counted": None if q.counted is None else q.counted.isoformat(),
+            }  # fmt: skip
+            if reading.get("quiet") != count or "dormant" in reading:
+                reading.pop("dormant", None)
+                rows.append({**row, "reading": {**reading, "quiet": count}})
+        for key, was in before.items():
+            old = _mark(was)
+            still = quiet.get(key)
+            if old is None or key not in self.stocks or key not in days:
+                continue  # never marked, or its bars could not be read this round: as it is
+            if still is not None and still.since is not None:
+                continue  # dormant still
+            sd = days[key]
+            i = sd.last_at_or_before(s)
+            last_now = sd.dates[i].isoformat() if i >= 0 else ""
+            if last_now > str(old.get("last_bar") or ""):
+                summary["returned"].append(key)
+                log.warning("wide list: the daily bars of dormant %s are back", key)
+            now_st = fresh.get(key) or {}
+            if still is None and _mark(now_st) is not None:  # not read by the evaluation
+                rows.append(
+                    {
+                        "series_key": key,
+                        "stale": bool(now_st.get("stale")),
+                        "reading": {"session": last_now or None},
+                    }
+                )
+        self.book.save_states(rows, now)
+
+    def _release_no_data(
+        self, t: WideTrade, sd: StockDays, q: _Quiet, now: dt.datetime, summary: dict[str, Any]
+    ) -> None:
+        """The active trade of a stock that went dormant on `q.since` (its last daily bar:
+        `q.last`). A pending entry is cancelled (it can never fill). A filled trade is closed
+        at the last stored close, booked as a sale, with the exit reason NO_DATA: a mark, not
+        the rule's exit. The trade is first put on the basis of the bars it is closed on."""
+        last, on = q.last, q.since or q.last
+        i = sd.last_at_or_before(last)
+        t = self._rebase(t, sd, i, now, summary) or t
+        key = t.series_key
+        why = (
+            f"no daily bar for {q.sessions} market sessions after {last:%d %b %Y}, found so on "
+            f"{q.rounds} evenings in a row (a suspension, a merger or a delisting?)"
+        )
+        if t.status == PENDING_ENTRY:
+            note = f"entry cancelled on {on:%d %b %Y}: {why}; never filled"
+            if self.book.cancel_entry(t, on, NO_DATA, _notes(note, t.note), now):
+                summary["released"].append(f"{key} (no data, entry cancelled)")
+                log.warning("wide list: %s: %s", key, note)
+            return
+        price = float(sd.close[i])
+        e = sd.index_of(t.entry_session) if t.entry_session is not None else None
+        held = i - e + 1 if e is not None and e <= i and t.status == OPEN else None
+        note = (
+            f"released on {on:%d %b %Y}: {why}; closed at the last stored close, "
+            f"Rs {price:,.2f}: a mark, not the rule's exit"
+        )
+        if t.status == EXIT_PENDING and t.exit_signal_date is not None:
+            note += (
+                f"; its exit signal of {t.exit_signal_date:%d %b %Y} ({t.exit_reason}) was "
+                f"never filled"
+            )
+        if self.book.release(t, on, price, NO_DATA, held, _notes(note, t.note), now):
+            summary["released"].append(f"{key} (no data)")
+            log.warning("wide list: %s: %s", key, note)
+
+    def _release_held(
+        self,
+        t: WideTrade,
+        sd: StockDays,
+        e: int,
+        i: int,
+        d: dt.date,
+        sessions: int,
+        seen: int,
+        held: str,
+        now: dt.datetime,
+        summary: dict[str, Any],
+    ) -> bool:
+        """An exit held for review is not held for ever: on the `dormant_after`-th session it
+        is held (counted from the first session that held it, on the stored bars), once
+        `CONFIRM_ROUNDS` evening rounds in a row before this one have seen it held (`seen`),
+        the trade is closed at that session's close with the exit reason REVIEW, booked as a
+        sale. Not the rule's exit, and the result may be on another price basis than the
+        entry: the note says so."""
+        n = self.dormant_after
+        if n <= 0 or t.entry_paise is None or seen < min(n, CONFIRM_ROUNDS):
+            return False
+        p = self.params
+        c = sd.close[: i + 1]
+        avg, fill = sma(c, p.exit_sma), t.entry_paise / 100
+        first = next(
+            (
+                u
+                for u in range(e, i + 1)
+                if _jump(sd, e + 1, u) is not None and exit_reading(c, e, fill, u, p, avg).hit
+            ),
+            i,
+        )
+        if i - first + 1 < n:
+            return False
+        note = (
+            f"released on {d:%d %b %Y}: its exit was held for review for {i - first + 1} "
+            f"sessions, seen on {seen + 1} evenings in a row; closed at that session's close, "
+            f"Rs {float(c[i]):,.2f}: not the rule's exit, and the result may be on another "
+            f"price basis than the entry. Check by hand; {held}"
+        )
+        note = _notes(note, None if t.note == held else t.note)
+        if not self.book.release(t, d, float(c[i]), REVIEW, sessions, note, now):
+            return False
+        summary["released"].append(f"{t.series_key} (held for review)")
+        log.warning("wide list: %s: %s", t.series_key, note)
+        return True
+
     # ── alerts ───────────────────────────────────────────────────────────────
     def alert_text(self, t: WideTrade, which: str) -> tuple[str, str]:
         stock = self.stocks.get(t.series_key)
@@ -1178,6 +1575,7 @@ class WideDesk:
             "enabled": True,
             "stocks": len(self.stocks),
             "cap_open": self.cap,
+            "dormant_after": self.dormant_after,
             "cap_used": sum(1 for t in active if t.tier == CAP) + (desk or 0),
             "desk_active": desk,
             "open_cap": sum(1 for t in active if t.tier == CAP),
@@ -1208,7 +1606,8 @@ class WideDesk:
 
     def view(self, closed: int = 100, closest: int = 12) -> dict[str, Any]:
         """Everything `GET /api/delivery/wide` answers: the summary, the open trades of both
-        tiers, the latest closed trades, the stale stocks and the stocks closest to a signal."""
+        tiers, the latest closed trades (the cancelled entries among them), the stale and the
+        dormant stocks and the stocks closest to a signal."""
         out = self.summary()
         active = sorted(self.book.active_now(), key=lambda t: (t.tier, t.signal_date))
         out["open"] = [{**t.as_dict(), "name": self._name(t.series_key)} for t in active]
@@ -1217,6 +1616,11 @@ class WideDesk:
         ]
         states = self.book.states()
         out["stale"] = sorted(k for k, st in states.items() if st.get("stale"))
+        out["dormant"] = [
+            {"series_key": k, "name": self._name(k), **mark}
+            for k, mark in sorted((k, _mark(st)) for k, st in states.items() if k in self.stocks)
+            if mark is not None
+        ]
         near = []
         for k, st in states.items():
             r = st.get("reading") or {}
@@ -1295,6 +1699,9 @@ def _round_view(row: Mapping[str, Any] | None) -> dict[str, Any] | None:
         "rebased": list(s.get("rebased") or []),
         "held": sorted(set(s.get("held") or [])),
         "jumps": sorted(set(s.get("jumps") or [])),
+        "dormant": list(s.get("dormant") or []),
+        "released": list(s.get("released") or []),
+        "returned": sorted(set(s.get("returned") or [])),
         "errors": list(s.get("errors") or [])[:10],
         "error_count": len(s.get("errors") or []),
         "waiting": list(s.get("waiting") or [])[:10],
@@ -1305,6 +1712,29 @@ def _round_view(row: Mapping[str, Any] | None) -> dict[str, Any] | None:
         "exits": s.get("exits"),
         "note": s.get("note"),
     }
+
+
+def _mark(state: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The dormant mark of a stock's state row (US-103), or None: since which session, its
+    last daily bar then, and the sessions counted."""
+    reading = state.get("reading")
+    mark = reading.get("dormant") if isinstance(reading, Mapping) else None
+    return dict(mark) if isinstance(mark, Mapping) else None
+
+
+def _held_rounds(state: Mapping[str, Any]) -> int:
+    """The evening rounds in a row that left the stock's open trade with its exit held for
+    review, as the state row says (0 when the last session read was not held)."""
+    reading = state.get("reading")
+    trade = reading.get("trade") if isinstance(reading, Mapping) else None
+    if not isinstance(trade, Mapping) or not trade.get("held"):
+        return 0
+    return int(trade.get("held_rounds") or 0)
+
+
+def _notes(new: str, old: str | None) -> str:
+    """A trade's note with what it said before kept behind it."""
+    return f"{new}; {old}" if old else new
 
 
 def _jump(sd: StockDays, lo: int, hi: int) -> tuple[dt.date, float] | None:

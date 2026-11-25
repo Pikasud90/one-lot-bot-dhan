@@ -221,6 +221,7 @@ class DeliveryDesk:
             self.clock,
             cap_open=w.cap_open,
             evening_round=w.evening_round,
+            dormant_after=w.dormant_after,
             min_bars=self.cfg.min_bars,
             notifier=self.notifier,
             fetch=fetch,

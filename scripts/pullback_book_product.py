@@ -86,7 +86,8 @@ def main() -> int:
     wide = WideDesk(
         create_engine(f"sqlite:///{tmp}"), stocks, params, delivery_model(costs),
         depository_paise(costs), calendar, SessionClock(SessionCfg(), calendar),
-        cap_open=cfg.wide.cap_open, min_bars=cfg.delivery.min_bars, background=False,
+        cap_open=cfg.wide.cap_open, dormant_after=cfg.wide.dormant_after,
+        min_bars=cfg.delivery.min_bars, background=False,
     )  # fmt: skip
     sessions = sorted({d for sd in days.values() for d in sd.dates})
     print(f"{len(days)} stocks, {len(sessions)} rounds, cap {cfg.wide.cap_open}; book {tmp}")

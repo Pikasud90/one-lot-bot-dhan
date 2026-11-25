@@ -296,7 +296,8 @@ def make_desk(
     desk = WideDesk(
         create_engine(f"sqlite:///{tmp}"), stocks, params, delivery_model(costs),
         depository_paise(costs), cal, SessionClock(SessionCfg(), cal),
-        cap_open=cfg.wide.cap_open, min_bars=cfg.delivery.min_bars, background=False,
+        cap_open=cfg.wide.cap_open, dormant_after=cfg.wide.dormant_after,
+        min_bars=cfg.delivery.min_bars, background=False,
     )  # fmt: skip
     return desk, tmp
 
