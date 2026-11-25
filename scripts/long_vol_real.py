@@ -234,14 +234,17 @@ class Day:
         return s.ffill().to_numpy(), real
 
 
-def rel_needed(day: Day, k: float, minute: int) -> int | None:
+def rel_needed(day: Day, k: float, minute: int) -> float:
+    """The rolling offset (in strike steps) that holds strike k at `minute`; NaN without an
+    at-the-money bar. Dhan serves offsets -10 to +10 only."""
     a, _ = atm_at(day.ce, minute)
     if not np.isfinite(a):
         a, _ = atm_at(day.pe, minute)
-    if not np.isfinite(a):
-        return None
-    r = (k - a) / day.step
-    return int(round(r)) if abs(r - round(r)) < 1e-6 and abs(r) <= 10 else None
+    return (k - a) / day.step if np.isfinite(a) else np.nan
+
+
+def fetchable(r: float) -> bool:
+    return bool(np.isfinite(r) and abs(r - round(r)) < 1e-6 and abs(r) <= 10)
 
 
 def pair_trade(p: h.Prep, day: Day, e_min: int, x_min: int, stop: bool) -> dict:
@@ -280,7 +283,22 @@ def pair_trade(p: h.Prep, day: Day, e_min: int, x_min: int, stop: bool) -> dict:
     for call, (px, m) in zip((True, False), xs, strict=True):
         if not np.isfinite(px):
             out["miss"] = "exit " + ("call" if call else "put")
-            out["need_rel"] = rel_needed(day, k, x)
+            r = rel_needed(day, k, x)
+            if fetchable(r):
+                out["need_rel"] = int(round(r))
+            elif np.isfinite(r):
+                # Dhan has no offset beyond ten strikes: the day is left out, and read at a
+                # floor for the buyer (the leg in the money at its intrinsic value, if larger
+                # than a print held; the other leg at its print or one tick)
+                out["miss"] = "exit beyond ten strikes"
+                sp = next((day.spot_at(x + w) for w in range(MAX_WAIT + 1)
+                           if np.isfinite(day.spot_at(x + w))), np.nan)  # fmt: skip
+                if np.isfinite(sp):
+                    fl = [max(sp - k, 0.0), max(k - sp, 0.0)]
+                    lb = [max(fl[i], xs[i][0] if np.isfinite(xs[i][0]) else 0.05)
+                          for i in range(2)]  # fmt: skip
+                    net, base = OS.leg_book(p, [e[0][0], e[1][0]], lb)
+                    out["ret_lb"] = net / base * 100.0
             return out
         if day.bad(px, call, k, m):
             out["miss"] = "bad print at exit"
@@ -340,6 +358,7 @@ def stage_trades() -> None:
                                  "ret": t.get("ret", np.nan), "gross": t.get("gross", np.nan),
                                  "why": t["why"], "miss": t["miss"], "k": t["k"],
                                  "real_share": t["real_share"], "m_old": m_old, "r_old": r_old,
+                                 "ret_lb": t.get("ret_lb", np.nan),
                                  **{c: t.get(c, np.nan) for c in ("e_call", "e_put", "x_call",
                                                                   "x_put")}})  # fmt: skip
                     if xn == "stop" and t.get("need_rel") not in (None, 0) and t["miss"]:
@@ -465,6 +484,14 @@ def stage_check() -> None:
         e = (g[f"par_{Q_DIV}"] / g["real"] - 1) * 100
         say(f"  at {mm // 60:02d}:{mm % 60:02d} (q {Q_DIV}): {len(g)} days, median {e.median():+.1f}%,"
             f" IQR {e.quantile(0.25):+.1f} to {e.quantile(0.75):+.1f}%")  # fmt: skip
+    # the forward the two real prints imply (C - P = disc (F - K)) against the assumed one
+    pr["disc"] = np.exp(-cfg["r"] * pr["t"])
+    pr["basis_bp"] = ((pr["k"] + (pr["call"] - pr["real"]) / pr["disc"]) / pr["spot"] - 1) * 1e4
+    pr["assumed_bp"] = (np.exp((cfg["r"] - Q_DIV) * pr["t"]) - 1) * 1e4
+    for name, g in [("both", pr), *list(pr.groupby("inst"))]:
+        say(f"  forward implied by the real pair, {name}: median {g.basis_bp.median():+.0f} bp "
+            f"over the index (IQR {g.basis_bp.quantile(0.25):+.0f} to "
+            f"{g.basis_bp.quantile(0.75):+.0f}), assumed {g.assumed_bp.median():+.0f} bp")  # fmt: skip
     w.close()
 
 
@@ -568,6 +595,14 @@ def stage_report() -> None:
         q = t[t.variant == v]
         miss = q[~q.both.astype(bool)]["miss"].value_counts().to_dict()
         say(f"  {v:12s} sessions {len(q)}, both real {int(q.both.sum())}, left out {miss}")
+        b = q[q.both.astype(bool)]
+        lb = q[q.ret_lb.notna()]
+        if len(lb):
+            x = np.r_[b.ret.to_numpy(float), lb.ret_lb.to_numpy(float)]
+            dd = np.r_[b.dayoff.to_numpy(), lb.dayoff.to_numpy()]
+            say(f"    with the {len(lb)} days beyond ten strikes at a floor (intrinsic value): "
+                f"{f2(b.ret.mean())} becomes {f2(x.mean())} (t {f2(rs.day_t(x, dd), 1)}); "
+                f"those days alone {f2(lb.ret_lb.mean())}")  # fmt: skip
     stop = t[t.variant.str.endswith("stop") & t.both.astype(bool)]
     say(f"  stop rule: minutes watched on real closes of both legs, mean "
         f"{stop.real_share.mean():.0%}; exits {stop.why.value_counts().to_dict()}")  # fmt: skip

@@ -464,6 +464,8 @@ def stage_fetch(max_tier: int | None) -> None:
     counts, why = run_needs(source, store, unds, needs, ledger, known,
                             deadline=gate_today(DEADLINE), progress=say)  # fmt: skip
     say(f"stopped: {why}; {counts}; requests in the ledger {ledger.count_requests()}")
+    if why in ("refused", "deadline"):
+        sys.exit(2)  # a chain of stages stops here: nothing more is asked
 
 
 def stage_status() -> None:
