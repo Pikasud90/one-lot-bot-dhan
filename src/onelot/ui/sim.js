@@ -126,6 +126,7 @@ function fitRoot() {
   // the open panel gives way so the chart keeps its height (at least 530px wide-screen, 390px with the dock as a row)
   const wide = window.innerWidth >= 1200, strip = $("sim-strip").offsetHeight;
   root.style.setProperty("--panel-h", Math.max(128, Math.min(212, h - strip - (wide ? 16 + 530 : 15 + 100 + 390))) + "px");
+  if (S.chart) requestAnimationFrame(() => S.chart.margins());
 }
 function panelOpen() { return S.view.panel === null ? window.innerHeight >= 800 : !!S.view.panel; }
 function renderPanelOpen() {
@@ -293,7 +294,7 @@ function ensureChart() {
   if (S.chart) return true;
   const LW = window.LightweightCharts;
   if (!LW) { veil("The chart library is missing (static/vendor).", "", "err"); return false; }
-  S.chart = SC.create($("sim-chart"), LW, { cssv, pinBox: $("sim-pins") });
+  S.chart = SC.create($("sim-chart"), LW, { cssv, pinBox: $("sim-pins"), topBox: document.querySelector("#sim-root .sim-chartbar"), legendBox: $("sim-legend") });
   S.chart.chart.subscribeCrosshairMove((param) => {
     const inside = param && param.point && param.logical !== undefined && param.time !== undefined;
     S.hover = !!inside;
@@ -734,7 +735,7 @@ function liveTick(dt) {
   S.liveAcc += dt;
   if (S.liveAcc < 5000 || S.inflight || !sessReady()) return;
   S.liveAcc = 0;
-  fetchChunk(1, null).then((ch) => { if (ch) flushAll(); renderClock(); });
+  fetchChunk(1, null).then((ch) => { if (ch) flushAll(); renderClock(); const lag = C.liveLagText(S.drawn, Date.now()); if (lag || S.note.startsWith("Waiting for the feed")) status(lag || "Following the live feed."); });
 }
 
 /* ── actions: take, skip, close, end ────────────────────────────────── */

@@ -209,6 +209,13 @@ function marketOpenAt(nowMs) {
   return wd >= 1 && wd <= 5 && s >= DAY_OPEN && s < DAY_OPEN + DAY_MINUTES * 60;
 }
 
+/* Live mode: a plain sentence when the market is open but the newest stored minute is more than 5 minutes old (the feed
+   is not writing minutes: a mock feed, a dropped socket), else null. */
+function liveLagText(drawnUnix, nowMs) {
+  if (!isNum(drawnUnix) || !marketOpenAt(nowMs) || nowMs / 1000 - drawnUnix <= 6 * 60) return null;
+  return `Waiting for the feed: the newest stored minute is ${clockText(drawnUnix)}. New minutes appear here as the feed writes them.`;
+}
+
 /* ── the price scale (owner's first bug) ───────────────────────────── */
 /* The range the chart shows: the visible candles' own range, widened by a level (entry, stop, target) only when it lies
    within `reach` (60%) of the candles' height beyond their range. A level farther away is not drawn into the scale: it
@@ -427,7 +434,7 @@ const api = {
   isNum, esc, num, money, rupees, signedMoney, rText, pctText, tone, volText, sourceWord, sideWord, stageText, reasonText, reasonShort,
   tfMinutes, unixOf, isoOf, dateText, dayText, hhmmOf, hhmmssOf, clockText, readyText, binStart, binEnd, countdownText, stepMinutes, eventMinute,
   mergeBar, foldMinutes, minutePath, partialMinute, playMinutes, minuteSeconds, speedInForce, chunkSize, speedStep, tfStep,
-  strategiesFor, startIsoOf, minuteBefore, defaultDay, snapDay, shiftDay, randomDay, resumeLine, marketOpenAt,
+  strategiesFor, startIsoOf, minuteBefore, defaultDay, snapDay, shiftDay, randomDay, resumeLine, marketOpenAt, liveLagText,
   scaleRule, pinnedText, legendParts, legendLine, keyAction, isOption, qtyText, rupeesAt, minutesLeft,
   ticketModel, positionModel, resultModel, ruleWords, numbersModel, tradeCells, eventWord, eventCells, levelLabels, markerFor, equityPath,
 };

@@ -117,6 +117,7 @@ function create(el, LW, opts = {}) {
         d.className = `sim-pin ${p.edge} ${p.name.startsWith("stop") ? "stop" : (p.name.startsWith("target") ? "target" : "entry")}`;
         d.style.setProperty("--slot", String(state.pinned.slice(0, i).filter(x => x.edge === p.edge).length));
       });
+      if (ctl) ctl.margins();
     };
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(draw); else draw();
   }
@@ -150,7 +151,7 @@ function create(el, LW, opts = {}) {
       candles.applyOptions({ priceFormat: { type: "price", precision: 2, minMove: tick } });
       const vol = hasVolume();
       volume.applyOptions({ visible: vol });
-      try { chart.priceScale("right").applyOptions({ autoScale: true, scaleMargins: vol ? { top: 0.08, bottom: 0.22 } : { top: 0.1, bottom: 0.1 } }); } catch (e) {}
+      ctl.margins();
       ctl.setCandles(tf, tfm, list, forming);
       ctl.startView();
     },
@@ -167,9 +168,26 @@ function create(el, LW, opts = {}) {
     startView() {
       const n = state.bars.length;
       try { chart.priceScale("right").applyOptions({ autoScale: true }); } catch (e) {}
-      if (n) chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - SHOW), to: n - 1 + RIGHT });
+      if (!n) return;
+      // Anchored to the NEWEST candle (bar spacing + right offset), never to absolute indices: the library applies a
+      // logical range only at its next frame, so minutes drawn before then (a Next alert, a resume) left the view behind
+      // on the old candles with the newest off screen (found on real bars, 25 Nov). An anchored view follows every new bar.
+      const ts = chart.timeScale(), w = typeof ts.width === "function" ? ts.width() : 0;
+      if (w > 0) ts.applyOptions({ barSpacing: Math.max(1.5, w / (SHOW + RIGHT)) });
+      ts.scrollToPosition(RIGHT, false);
     },
     fit() { ctl.startView(); },
+    /* The price scale's margins. The top one keeps the newest candles clear of the chart's toolbar (about 44 px) on a
+       short chart (1024x768: 299 px), where 10% was 30 px and the highs ran under it (found on real bars, 25 Nov). */
+    margins() {
+      // On a phone the legend spans the chart and the pinned tags sit under it: the band holds them too.
+      const bottomOf = (b) => (b && b.offsetHeight ? b.offsetTop + b.offsetHeight : 0), narrow = !!(el && el.clientWidth && el.clientWidth < 700);
+      let px = Math.max(bottomOf(opts.topBox), narrow ? bottomOf(opts.legendBox) : 0) + 8;
+      if (narrow) px += state.pinned.filter((p) => p.edge === "top").length * 30;
+      if (px <= 8) px = 44;
+      const h = (el && el.clientHeight) || 0, top = Math.min(0.25, Math.max(0.1, h ? px / h : 0.1));
+      try { chart.priceScale("right").applyOptions({ autoScale: true, scaleMargins: hasVolume() ? { top: Math.max(0.08, top), bottom: 0.22 } : { top, bottom: 0.1 } }); } catch (e) {}
+    },
     toNow() { chart.timeScale().scrollToRealTime(); },
     /* Draw minute `bar` up to fraction f (1: the whole minute; it is then part of its candle). */
     drawMinute(bar, f) {
@@ -254,7 +272,9 @@ function create(el, LW, opts = {}) {
     },
     hideDates(on) { state.hideDates = !!on; chart.applyOptions({ timeScale: { tickMarkFormatter: tickMark }, localization: { timeFormatter: fmtTime } }); },
     theme() {
-      chart.applyOptions(chartOptions());
+      // colours only: the bar spacing and right offset of chartOptions() would undo the reader's zoom (and the start view)
+      const o = chartOptions(); delete o.timeScale.barSpacing; delete o.timeScale.rightOffset; delete o.rightPriceScale.scaleMargins;
+      chart.applyOptions(o);
       candles.applyOptions(candleColours());
       overlays.forEach((s, i) => s.applyOptions({ color: cssv(OVERLAY_COLOURS[i]) }));
       if (hasVolume()) volume.setData(state.bars.map(volOf));

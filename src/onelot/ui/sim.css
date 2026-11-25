@@ -343,6 +343,7 @@
   #sim-root .sim-flag{display:none}   /* the bar at the bottom says it */
   #sim-root .sim-tonow{right:76px}
   #sim-root .sim-pin{right:72px}
+  #sim-root .sim-pin.top{top:calc(100px + var(--slot,0) * 30px)}   /* under the legend, in the band the price scale keeps free */
   #sim-root .sim-dock{order:3;overflow:visible}
   #sim-root .sim-panel{order:4;height:auto}
   #sim-root .sim-pbody{max-height:60svh}

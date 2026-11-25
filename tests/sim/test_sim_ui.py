@@ -494,7 +494,7 @@ class TestChoosing:
 # ══ the chart controller with a stub of the library (SIM-01) ═══════════════════════════════
 STUB = r"""
 function makeLW() {
-  const log = { lines: [], series: [], scale: [], markers: null, primitives: 0, ranges: [] };
+  const log = { lines: [], series: [], scale: [], markers: null, primitives: 0, ranges: [], positions: [] };
   const series = (type, opts) => {
     const s = { type, opts: { ...opts }, data: [], lines: [],
       setData(d) { this.data = d.slice(); }, update(b) { const n = this.data.length; if (n && this.data[n-1].time === b.time) this.data[n-1] = b; else this.data.push(b); },
@@ -506,7 +506,7 @@ function makeLW() {
     log.series.push(s); return s;
   };
   const ts = { opts: {}, range: null, applyOptions(o) { Object.assign(this.opts, o); }, setVisibleLogicalRange(r) { this.range = r; log.ranges.push(r); },
-    getVisibleLogicalRange() { return this.range; }, scrollToRealTime() {}, subscribeVisibleLogicalRangeChange() {}, timeToCoordinate() { return 10; } };
+    getVisibleLogicalRange() { return this.range; }, scrollToRealTime() {}, width() { return 1008; }, scrollToPosition(p) { log.positions.push(p); }, subscribeVisibleLogicalRangeChange() {}, timeToCoordinate() { return 10; } };
   const chartObj = { opts: {}, applyOptions(o) { Object.assign(this.opts, o); }, addSeries(type, o) { return series(type, o); },
     priceScale(id) { return { applyOptions(o) { log.scale.push([id, o]); } }; }, timeScale() { return ts; }, subscribeCrosshairMove() {}, paneSize() { return { height: 400 }; } };
   return { log, LW: { CandlestickSeries: 'candles', HistogramSeries: 'hist', LineSeries: 'line',
@@ -600,9 +600,11 @@ class TestChartController:
             f"""const {{ LW, log }} = makeLW(); const ch = SC.create({{}}, LW, {{}});
             const bars = []; for (let i = 0; i < 300; i++) bars.push([{DAY1} + 60*i, 1, 2, 0.5, 1.5, 0]);
             ch.load({{ key: 'X', label: 'X', kind: 'INDEX', tick: 0.05 }}, '1m', 1, bars, null);
-            return log.ranges.slice(-1)[0];"""
+            const ts = LW.createChart().timeScale();
+            return [ts.opts.barSpacing, log.positions.slice(-1)[0], log.ranges.length];"""
         )
-        assert out == {"from": 180, "to": 305}
+        # 1008 px over 120 candles and 6 empty bars, anchored 6 bars right of the newest (it follows new bars)
+        assert out == [8, 6, 0]
 
     def test_a_drawn_minute_updates_the_forming_candle_and_ends_as_the_real_bar(self):
         out = run_chart(
@@ -914,3 +916,27 @@ class TestOnRealBars:
         css = SIM_CSS.read_text("utf-8")
         rule = re.search(r"#sim-root \.sim-pair\{[^}]*\}", css).group(0)
         assert "flex-wrap:wrap" in rule
+
+
+@needs_node
+def test_live_mode_says_when_the_feed_writes_no_minutes():
+    # DAY1 + 3h = 12:15 IST on a Monday; a newest minute 4 minutes old is fine, 2 days old is said
+    now_ms = (DAY1 + 3 * 3600) * 1000
+    out = run(
+        f"return [C.liveLagText({DAY1} + 3*3600 - 240, {now_ms}), C.liveLagText({DAY1} - 2*86400, {now_ms}),"
+        f" C.liveLagText({DAY1} - 2*86400, {now_ms} + 8*3600*1000)];"
+    )
+    assert out[0] is None and out[2] is None
+    assert out[1].startswith("Waiting for the feed: the newest stored minute is Sat 03 Oct 09:15.")
+
+
+@needs_node
+def test_a_theme_change_keeps_the_zoom_and_the_price_margins():
+    out = run_chart(
+        f"""const {{ LW, log }} = makeLW(); const ch = SC.create({{}}, LW, {{}});
+        const bars = []; for (let i = 0; i < 300; i++) bars.push([{DAY1} + 60*i, 1, 2, 0.5, 1.5, 0]);
+        ch.load({{ key: 'X', label: 'X', kind: 'INDEX', tick: 0.05 }}, '1m', 1, bars, null);
+        const c = LW.createChart(); c.opts = {{}}; ch.theme();
+        return [c.opts.timeScale.barSpacing, c.opts.timeScale.rightOffset, c.opts.rightPriceScale.scaleMargins, !!c.opts.layout];"""
+    )
+    assert out == [None, None, None, True]
