@@ -229,7 +229,7 @@ function renderAccount(a) {
     tile("Realised today", rup(s.positions_realized), "", cls(s.positions_realized)) +
     tile("Unrealised", rup(s.positions_unrealized), "open positions", cls(s.positions_unrealized)) +
     tile("Ledger balance", rup(s.ledger_running_balance), s.ledger_last_date ? "as of " + esc(s.ledger_last_date) : "latest voucher") +
-    tile("30-day flows", `<span class="pos" style="font-size:.8em">+${rup(s.ledger_credits).replace("₹", "")}</span><span class="neg" style="font-size:.8em"> / −${rup(s.ledger_debits).replace("₹", "")}</span>`, "ledger credits / debits, ₹");
+    tile("30-day flows", `<span class="pos" style="font-size:max(14px,.8em)">+${rup(s.ledger_credits).replace("₹", "")}</span><span class="neg" style="font-size:max(14px,.8em)"> / −${rup(s.ledger_debits).replace("₹", "")}</span>`, "ledger credits / debits, ₹");
   const prof = (p.profile && p.profile.data) || {};
   $("acct-profile").innerHTML = kv("Client", s.client_id_suffix ? "…" + s.client_id_suffix : "–") +
     kv("Token valid till", esc(prof.tokenValidity || "–")) +
@@ -369,7 +369,7 @@ function alertRow(s) {
       <div class="strat"><b>${esc(s.strategy_label || s.strategy)}</b>${esc(s.timeframe)} · strength ${fmt(s.strength, 0)}</div>
       ${confBadge(c)}
       <div>${outcomeCell(s)}</div>
-      <div class="dim" style="font-size:12px">${esc(s.status)}${s.resolved_at ? "<br>" + hhmm(s.resolved_at) : ""}</div>
+      <div class="dim" style="font-size:14px">${esc(s.status)}${s.resolved_at ? "<br>" + hhmm(s.resolved_at) : ""}</div>
       <div class="acc-caret">▾</div>
     </div>
     <div class="alert-body">${body}</div></div>`;
@@ -631,7 +631,7 @@ function renderFeed(items) {
 const desk = { rendered: 0, force: true, sig: {}, open: store.get("desk.open", {}) };
 function hdot(state) { return `<span class="hs ${state === "OK" ? "ok" : (state === "CLOSED" || state === "LAGGING" ? "warn" : (state === "NO DATA" ? "" : "bad"))}"></span>`; }
 function sigNum(l, v, c = "") { return `<div class="sig-num"><small>${l}</small><b class="${c}">${v}</b></div>`; }
-const trainTag = (r) => r && r.trade === false ? `<span class="warn" style="font-size:12px">Training only: no alerts</span>` : "";
+const trainTag = (r) => r && r.trade === false ? `<span class="warn">Training only: no alerts</span>` : "";
 function signalCard(s) {
   const e = s.economics || {}, sell = s.direction === "short", o = e.option || {};
   const title = s.kind === "INDEX" ? `BUY ${esc(s.label)} ${o.strike ? fmt(o.strike, 0) : ""} ${esc(o.opt_type || "")} <span class="num" style="font-size:15px">${esc(e.unit_label)}</span>`

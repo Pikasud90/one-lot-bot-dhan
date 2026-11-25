@@ -23,7 +23,7 @@
 .ms-chip.active.bear{background:var(--bad);color:var(--panel)}
 .ms-chip.active.flat{background:var(--cyan);color:var(--panel)}
 .ms-chip.calm{background:transparent}
-.ms-tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px}
+.ms-tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(340px,100%),1fr));gap:18px}
 .ms-table{font-size:15.5px}
 .ms-table tr.ms-usual td{color:var(--muted);font-style:italic}
 .ms-evidence{font-size:16px;margin:14px 0 6px;color:var(--text)}
