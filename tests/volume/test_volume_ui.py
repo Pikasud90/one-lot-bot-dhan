@@ -846,3 +846,14 @@ class TestStatic:
         assert "POLL_MS = 20000" in js and "if (S.busy) return;" in js
         assert "document.hidden" in js and "!S.date" in js
         assert 'store.set("volume.index"' in js
+
+
+def test_the_pressure_word_at_the_floor_reads_as_the_server_does():
+    # the server calls a pressure balanced only when it is strictly under the floor
+    # (service.py: abs(p5) < PRESSURE_WORDS); the page gets the value rounded, so a raw 0.0504
+    # arrives as 0.05 and must still read as pressure (review of 25 Nov 2026)
+    out = run(
+        "return [pressureWord(0.05, 0.05), pressureWord(-0.05, 0.05),"
+        " pressureWord(0.049, 0.05), pressureWord(-0.049, 0.05)];"
+    )
+    assert out == ["Buying pressure", "Selling pressure", "Balanced", "Balanced"]

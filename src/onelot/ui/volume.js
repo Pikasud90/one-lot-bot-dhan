@@ -84,7 +84,7 @@ const bookIsEmpty = (b) => !b || !Array.isArray(b.stocks) || !b.stocks.length;
 const stateChip = (s) => `<span class="vol-chip ${esc(STATE_TEXT[s] ? s : "normal")}" title="${esc(STATE_HELP[s] || "")}">${esc(stateWord(s))}</span>`;
 const shareBar = (s) => `<span class="vol-bs" title="${esc(buyersText(s))}"><i style="width:${sharePct(s)}%"></i><u></u></span>`;
 const PRESSURE_FLOOR = 0.05;   // only the fallback for a demo answer without settings: the engine's own floor comes in settings.pressure_floor
-const pressureWord = (p, floor = PRESSURE_FLOOR) => num(p) === null ? "–" : (p > floor ? "Buying pressure" : (p < -floor ? "Selling pressure" : "Balanced"));
+const pressureWord = (p, floor = PRESSURE_FLOOR) => num(p) === null ? "–" : (p >= floor ? "Buying pressure" : (p <= -floor ? "Selling pressure" : "Balanced"));
 const pressBar = (p5, pd) => `<div class="vol-press" aria-hidden="true"><i class="${num(p5) < 0 ? "sell" : "buy"}" style="${num(p5) < 0 ? "right" : "left"}:50%;width:${Math.abs(clampHalf(p5))}%"></i><b class="${num(pd) < 0 ? "sell" : "buy"}" style="${num(pd) < 0 ? "right" : "left"}:50%;width:${Math.abs(clampHalf(pd))}%"></b><u></u></div>`;
 const nameOf = (stocks, key) => { const s = (stocks || []).find(x => x.key === key); return s ? s.label : key; };
 const directionWord = (d) => d === "BUYING" ? "mostly buying" : (d === "SELLING" ? "mostly selling" : "two-way trade");

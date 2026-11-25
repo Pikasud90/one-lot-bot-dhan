@@ -115,9 +115,9 @@ def test_a7_row_says_real_price_or_model_price_beside_the_instrument() -> None:
     real = paper_js("paperRow(P)", trade(price_source="real"))
     model = paper_js("paperRow(P)", trade(price_source="model"))
     plain = paper_js("paperRow(P)", trade())
-    assert '<span class="dim">· real price</span>' in real
-    assert '<span class="dim">· model price</span>' in model
+    assert '<span class="dim">· entry at a real price</span>' in real
+    assert '<span class="dim">· entry at a model price</span>' in model
     assert "real price" not in plain and "model price" not in plain
     assert "price_source" not in plain
     # a row without the key renders as before: the others only add the one span
-    assert real.replace(' <span class="dim">· real price</span>', "") == plain
+    assert real.replace(' <span class="dim">· entry at a real price</span>', "") == plain

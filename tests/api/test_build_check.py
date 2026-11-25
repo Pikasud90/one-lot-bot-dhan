@@ -20,3 +20,18 @@ def test_the_served_page_has_the_same_build(client) -> None:  # noqa: F811
     assert f'window.ONELOT_BUILD = "{build}";' in page
     assert "__BUILD__" not in page
     assert re.search(r'id="build-bar"', page)
+
+
+def test_the_build_changes_when_a_page_file_changes(tmp_path, monkeypatch) -> None:
+    import shutil
+
+    import onelot.api.server as server
+
+    ui = tmp_path / "ui"
+    shutil.copytree(server.UI_DIR, ui)
+    monkeypatch.setattr(server, "UI_DIR", ui)
+    before = server._ui_build()
+    assert server._ui_build() == before  # the same files: the same id
+    page = ui / "app.js"
+    page.write_text(page.read_text(encoding="utf-8") + "\n// changed\n", encoding="utf-8")
+    assert server._ui_build() != before

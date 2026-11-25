@@ -8,6 +8,7 @@ import datetime as dt
 import json
 import subprocess
 import sys
+import threading
 import time
 import warnings
 from pathlib import Path
@@ -120,7 +121,9 @@ def test_the_first_request_answers_at_once_and_a_later_one_has_the_full_body(sto
     t0 = time.perf_counter()
     first = strict(c.get(url))
     took = time.perf_counter() - t0
-    assert took < 0.1, f"the first request took {took:.3f} s"
+    # the proof that it did not wait is "building is True" below; the time is only a loose
+    # guard (a 0.1 s limit failed at 0.32 s on a busy machine in the gate of 25 Nov 2026)
+    assert took < 2.0, f"the first request took {took:.3f} s"
     assert first["building"] is True and first["now"] is None
     assert first["minutes"] == [] and first["stocks"] == [] and first["indices"] == []
     assert first["alerts"] == [] and first["notes"] == ["Preparing this session\u2026"]
@@ -146,13 +149,17 @@ def test_the_live_first_view_is_building_too(store, frames):
 def test_an_exception_in_the_build_is_caught_and_said_in_the_notes(store, monkeypatch):
     import onelot.volume.service as svc
 
+    gate = threading.Event()
+
     def boom(*a, **k):
+        gate.wait(30)  # held until the first answer is read: a fast failure cannot win the race
         raise RuntimeError("store unreadable")
 
     monkeypatch.setattr(svc, "build_baselines", boom)
     after = at(SPIKE_DAY + dt.timedelta(days=3), "08:00")
     watch = _background_watch(store, after)
     assert watch.body(DAYS[-2].isoformat())["building"] is True
+    gate.set()
     _until_built(watch, DAYS[-2])
     body = watch.body(DAYS[-2].isoformat())
     assert body["building"] is False
