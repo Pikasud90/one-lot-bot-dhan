@@ -16,6 +16,12 @@
    Today's data is never used to compute today's regime.
 5. If you see a notification self-test toast, alerts are working. If you do
    **not**, fix that before trading — see below.
+6. On the phone (US-097): about a minute after every start the desk sends "Desk started 09:02.
+   Token valid until 21:31. Feed: live."; a start after 09:15 on a trading day adds "Started
+   late: alerts before 10:57 were missed." At 09:05 IST on a trading day a running desk sends
+   the same three facts ("Desk up at 09:05. ..."). Each comes once a day (its own key). Nothing
+   can be sent while the laptop sleeps or the desk is stopped: treat a missing 09:05 message
+   as "the desk is down" and start it.
 
 **During the session**
 
@@ -130,7 +136,9 @@ paper trades only: the system never places an order.
 - With the Dhan Data API on, the desk tops up the store's one-minute bars once a day outside
   09:00 to 15:35 when the store is behind (`delivery.top_up`, on by default): at most three
   tries in a window, 20 minutes apart, stopped at 09:00; its errors show on Home. Otherwise run
-  a backfill from the Data tab.
+  a backfill from the Data tab. Since US-097 the top-up also starts when only another series it
+  writes is behind: a tracked index's one-minute bars or India VIX (daily or one-minute). A
+  series with no stored bars at all does not start it.
 
 ## Index options: the micro-trend rule (US-068)
 - The only rule on the four traded indices (NIFTY, BANKNIFTY, FINNIFTY, SENSEX). MIDCPNIFTY is
@@ -148,6 +156,19 @@ paper trades only: the system never places an order.
   Without them, or on the delayed 2-minute Yahoo feed (no 3m, 5m or 15m bars), nothing fires.
 - The index card shows the seven trends, "aligned up", "aligned down" or "not aligned", and for
   an open trade "reversed k of 7, exit at 3". The backtest of this exact rule lost a little.
+- Clean bars (US-097): the rule raises no alert for an index while the bars it reads today are
+  not all one-minute bars of the live source: a bar of today from the delayed Yahoo feed (a
+  desk started on Yahoo before the token was renewed), or a hole of more than five minutes
+  before the signal (the open counts). The card says "waiting for clean one-minute bars since
+  10:57" with the reason, under the trends and in the slot's "Why". A live bar of the same
+  minute replaces a delayed one; a desk that switches source starts its bars afresh. On such a
+  day the rule usually stays quiet until the next session. The pullback rule is not affected.
+- Spread (US-097): when a quote of the alerted contract not older than 60 seconds is at hand
+  (the option chain the alert was priced on, or the fill-cost recorder's last quote), the alert
+  carries `spread_pct`, half the bid-ask spread in % of the mid, and from 1% on the line "Wide
+  spread now: about 1.8% a side" in its text and in the Telegram message. No quote, no line;
+  the alert never waits for one and its prices do not change. FINNIFTY and SENSEX are often
+  wider than the cost model's 0.6% (`docs/research/LIVE_ALERTS_2026-11-24.md`).
 
 ## How a trade is managed: stop, target and trail (US-079)
 - A slot with `ratchet: true` in `config/desk.yaml` (today the micro-trend slot) is managed by
@@ -273,6 +294,7 @@ the whole channel off; the card then says so.
 | Critical desk states | CRITICAL | token expired at start, feed dead, index disagreement, halt. Always with sound. The same title is not sent again within 30 minutes of the last one sent. |
 | Dhan token reminders | WARNING, kind `token` | the ladder below. Always with sound. A stage reminder is dropped if it could not be delivered before the token ran out. |
 | Volume Watch | WARNING, kind `volume` | each note under its own key; a repeat of the same key is held back, a new key never. Muted outside the session. |
+| Desk start and 09:05 check (US-097) | WARNING, kind `desk` | "Desk started 09:02. Token valid until 21:31. Feed: live." about a minute after a start (with "Started late: ..." after 09:15 on a trading day), and "Desk up at 09:05. ..." on a trading day; each once a day by its own key. Always with sound. |
 
 Everything else (INFO, other warnings) stays on the page and the computer. Every message is a
 row in `telegram_outbox` before it is a request, sent in order (exit and critical first),
@@ -288,7 +310,9 @@ the housekeeping loop; only when Dhan credentials exist) and sends, once per tok
   IST and "Settings, Dhan card: Renew, or paste a new token."; when the desk can renew by
   itself it says it will try);
 - "Dhan token expired" when it ends;
-- while it is still expired: one reminder at 08:30 IST on each trading day, before 09:15;
+- while it is still expired: one reminder at 08:30 IST on each trading day, before 09:15; a
+  desk that first looks later that trading day (started after 09:15, or the laptop slept)
+  sends it at that first look, once that day, until the close (US-097);
 - "Dhan token renewed: valid until 21:31 on 25 Nov" when the expiry moves forward; the ladder
   is armed again.
 
@@ -300,9 +324,10 @@ expires") and still reports an expired token. The same messages show as a toast 
 and on the computer; the page shows the time left in the header chip, the Today strip and the
 Settings card.
 
-**What does NOT arrive**: nothing is sent while the laptop sleeps, is offline or the desk is
-stopped. The reminders are sent by the running desk: a token that ends overnight while the
-desk is stopped is told at the next start ("expired"), not before.
+**What does NOT arrive**: nothing is sent while the laptop sleeps, is offline or the desk is stopped
+(a missing 09:05 "Desk up" message means the desk is down). The reminders are sent by the running
+desk: a token that ends overnight while the desk is stopped is told at the next start ("expired"),
+not before.
 
 **Status** (no secret): `GET /api/notify/status` says for Telegram whether it is configured and
 in use, when the last message was confirmed, the class of the last error ("HTTP 403") and how
@@ -325,6 +350,8 @@ session and the day's profile.
   or for the basket as a whole, so an ordinary day reads about 1.0. The spike score compares
   the last 5 minutes with the previous 60 full sessions at the same minute. A session with fewer than 300 one-minute bars is never a baseline.
   They are built once a session on their own thread; until then the page says so in its notes.
+  A request never waits for them (US-097): the first view of a session answers at once with
+  `"building": true` and "Preparing this session…", and the page asks again every 2 seconds.
 - The words: quiet below 0.7 times normal over the last 5 minutes, busy from 1.5 (the study's
   15th and 85th percentiles).
 - When it alerts: a market spike score of 2.5 or more (about 1.3 a day), a single stock at 4.0
@@ -332,6 +359,9 @@ session and the day's profile.
   12 a day, and only for the last three closed minutes (in time or not at all). Each alert is
   stored once in `volume_alerts` (a restart repeats none) and goes through the Notifier as a
   WARNING of kind `volume`: the page's toasts, the computer's notifications and Telegram.
+- "Likely to move" on a market alert names an index only when its own pressure in the spike
+  (influence x net flow over expected turnover, summed over all the basket's stocks) is among
+  the two largest and at least 0.05: a spike led by ITC does not name the bank indices.
 - A watch alert is not a trade alert: it never opens a paper trade and never says buy or sell.
   The study found a size effect (the index's next 5 to 60 minutes about 1.5 times as large as
   usual) and no direction: the flow's side was right about half the time.
@@ -348,3 +378,19 @@ session and the day's profile.
 - Checking a day by hand: `PYTHONPATH=src .venv/bin/python scripts/volume_replay.py --store
   data/onelot.db --date 2026-11-20` opens the store read-only, prints the day and recomputes the
   newest minute straight from the bars.
+
+## Desk uptime (US-097)
+The desk was not running on 5 of the 7 sessions from 13 to 23 Nov 2026 (16 to 20 Nov) and
+nothing recorded it.
+- Heartbeat: while the desk runs, the housekeeping loop writes at most one small row update
+  every five minutes to `desk_uptime`: one row per calendar day with the first and last beat,
+  the beats, the minutes of market hours the beats covered (two beats more than ten minutes
+  apart are a gap, not covered) and whether the day's first start came after 09:15 on a
+  trading day. A restart continues the day's row.
+- `GET /api/desk/uptime?days=30`: per trading day of the app's calendar, from when to when the
+  desk ran inside market hours, the share of the session covered, missed or not, started late
+  or not. Days before the first row ever are marked `known: false`. It reads the store, so it
+  answers while the desk is not running.
+- Home: one line in the Today strip, only when a finished session of the last ten was missed or
+  covered under 90%: "The desk did not run on 5 of the last 10 sessions: 16, 17, 18, 19, 20 Nov."
+- On the phone: the start and 09:05 messages (Daily, step 6, and the Telegram table).
