@@ -443,6 +443,21 @@ def create_app(engine, api_token: str) -> FastAPI:
         out["paper_scoreboard"] = _paper_scoreboard(d)
         return out
 
+    @app.get("/api/delivery/wide")
+    def delivery_wide(closed: int = Query(100, ge=0, le=2000)) -> dict:
+        """US-099: the pullback rule's wide-list paper test (reads only): the last evening
+        round, the open trades of both tiers, the closed ones, the score of both tiers beside
+        the backtest's figure, and the stocks closest to a signal. {"enabled": false} when the
+        slot's `wide` is off."""
+        wide = getattr(getattr(_desk(), "delivery", None), "wide", None)
+        if wide is None:
+            return {"enabled": False}
+        try:
+            return wide.view(closed=closed)
+        except Exception as exc:  # noqa: BLE001 - the page says so; the desk runs on
+            log.warning("the wide list could not be read: %s", type(exc).__name__)
+            raise HTTPException(503, "the wide list could not be read") from exc
+
     @app.get("/api/desk/bars")
     def desk_bars(
         key: str, timeframe: str | None = None, n: int = Query(300, ge=20, le=3000)

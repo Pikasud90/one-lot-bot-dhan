@@ -118,6 +118,7 @@ class TradingCalendar:
     def __init__(self, holidays: dict[dt.date, str], verified: bool = False):
         self._holidays = holidays
         self.verified = verified
+        self._years: tuple[int, frozenset[int]] | None = None  # has_year's cache
         if not verified:
             log.warning(
                 "Holiday calendar is UNVERIFIED. Populate config/nse_holidays.yaml "
@@ -147,7 +148,12 @@ class TradingCalendar:
         return d.weekday() < 5 and not self.is_holiday(d)
 
     def has_year(self, year: int) -> bool:
-        return any(d.year == year for d in self._holidays)
+        # the years of the holiday list, kept until the list's size changes (US-099: the
+        # wide list's rounds ask this for every day of every stock's window)
+        n = len(self._holidays)
+        if self._years is None or self._years[0] != n:
+            self._years = (n, frozenset(d.year for d in self._holidays))
+        return year in self._years[1]
 
     def previous_trading_days(self, before: dt.date, count: int) -> list[dt.date]:
         """The `count` trading days strictly before `before`, oldest first."""

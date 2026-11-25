@@ -321,12 +321,18 @@ class WideBook:
         """Upsert per-stock state rows (only the columns given), in one transaction."""
         if not rows:
             return
+        groups: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+        for r in rows:
+            values = {"stale": False, **r, "updated_at": now}
+            groups.setdefault(tuple(sorted(values)), []).append(values)
         with self.engine.begin() as conn:
-            for r in rows:
-                values = {"stale": False, **r, "updated_at": now}
-                stmt = sqlite.insert(wide_state).values(**values)
-                cols = {k: getattr(stmt.excluded, k) for k in values if k != "series_key"}
-                conn.execute(stmt.on_conflict_do_update(index_elements=["series_key"], set_=cols))
+            for cols, part in groups.items():
+                stmt = sqlite.insert(wide_state)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["series_key"],
+                    set_={k: getattr(stmt.excluded, k) for k in cols if k != "series_key"},
+                )
+                conn.execute(stmt, part)  # one statement for many rows
         self.version += 1
 
     # ── rounds ──
@@ -1053,6 +1059,30 @@ class WideDesk:
         near.sort(key=lambda x: -float(x["below_high_pct"] or 0))
         out["closest"] = near[:closest]
         return out
+
+
+def replay_rounds(
+    wide: WideDesk,
+    days: Mapping[str, StockDays],
+    nifty_dates: Sequence[dt.date],
+    nifty_close: np.ndarray,
+    sessions: Sequence[dt.date],
+    at: dt.time = dt.time(18, 0),
+    progress: Callable[[int, dt.date], None] | None = None,
+) -> None:
+    """The product's evening round, session by session, on daily bars already in memory (the
+    replay tool and the tests; no broker). Each round reads the bars up to its own session
+    only (`WideDesk._evaluate` cuts every array there) and NIFTY up to that session."""
+    nd = np.array([d.toordinal() for d in nifty_dates], dtype=np.int64)
+    nlist = list(nifty_dates)
+    wide._fetch = None
+    wide._source = lambda keys: days
+    for n, s in enumerate(sessions):
+        k = int(np.searchsorted(nd, s.toordinal(), side="right"))
+        wide._nifty = lambda now, k=k: (nlist[:k], nifty_close[:k])  # type: ignore[misc]
+        wide.run_round(dt.datetime.combine(s, at, tzinfo=IST), s)
+        if progress is not None:
+            progress(n, s)
 
 
 def _round_view(row: Mapping[str, Any] | None) -> dict[str, Any] | None:
