@@ -105,3 +105,19 @@ def test_a6_build_changed_compares_the_two_builds() -> None:
         ' buildChanged("a1", null), buildChanged(undefined, undefined)]',
     )
     assert out == [False, True, False, False, False]
+
+
+@needs_node
+def test_a7_row_says_real_price_or_model_price_beside_the_instrument() -> None:
+    from tests.desk.test_paper_panel_ui import js as paper_js
+    from tests.desk.test_paper_panel_ui import trade
+
+    real = paper_js("paperRow(P)", trade(price_source="real"))
+    model = paper_js("paperRow(P)", trade(price_source="model"))
+    plain = paper_js("paperRow(P)", trade())
+    assert '<span class="dim">· real price</span>' in real
+    assert '<span class="dim">· model price</span>' in model
+    assert "real price" not in plain and "model price" not in plain
+    assert "price_source" not in plain
+    # a row without the key renders as before: the others only add the one span
+    assert real.replace(' <span class="dim">· real price</span>', "") == plain

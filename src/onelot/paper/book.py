@@ -623,11 +623,12 @@ class PaperBook:
                 for c in paper_trades.c
             }
             rows = conn.execute(stmt).mappings().all()
+        sources = self._price_sources([row["id"] for row in rows])
         views: list[dict[str, Any]] = []
         for row in rows:
             try:
                 stored = {k: _decoded(k, v, decoders[k]) for k, v in row.items()}
-                views.append(trade_view(PaperTrade.from_row(stored)))
+                views.append(trade_view(PaperTrade.from_row(stored), sources.get(row["id"])))
             except Exception as exc:  # noqa: BLE001 - one bad row never hides the others
                 why = f"{type(exc).__name__}: {exc}"
                 self._warn_once(
@@ -639,6 +640,27 @@ class PaperBook:
                     why,
                 )
         return views
+
+    def _price_sources(self, trade_ids: list[int]) -> dict[int, str]:
+        """trade id -> "real" or "model": how an option fill was priced, from its FILLED event.
+        Read-only; a failing read or an event without it gives nothing (the row says nothing)."""
+        out: dict[int, str] = {}
+        if not trade_ids:
+            return out
+        e = paper_events.c
+        try:
+            with self.engine.connect() as conn:
+                found = conn.execute(
+                    select(e.trade_id, e.detail).where(e.kind == "FILLED", e.trade_id.in_(trade_ids))
+                ).all()
+        except Exception as exc:  # noqa: BLE001 - the listing never fails for a label
+            log.warning("paper: price sources not read: %s: %s", type(exc).__name__, exc)
+            return out
+        for trade_id, detail in found:
+            source = detail.get("premium_source") if isinstance(detail, dict) else None
+            if source in ("real", "model"):
+                out[trade_id] = source
+        return out
 
     def today_totals(self, now: dt.datetime) -> DayTotals:
         """`day_totals` of `now`'s IST calendar date. A naive `now` is rejected (ValueError)."""

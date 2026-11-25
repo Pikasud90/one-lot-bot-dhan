@@ -39,9 +39,10 @@ class DayTotals(TypedDict):
     left_out_net_paise: NotRequired[int]
 
 
-def trade_view(trade: PaperTrade) -> dict[str, Any]:
+def trade_view(trade: PaperTrade, price_source: str | None = None) -> dict[str, Any]:
     """One paper trade for GET /api/paper: entry/exit/mark are per unit, gross/net/unrealised
-    the whole trade. `mark` and `unrealised` are set for an OPEN trade only (`open_mark`)."""
+    the whole trade. `mark` and `unrealised` are set for an OPEN trade only (`open_mark`).
+    `price_source` ("real" or "model", from the FILLED event) adds the key of that name."""
     plan = trade.plan  # parsed once for the label and the mark
     mark, unrealised = open_mark(trade, plan)
     return (
@@ -69,6 +70,7 @@ def trade_view(trade: PaperTrade) -> dict[str, Any]:
         }
         | ratchet_levels(plan)
         | void_tag(plan)
+        | ({"price_source": price_source} if price_source in ("real", "model") else {})
     )
 
 
