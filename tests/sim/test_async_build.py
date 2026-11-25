@@ -327,3 +327,39 @@ def test_the_next_window_is_prepared_ahead_never_inside_an_advance(db_engine, tm
             crossed = True
             assert m.frame_cache.builds == builds, "the advance built the next window itself"
     assert s.window.lo_strategy > first.lo_strategy
+
+
+def test_a_stored_session_pushed_out_of_the_queue_is_rebuilt_on_the_next_read(
+    stored, tmp_path, slow
+):
+    """The lead's check on the owner's own stored sessions (25 Nov): three stored sessions read
+    in a row left the middle one FAILED ("a newer choice replaced this session") until a
+    restart, though its row was sound. A stored session is tried again on its next read; a
+    session that was CREATED and replaced still stays FAILED (the two tests above)."""
+    slow["seconds"] = 0.0
+    m = make_manager(stored, StoreBars(stored), tmp_path, build="thread")
+    ids = []
+    for strategy in ("ema_cross", "supertrend_vol", "squeeze"):
+        sid = m.create(body(strategy))["session"]["id"]
+        m.builder.idle(10.0)
+        m.get(sid).save()
+        ids.append(sid)
+    a, b, c = ids
+    slow["hold"].clear()  # no rebuild can finish until the test says so
+    m2 = make_manager(stored, StoreBars(stored), tmp_path, build="thread")
+    m2.read(a)  # its rebuild runs
+    wait_running_job(m2)
+    m2.read(b)  # waits
+    m2.read(c)  # takes the waiting place: b is pushed out
+    pushed = m2.sessions[b]
+    assert pushed.status == "FAILED" and pushed.row is not None
+    slow["hold"].set()
+    m2.builder.idle(10.0)
+    assert m2.read(a)["session"]["status"] == "RUNNING"
+    assert m2.read(c)["session"]["status"] == "RUNNING"
+    again = m2.read(b)  # not FAILED for good: this read starts its rebuild again
+    assert again["session"]["status"] in ("BUILDING", "RUNNING")
+    assert m2.sessions[b] is not pushed and pushed.evicted
+    m2.builder.idle(10.0)
+    assert m2.read(b)["session"]["status"] == "RUNNING"
+    assert m2.store.session(b)["status"] == "RUNNING"  # the stored row was never marked failed

@@ -811,14 +811,32 @@ class SimManager:
             out["detail"] = entry.detail or "The session could not be prepared."
         return out
 
+    @staticmethod
+    def _pushed_out(entry: Entry) -> bool:
+        """A STORED session whose rebuild lost its place in the queue to a newer build. Its row
+        is sound (ENDED or RUNNING), so it is not FAILED for good: the next read rebuilds it.
+        (The lead's check on the owner's stored sessions, 25 Nov: three reads in a row left
+        the middle session FAILED until a restart.) A session that was CREATED and replaced
+        has no stored row here and stays FAILED: the newer choice did replace it."""
+        return (
+            entry.session is None
+            and entry.status == "FAILED"
+            and entry.detail == REPLACED
+            and entry.row is not None
+            and entry.row.get("status") != "FAILED"
+        )
+
     def entry(self, sid: str) -> Entry:
         """The session's entry; one that is not in memory is answered from its stored row and
         rebuilt (at once when its frame is ready, else in the worker)."""
         with self.lock:
             hit = self.sessions.get(sid)
-            if hit is not None:
+            if hit is not None and not self._pushed_out(hit):
                 self.sessions.move_to_end(sid)
                 return hit
+            if hit is not None:  # a sound stored session: its rebuild is tried again now
+                hit.evicted = True
+                del self.sessions[sid]
         row = self.store.session(sid)
         if row is None:
             raise SimError(404, f"There is no simulator session {sid!r}.")
