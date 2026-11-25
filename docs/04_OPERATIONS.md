@@ -149,8 +149,8 @@ places an order, and the desk 18 keep working exactly as above.
   swing-universe study. The 204 stocks that are not desk instruments are delivery-only: daily
   bars only, no feed, no intraday bars, no card.
 - The switch: on the pullback slot in `config/desk.yaml`, `wide: true`, `cap_open: 10`,
-  `evening_round: true` and `universe:` (the file above). With `wide: false` the desk is as
-  before this story; reload or restart after a change.
+  `evening_round: true`, `universe:` (the file above) and `dormant_after: 10` (below). With
+  `wide: false` the desk is as before this story; reload or restart after a change.
 - The evening round, once per finished session, after the close (never between 09:00 and
   15:35), on its own thread: it fetches the last 30 or so daily bars of each delivery-only
   stock through the desk's adapter (Data API on; at most two requests a second; an error is
@@ -193,8 +193,8 @@ places an order, and the desk 18 keep working exactly as above.
   close before) may be a split or bonus the broker left unadjusted. Within the 20 sessions of
   the rule's high it blocks the entry ("a split or bonus not adjusted?"); since a trade's
   entry it holds that trade's exit for the owner (the note says "exit held for review"; the
-  round lists it as held). A held trade keeps its place until the history is re-based or the
-  owner decides. A rise is never blocked.
+  round lists it as held). A held trade keeps its place until the history is re-based, and
+  for `dormant_after` sessions at most (see "Dormant stocks" below). A rise is never blocked.
 - Two tiers. Every signal is a paper trade (tier "all"). At most `cap_open` trades are open
   within the cap at a time, the desk 18's active trades counted. A signal of the round's own
   session takes a free place, the desk group first, then the deepest pullback first; a trade
@@ -202,11 +202,48 @@ places an order, and the desk 18 keep working exactly as above.
   Telegram: "wide list"), to enter and to exit. The others are recorded: "recorded for the
   test, not alerted: the cap of 10 is full". A signal read late (a round that did not run)
   is recorded and never alerted.
+- Dormant stocks and released trades (US-103). A stock that stops trading (a suspension, a
+  merger, a delisting) or stays stale gets no new daily bar. After `dormant_after` market
+  sessions without one (10, on the pullback slot in `config/desk.yaml`) the stock is dormant:
+  - Its open paper trade is closed at its last stored close, booked as a sale, with the exit
+    reason NO_DATA. An entry still pending is cancelled and never filled. The place within
+    the cap is free for a new signal of that same evening.
+  - The round stops waiting for the stock, so its missing bar costs no extra try. The stock
+    is still asked for every evening, and it is read again when its bars return. A fetch
+    now starts before the stock's last stored bar, so a long silence leaves no hole in the
+    history. A released trade stays released.
+  - What counts: a market session is a trading day of the app's calendar on which at least
+    half of the other stocks got a bar. The sessions are read from the stored bars, so a
+    holiday the calendar does not list, a special session off the calendar (a Muhurat) and
+    an evening on which the bars of a few stocks only came are not counted. With no broker
+    data at all nothing is ever released.
+  - Two guards. The desk must find the stock without a new bar on three evening rounds in
+    a row (two that count and the one that releases): after it was off for two weeks, one
+    bad evening releases nothing. And the stock turns dormant only at the round after the
+    one that counted its tenth session, if it still has no bar: that bar has had a day to
+    arrive. With the desk running every evening that is the eleventh evening. A new bar
+    starts both counts again. One case is left as it falls: a stock that trades again on
+    the very evening it is released, its bar coming after that round's first try, stays
+    released.
+  - An exit held for review is released on the same count: on the 10th session counted from
+    the one that first held it, once two evening rounds in a row before have seen it held,
+    at that session's close, with the exit reason REVIEW. Its result may be on another price
+    basis than its entry: check it by hand.
+  - Neither is the rule's own exit. The score counts these trades apart ("Not in the
+    score"), the round's line names them ("released without the rule's exit", "dormant, not
+    waited for", "daily bars are back") and the block lists the dormant stocks with their
+    last bar. Nothing is sent to the phone: if you hold the shares, decide by hand.
+  - Why 10: the longest hole in one stock's bars in the study's 16 years is 5 sessions, and
+    one stock traded only once a week for months (4 sessions missing between its bars). A
+    small number would release trades of stocks that still trade. `dormant_after: 0`
+    switches all of this off: the desk as before US-103.
 - Where to look: Home and the Live Desk's Stocks card show the Wide list block (the last
   round, the places in use, the open trades of both tiers, the score of both tiers beside the
   backtest's figure, the closed trades and the stocks closest to a signal). The same as data:
   `GET /api/delivery/wide` (reads only). Its own tables: `wide_trades`, `wide_state`,
-  `wide_rounds`; the desk 18's `delivery_trades` is never written by the round.
+  `wide_rounds`; the desk 18's `delivery_trades` is never written by the round. Since US-103
+  the answer also carries `dormant`, a `released` and a `cancelled` count in each tier of
+  `score`, and trades with the status CANCELLED or the exit reason NO_DATA or REVIEW.
 - History: the lead copies the study's daily bars into the store once, with the desk running:
 
       PYTHONPATH=src .venv/bin/python scripts/import_daily_universe.py \
