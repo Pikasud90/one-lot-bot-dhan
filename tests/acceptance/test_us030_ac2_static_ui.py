@@ -22,7 +22,7 @@ import us030_helpers as H
 BASELINE_STYLES_COLOUR_LITERALS = 52  # colour values in styles.css outside the two theme blocks
 BASELINE_INDEX_INLINE_COLOUR_LITERALS = 0  # colours in style="" attributes, outside the mascots
 MASCOT_SHA256 = "969c931aeeddb20c3ec689181ba086e8ad377cb925fdc173f250667d4493c357"
-MIN_FONT_PX = 12  # the smallest type the desk already uses (the uppercase badges)
+MIN_FONT_PX = 14  # the desk's type floor since 25 Nov 2026 (see tests/test_us085_ux_ui.py)
 
 INDEX = H.INDEX_HTML.read_text(encoding="utf-8")
 STYLES = H.STYLES_CSS.read_text(encoding="utf-8")

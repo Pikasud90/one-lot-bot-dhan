@@ -10,7 +10,7 @@ const live = new Map();   // el -> { chart, series: [], markers: [], priceLines:
 
 const themeOpts = () => ({
   layout: { background: { type: "solid", color: "transparent" }, textColor: cssVar("--plot-font"),
-            fontFamily: "JetBrains Mono, Menlo, monospace", fontSize: 12, attributionLogo: false },
+            fontFamily: "JetBrains Mono, Menlo, monospace", fontSize: 14, attributionLogo: false },
   grid: { vertLines: { color: cssVar("--grid") }, horzLines: { color: cssVar("--grid") } },
   crosshair: { mode: 0 },
   rightPriceScale: { borderColor: cssVar("--line2") },
