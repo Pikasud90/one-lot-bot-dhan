@@ -1380,3 +1380,19 @@ def test_a_round_with_no_broker_and_no_replay_source_counts_and_releases_nothing
         assert r.summary["released"] == [] and r.summary["dormant"] == [], i
         assert by_key(w)["AAA"].status == "OPEN", i
     assert quiet(w)[1] == 0 and "dormant" not in reading(w)  # no evening was ever counted
+
+
+def test_switching_dormant_after_to_0_keeps_a_held_trade_held():
+    raw = unadjusted(slow(SIG), SIG + 5, 0.5)  # an unadjusted split: the exit is held
+    w, broker = desk({"AAA": raw, "BBB": PLAIN}, dormant_after=3)
+    for i in range(SIG - 2, SIG + 9):
+        r = go(w, broker, i)
+        assert r.summary["released"] == []
+    assert reading(w)["trade"]["held_rounds"] == 2  # two held evenings are counted
+    w.dormant_after = 0  # the switch: the desk as before, nothing is ever released
+    for i in (SIG + 9, SIG + 10):
+        r = go(w, broker, i)
+        assert r.summary["released"] == [] and r.summary["held"] == ["AAA"]
+        a = by_key(w)["AAA"]
+        assert a.status == "OPEN" and a.exit_reason is None and "exit held for review" in a.note
+        assert reading(w)["trade"]["held_rounds"] == 0 and "released" not in reading(w)["trade"]
