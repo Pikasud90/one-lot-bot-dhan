@@ -42,8 +42,9 @@ from ..data.universe import load_specs
 from ..indicators import mtf
 from ..lab.real_options import premium_in_minute
 from ..notify.base import Notification, NotificationLevel, shown_confidence
+from ..void import void_reason
 from . import clean_bars
-from .audit import audit_signal, confidence, strategy_scoreboard
+from .audit import audit_signal, confidence, scoreboard_left_out, strategy_scoreboard
 from .config import DeskConfig, load_desk_config
 from .data import CompositeBars, build_source, is_delayed_source
 from .economics import (
@@ -249,6 +250,11 @@ class Desk:
         self.positions: dict[str, dict] = {}  # open, by id
         self.archive: list[dict] = []  # recent signals (any status) with outcomes, newest first
         self.scoreboard: dict[str, dict] = {}
+        # US-105: the alerts the scoreboard left out (void contracts); None when none
+        self.scoreboard_left_out: dict | None = None
+        # the same record with the void alerts kept: only the confidence score reads it, so
+        # no alert text changes (US-105 V5)
+        self._scoreboard_confidence: dict[str, dict] = {}
         self._chain_cache: dict[str, tuple[dt.datetime, Any]] = {}
         # the alerted contracts' one-minute bars for the paper book's real premiums
         self._contract_cache: dict[str, tuple[dt.datetime, pd.DataFrame]] = {}
@@ -1070,7 +1076,7 @@ class Desk:
         conf = confidence(
             v.strength,
             self._backtest_evidence(slot.cfg.name, t.instrument.key, slot.cfg.timeframe),
-            self.scoreboard.get(slot.cfg.name),
+            self._scoreboard_confidence.get(slot.cfg.name),
             regime_ok,
         )
         src = self._served_by(t.cfg.key)
@@ -2249,6 +2255,8 @@ class Desk:
                         update(desk_signals).where(desk_signals.c.id == s["id"]).values(payload=s)
                     )
         self.scoreboard = strategy_scoreboard(self.archive)
+        self.scoreboard_left_out = scoreboard_left_out(self.archive)
+        self._scoreboard_confidence = strategy_scoreboard(self.archive, counted_only=False)
 
     def signals_view(self, days: int = 7) -> dict:
         cutoff = now_ist() - dt.timedelta(days=days)
@@ -2259,13 +2267,22 @@ class Desk:
                 delivery = self.delivery.alerts(cutoff)
             except Exception:  # noqa: BLE001 - the intraday alerts still answer
                 log.exception("delivery: the alert archive could not be read")
-        return {
+        # US-105: a void alert stays listed as recorded, with a tag on a copy (the stored
+        # payload is never touched)
+        rows = [
+            {**s, "void_reason": reason} if (reason := void_reason(s)) is not None else s
+            for s in rows
+        ]
+        out = {
             "signals": rows,
             "scoreboard": self.scoreboard,
             "days": days,
             "pending": [s["id"] for s in self.signals.values()],
             "delivery_alerts": delivery,
         }
+        if self.scoreboard_left_out is not None:
+            out["scoreboard_left_out"] = self.scoreboard_left_out
+        return out
 
     def bars_view(self, key: str, timeframe: str | None = None, n: int = 300) -> dict:
         t = self.trackers.get(key.upper())
@@ -2780,6 +2797,12 @@ class Desk:
             # US-067: pending delivery alerts and carried delivery trades (None: no slot)
             "delivery": self.delivery.view() if self.delivery is not None else None,
             "scoreboard": self.scoreboard,
+            # US-105: said whenever the scoreboard above left a void alert out
+            **(
+                {"scoreboard_left_out": self.scoreboard_left_out}
+                if self.scoreboard_left_out
+                else {}
+            ),
             "counts": {
                 "instruments": len(trackers),
                 "strategies": sum(len(t.slots) for t in self.trackers.values()),

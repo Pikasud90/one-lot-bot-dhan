@@ -1,0 +1,211 @@
+"""US-105 through the REAL Desk and the HTTP API: a trade on a contract that was not tradeable
+is tagged on its alert row, left out of the scoreboards, and counted in a left-out figure.
+
+The rig is the OF-5 one. The paper trade is a stock trade the rig opens and stops out; the
+void mark is written the way the book writes it, and the alert's facts are set to the
+recorded ones, because the rig raises no index option alert.
+"""
+
+# ruff: noqa: F811
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+
+import us001_helpers as H
+from sqlalchemy import select
+from test_of5_alert_lifecycle import (  # noqa: F401  (fixtures)
+    _offline,
+    api,
+    app_cfg,
+    desk_db,
+    rig,
+    through_the_stop,
+)
+
+from onelot.desk.audit import scoreboard_left_out, strategy_scoreboard
+from onelot.store.schema import paper_trades, paper_void
+from onelot.void import LEFT_OUT_NOTE, VOID_REASON
+
+
+def void_facts(alert: dict) -> dict:
+    """The alert as the desk stored it for the MIDCPNIFTY put of 23 Nov (open interest 0)."""
+    alert = json.loads(json.dumps(alert))
+    alert["kind"] = "INDEX"
+    alert["economics"] = {
+        **alert.get("economics", {}),
+        "synthetic": False,
+        "option": {"bid": 1313.45, "ask": 1678.5, "oi": 0.0, "iv": 0.625, "delta": 0.643},
+    }
+    return alert
+
+
+def closed_alert(rig_, strategy: str, oid: str, pnl: float, void: bool) -> dict:
+    s = {
+        "id": oid,
+        "strategy": strategy,
+        "kind": "STOCK",
+        "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "status": "EXPIRED",
+        "outcome": {"outcome": "STOP" if pnl < 0 else "TARGET", "r_now": pnl / 100, "pnl_est": pnl},
+    }
+    return void_facts(s) if void else s
+
+
+class TestAuditScoreboard:
+    def test_void_alerts_are_left_out_and_counted(self):
+        sigs = [
+            closed_alert(None, "a", "1", 100.0, void=False),
+            closed_alert(None, "a", "2", -50.0, void=False),
+            closed_alert(None, "a", "3", -400.0, void=True),
+            closed_alert(None, "b", "4", 30.0, void=True),
+        ]
+        board = strategy_scoreboard(sigs)
+        assert board["a"]["n"] == 2 and board["a"]["pnl_sum"] == 50.0 and "b" not in board
+        assert scoreboard_left_out(sigs) == {"trades": 2, "net": -370.0, "reason": LEFT_OUT_NOTE}
+
+    def test_with_nothing_void_the_figures_are_as_before(self):
+        sigs = [closed_alert(None, "a", "1", 100.0, void=False)]
+        assert scoreboard_left_out(sigs) is None
+        assert strategy_scoreboard(sigs) == strategy_scoreboard(sigs, counted_only=False)
+
+    def test_an_open_outcome_of_a_void_alert_is_not_counted_as_left_out(self):
+        s = closed_alert(None, "a", "1", 100.0, void=True)
+        s["outcome"] = {"outcome": "OPEN", "r_now": 0.2}
+        assert scoreboard_left_out([s]) is None
+
+    def test_the_unfiltered_record_is_kept_for_the_confidence_score(self):
+        sigs = [closed_alert(None, "a", str(i), 10.0, void=True) for i in range(6)]
+        assert strategy_scoreboard(sigs) == {}
+        assert strategy_scoreboard(sigs, counted_only=False)["a"]["n"] == 6
+
+
+class TestTheDeskAndTheApi:
+    def test_the_alert_row_is_tagged_and_the_stored_alert_is_untouched(self, rig):
+        alert = rig.alert("SBIN")
+        through_the_stop(rig, alert)
+        rig.poll()
+        kept = next(s for s in rig.desk.archive if s["id"] == alert["id"])
+        kept.update(void_facts(kept))
+        before = json.dumps(kept, sort_keys=True, default=str)
+        body = api(rig.desk).get("/api/desk/signals").json()
+        row = next(s for s in body["signals"] if s["id"] == alert["id"])
+        assert row["void_reason"] == VOID_REASON
+        assert row["exit"]["reason"] == "STOP"  # the recorded exit is still on the row
+        assert json.dumps(kept, sort_keys=True, default=str) == before  # nothing stored changed
+        assert "void_reason" not in kept
+
+    def test_a_sound_alert_row_has_no_tag_and_no_left_out_key_appears(self, rig):
+        alert = rig.alert("SBIN")
+        through_the_stop(rig, alert)
+        rig.poll()
+        body = api(rig.desk).get("/api/desk/signals").json()
+        row = next(s for s in body["signals"] if s["id"] == alert["id"])
+        assert "void_reason" not in row
+        assert "paper_left_out" not in body and "scoreboard_left_out" not in body
+
+    def test_the_marked_trade_is_left_out_of_the_scoreboard_and_counted_apart(self, rig):
+        alert = rig.alert("SBIN")
+        through_the_stop(rig, alert)
+        rig.poll()
+        before = api(rig.desk).get("/api/desk/signals").json()
+        mine = lambda b: next(  # noqa: E731
+            r for r in b["paper_scoreboard"] if r["strategy"] == alert["strategy"] and r["trades"]
+        )
+        counted = mine(before)
+        assert "left_out" not in counted
+        with rig.engine.begin() as conn:
+            trade = conn.execute(select(paper_trades.c.id, paper_trades.c.net_paise)).one()
+            conn.execute(
+                paper_void.insert().values(
+                    trade_id=trade.id,
+                    alert_id=alert["id"],
+                    reason=VOID_REASON,
+                    marked_at=dt.datetime.now(dt.timezone.utc),
+                )
+            )
+        after = api(rig.desk).get("/api/desk/signals").json()
+        rows = [r for r in after["paper_scoreboard"] if r["strategy"] == alert["strategy"]]
+        assert all(r["trades"] == 0 for r in rows)
+        assert after["paper_left_out"]["trades"] == 1
+        assert after["paper_left_out"]["net"] == counted["net"]
+        assert after["paper_left_out"]["reason"] == LEFT_OUT_NOTE
+
+    def test_the_paper_api_still_lists_the_trade_with_its_net_and_a_tag(self, rig):
+        alert = rig.alert("SBIN")
+        through_the_stop(rig, alert)
+        rig.poll()
+        with rig.engine.begin() as conn:
+            row = conn.execute(select(paper_trades.c.id, paper_trades.c.plan)).one()
+            plan = {**row.plan, "alert": void_facts(row.plan["alert"])}
+            conn.execute(paper_trades.update().values(plan=plan))
+        body = api(rig.desk).get("/api/paper").json()
+        (t,) = [t for t in body["trades"] if t["alert_id"] == alert["id"]]
+        assert t["status"] == "CLOSED" and t["net"] is not None  # listed, as recorded
+        assert t["void_reason"] == VOID_REASON
+
+
+def archive_rows(strategy: str, now: dt.datetime, voids: int, sound: int) -> list[dict]:
+    """Closed archive outcomes of one strategy, created a day before `now`."""
+    made = (now - dt.timedelta(days=1)).isoformat()
+    rows = []
+    for i in range(voids + sound):
+        row = closed_alert(
+            None, strategy, f"{strategy}{i}", -100.0 if i < voids else 40.0, i < voids
+        )
+        row.update(created_at=made, series_key="SBIN", instrument_key="SBIN", horizon="intraday")
+        rows.append(row)
+    return rows
+
+
+class TestTheRealDeskPath:
+    """Review findings: the left-out figure and the confidence record were never checked on the
+    real Desk (mutating them away left every test green)."""
+
+    def seeded(self, rig, monkeypatch, voids=2, sound=4):
+        now = H.mid_session(rig.desk, "SBIN")
+        rig.desk.archive = archive_rows("zz", now, voids, sound)
+        rig.desk._audit_archive(now)
+        monkeypatch.setattr("onelot.desk.desk.now_ist", lambda: now)
+        return now
+
+    def test_signals_view_and_the_route_say_what_the_audit_scoreboard_left_out(
+        self, rig, monkeypatch
+    ):
+        self.seeded(rig, monkeypatch)
+        want = {"trades": 2, "net": -200.0, "reason": LEFT_OUT_NOTE}
+        assert rig.desk.scoreboard["zz"]["n"] == 4
+        assert rig.desk.signals_view()["scoreboard_left_out"] == want
+        assert api(rig.desk).get("/api/desk/signals").json()["scoreboard_left_out"] == want
+
+    def test_the_snapshot_carries_it_beside_the_scoreboard(self, rig, monkeypatch):
+        now = self.seeded(rig, monkeypatch)
+        rig.desk._rebuild_snapshot(now, None)
+        snap = rig.desk.snapshot()
+        assert snap["scoreboard"]["zz"]["n"] == 4
+        assert snap["scoreboard_left_out"] == {"trades": 2, "net": -200.0, "reason": LEFT_OUT_NOTE}
+
+    def test_with_nothing_void_neither_key_appears(self, rig, monkeypatch):
+        now = self.seeded(rig, monkeypatch, voids=0)
+        rig.desk._rebuild_snapshot(now, None)
+        assert "scoreboard_left_out" not in rig.desk.snapshot()
+        assert "scoreboard_left_out" not in rig.desk.signals_view()
+
+    def test_a_new_alerts_confidence_reads_the_unfiltered_record(self, rig, monkeypatch):
+        """No alert text changes (V5): the confidence of a new alert is computed from the record
+        with the void alerts kept, and differs from what the filtered scoreboard would give."""
+        t = rig.desk.trackers["SBIN"]
+        name = t.slots[0].cfg.name
+        now = H.mid_session(rig.desk, "SBIN")
+        rig.desk.archive = archive_rows(name, now, voids=5, sound=1)
+        rig.desk._audit_archive(now)
+        assert rig.desk.scoreboard[name]["n"] == 1  # the filtered score has too little evidence
+        seen: list = []
+        import onelot.desk.desk as desk_module
+
+        real = desk_module.confidence
+        monkeypatch.setattr(desk_module, "confidence", lambda *a: (seen.append(a[2]), real(*a))[1])
+        alert = H.raise_alert(rig.desk, "SBIN", now=now)
+        assert seen[0]["n"] == 6  # all six, void ones kept
+        assert alert["confidence"]["parts"]["live_note"].startswith("6 archived alerts")

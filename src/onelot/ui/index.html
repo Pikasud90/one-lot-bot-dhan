@@ -124,7 +124,7 @@
     <!-- 3. Monitoring | Strategy scoreboard -->
     <div class="grid2">
       <div class="card"><h2>Monitoring <small>alerts you took · each closes at its exit alert's price · scroll sideways for every column</small></h2><div class="scroll" id="home-positions"></div></div>
-      <div class="card"><h2>Strategy scoreboard <small>the two rules (micro-trend options · pullback delivery) · every alert's paper trade, net of costs</small></h2><div class="scroll" id="home-scoreboard"></div></div>
+      <div class="card"><h2>Strategy scoreboard <small>the two rules (micro-trend options · pullback delivery) · every alert's paper trade, net of costs · trades on contracts that were not tradeable are left out and tagged</small></h2><div class="scroll" id="home-scoreboard"></div></div>
     </div>
     <!-- 4. Archive, 10 at a time -->
     <div class="card"><h2>Archive <small>newest first · 10 at a time · exit = the alert's one exit alert (its paper trade)</small></h2><div class="scroll" id="home-archive"></div><div class="actions mt" id="home-archive-more"></div></div>
@@ -152,7 +152,7 @@
     </div>
     <div id="desk-signals"></div>
     <div class="card strip" id="desk-paper-card">
-      <div class="row between"><h2>Paper trades <small>every alert opens one · one lot, or shares worth about ₹10,000 for a delivery trade · never an order</small></h2><span class="muted" id="desk-paper-meta"></span></div>
+      <div class="row between"><h2>Paper trades <small>every alert opens one · one lot, or shares worth about ₹10,000 for a delivery trade · never an order · one on a contract that was not tradeable is tagged and not counted</small></h2><span class="muted" id="desk-paper-meta"></span></div>
       <div class="paper-views" role="radiogroup" aria-label="Which paper trades to show">
         <button type="button" role="radio" aria-checked="true" tabindex="0" data-paper-view="today">Today</button>
         <button type="button" role="radio" aria-checked="false" tabindex="-1" data-paper-view="last">Last session</button>

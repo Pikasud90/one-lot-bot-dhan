@@ -14,6 +14,11 @@ of every total and warned about, never truncated into the sum (as `PaperTrade.fr
 A trade with net above zero is a win, below zero a loss, exactly zero neither (it still counts
 as a trade). NO_FILL rows (zero money, never filled), open and waiting trades, and closes whose
 exit was never priced (net NULL) are not trades the ledger counts.
+
+US-105: a trade marked in `paper_void` (its contract was not tradeable) is left out of every
+figure here. The CLOSED ones with a net are counted apart (`PaperLedger.left_out()` and
+`StrategyTotals.left_out_*`), so a score can say how many it left out; a void NO_FILL has no money
+and stays in the slot's No fill count (nothing is scored by it).
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import threading
+import weakref
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -29,7 +35,7 @@ from typing import NamedTuple, TypeVar, get_args
 from sqlalchemy import ColumnElement, Engine, func, select, type_coerce
 from sqlalchemy.types import NullType
 
-from ..store.schema import paper_trades
+from ..store.schema import METADATA, paper_trades, paper_void
 from .alert import Grade
 from .money import stored_paise
 
@@ -76,6 +82,10 @@ class LedgerTotals:
     net_paise: int
 
 
+# engines whose paper_void table was already checked (weak: a new engine is checked afresh)
+_VOID_TABLE_SEEN: weakref.WeakSet[Engine] = weakref.WeakSet()
+
+
 @dataclass
 class StrategyTotals:
     """One strategy's closed paper trades that have a net (owner feedback OF-5): the same
@@ -96,6 +106,8 @@ class StrategyTotals:
     r_trades: int = 0
     no_fill: int = 0
     last_exit: dt.datetime | None = None
+    left_out_trades: int = 0  # void trades of this slot left out (US-105)
+    left_out_net_paise: int = 0
 
 
 class PaperLedger:
@@ -105,6 +117,47 @@ class PaperLedger:
         self.engine = engine
         self._warned: OrderedDict[tuple[object, str], None] = OrderedDict()
         self._warn_lock = threading.Lock()
+        if engine not in _VOID_TABLE_SEEN:  # once per engine: a request builds a ledger
+            METADATA.create_all(engine, tables=[paper_void])  # no-op if present (US-105)
+            _VOID_TABLE_SEEN.add(engine)
+
+    def left_out(
+        self,
+        *,
+        grade: str | None = None,
+        since: dt.datetime | None = None,
+        until: dt.datetime | None = None,
+    ) -> tuple[int, int]:
+        """(count, summed net in paise) of the void CLOSED trades with a net in the window
+        `by_slot()` uses (the time the book closed them): what every score left out."""
+        _check_grade(grade)
+        _check_aware(since, "since")
+        _check_aware(until, "until")
+        t = paper_trades.c
+        when = func.coalesce(t.exit_ts, t.updated_at)
+        where: list[ColumnElement[bool]] = [t.status == "CLOSED", t.net_paise.is_not(None)]
+        if grade is not None:
+            where.append(t.grade == grade)
+        if since is not None:
+            where.append(when >= since)
+        if until is not None:
+            where.append(when < until)
+        cells = [type_coerce(t[name], NullType()).label(name) for name in _MONEY]
+        stmt = (
+            select(t.id, *cells)
+            .join(paper_void, paper_void.c.trade_id == t.id)
+            .where(*where)
+            .order_by(t.id)
+        )
+        with self.engine.connect() as conn:
+            rows = conn.execute(stmt).all()
+        count = net = 0
+        for trade_id, *raw in rows:
+            money = self._money(trade_id, raw)
+            if money is not None:
+                count += 1
+                net += money[2]
+        return count, net
 
     def totals(
         self,
@@ -135,13 +188,20 @@ class PaperLedger:
             where.append(t.exit_ts < until)
         # raw cells: a REAL in a BIGINT column must be seen as what it is, not coerced
         cells = [type_coerce(t[name], NullType()).label(name) for name in _MONEY]
-        stmt = select(t.id, *cells).where(*where).order_by(t.id)
+        stmt = (
+            select(t.id, paper_void.c.trade_id.label("void_id"), *cells)
+            .select_from(paper_trades.outerjoin(paper_void, paper_void.c.trade_id == t.id))
+            .where(*where)
+            .order_by(t.id)
+        )
         with self.engine.connect() as conn:
             rows = conn.execute(stmt).all()
         trades = wins = losses = gross = costs = net = 0
-        for trade_id, *raw in rows:
+        for trade_id, void_id, *raw in rows:
             money = self._money(trade_id, raw)
             if money is None:
+                continue
+            if void_id is not None:  # US-105: marked, left out; `left_out()` counts them
                 continue
             trade_gross, trade_costs, trade_net = money
             trades += 1
@@ -207,14 +267,36 @@ class PaperLedger:
         cells = [type_coerce(t[name], NullType()).label(name) for name in _MONEY]
         risk = type_coerce(t.risk_paise, NullType()).label("risk_paise")
         stmt = (
-            select(t.id, t.strategy, t.timeframe, t.kind, t.status, t.exit_ts, risk, *cells)
+            select(
+                t.id,
+                t.strategy,
+                t.timeframe,
+                t.kind,
+                t.status,
+                t.exit_ts,
+                paper_void.c.trade_id.label("void_id"),
+                risk,
+                *cells,
+            )
+            .select_from(paper_trades.outerjoin(paper_void, paper_void.c.trade_id == t.id))
             .where(*where)
             .order_by(t.id)
         )
         with self.engine.connect() as conn:
             rows = conn.execute(stmt).all()
         out: dict[K, StrategyTotals] = {}
-        for trade_id, strategy, timeframe, kind, status, exit_ts, raw_risk, *raw in rows:
+        left: dict[K, list[int]] = {}  # US-105: void closes per key: [count, net]
+        for trade_id, strategy, timeframe, kind, status, exit_ts, void_id, raw_risk, *raw in rows:
+            if void_id is not None:  # marked void: never in a money figure, counted apart
+                if status == "NO_FILL":  # no money: it stays in the No fill count, said in the docs
+                    out.setdefault(key(strategy, timeframe, kind), StrategyTotals()).no_fill += 1
+                elif status == "CLOSED" and raw[-1] is not None:
+                    money = self._money(trade_id, raw)
+                    if money is not None:
+                        pair = left.setdefault(key(strategy, timeframe, kind), [0, 0])
+                        pair[0] += 1
+                        pair[1] += money[2]
+                continue
             row = out.setdefault(key(strategy, timeframe, kind), StrategyTotals())
             if status == "NO_FILL":
                 row.no_fill += 1
@@ -245,6 +327,9 @@ class PaperLedger:
             ts = _as_aware(exit_ts)
             if ts is not None and (row.last_exit is None or ts > row.last_exit):
                 row.last_exit = ts
+        for k, (count, net) in left.items():
+            if k in out:  # a slot with only void trades gets no row of its own
+                out[k].left_out_trades, out[k].left_out_net_paise = count, net
         return out
 
     def _money(self, trade_id: object, raw: list[object]) -> tuple[int, int, int] | None:

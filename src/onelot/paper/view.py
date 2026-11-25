@@ -11,9 +11,10 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Collection, Mapping, Sequence
 from decimal import ROUND_HALF_EVEN, Decimal
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 from ..clock import IST
+from ..void import left_out_view, void_reason
 from .ledger import Slot  # at run time: the ledger imports neither the book nor this module
 from .money import format_rupees, to_decimal
 
@@ -32,6 +33,10 @@ class DayTotals(TypedDict):
     losses: int
     gross_paise: int | None  # None if any of them has no gross
     net_paise: int | None  # None if any of them has no net (costs are US-023)
+    # US-105: the void trades (contract not tradeable) the figures above leave out; the keys
+    # are present only when at least one was left out
+    left_out_trades: NotRequired[int]
+    left_out_net_paise: NotRequired[int]
 
 
 def trade_view(trade: PaperTrade) -> dict[str, Any]:
@@ -39,28 +44,39 @@ def trade_view(trade: PaperTrade) -> dict[str, Any]:
     the whole trade. `mark` and `unrealised` are set for an OPEN trade only (`open_mark`)."""
     plan = trade.plan  # parsed once for the label and the mark
     mark, unrealised = open_mark(trade, plan)
-    return {
-        "alert_id": trade.alert_id,
-        "instrument": instrument_label(plan, trade.kind, trade.series_key),
-        "side": trade.side,
-        "direction": trade.direction,
-        "kind": trade.kind,
-        "strategy": trade.strategy,
-        "timeframe": trade.timeframe,
-        "grade": trade.grade,
-        "status": trade.status,
-        "close_reason": trade.close_reason,
-        "qty": trade.qty,
-        "entry_ts": _iso(trade.entry_ts),
-        "entry": format_rupees(trade.entry_paise),
-        "exit": format_rupees(trade.exit_paise),
-        "gross": format_rupees(trade.gross_paise),
-        "net": format_rupees(trade.net_paise),
-        "mark": format_rupees(mark),
-        "unrealised": format_rupees(unrealised),
-        "created_at": _iso(trade.created_at),
-        "closed_at": _iso(closed_at(trade)),
-    } | ratchet_levels(plan)
+    return (
+        {
+            "alert_id": trade.alert_id,
+            "instrument": instrument_label(plan, trade.kind, trade.series_key),
+            "side": trade.side,
+            "direction": trade.direction,
+            "kind": trade.kind,
+            "strategy": trade.strategy,
+            "timeframe": trade.timeframe,
+            "grade": trade.grade,
+            "status": trade.status,
+            "close_reason": trade.close_reason,
+            "qty": trade.qty,
+            "entry_ts": _iso(trade.entry_ts),
+            "entry": format_rupees(trade.entry_paise),
+            "exit": format_rupees(trade.exit_paise),
+            "gross": format_rupees(trade.gross_paise),
+            "net": format_rupees(trade.net_paise),
+            "mark": format_rupees(mark),
+            "unrealised": format_rupees(unrealised),
+            "created_at": _iso(trade.created_at),
+            "closed_at": _iso(closed_at(trade)),
+        }
+        | ratchet_levels(plan)
+        | void_tag(plan)
+    )
+
+
+def void_tag(plan: Mapping[str, Any]) -> dict[str, Any]:
+    """US-105: `{"void_reason": ...}` for a trade on a contract that was not tradeable (it
+    stays listed with its recorded prices, only not counted); `{}` for every other trade."""
+    reason = void_reason(plan.get("alert")) if isinstance(plan, Mapping) else None
+    return {} if reason is None else {"void_reason": reason}
 
 
 def ratchet_levels(plan: Mapping[str, Any]) -> dict[str, Any]:
@@ -142,13 +158,18 @@ def instrument_label(plan: Mapping[str, Any], kind: str, fallback: str) -> str:
 
 def totals_view(totals: DayTotals) -> dict[str, Any]:
     """A day's totals for GET /api/paper: the money as rupee strings (None stays null)."""
-    return {
+    out: dict[str, Any] = {
         "closed": totals["closed"],
         "wins": totals["wins"],
         "losses": totals["losses"],
         "gross_rupees": format_rupees(totals["gross_paise"]),
         "net_rupees": format_rupees(totals["net_paise"]),
     }
+    if totals.get("left_out_trades", 0) > 0:  # US-105: only when something was left out
+        out["left_out"] = left_out_view(
+            totals["left_out_trades"], format_rupees(totals.get("left_out_net_paise", 0))
+        )
+    return out
 
 
 def last_session_view(day: dt.date, totals: DayTotals) -> dict[str, Any]:
@@ -224,7 +245,7 @@ def _score(row: StrategyTotals | None, opened: Mapping[Any, int], key: object) -
             )
         )
     )
-    return {
+    out: dict[str, Any] = {
         "trades": trades,
         "wins": row.wins if row else 0,
         "losses": row.losses if row else 0,
@@ -240,6 +261,9 @@ def _score(row: StrategyTotals | None, opened: Mapping[Any, int], key: object) -
         "avg_r": round(row.r_sum / row.r_trades, 2) if row and row.r_trades else None,
         "last_exit": _iso(row.last_exit) if row else None,
     }
+    if row and row.left_out_trades > 0:  # US-105: only when something was left out
+        out["left_out"] = left_out_view(row.left_out_trades, format_rupees(row.left_out_net_paise))
+    return out
 
 
 def _iso(ts: dt.datetime | None) -> str | None:

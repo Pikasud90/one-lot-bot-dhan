@@ -39,7 +39,8 @@ from ..clock import IST, now_ist
 from ..config import BacktestCfg, PaperCfg
 from ..costs import CostModel
 from ..data.universe import InstrumentSpec
-from ..store.schema import METADATA, desk_signals, paper_events, paper_trades
+from ..store.schema import METADATA, desk_signals, paper_events, paper_trades, paper_void
+from ..void import void_reason
 from .alert import (
     Grade,
     PaperAlertError,
@@ -276,7 +277,8 @@ class PaperBook:
         # so a repeat is DEBUG (US-030 review MINOR). Its own lock: reads never take _lock.
         self._read_warned: OrderedDict[tuple[object, str], None] = OrderedDict()
         self._read_warn_lock = threading.Lock()
-        METADATA.create_all(engine, tables=[paper_trades, paper_events])  # no-op if present
+        METADATA.create_all(engine, tables=[paper_trades, paper_events, paper_void])  # if absent
+        self._mark_void()  # US-105: also when disabled; marks only, never opens or closes
         self._backfill_costs()  # also when disabled: it completes closes, it opens nothing
         self._load_active()
         if cfg.enabled:  # a disabled book opens nothing, not even at startup
@@ -660,16 +662,31 @@ class PaperBook:
             and_(t.exit_ts >= start, t.exit_ts < end),
             and_(t.exit_ts.is_(None), t.updated_at >= start, t.updated_at < end),
         )
-        stmt = select(t.id, t.gross_paise, t.net_paise).where(t.status == "CLOSED", closed_today)
+        stmt = (
+            select(t.id, t.gross_paise, t.net_paise, paper_void.c.trade_id.label("void_id"))
+            .select_from(paper_trades.outerjoin(paper_void, paper_void.c.trade_id == t.id))
+            .where(t.status == "CLOSED", closed_today)
+        )
         with self.engine.connect() as conn:
             rows = conn.execute(stmt).all()
-        return closed_totals(
+        totals = closed_totals(
             (
                 self._paise_or_unknown(i, "gross_paise", gross),
                 self._paise_or_unknown(i, "net_paise", net),
             )
-            for i, gross, net in rows
+            for i, gross, net, void_id in rows
+            if void_id is None
         )
+        left = [
+            n
+            for i, _gross, net, void_id in rows
+            if void_id is not None
+            and (n := self._paise_or_unknown(i, "net_paise", net)) is not None
+        ]
+        if left:  # US-105: said only when something was left out; the ledger's rule: a net known
+            totals["left_out_trades"] = len(left)
+            totals["left_out_net_paise"] = sum(left)
+        return totals
 
     def last_session(self, now: dt.datetime) -> dt.date | None:
         """The most recent IST date BEFORE `now`'s on which a CLOSED trade closed; only when no
@@ -694,7 +711,11 @@ class PaperBook:
         closed_at = func.coalesce(t.exit_ts, t.updated_at)  # typed as the columns: binds in UTC
         stmt = (
             select(t.id, type_coerce(closed_at, NullType()).label("closed_at"))  # decoded per row
-            .where(t.status == status, closed_at < before)
+            .where(
+                t.status == status,
+                closed_at < before,
+                ~select(paper_void.c.trade_id).where(paper_void.c.trade_id == t.id).exists(),
+            )
             .order_by(closed_at.desc(), t.id.desc())
             .limit(LAST_SESSION_SCAN)
         )
@@ -902,6 +923,52 @@ class PaperBook:
                 )
         log.info("paper: reconciled %d of %d unbooked desk signal(s)", opened, len(rows))
         return opened
+
+    # ── US-105: trades on contracts that were not tradeable ───────────────
+    def _mark_void(self) -> int:
+        """Mark every trade whose alert is void (`onelot.void.void_reason`) that has no mark.
+
+        Idempotent: a trade already in `paper_void` is never a candidate (nor is a STOCK trade, so
+        the pass does not read every sound stock plan again at each start), so a second pass
+        changes nothing, and no mark is ever removed. The alert is read from the trade's own
+        plan snapshot (the copy taken at open), so it needs no desk_signals row. One
+        unreadable plan is skipped, never fatal. Returns how many marks were written.
+        """
+        t = paper_trades.c
+        stmt = (
+            select(t.id, t.alert_id, type_coerce(t.plan, Text))
+            .select_from(paper_trades.outerjoin(paper_void, paper_void.c.trade_id == t.id))
+            .where(paper_void.c.trade_id.is_(None), t.kind == "INDEX")  # only INDEX can be void
+            .order_by(t.id)
+        )
+        try:
+            with self.engine.connect() as conn:
+                rows = conn.execute(stmt).all()
+        except DBAPIError as exc:
+            log.warning("paper: void marking deferred to the next start: %s", exc)
+            return 0
+        marks: list[dict[str, Any]] = []
+        now = self.clock()
+        for trade_id, alert_id, raw in rows:
+            try:
+                plan = json.loads(raw) if isinstance(raw, str | bytes) else raw
+                reason = void_reason(plan.get("alert")) if isinstance(plan, Mapping) else None
+            except ValueError:
+                reason = None
+            if reason is not None:
+                marks.append(
+                    {"trade_id": trade_id, "alert_id": alert_id, "reason": reason, "marked_at": now}
+                )
+        if not marks:
+            return 0
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(paper_void.insert(), marks)
+        except DBAPIError as exc:  # another book marked first, or the database failed
+            log.warning("paper: void marking deferred to the next start: %s", exc)
+            return 0
+        log.info("paper: marked %d trade(s) on contracts that were not tradeable", len(marks))
+        return len(marks)
 
     # ── the startup backfill of costs and net (US-023 NFR) ────────────────
     def _backfill_costs(self) -> int:
@@ -1111,6 +1178,16 @@ class PaperBook:
                     trade_id=trade_id, ts=values["created_at"], kind="OPENED", detail=detail
                 )
             )
+            reason = void_reason(values["plan"]["alert"])
+            if reason is not None:  # US-105: marked in the same transaction as the trade
+                conn.execute(
+                    paper_void.insert().values(
+                        trade_id=trade_id,
+                        alert_id=values["alert_id"],
+                        reason=reason,
+                        marked_at=values["updated_at"],
+                    )
+                )
             row = (
                 conn.execute(select(paper_trades).where(paper_trades.c.id == trade_id))
                 .mappings()

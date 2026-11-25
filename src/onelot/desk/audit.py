@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from ..clock import IST
+from ..void import left_out_view, void_reason
 
 
 def _iso_to_ts(v) -> pd.Timestamp | None:
@@ -142,12 +143,35 @@ def audit_signal(
     return out
 
 
-def strategy_scoreboard(signals: list[dict]) -> dict[str, dict]:
-    """Per strategy: how its archived alerts fared (closed outcomes only)."""
+def _closed_outcome(s: dict) -> dict | None:
+    """The alert's audited outcome when it is a closed one, else None."""
+    a = s.get("outcome") or {}
+    return None if a.get("outcome") in (None, "NO_DATA", "OPEN") else a
+
+
+def scoreboard_left_out(signals: list[dict]) -> dict | None:
+    """US-105: the alerts `strategy_scoreboard` leaves out because their contract was not
+    tradeable: {trades, net, reason} (net = the sum of their audited P&L estimate in rupees),
+    or None when it left none out. Counts the same closed outcomes the scoreboard counts."""
+    count, net = 0, 0.0
+    for s in signals:
+        a = _closed_outcome(s)
+        if a is not None and void_reason(s) is not None:
+            count += 1
+            net += float(a.get("pnl_est") or 0)
+    return left_out_view(count, round(net, 2)) if count else None
+
+
+def strategy_scoreboard(signals: list[dict], *, counted_only: bool = True) -> dict[str, dict]:
+    """Per strategy: how its archived alerts fared (closed outcomes only).
+
+    US-105: an alert on a contract that was not tradeable (`onelot.void.void_reason`) is
+    left out; `scoreboard_left_out` says how many. `counted_only=False` keeps them (the
+    confidence score of a new alert reads that record, so no alert text changes)."""
     by: dict[str, dict] = {}
     for s in signals:
-        a = s.get("outcome") or {}
-        if a.get("outcome") in (None, "NO_DATA", "OPEN"):
+        a = _closed_outcome(s)
+        if a is None or (counted_only and void_reason(s) is not None):
             continue
         d = by.setdefault(
             s["strategy"],
