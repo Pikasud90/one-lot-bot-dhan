@@ -19,7 +19,7 @@ const num = (v, d = 2) => isNum(v) ? Number(v).toLocaleString("en-IN", { minimum
 /* -2287.5 -> "−₹2,287.50" */
 const money = (v) => isNum(v) ? (Number(v) < 0 ? "−" : "") + "₹" + Math.abs(Number(v)).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "–";
 /* whole rupees with a sign, for chart labels: 6712.5 -> "+₹6,713", -2287.5 -> "−₹2,288" */
-const rupees = (v) => isNum(v) ? (Number(v) < 0 ? "−" : (Number(v) > 0 ? "+" : "")) + "₹" + Math.round(Math.abs(Number(v))).toLocaleString("en-IN") : "–";
+const rupees = (v) => isNum(v) ? (Number(v) < 0 ? "−" : (Number(v) > 0 ? "+" : "")) + "₹" + (Math.abs(Number(v)) < 100 ? Math.abs(Number(v)).toFixed(2) : Math.round(Math.abs(Number(v))).toLocaleString("en-IN")) : "–";   // paise under ₹100 (one share)
 const signedMoney = (v) => isNum(v) ? (Number(v) > 0 ? "+" : "") + money(v) : "–";
 const rText = (r) => isNum(r) ? (Number(r) > 0 ? "+" : (Number(r) < 0 ? "−" : "")) + Math.abs(Number(r)).toFixed(2) + " R" : "–";
 const pctText = (p) => isNum(p) ? (Number(p) > 0 ? "+" : (Number(p) < 0 ? "−" : "")) + Math.abs(Number(p)).toFixed(2) + "%" : "–";

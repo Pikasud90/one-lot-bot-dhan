@@ -322,18 +322,18 @@
   #sim-root .sim-sel-inst,#sim-root .sim-sel-strat{flex:1 1 0;max-width:none;min-width:0}
   #sim-root .sim-sel-tf{flex:0 0 76px}
   #sim-root .sim-date{flex:1 1 auto;min-width:0}
-  #sim-root .sim-daybtn{flex:1 1 auto;min-width:0}
+  #sim-root .sim-daybtn{flex:1 1 auto;min-width:0;padding:0 6px}
   #sim-root .sim-g-play{justify-content:flex-start;gap:6px}
   #sim-root .sim-sel,#sim-root .sim-daybtn{height:44px}
   #sim-root .sim-seg button{height:42px}
-  #sim-root .sim-daybtn{min-width:128px}
+  #sim-root .sim-mode button{padding:0 8px;font-size:15px}
   #sim-root .sim-speeds,#sim-root .sim-ctfs,#sim-root #sim-full,#sim-root #sim-helpbtn{display:none}
   #sim-root .sim-chartbar{right:64px}
   #sim-root .sim-clockbox{width:auto}
   #sim-root .sim-sel-speed,#sim-root .sim-sel-ctf{display:block}
   #sim-root .sim-play{min-width:0;width:48px;padding:0;flex:none}
   #sim-root .sim-g-play>*{flex:none}
-  #sim-root .sim-sel-speed{width:66px}
+  #sim-root .sim-sel-speed{width:80px}
   #sim-root .sim-play span{display:none}
   #sim-root .sim-g-play>.sim-clockbox{flex:1 1 auto;min-width:0;margin-left:0;padding-left:8px}
   #sim-root .sim-clock{font-size:16px}

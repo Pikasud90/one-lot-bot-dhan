@@ -282,8 +282,8 @@ class TestWords:
 
     def test_volume_and_rupees_in_indian_units(self):
         assert run(
-            "return [volText(950), volText(12345), volText(123456), volText(12345678), money(-2287.5), money(100000), rupees(6712.5), rupees(-2287.5), num(25010.5)];"
-        ) == ["950", "12.3 K", "1.2 L", "1.2 Cr", "−₹2,287.50", "₹1,00,000.00", "+₹6,713", "−₹2,288", "25,010.50"]  # fmt: skip
+            "return [volText(950), volText(12345), volText(123456), volText(12345678), money(-2287.5), money(100000), rupees(6712.5), rupees(-2287.5), num(25010.5), rupees(-0.27), rupees(1.1)];"
+        ) == ["950", "12.3 K", "1.2 L", "1.2 Cr", "−₹2,287.50", "₹1,00,000.00", "+₹6,713", "−₹2,288", "25,010.50", "−₹0.27", "+₹1.10"]  # fmt: skip
 
     def test_the_key_map(self):
         out = run(
