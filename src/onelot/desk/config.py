@@ -67,10 +67,13 @@ class WideCfg:
     cap_open: int = 10  # trades open "within the cap" at a time (the desk 18 count toward it)
     evening_round: bool = True  # the evening round of the delivery-only stocks
     universe: str = "config/delivery_universe.yaml"  # relative to the project root
+    # US-103: market sessions with no new daily bar after which a stock is dormant and its
+    # paper trade is released (also: sessions an exit may stay held for review); 0 = never
+    dormant_after: int = 10
 
 
-#: the pullback slot's keys of the wide list (US-099), beside name, timeframe and params
-WIDE_KEYS = ("wide", "cap_open", "evening_round", "universe")
+#: the pullback slot's keys of the wide list (US-099, US-103), beside name, timeframe and params
+WIDE_KEYS = ("wide", "cap_open", "evening_round", "universe", "dormant_after")
 
 
 @dataclass(frozen=True)
@@ -300,11 +303,17 @@ def _wide(raw: dict) -> WideCfg:
         universe = r.get("universe", WideCfg.universe)
         if not isinstance(universe, str) or not universe.strip():
             raise ValueError(f"desk.yaml slot key universe must be a file path, not {universe!r}")
+        after = r.get("dormant_after", WideCfg.dormant_after)
+        if isinstance(after, bool) or not isinstance(after, int) or after < 0:
+            raise ValueError(
+                f"desk.yaml slot key dormant_after must be a whole number >= 0, not {after!r}"
+            )
         return WideCfg(
             on=_flag(r.get("wide", False), "wide"),
             cap_open=cap,
             evening_round=_flag(r.get("evening_round", True), "evening_round"),
             universe=universe.strip(),
+            dormant_after=after,
         )
     return WideCfg()
 

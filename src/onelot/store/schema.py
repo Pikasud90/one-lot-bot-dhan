@@ -764,14 +764,17 @@ wide_trades = Table(
     Column("qty", Integer, nullable=False),  # whole shares nearest unit_inr, as for the desk 18
     Column("tier", String(4), nullable=False),  # cap | test
     Column("late", Boolean, nullable=False),  # read in a later round (catch-up): never alerted
-    Column("status", String(16), nullable=False),  # PENDING_ENTRY OPEN EXIT_PENDING CLOSED
+    # PENDING_ENTRY OPEN EXIT_PENDING CLOSED, or CANCELLED (US-103: an entry never filled)
+    Column("status", String(16), nullable=False),
     Column("note", Text),
     Column("created_at", TZDateTime, nullable=False),
     Column("entry_told_at", TZDateTime),
     Column("entry_session", String(10)),
     Column("entry_paise", BigInteger),
     Column("exit_signal_date", String(10)),
-    Column("exit_reason", String(48)),  # R3 reasons, comma-separated in R3's order
+    # R3 reasons, comma-separated in R3's order; or NO_DATA or REVIEW (US-103: a release,
+    # not the rule's exit; a REVIEW release books no exit price and no money)
+    Column("exit_reason", String(48)),
     Column("sessions_held", Integer),
     Column("exit_told_at", TZDateTime),
     Column("exit_session", String(10)),

@@ -80,6 +80,15 @@ defaults:
       cap_open: 10
       evening_round: true
       universe: config/delivery_universe.yaml
+      # US-103: a stock with no new daily bar for this many market sessions is dormant (a
+      # market session: a trading day of the calendar on which at least half of the other
+      # stocks did get a bar). Two evening rounds must each find it so; the round of the next
+      # session releases its paper trade at the last stored close as NO_DATA, apart from the
+      # score, and the round stops waiting for it: at 10, the round of the 12th session. An
+      # exit held for review is released as REVIEW on the same count, with no money booked.
+      # The longest hole in the study's 16 years is 5 sessions: under 5 the desk warns. 0 =
+      # never (dormancy and the REVIEW release off; the wider fetch window stays).
+      dormant_after: 10
 
 indices:
   - {key: BANKNIFTY,  tracked: BANKNIFTY_OPT}

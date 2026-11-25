@@ -148,6 +148,7 @@ def wide_desk(
     *,
     engine: Any = None,
     path: Path | None = None,
+    calendar: TradingCalendar | None = None,
     **kw: Any,
 ) -> WideDesk:
     eng = engine or create_engine(f"sqlite:///{path}" if path else "sqlite://")
@@ -155,9 +156,10 @@ def wide_desk(
     kw.setdefault("nifty", nifty_of(dates))
     kw.setdefault("background", False)
     kw.setdefault("wall", lambda: dt.datetime(2000, 1, 1, tzinfo=IST))  # never 09:00 yet
+    cal = calendar or CAL  # a calendar of its own: the holiday tests of US-103
     return WideDesk(
-        eng, stocks, PullbackParams(), delivery_model(COSTS), depository_paise(COSTS), CAL,
-        SessionClock(SessionCfg(), CAL), **kw,
+        eng, stocks, PullbackParams(), delivery_model(COSTS), depository_paise(COSTS), cal,
+        SessionClock(SessionCfg(), cal), **kw,
     )  # fmt: skip
 
 

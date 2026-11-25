@@ -54,7 +54,14 @@ from onelot.delivery.universe import (  # noqa: E402
     research_daily,
     stamped,
 )
-from onelot.delivery.wide import CLOSED, StockDays, WideDesk, replay_rounds  # noqa: E402
+from onelot.delivery.wide import (  # noqa: E402
+    CANCELLED,
+    CLOSED,
+    RELEASES,
+    StockDays,
+    WideDesk,
+    replay_rounds,
+)
 from onelot.desk.config import load_desk_config  # noqa: E402
 
 STUDY_LAST = dt.date(2026, 11, 7)
@@ -168,7 +175,8 @@ def main() -> int:  # noqa: C901 - a driver, read top to bottom
     wide = WideDesk(
         create_engine(f"sqlite:///{tmp}"), stocks, params, delivery_model(costs),
         depository_paise(costs), calendar, SessionClock(SessionCfg(), calendar),
-        cap_open=cfg.wide.cap_open, min_bars=cfg.delivery.min_bars, background=False,
+        cap_open=cfg.wide.cap_open, dormant_after=cfg.wide.dormant_after,
+        min_bars=cfg.delivery.min_bars, background=False,
     )  # fmt: skip
     sessions = sorted({d for sd in days.values() for d in sd.dates})
     if a.start:
@@ -214,7 +222,12 @@ def main() -> int:  # noqa: C901 - a driver, read top to bottom
                 kinds["only in the study"].append(f"{r.stock} {r.signal} -> {r.exit} {ex}")
             continue
         got_exit = t.exit_session
-        if t.entry_session != r.entry:
+        if t.status == CANCELLED or t.exit_reason in RELEASES:
+            # US-103: a dormant stock's trade or a held exit, ended without the rule's exit
+            kinds["released by the product, not the rule's exit"].append(
+                f"{r.stock} {r.signal}: {t.status} {t.exit_reason} on {got_exit}"
+            )
+        elif t.entry_session != r.entry:
             kinds["entry date differs"].append(
                 f"{r.stock} {r.signal}: {r.entry} / {t.entry_session}"
             )
