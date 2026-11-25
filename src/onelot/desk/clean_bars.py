@@ -58,7 +58,8 @@ def note_frame(
         return out
     idx = pd.DatetimeIndex(frame.index)
     idx = idx.tz_localize(IST) if idx.tz is None else idx.tz_convert(IST)
-    today = [ts for ts in idx if ts.date() == day]
+    start = pd.Timestamp(dt.datetime.combine(day, dt.time(0)), tz=IST)
+    today = list(idx[(idx >= start) & (idx < start + pd.Timedelta(days=1))])
     if clean:
         for ts in today:
             out.pop(ts, None)
