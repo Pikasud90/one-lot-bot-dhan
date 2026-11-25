@@ -164,9 +164,8 @@ def record_all(manager_for: Any) -> dict[str, Any]:
 
 def _main() -> None:
     sys.path.insert(0, str(ROOT.parent))
-    from sim.conftest import MemBars, make_manager
-
     from onelot.store import init_database
+    from sim.conftest import MemBars, make_manager
 
     frames = fixture_frames()
     tmp = Path(tempfile.mkdtemp())
