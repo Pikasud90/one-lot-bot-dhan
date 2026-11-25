@@ -163,14 +163,17 @@ places an order, and the desk 18 keep working exactly as above.
 - Waiting for the broker's bars (US-102): the round reads a session when the broker's daily
   bars of that session are there. It checks from just after 15:35 and then every 30 minutes,
   also through the night and before 09:00 the next morning. A check that finds no bar of the
-  session yet costs at most 5 requests and is not one of the 4 tries; the round's note says
+  session yet costs at most 5 requests (5 stocks, the next check 5 stocks further down the
+  list) and is not one of the 4 tries; the round's note says
   "Dhan has not published the daily bars of ... yet" (or "Dhan did not answer" when every
   request failed). When the bars are there, the session's signals are on time: they take the
   free places within the cap and are alerted. Once one stock has the bar, the tries count as
   above. If the bars never come before 15:35 of the next trading day, that day's round reads
   the old session late (recorded, never alerted). Measured on 25 Nov 2026: the bars of the day
   were not there at 15:42.
-First seen at: TO BE MEASURED
+
+  First seen at: TO BE MEASURED
+
 - Adjustments: when the fetched closes differ from the stored ones by more than 0.5% on the
   overlap (a split, a bonus, a demerger), the stock's whole history is fetched again and
   replaces the stored one, and the round says so. If that refetch fails, the stock is stale:

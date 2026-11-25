@@ -85,7 +85,7 @@ def test_not_published_is_one_cheap_check_and_not_a_try():
     before = rows(w, wide_state)
     w.maybe_round(at(DAY, "15:42"))
     row = w.book.round(DAY)
-    assert len(broker.calls) <= PROBE and w.requests <= PROBE
+    assert len(broker.calls) == 5 and w.requests == 5 == PROBE
     assert row["tries"] == 0 and row["finished_at"] is None
     assert rows(w, wide_state) == before and rows(w, wide_trades) == []
     assert row["summary"]["note"] == NOT_YET and w.note == NOT_YET
@@ -143,10 +143,10 @@ def test_a_check_where_every_answer_fails_is_not_a_try_and_says_dhan_did_not_ans
     broker.fail = lambda key, start: True
     w.maybe_round(at(DAY, "15:42"))
     row = w.book.round(DAY)
-    assert len(broker.calls) == PROBE
+    assert len(broker.calls) == 5
     assert row["tries"] == 0 and row["finished_at"] is None
     errors = row["summary"]["errors"]
-    assert len(errors) == PROBE and all("ConnectionError" in e for e in errors)
+    assert len(errors) == 5 and all("ConnectionError" in e for e in errors)
     note = (
         "Dhan did not answer (5 requests failed, checked 15:42): "
         "the round tries again every 30 minutes"
@@ -233,3 +233,104 @@ def test_when_the_bars_never_come_the_next_session_reads_the_old_one_late():
         DAY.isoformat(),
         DATES[SIG + 1].isoformat(),
     }
+
+
+# ── after the two reviews ────────────────────────────────────────────────────
+
+
+def test_the_errors_of_a_check_do_not_carry_into_the_round_that_reads_the_session():
+    w, broker = desk(frames_of())
+    broker.fail = lambda key, start: key == "AAA"
+    w.maybe_round(at(DAY, "15:42"))
+    assert w.book.round(DAY)["summary"]["errors"] == ["AAA: ConnectionError: AAA: refused"]
+    broker.fail = lambda key, start: False
+    broker.published = DAY
+    w.maybe_round(at(DAY, "16:12"))
+    row = w.book.round(DAY)
+    assert row["finished_at"] is not None and row["tries"] == 1
+    assert row["summary"]["errors"] == [] and row["summary"]["fetched"] == len(KEYS)
+
+
+def doubled(frames: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """Each history at twice its prices: every stored history disagrees with the broker."""
+    out = {}
+    for k, f in frames.items():
+        g = f.copy()
+        g[["open", "high", "low", "close"]] *= 2
+        out[k] = g
+    return out
+
+
+def test_a_check_makes_five_requests_even_when_every_stored_history_disagrees():
+    frames = frames_of()
+    w, broker = desk(frames, stored_to=None)
+    for k, f in doubled(frames).items():
+        save_bars(w.engine, k, "1d", upto(f, DATES[SIG - 1]), "dhan")
+    before = rows(w, wide_state)
+    w.maybe_round(at(DAY, "15:42"))
+    assert len(broker.calls) == 5 and w.requests == 5
+    assert rows(w, wide_state) == before and w.book.round(DAY)["tries"] == 0
+    broker.published = DAY  # read at last: each stock disagrees and is fetched again whole
+    w.maybe_round(at(DAY, "16:12"))
+    row = w.book.round(DAY)
+    assert sorted(row["summary"]["refetched"]) == sorted(KEYS)
+    assert row["finished_at"] is not None and row["tries"] == 1
+
+
+def test_a_disagreeing_stock_whose_refetch_fails_while_the_bars_are_there_is_stale():
+    frames = frames_of()
+    w, broker = desk(frames, stored_to=None)
+    for k, f in frames.items():
+        g = doubled({k: f})[k] if k == "AAA" else f
+        save_bars(w.engine, k, "1d", upto(g, DATES[SIG - 1]), "dhan")
+    broker.published = DAY
+    broker.fail = lambda key, start: key == "AAA" and start.year == 2010  # the whole history
+    w.maybe_round(at(DAY, "15:42"))
+    row = w.book.round(DAY)
+    assert row["tries"] == 1 and row["summary"]["stale"] == ["AAA"]
+    assert {c[0] for c in broker.calls} == set(KEYS)
+    (aaa,) = [r for r in rows(w, wide_state) if r["series_key"] == "AAA"]
+    assert aaa["stale"] and not aaa.get("fetched_for")
+
+
+DEAD = ["VVV", "WWW", "XXX", "YYY", "ZZZ"]  # suspended: no bar after the session before
+
+
+def test_five_stocks_without_the_bar_at_the_head_of_the_list_do_not_block_it():
+    rec = Recorder()
+    frames = {k: upto(frame(DATES, closes([], N, 0.003)), DATES[SIG - 1]) for k in DEAD}
+    frames.update(frames_of())
+    w, broker = desk(frames, rec)
+    broker.published = DAY  # published: only the five at the head have no bar of the day
+    w.maybe_round(at(DAY, "15:42"))
+    assert [c[0] for c in broker.calls] == DEAD and w.book.round(DAY)["tries"] == 0
+    w.maybe_round(at(DAY, "16:12"))
+    w.tell(at(DAY, "16:13"))
+    (t,) = w.book.all()
+    assert (t.series_key, t.signal_date, t.tier, t.late) == ("AAA", DAY, "cap", False)
+    assert len(rec.sent) == 1
+    row = w.book.round(DAY)
+    assert row["tries"] == 1 and sorted(row["summary"]["waiting"]) == DEAD
+
+
+def test_a_check_stopped_at_nine_before_any_request_does_not_say_dhan_has_not_published():
+    w, broker = desk(frames_of())
+    r = w.run_round(at(NEXT, "08:59"), DAY, stop=lambda: True)
+    assert broker.calls == [] and r.finished is False
+    note = "the check of 2024-12-02 stopped at 09:00 before asking Dhan"
+    assert r.summary["note"] == note and w.note == note
+    assert w.book.round(DAY)["tries"] == 0
+
+
+def test_a_stale_answer_carried_the_bar_so_the_session_is_there_and_the_try_counts():
+    frames = frames_of()
+    w, broker = desk(frames, stored_to=None)
+    for k, f in doubled(frames).items():
+        save_bars(w.engine, k, "1d", upto(f, DATES[SIG - 1]), "dhan")
+    broker.published = DAY
+    broker.fail = lambda key, start: start.year == 2010  # every whole-history refetch fails
+    w.maybe_round(at(DAY, "15:42"))
+    row = w.book.round(DAY)
+    assert row["tries"] == 1 and sorted(row["summary"]["stale"]) == sorted(KEYS)
+    assert all(r["stale"] for r in rows(w, wide_state))
+    assert row["summary"].get("check") is None and row["summary"]["note"] is None
