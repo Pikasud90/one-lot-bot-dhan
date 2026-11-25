@@ -274,7 +274,7 @@ const legendLine = (p) => `${p.head}   O ${p.o}  H ${p.h}  L ${p.l}  C ${p.c}  $
 /* ── keys ──────────────────────────────────────────────────────────── */
 /* The key sheet: [what you press, what it does]. Number keys stay with the app's tabs. */
 const KEYS = [
-  ["Space", "Play or pause"], ["→", "One minute forward"], ["Shift + →", "To the close of the chart's candle"],
+  ["Space", "Play or pause"], ["Shift + ↓", "Play or pause"], ["→", "One minute forward"], ["Shift + →", "To the close of the chart's candle"],
   ["N", "Jump to the next alert"], ["↑ ↓", "Faster, slower"], ["T", "Take the alert"], ["S", "Skip the alert"],
   ["X", "Close the trade"], ["F", "Fit the chart"], ["L", "Show or hide the bottom panel"], ["[ ]", "Chart timeframe down, up"],
   ["?", "This sheet"], ["Esc", "Close a sheet or a question"],
@@ -421,13 +421,14 @@ function eventCells(ev) {
 function levelLabels(src, kind) {
   if (!src) return null;
   if (kind === "alert") {
-    return { entry: `Alert entry ${num(src.entry)}`, stop: `Stop ${num(src.stop)} · ${rupees(-Math.abs(Number(src.risk_inr) || 0))}`, target: `Target ${num(src.target)} · ${rupees(Math.abs(Number(src.reward_inr) || 0))}` };
+    return { entry: "Alert", stop: `Stop ${rupees(-Math.abs(Number(src.risk_inr) || 0))}`, target: `Target ${rupees(Math.abs(Number(src.reward_inr) || 0))}` };
   }
-  const opt = isOption(src);
+  // short words beside the price scale, whose own label already says the price (review R3: long titles piled up at the
+  // right edge); the premiums and the full plan are in the dock
   return {
-    entry: opt ? `In ${num(src.entry)} · ₹${num(src.entry_price)}` : `In ${num(src.entry)}`,
-    stop: `Stop ${num(src.stop)} · ${rupees(rupeesAt(src, src.stop_price ?? src.stop))}`,
-    target: `Target ${num(src.target)} · ${rupees(rupeesAt(src, src.target_price ?? src.target))}`,
+    entry: "In",
+    stop: `Stop ${rupees(rupeesAt(src, src.stop_price ?? src.stop))}`,
+    target: `Target ${rupees(rupeesAt(src, src.target_price ?? src.target))}`,
     stop0: "First stop", target0: "First target",
   };
 }
@@ -436,12 +437,12 @@ function levelLabels(src, kind) {
 function markerFor(ev, side) {
   const long = side !== "SHORT", d = ev.data || {}, t = eventMinute(ev);
   if (ev.kind === "ALERT") return { minute: t, position: long ? "belowBar" : "aboveBar", shape: long ? "arrowUp" : "arrowDown", color: "--accent2", text: "Alert" };
-  if (ev.kind === "FILLED") return { minute: t, position: long ? "aboveBar" : "belowBar", shape: "circle", color: "--cyan", text: "In " + num(d.entry_price ?? d.entry) };
+  if (ev.kind === "FILLED") return { minute: t, position: long ? "aboveBar" : "belowBar", shape: "circle", color: "--cyan", text: "In" };
   if (ev.kind === "STAGE") return { minute: t, position: long ? "belowBar" : "aboveBar", shape: "square", color: "--violet", text: STAGE_SHORT[d.stage] || "Stop" };
   if (ev.kind === "CLOSED") {
     const net = Number(d.net);
     return { minute: t, position: long ? "aboveBar" : "belowBar", shape: "square", color: net >= 0 ? "--ok" : "--bad",
-      text: [reasonShort(d.exit_reason), isNum(d.net) ? rupees(net) : null, isNum(d.r_multiple) ? rText(d.r_multiple).replace(" R", "R") : null].filter(Boolean).join(" · ") };
+      text: isNum(d.net) ? "Out " + rupees(net) : "Out" };   // short (review R3); the reason and R are in the log and the result card
   }
   return null;
 }

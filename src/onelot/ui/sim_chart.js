@@ -112,7 +112,7 @@ function create(el, LW, opts = {}) {
       pinEls.forEach((d, i) => {
         const p = state.pinned[i];
         d.hidden = !p;
-        if (!p) return;
+        if (!p) { d.textContent = ""; d.className = "sim-pin"; return; }   // nothing of an old session stays, even hidden (R12)
         d.textContent = C.pinnedText(p);
         d.className = `sim-pin ${p.edge} ${p.name.startsWith("stop") ? "stop" : (p.name.startsWith("target") ? "target" : "entry")}`;
         d.style.setProperty("--slot", String(state.pinned.slice(0, i).filter(x => x.edge === p.edge).length));
@@ -183,6 +183,9 @@ function create(el, LW, opts = {}) {
       // On a phone the legend spans the chart and the pinned tags sit under it: the band holds them too.
       const bottomOf = (b) => (b && b.offsetHeight ? b.offsetTop + b.offsetHeight : 0), narrow = !!(el && el.clientWidth && el.clientWidth < 700);
       let px = Math.max(bottomOf(opts.topBox), narrow ? bottomOf(opts.legendBox) : 0) + 8;
+      // the pinned tags sit at the LEFT, one under another below the legend, away from the price scale's own labels and
+      // the newest candles at the right (review R3)
+      if (pinBox && pinBox.style) pinBox.style.setProperty("--pin-top", (bottomOf(opts.legendBox) + 6 || 64) + "px");
       if (narrow) px += state.pinned.filter((p) => p.edge === "top").length * 30;
       if (px <= 8) px = 44;
       // A phone keeps the candles at 55% or more of the pane: a lower cap on the band and a slimmer volume strip.

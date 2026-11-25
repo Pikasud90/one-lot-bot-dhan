@@ -407,14 +407,9 @@ class TestWords:
         out = run(
             f"return [levelLabels({json.dumps(ALERT)}, 'alert'), levelLabels({json.dumps(OPEN_TRADE)}, 'trade')];"
         )
-        assert (
-            out[0]["stop"] == "Stop 24,970.00 · −₹2,288"
-            and out[0]["target"] == "Target 25,154.80 · +₹6,713"
-        )
-        assert (
-            out[1]["stop"] == "Stop 25,031.50 · +₹518"
-            and out[1]["entry"] == "In 25,018.00 · ₹413.20"
-        )
+        # short words beside the price scale, whose own label says the price (review R3)
+        assert out[0] == {"entry": "Alert", "stop": "Stop −₹2,288", "target": "Target +₹6,713"}
+        assert out[1]["stop"] == "Stop +₹518" and out[1]["entry"] == "In"
 
     def test_markers_say_what_happened(self):
         out = run(
@@ -425,8 +420,8 @@ class TestWords:
               markerFor(e('CLOSED', '2026-11-03T12:10:00+05:30', {exit_reason: 'TARGET', net: 6713, r_multiple: 2.9}), 'LONG'),
               markerFor(e('STOP_MOVED', '2026-11-03T11:50:00+05:30'), 'LONG')];"""
         )
-        assert out[:3] == ["Alert", "In 413.20", "35%"]
-        assert out[3]["text"] == "Target · +₹6,713 · +2.90R" and out[3]["color"] == "--ok"
+        assert out[:3] == ["Alert", "In", "35%"]
+        assert out[3]["text"] == "Out +₹6,713" and out[3]["color"] == "--ok"  # short (review R3)
         assert out[4] is None
 
 
@@ -788,6 +783,7 @@ class TestStatic:
             "--slot",
             "--sw",
             "--legend-r",
+            "--pin-top",
         }  # the page's own
         root = re.search(r":root\{(.*?)\n\}", styles, re.S).group(1)
         for theme in ("night", "laxmi", "ramayana", "batman"):
@@ -905,12 +901,16 @@ class TestOnRealBars:
         body = re.search(r"async function running\(st, r, resumed\) \{.*?\n\}", js, re.S).group(0)
         assert body.index("takeState(st, true)") < body.index("syncChart()")
 
-    def test_a_close_while_paused_reveals_the_minute_whose_open_fills_it(self):
+    def test_a_close_reveals_the_minute_whose_open_fills_it_paused_or_playing(self):
+        """Review R4: a close while playing waited a whole minute of play (60 s at 1x)."""
         js = SIM_JS.read_text("utf-8")
         body = re.search(r"async function act\(kind\) \{.*?\n\}", js, re.S).group(0)
+        assert 'kind === "close" && tradeOpen() && !S.over' in body and "forward(1, null)" in body
         assert (
-            'kind === "close" && tradeOpen() && !S.playing' in body and "forward(1, null)" in body
+            "!S.playing"
+            not in body.split("forward(1, null)")[0].split('kind === "close" && tradeOpen()')[-1]
         )
+        assert "if (wasPlaying" in body  # and play goes on after the fill
 
     def test_a_pair_of_rupee_amounts_wraps_instead_of_being_cut(self):
         css = SIM_CSS.read_text("utf-8")
@@ -965,3 +965,86 @@ def test_a_strategy_line_breaks_where_the_server_left_points_out():
         {"time": DAY1 + 1800, "value": 12},
     ]
     assert out[3] == [{"time": DAY1 + 180, "value": 12}]
+
+
+# ══ the three reviews of 25 Nov (page and rules) ═════════════════════════════════════════════
+def _phone_block(css: str) -> str:
+    start = css.index("@media (max-width:699px){")
+    depth, i = 0, start
+    while True:
+        if css[i] == "{":
+            depth += 1
+        elif css[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return css[start : i + 1]
+        i += 1
+
+
+class TestReviews:
+    def test_touch_targets_on_a_phone_are_44px_or_more(self):
+        """Rules review R5 and page review R10: every height or control size in the phone block is at least 44 px, and
+        the chart's toolbar, the segments, the panel's view toggle and tabs are raised to it."""
+        block = _phone_block(SIM_CSS.read_text("utf-8"))
+        for m in re.finditer(r"(?<![-\w])(height|--ctl|min-height):\s*(\d+)px", block):
+            assert int(m.group(2)) >= 44, m.group(0)
+        for rule in (".sim-chartbar{--ctl:44px}", ".sim-seg button{height:44px}",
+                     ".sim-phead .sim-seg button{height:44px}", ".sim-ptoggle{width:44px;height:44px}"):  # fmt: skip
+            assert rule in block, rule
+        assert re.search(r"\.sim-ptab\{height:44px", block)
+
+    def test_the_build_poll_gives_up_and_says_so(self):
+        """Rules review R1: a 404 or five failed reads in a row end in failed(), with a back-off between tries."""
+        js = SIM_JS.read_text("utf-8")
+        body = re.search(r"function pollBuild\(my, fails = 0\) \{.*?\n\}", js, re.S).group(0)
+        assert "e.status === 404" in body and "POLL_FAILS" in body and "failed(" in body
+        assert "pollBuild(my, fails + 1)" in body and "2 ** fails" in body
+
+    def test_a_keep_clock_switch_loads_the_days_of_the_new_instrument(self):
+        """Page review R1: after a switch in the middle of a session the day buttons died (the days were never read)."""
+        js = SIM_JS.read_text("utf-8")
+        body = re.search(r"async function choose\(patch, opts = \{\}\) \{.*?\n\}", js, re.S).group(
+            0
+        )
+        assert "if (keepClock) daysOf(S.choice.instrument).then(" in body
+        assert body.index("daysOf(S.choice.instrument).then(") < body.index(
+            "if (keepClock || known)"
+        )
+        day = re.search(r"function renderDay\(\) \{.*?\n\}", js, re.S).group(0)
+        assert "Loading the stored days" in day
+
+    def test_sheets_take_focus_give_it_back_and_hold_the_keys(self):
+        js = SIM_JS.read_text("utf-8")
+        assert "first.focus()" in js and "refocus(S.sheetOpener)" in js and "refocus(opener)" in js
+        assert 'if (sheetOpen() && a !== "help") return;' in js
+        assert 'if (S.note === SHEET_NOTE) status("")' in js  # review R7: no stale line
+
+    def test_every_key_that_acts_is_in_the_key_sheet(self):
+        out = run(
+            """const keys = C.KEYS.map(k => k[0]);
+            return [keys.includes("Shift + ↓"), C.keyAction({key: "ArrowDown", shiftKey: true})];"""
+        )
+        assert out == [True, "play"]
+
+    def test_reduced_motion_turns_off_the_flash_and_the_smooth_minute(self):
+        js = SIM_JS.read_text("utf-8")
+        assert "prefers-reduced-motion: reduce" in js and "smooth: !REDUCED" in js
+        assert "if (!el || REDUCED) return;" in js
+        assert re.search(
+            r"prefers-reduced-motion:reduce\)\{[^\n]*\.sim-flash\{animation:none\}",
+            SIM_CSS.read_text("utf-8"),
+        )
+
+    def test_fit_root_writes_only_on_a_change_and_does_not_watch_the_root(self):
+        js = SIM_JS.read_text("utf-8")
+        body = re.search(r"function fitRoot\(\) \{.*?\n\}", js, re.S).group(0)
+        assert 'getPropertyValue("--sim-h") === hv' in body
+        assert '$("warnings")].forEach' in js
+
+    def test_pins_sit_left_below_the_legend_and_the_alert_box_left_the_candles(self):
+        css = SIM_CSS.read_text("utf-8")
+        assert "#sim-root .sim-pin{position:absolute;left:8px;" in css
+        assert "var(--pin-top" in css
+        js = SIM_JS.read_text("utf-8")
+        flag = re.search(r"function renderFlag\(\) \{.*?\n\}", js, re.S).group(0)
+        assert "take it (T)" not in flag

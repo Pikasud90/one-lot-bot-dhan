@@ -13,7 +13,8 @@ const errText = (e) => String((e && e.message) || "no answer").replace(/\.\s*$/,
 const NO_HISTORY = "No stored history for this instrument yet: run the backfill on the Data tab, or use Live";
 
 /* ── state ──────────────────────────────────────────────────────────── */
-const VIEW0 = { ctf: "3m", speed: 10, smooth: true, pauseOnAlert: true, slowInTrade: true, autoNextDay: false, hideDate: false, sound: true, panel: null, ptab: "trades" };
+const REDUCED = (() => { try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) { return false; } })();
+const VIEW0 = { ctf: "3m", speed: 10, smooth: !REDUCED, pauseOnAlert: true, slowInTrade: true, autoNextDay: false, hideDate: false, sound: true, panel: null, ptab: "trades" };
 const S = {
   fake: null, opts: null, offline: false, booted: false, chart: null,
   days: new Map(),                                   // instrument -> its stored days (or a promise of them)
@@ -81,7 +82,7 @@ function flag(text, kind, ms) {
   const el = $("sim-flag");
   if (!text) { el.hidden = true; return; }
   el.textContent = text; el.className = "sim-flag " + (kind || ""); el.hidden = false;
-  if (ms) S.flagTimer = setTimeout(() => { if (!(S.alert && !S.trade)) el.hidden = true; else renderFlag(); }, ms);
+  if (ms) S.flagTimer = setTimeout(() => { el.hidden = true; }, ms);
 }
 function veil(text, sub, kind) {
   const v = $("sim-veil");
@@ -110,22 +111,41 @@ function confirm(text, yes = "Yes", no = "No") {
   setPlaying(false);
   return new Promise((resolve) => {
     const box = $("sim-ask"), y = $("sim-ask-yes"), n = $("sim-ask-no");
+    const opener = document.activeElement;
     set("sim-ask-text", text); y.textContent = yes; n.textContent = no; box.hidden = false; y.focus();
-    const done = (v) => { box.hidden = true; y.onclick = n.onclick = null; S.answer = null; resolve(v); };
+    const done = (v) => { box.hidden = true; y.onclick = n.onclick = null; S.answer = null; refocus(opener); resolve(v); };
     y.onclick = () => done(true); n.onclick = () => done(false); S.answer = done;
   });
+}
+
+/* Focus back to the control that opened a sheet or a question (when it is still on the page and can take it). */
+function refocus(el) { try { if (el && el.isConnected && typeof el.focus === "function" && !el.disabled) el.focus(); } catch (e) {} }
+/* A phone: bring the play row and the chart into view (the app's header fills the first screen), at a session's start
+   and at an alert, so the chart and the bar at the bottom are seen together (review R2). */
+function phoneFocus() {
+  if (!phone() || !OL.tabShown("sim")) return;
+  const row = document.querySelector("#sim-root .sim-g-play"), box = $("sim-chartbox");
+  if (!row || !box) return;
+  const top = row.getBoundingClientRect().top, bottom = box.getBoundingClientRect().bottom;
+  const bar = $("sim-actbar"), barTop = bar && !bar.hidden ? bar.getBoundingClientRect().top : window.innerHeight;
+  if (top >= 0 && bottom <= barTop) return;   // already in view
+  try { window.scrollTo({ top: Math.max(0, window.scrollY + top - 4), behavior: REDUCED ? "auto" : "smooth" }); } catch (e) { window.scrollTo(0, Math.max(0, window.scrollY + top - 4)); }
 }
 
 /* ── the workspace's size ───────────────────────────────────────────── */
 function fitRoot() {
   const root = $("sim-root");
   if (!root || !OL.tabShown("sim")) return;
-  if (document.fullscreenElement === root || phone()) { root.style.removeProperty("--sim-h"); return; }
+  if (document.fullscreenElement === root || phone()) { if (root.style.getPropertyValue("--sim-h")) root.style.removeProperty("--sim-h"); return; }
   const top = root.getBoundingClientRect().top + window.scrollY, h = Math.max(420, Math.floor(window.innerHeight - top - 6));
-  root.style.setProperty("--sim-h", h + "px");
-  // the open panel gives way so the chart keeps its height (at least 530px wide-screen, 390px with the dock as a row)
+  // the open panel gives way so the chart keeps its height (at least 480px wide-screen, 390px with the dock as a row);
+  // the panel opens at about 200px where the window allows (review R8: 128px showed one row)
   const wide = window.innerWidth >= 1200, strip = $("sim-strip").offsetHeight;
-  root.style.setProperty("--panel-h", Math.max(128, Math.min(212, h - strip - (wide ? 16 + 530 : 15 + 100 + 390))) + "px");
+  const hv = h + "px", pv = Math.max(150, Math.min(212, h - strip - (wide ? 16 + 480 : 15 + 100 + 390))) + "px";
+  // written only when they change: the root's own resize calls this again (review R9)
+  if (root.style.getPropertyValue("--sim-h") === hv && root.style.getPropertyValue("--panel-h") === pv) return;
+  root.style.setProperty("--sim-h", hv);
+  root.style.setProperty("--panel-h", pv);
   if (S.chart) requestAnimationFrame(() => S.chart.margins());
 }
 function panelOpen() { return S.view.panel === null ? window.innerHeight >= 800 : !!S.view.panel; }
@@ -169,11 +189,11 @@ function renderDay() {
   const c = S.choice, days = daysNow(c.instrument), hidden = S.hidden;
   set("sim-day", live() ? "Live today" : (hidden ? "A hidden day" : (c.day ? C.dayText(c.day, false) : "–")));
   $("sim-day").title = live() ? "Live practice follows today" : (hidden ? "The date shows when the day is over" : (c.day ? `Replaying ${C.dayText(c.day)}: choose another day` : "Choose the day to replay"));
-  const i = days && c.day ? days.indexOf(c.day) : -1;
-  disable("sim-day-prev", live() ? "Live practice follows today" : (!days || i <= 0 ? "No stored day before this one" : null));
-  disable("sim-day-next", live() ? "Live practice follows today" : (!days || i < 0 || i >= days.length - 1 ? "No stored day after this one" : null));
-  disable("sim-day-rand", live() ? "Live practice follows today" : (!days || !days.length ? "No stored days for this instrument" : null));
-  disable("sim-day", live() ? "Live practice follows today" : (!days || !days.length ? "No stored days for this instrument" : null));
+  const i = days && c.day ? days.indexOf(c.day) : -1, wait = "Loading the stored days…";
+  disable("sim-day-prev", live() ? "Live practice follows today" : (!days ? wait : (i <= 0 ? "No stored day before this one" : null)));
+  disable("sim-day-next", live() ? "Live practice follows today" : (!days ? wait : (i < 0 || i >= days.length - 1 ? "No stored day after this one" : null)));
+  disable("sim-day-rand", live() ? "Live practice follows today" : (!days ? wait : (!days.length ? "No stored days for this instrument" : null)));
+  disable("sim-day", live() ? "Live practice follows today" : (!days ? wait : (!days.length ? "No stored days for this instrument" : null)));
   const inp = $("sim-day-input");
   if (days && days.length) { inp.min = days[0]; inp.max = days[days.length - 1]; }
   inp.value = c.day || "";
@@ -251,12 +271,13 @@ function renderPlay() {
   else if (S.starting || (S.sess && S.sess.status === "BUILDING")) { word = "Preparing"; k = "wait"; }
   else if (S.failed && !S.sess) { word = "Not prepared"; k = "bad"; }
   else if (busy) { word = "Moving…"; k = "wait"; }
-  else if (S.playing) { word = live() ? "Live" : `Playing ${force()}x` + (force() < S.view.speed ? " (in a trade)" : ""); k = "on"; }
+  else if (S.playing) { word = live() ? "Live" : `Playing ${force()}x` + (force() < S.view.speed ? " · trade" : ""); k = "on"; }
   else if (S.alert && !S.trade && sessReady()) { word = "Alert: your move"; k = "wait"; }
   else if (S.over) word = "Ended";
   else if (S.dayOver) word = "Day over";
-  else if (!S.sess) word = live() ? "Ready: live" : "Ready: press Play";
+  else if (!S.sess) word = phone() ? "Ready" : (live() ? "Ready: live" : "Ready: press Play");
   st.textContent = word; st.className = "sim-state " + k;
+  st.title = S.playing && force() < S.view.speed ? `Playing at ${force()}x while a trade is open (Settings: slow down in a trade)` : word;
   renderSpeeds();
 }
 
@@ -386,7 +407,7 @@ function dropSession() {
   stopPoll();
   S.sess = null; S.chunks = []; S.inflight = null; S.owe = 0; S.frac = 0; S.playing = false; S.pausedByAlert = false; S.want = null;
   S.alert = null; S.trade = null; S.lastClosed = null; S.summary = null; S.trades = []; S.allTrades = null; S.tview = "session";
-  S.events = []; S.markers = []; S.overlays = {}; S.mark = null; S.exitSignal = false; S.dayOver = null; S.over = false; S.build = null;
+  S.events = []; S.markers = []; S.overlays = {}; S.mark = null; S.exitSignal = false; S.dayOver = null; S.over = false; S.build = null; S.steps = 0;
   $("sim-log").innerHTML = ""; renderTrades(); renderNumbers(); renderLogCount();
 }
 function endOld() {
@@ -407,8 +428,15 @@ async function choose(patch, opts = {}) {
   const keepClock = mid && opts.keepClock !== false && !patch.day && patch.mode === undefined;
   if (S.sess) endOld();
   dropSession();
+  const wanted = S.choice.strategy;
   Object.assign(S.choice, patch);
   settleChoice();
+  // a strategy that does not fit the new instrument is replaced: say so (review R9)
+  let swapNote = "";
+  if (patch.instrument && wanted && S.choice.strategy && S.choice.strategy !== wanted) {
+    const a = stratOf(wanted), b = stratOf(S.choice.strategy), inst = instOf(S.choice.instrument);
+    swapNote = `${a ? a.label : wanted} does not fit ${inst ? inst.label : S.choice.instrument}: using ${b ? b.label : S.choice.strategy}.`;
+  }
   if (!keepClock) { if (opts.random) S.hidden = !!S.view.hideDate; else if (patch.day || patch.instrument || patch.mode) S.hidden = false; }
   if (S.chart) S.chart.hideDates(S.hidden);
   // The switch is instant: the old picture goes and the veil comes in this same task. When the new instrument's days are
@@ -421,12 +449,14 @@ async function choose(patch, opts = {}) {
   else S.startIso = live() || !S.choice.day ? null : C.startIsoOf(S.choice.day);
   saveChoice(); renderChoice();
   const pic = loadPicture(), my = S.req, guess = S.choice.day;
-  if (keepClock || known) { await pic; prepare(); return; }
+  if (keepClock) daysOf(S.choice.instrument).then(() => { if (my === S.req) renderDay(); });   // review R1: the day buttons of the new instrument
+  if (keepClock || known) { await pic; if (swapNote && my === S.req) status(swapNote); prepare(); return; }
   const days = await daysOf(S.choice.instrument);
   if (my !== S.req) return;
   place(days);
   saveChoice(); renderDay();
   if (S.choice.day !== guess) await loadPicture(); else await pic;
+  if (swapNote && S.req === my) status(swapNote);
   prepare();
 }
 
@@ -471,19 +501,25 @@ function showBuild(b) {
   status(`Preparing the strategy: ${words}. Play starts by itself when it is ready.`);
   renderHint();
 }
-function pollBuild(my) {
+const POLL_FAILS = 5;   // consecutive failed reads of a BUILDING session before the page says the engine is gone
+function pollBuild(my, fails = 0) {
   stopPoll();
+  // 250 ms while the engine answers; backed off while it does not (rules review R1)
   S.poll = setTimeout(async () => {
     if (my !== S.req || !S.sess) return;
     let st;
-    try { st = await getJson(`/api/sim/sessions/${S.sess.id}`); } catch (e) { if (my === S.req) pollBuild(my); return; }
-    if (my !== S.req || !S.sess || st.session.id !== S.sess.id) return;
+    try { st = await getJson(`/api/sim/sessions/${S.sess.id}`); } catch (e) {
+      if (my !== S.req || !S.sess) return;
+      if ((e && e.status === 404) || fails + 1 >= POLL_FAILS) { failed(`The engine did not answer (${errText(e)})`); return; }
+      pollBuild(my, fails + 1); return;
+    }
+    if (my !== S.req || !S.sess || !st || !st.session || st.session.id !== S.sess.id) return;
     S.sess.session = st.session; S.sess.status = st.session.status;
     if (st.session.status === "BUILDING") { showBuild(st.build); pollBuild(my); return; }
     show("sim-build", false);
     if (st.session.status === "FAILED") { failed(st.detail); return; }
     await running(st, st);
-  }, 250);
+  }, fails ? Math.min(4000, 250 * 2 ** fails) : 250);
 }
 function failed(detail) {
   show("sim-build", false);
@@ -518,6 +554,7 @@ async function running(st, r, resumed) {
   if (s.premium_note) set("sim-premium", "Prices in this session: " + s.premium_note + ".");
   status(resumed ? "Resumed where you left off." : (live() ? "Following the live feed." : "The replay is ready."));
   renderAll(); renderLegend();
+  phoneFocus();
   const w = S.want; S.want = null;
   if (w) run(w);
 }
@@ -646,7 +683,9 @@ function flushAll() {
 }
 /* Step, Shift+Right and Next alert: up to n minutes, from the queue first, stopping where the user is needed. */
 async function forward(n, until) {
-  if (S.moving || live()) return;
+  if (live()) return;
+  // a step pressed while one is being drawn is queued, so a held key steps on and on (review R6)
+  if (S.moving) { if (n === 1 && !until) S.steps = Math.min(30, (S.steps || 0) + 1); return; }
   if (!sessReady()) { await ensureSession(n === 1 ? "step" : (until === "alert" && n === 390 ? "next" : "candle")); return; }
   if (S.over) return;
   S.moving = true; S.playing = false; S.dayOver = null; status(""); renderAll();
@@ -667,6 +706,10 @@ async function forward(n, until) {
       if (ch) flushAll();
     }
   } finally { S.moving = false; renderAll(); renderLegend(); }
+  if (S.steps > 0) {
+    S.steps -= 1;
+    if (sessReady() && !S.over && !S.dayOver && !(S.alert && !S.trade && S.view.pauseOnAlert)) setTimeout(() => forward(1, null), 0); else S.steps = 0;
+  }
 }
 /* Apply a chunk's answer: the state after its minutes, its events, the strategy's lines. Returns true when it needs the user. */
 function applyChunk(ch) {
@@ -679,7 +722,9 @@ function applyChunk(ch) {
     if (ev.kind === "ALERT") {
       needs = true; S.lastClosed = null; S.exitSignal = false; beep();
       if (S.view.pauseOnAlert && S.playing) { S.playing = false; S.pausedByAlert = true; S.owe = 0; status("Paused: an alert to take or skip."); }
+      if (S.view.pauseOnAlert) S.steps = 0;
       flashCard("sim-ticket");
+      setTimeout(phoneFocus, 0);
     } else if (ev.kind === "FILLED") {
       const d = ev.data || {};
       flag(`Filled: in at ₹${C.num(d.entry_price ?? d.entry)}` + (S.trade && C.isOption(S.trade) ? ` (index ${C.num(d.entry)})` : ""), "info", 3500);
@@ -744,10 +789,16 @@ async function act(kind) {
   if (kind === "take" || kind === "skip") { if (!S.alert || S.trade) return; }
   if (kind === "close" && !S.trade) return;
   if (kind === "end" && !S.over && !(await confirm("End this practice session? An open trade closes at the next minute's open, and the replay of this session stops.", "End it", "Keep going"))) return;
+  const wasPlaying = S.playing;
   S.acting = true;
-  try { await actNow(kind); } finally { S.acting = false; renderAll(); }
-  // A close fills at the next minute's open (SIM-API close). Paused, that minute would never come: reveal it at once.
-  if (kind === "close" && tradeOpen() && !S.playing && !S.over && !live()) await forward(1, null);
+  if (kind === "close") { const b = $("sim-ab-close"); if (b) b.textContent = "Closing…"; }
+  try { await actNow(kind); } finally { S.acting = false; const b = $("sim-ab-close"); if (b) b.textContent = "Close"; renderAll(); }
+  // A close fills at the next minute's open (SIM-API close). Reveal that minute at once, paused or playing (review R4:
+  // at 1x a playing close waited a whole minute), then play on.
+  if (kind === "close" && tradeOpen() && !S.over && !live()) {
+    await forward(1, null);
+    if (wasPlaying && !S.over && !S.dayOver && sessReady()) setPlaying(true);
+  }
 }
 async function actNow(kind) {
   const wasPlaying = S.playing || S.pausedByAlert;
@@ -774,7 +825,7 @@ async function actNow(kind) {
 }
 
 /* ── the dock ───────────────────────────────────────────────────────── */
-function flashCard(id) { const el = $(id); if (!el) return; el.classList.remove("sim-flash"); void el.offsetWidth; el.classList.add("sim-flash"); }
+function flashCard(id) { const el = $(id); if (!el || REDUCED) return; el.classList.remove("sim-flash"); void el.offsetWidth; el.classList.add("sim-flash"); }
 function renderHint(h) {
   const c = S.choice, strat = stratOf(c.strategy), inst = instOf(c.instrument);
   if (!h) {
@@ -861,10 +912,9 @@ function renderDock() {
 }
 function renderFlag() {
   const el = $("sim-flag");
-  if (sessReady() && S.alert && !S.trade) {
-    clearTimeout(S.flagTimer);
-    el.textContent = `Alert: ${S.alert.action} · take it (T) or skip it (S)`; el.className = "sim-flag"; el.hidden = false;
-  } else if (el.className === "sim-flag" && !el.hidden) el.hidden = true;
+  // The alert itself is said by the ticket in the dock and the strip's state, never by a box over the candles (review
+  // R3: the banner covered the alert candle and the strategy's line).
+  if (el.className === "sim-flag" && !el.hidden) el.hidden = true;
 }
 function renderActbar() {
   const bar = $("sim-actbar");
@@ -872,7 +922,10 @@ function renderActbar() {
   const a = sessReady() && S.alert && !S.trade, t = !!S.trade;
   bar.hidden = !(a || t);
   show("sim-ab-take", a); show("sim-ab-skip", a); show("sim-ab-close", t);
-  if (a) set("sim-ab-text", `${S.alert.action} · risk ${C.money(S.alert.risk_inr)}`);
+  if (a) {   // the plan in the bar: the phone's dock is below the fold (review R2)
+    const m = C.ticketModel(S.alert, null), low = (x) => x.charAt(0).toLowerCase() + x.slice(1);
+    set("sim-ab-text", `${S.alert.action} · ${low(m.buy.replace(" at ", " "))} · ${low(m.stop)} · ${low(m.target)}`);
+  }
   else if (t) { const m = C.positionModel(S.trade, S.mark, false); set("sim-ab-text", m.pending ? "Waiting for the fill" : `${m.pnl} · ${m.r}`); }
 }
 function renderNumbers() {
@@ -979,7 +1032,6 @@ async function loadTab() {
   if (S.booted) { renderAll(); if (S.chart && !S.hover) renderLegend(); return; }
   S.booted = true;
   ensureChart();
-  window.SimPage = { chart: () => S.chart, state: () => S };   // for the browser checks: read the chart and the state
   if (S.fake) { set("sim-banner", "Demo data, not market data"); show("sim-banner", true); Object.assign(window.SimPage, { forget() { dropSession(); S.chart.reset(); renderAll(); }, offerResume }); }   // a page that lost its session, then the offer
   buildSpeeds(); renderSpeeds(); showPanelTab(S.view.ptab || "trades"); renderPanelOpen();
   setChecks();
@@ -1044,17 +1096,30 @@ function setChecks() {
   $("sim-o-smooth").checked = v.smooth; $("sim-o-pause").checked = v.pauseOnAlert; $("sim-o-slow").checked = v.slowInTrade;
   $("sim-o-nextday").checked = v.autoNextDay; $("sim-o-hide").checked = v.hideDate; $("sim-o-sound").checked = v.sound;
 }
+const SHEET_NOTE = "Paused while a sheet is open.";
+const sheetOpen = () => ["sim-settings", "sim-keys"].some(x => !$(x).hidden);
 function openSheet(id) {
+  const opener = sheetOpen() ? S.sheetOpener : document.activeElement;
   ["sim-settings", "sim-keys"].forEach(x => { if (x !== id) $(x).hidden = true; });
   const el = $(id), open = el.hidden;
   el.hidden = !open;
   $("sim-gear").setAttribute("aria-expanded", String(id === "sim-settings" && open));
-  if (open) setPlaying(false, "Paused while a sheet is open.");
+  if (open) {
+    S.sheetOpener = opener;
+    setPlaying(false, SHEET_NOTE);
+    const first = el.querySelector("input, button, select, [tabindex]");   // focus moves into the sheet (rules review R6)
+    if (first) first.focus();
+  } else sheetClosed();
+}
+function sheetClosed() {
+  if (S.note === SHEET_NOTE) status("");   // review R7: no stale line once the sheet is gone
+  refocus(S.sheetOpener); S.sheetOpener = null;
 }
 function closeSheets() {
   let closed = false;
   ["sim-settings", "sim-keys"].forEach(x => { if (!$(x).hidden) { $(x).hidden = true; closed = true; } });
   $("sim-gear").setAttribute("aria-expanded", "false");
+  if (closed) sheetClosed();
   if (S.answer) { S.answer(false); closed = true; }
   return closed;
 }
@@ -1139,6 +1204,7 @@ function wire() {
     if (!a) return;
     if (a === "escape") { if (closeSheets()) e.preventDefault(); return; }
     if (!$("sim-ask").hidden) return;
+    if (sheetOpen() && a !== "help") return;   // a sheet is open: only Esc and ? act (rules review R6)
     e.preventDefault();
     if (a === "help") openSheet("sim-keys");
     else if (a === "faster" || a === "slower") speedTo(C.speedStep(speeds(), S.view.speed, a === "faster" ? 1 : -1));
@@ -1154,12 +1220,15 @@ function wire() {
   document.addEventListener("fullscreenchange", () => requestAnimationFrame(fitRoot));
   if (typeof ResizeObserver === "function") {
     const ro = new ResizeObserver(() => requestAnimationFrame(fitRoot));
-    [document.querySelector("header.top"), $("warnings"), root].forEach(el => { if (el) ro.observe(el); });
+    [document.querySelector("header.top"), $("warnings")].forEach(el => { if (el) ro.observe(el); });   // not the root: fitRoot resizes it (R9)
   }
   new MutationObserver(() => { if (S.chart) { S.chart.theme(); resetLegendLines(); renderLegend(); } }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 }
 function boot() {
   if (!$("sim-root")) return;
+  // for the browser checks and the node tests: read the chart and the state; the three calls whose late answers must
+  // never overwrite a newer choice (rules review R3)
+  window.SimPage = { chart: () => S.chart, state: () => S, loadPicture, redrawTo, fetchChunk };
   wire();
   OL.tabLoaders.sim = () => { loadTab(); };
   if (OL.tabShown("sim")) loadTab();
