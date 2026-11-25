@@ -24,7 +24,7 @@ from sqlalchemy import Engine
 
 from ..clock import IST
 from ..data.hygiene import clean_intraday, consistent_daily, drop_junk_sessions
-from ..data.store import _read_bars, available_resolutions, load_bars
+from ..data.store import _read_bars, load_bars, series_spans
 from ..data.universe import load_specs
 from ..mllab.service import join_bars
 
@@ -100,7 +100,7 @@ class StoreBars:
         hit = self._daily.get(series_key)
         if hit is not None and hit[0] == n:
             return hit[1]
-        avail = available_resolutions(self.engine, series_key)
+        avail = series_spans(self.engine, series_key)
         stored = _read_bars(self.engine, series_key, "1d") if "1d" in avail else pd.DataFrame()
         out: pd.DataFrame | None
         if minutes is not None and not minutes.empty:
@@ -118,7 +118,7 @@ class StoreBars:
         return out
 
     def minute_range(self, series_key: str) -> tuple[pd.Timestamp, pd.Timestamp] | None:
-        got = available_resolutions(self.engine, series_key).get("1m")
+        got = series_spans(self.engine, series_key).get("1m")
         if got is None:
             return None
         return _ts(got[0]), _ts(got[1])

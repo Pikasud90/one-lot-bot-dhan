@@ -24,7 +24,7 @@ from ..costs import CostModel
 from ..data.db import get_engine
 from ..data.hygiene import clean_intraday, consistent_daily
 from ..data.resample import normalize_resolution
-from ..data.store import _read_bars, available_resolutions, load_bars
+from ..data.store import _read_bars, load_bars, series_spans
 from ..data.universe import InstrumentSpec, load_specs, market_index_key
 from ..settings import current_settings
 from ..strategies.base import Context, StrategyParams
@@ -142,7 +142,7 @@ class DataCache:
             return load_bars(self.engine, series_key, res)
         if normalize_resolution(res) != "1d":
             return clean_intraday(series_key, load_bars(self.engine, series_key, res))
-        avail = available_resolutions(self.engine, series_key)
+        avail = series_spans(self.engine, series_key)
         if "1m" not in avail:
             return load_bars(self.engine, series_key, res)
         # Daily bars from the cleaned one-minute bars, so a daily level is on the same price

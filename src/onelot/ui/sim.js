@@ -233,6 +233,16 @@ function retheme() {
 const barOf = (c) => ({ time: toT(c[0]), open: c[1], high: c[2], low: c[3], close: c[4] });
 function drawAll() { if (ensureChart()) { S.series.setData(S.candles.map(barOf)); S.chart.timeScale().fitContent(); } }
 function drawLast(c) { if (S.series) S.series.update(barOf(c)); }
+/* A new session starts with a clean chart: no level, line or marker of the session before it may stay. Left behind, an
+   index's stop and target near 24,000 stretched the price scale of a share near 1,200 until its candles were two pixels
+   high (the owner's report of 25 Nov 2026). */
+function clearTradeLines() {
+  S.scaleLevels = null;
+  if (S.series) S.lines.forEach(l => { try { S.series.removePriceLine(l); } catch (e) {} });
+  S.lines = [];
+  if (S.marks) { try { S.marks.setMarkers([]); } catch (e) {} }
+  if (S.chart) { try { S.chart.priceScale("right").applyOptions({ autoScale: true }); } catch (e) {} }
+}
 function syncLines() {
   if (!S.series) return;
   const t = S.trade && S.trade.status === "OPEN" ? S.trade : null, a = !t && !S.trade && S.alert ? S.alert : null, src = t || a;
@@ -326,7 +336,8 @@ function resetRun(session) {
   S.mode = session.mode; S.cursorIso = session.cursor; S.shownUnix = unixOf(session.cursor) + 60;
   S.alert = null; S.trade = null; S.lastClosed = null; S.summary = null; S.trades = []; S.events = []; S.alertMarks = [];
   S.exitSignal = false; S.anim = null; S.acc = 0; S.liveAcc = 0; S.over = false; S.note = ""; S.pausedByAlert = false; S.needRefresh = false;
-  S.playing = false; S.lineKey = ""; S.view = "session"; S.allTrades = null; S.healT = null;
+  S.playing = false; S.lineKey = null; S.view = "session"; S.allTrades = null; S.healT = null;   // null never equals a computed key
+  clearTradeLines();
 }
 /* A session that starts (or resumes) in the middle of a candle only reveals that candle's later minutes, so the page draws it
    from a wrong open. Remember its start; when it has closed, take the server's version of it. */
@@ -351,13 +362,16 @@ function takeState(st) {
 }
 async function startSession() {
   if (S.starting) return;   // a second click while the first request runs does nothing
-  S.starting = true; $("sim-go").disabled = true;
-  try { await startSessionNow(); } finally { S.starting = false; renderSetup(); }
+  S.starting = true;
+  const go = $("sim-go");
+  go.disabled = true; go.textContent = "Loading…";   // the wait is said, not only a greyed button
+  try { await startSessionNow(); } finally { S.starting = false; go.textContent = "Start"; renderSetup(); }
 }
 async function startSessionNow() {
   readSetup();
   const st = S.setup;
   if (!st.strategy) return;
+  if (S.id && !S.over && S.trade && !window.confirm("A trade is open in this session. Starting again closes it at the next minute's open. Go on?")) return;
   if (S.id && !S.over) { try { await post(`/api/sim/sessions/${S.id}/end`, {}); } catch (e) {} }
   S.playing = false;
   let r;
@@ -446,7 +460,7 @@ async function runFast(n) {
   absorb(res);
 }
 function tick(dtMs) {
-  if (!S.id || !S.playing || S.busy || S.over || document.hidden) return;
+  if (!S.id || !S.playing || S.busy || S.over || document.hidden || !OL.tabShown("sim")) return;   // the replay waits while another tab is shown
   if (S.mode === "live") {
     S.liveAcc += dtMs;
     if (S.liveAcc >= 5000) { S.liveAcc = 0; runFast(1); }
