@@ -20,7 +20,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -55,6 +55,8 @@ if TYPE_CHECKING:  # annotation only: the factory is imported lazily in _paper_b
     from .paper.book import PaperBook
 
 log = logging.getLogger(__name__)
+#: US-097: the start message goes out this long after the start (the token reading settles)
+DESK_START_SETTLE = dt.timedelta(seconds=60)
 
 
 @dataclass
@@ -163,6 +165,26 @@ class Engine:
         )
         self._last_renew_at: dt.datetime | None = None
         self._last_renew_error: str | None = None
+        # US-097: when the desk ran (a heartbeat) and the messages that say it is up
+        self._desk_start_pending: dt.datetime | None = None
+        self._uptime: Any = None
+        try:
+            from .desk.uptime import UptimeRecorder
+
+            self._uptime = UptimeRecorder(
+                self.db.engine, self.session_clock, self.calendar.is_trading_day
+            )
+        except Exception:  # noqa: BLE001 - the desk runs without its heartbeat
+            log.exception("desk uptime: the recorder could not be built")
+        from .desk.uptime import DeskMessages
+
+        self._desk_messages = DeskMessages(
+            self.notifier.send,
+            self.session_clock,
+            self.calendar.is_trading_day,
+            self.token_expiry,
+            self._feed_word,
+        )
 
     # ── startup ───────────────────────────────────────────────────────────
     def _paper_book(self) -> PaperBook | None:
@@ -268,6 +290,7 @@ class Engine:
         except Exception:
             log.exception("Live Desk failed to start (the Bank Nifty engine continues)")
             self.status.warnings.append("Live Desk failed to start — see the log")
+        self._desk_started(now_ist())
 
         for target, name in (
             (self._bar_loop, "bar-loop"),
@@ -675,6 +698,50 @@ class Engine:
         if not self.secrets.has_broker_creds:
             return
         self._token_reminders.look(now)
+
+    # ── US-097: is the desk running? ──────────────────────────────────────
+    def _feed_word(self) -> str:
+        from .desk.data import is_delayed_source
+        from .desk.uptime import feed_word
+
+        desk = self.desk
+        name = getattr(getattr(desk, "source", None), "name", None) if desk is not None else None
+        return feed_word(name, is_delayed_source(name))
+
+    def _desk_started(self, now: dt.datetime) -> None:
+        """The first heartbeat once the desk is up; the start message follows from the
+        housekeeping loop a minute later (the account's token reading settles first). Never
+        raises."""
+        if self.desk is None:
+            return
+        self._desk_start_pending = now
+        try:
+            if self._uptime is not None:
+                self._uptime.beat(now)
+        except Exception:  # noqa: BLE001
+            log.exception("desk uptime: the first heartbeat failed")
+
+    def _desk_heartbeat(self, now: dt.datetime) -> None:
+        """From the housekeeping loop: the heartbeat (it throttles itself to one write every
+        five minutes) and the 09:05 check on a trading day. Never raises."""
+        if self.desk is None:
+            return
+        try:
+            if self._uptime is not None:
+                self._uptime.beat(now)
+        except Exception:  # noqa: BLE001
+            log.exception("desk uptime: the heartbeat failed")
+        started = self._desk_start_pending
+        if started is not None and now - started >= DESK_START_SETTLE:
+            self._desk_start_pending = None
+            try:
+                self._desk_messages.started(started, now)
+            except Exception:  # noqa: BLE001
+                log.exception("desk messages: the start message failed")
+        try:
+            self._desk_messages.look(now)
+        except Exception:  # noqa: BLE001
+            log.exception("desk messages: the 09:05 check failed")
 
     def _maybe_auto_renew(self, now: dt.datetime) -> None:
         if not self.secrets.can_self_renew:
@@ -1232,6 +1299,7 @@ class Engine:
                     self._remind_about_the_token(now)
                 except Exception:  # noqa: BLE001 - a reminder never starves the pass below
                     log.exception("token reminders: the step failed")
+                self._desk_heartbeat(now)  # US-097: guarded inside
                 today = now.date().isoformat()
                 if today != last_iv_record and self.chain and self.chain.snapshot:
                     iv = self.chain.atm_iv()

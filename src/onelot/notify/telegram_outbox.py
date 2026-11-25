@@ -75,6 +75,7 @@ OutboxKind = Literal[
     "token",
     "volume",
     "stop",
+    "desk",
 ]
 OUTBOX_KINDS: frozenset[str] = frozenset(
     (
@@ -88,6 +89,7 @@ OUTBOX_KINDS: frozenset[str] = frozenset(
         "token",
         "volume",
         "stop",
+        "desk",
     )
 )
 

@@ -665,6 +665,22 @@ token_reminder_state = Table(
 )
 
 
+# ── When the desk ran (US-097) ───────────────────────────────────────────
+# One row per calendar day (IST) the desk ran: the first and last heartbeat, how many beats
+# (at most one write every five minutes), the minutes of market hours the beats covered, and
+# whether the day's first start came after 09:15 on a trading day. A restart continues the row.
+desk_uptime = Table(
+    "desk_uptime",
+    METADATA,
+    Column("day", String(10), primary_key=True),  # 2026-11-25 (IST)
+    Column("first_seen", TZDateTime, nullable=False),
+    Column("last_seen", TZDateTime, nullable=False),
+    Column("beats", Integer, nullable=False, default=0),
+    Column("session_minutes", Float, nullable=False, default=0.0),
+    Column("started_late", Boolean, nullable=False, default=False),
+)
+
+
 # ── Delivery trades of the pullback rule (US-067) ─────────────────────────
 # One row per (stock, signal date): the entry alert, its paper trade and its exit alert are
 # states of the same row (PENDING_ENTRY -> OPEN -> EXIT_PENDING -> CLOSED, or MISSED), so a
