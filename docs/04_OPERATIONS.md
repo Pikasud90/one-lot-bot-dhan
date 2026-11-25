@@ -220,6 +220,15 @@ places an order, and the desk 18 keep working exactly as above.
   the close, and the afternoon one is first read the next session.
 - Alert: at a 3-minute close where all seven newly point up (BUY a call) or down (BUY a put),
   inside the option entry window, one lot of the monthly contract, one live idea per index.
+- Contract (US-104): the monthly contract nearest delta 0.65 AMONG CONTRACTS THAT TRADE: a last
+  price, a two-sided quote (bid and ask above 0), open interest above 0 and a spread of at
+  most 10% (`backtest.option_max_spread_pct`, 1 to 50). The bid, the ask and the spread shown
+  are that contract's own. A contract with no quote or no open interest is never named, however
+  near 0.65 its delta reads (on 25 Nov 2026 three alerts named such dead contracts, 10% to 14%
+  away from the index). When the nearest tradeable delta is more than 0.10 from 0.65 the alert
+  notes "nearest tradeable contract: delta 0.52 (wanted about 0.65)". When nothing in the chain
+  trades the model prices the alert ("est.") and its first note says "no tradeable contract in
+  the live chain". The fill-cost recorder watches the same contract.
 - Exit: the paper trade closes at the first one-minute bar at or after the 3-minute close where
   3 of the 7 point against it, else at the session end, unless the stop or the target comes
   first (next section).

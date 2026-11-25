@@ -30,6 +30,7 @@ from ..lab.execution import (
     year_frac,
 )
 from ..settings import current_settings
+from .option_pick import pick_contract
 
 
 @dataclass
@@ -248,6 +249,24 @@ def alert_text(
     return "\n".join(lines)
 
 
+NO_TRADEABLE_NOTE = (
+    "no tradeable contract in the live chain (no open interest or no two-sided quote): "
+    "the premium is the model's estimate"
+)
+# beyond this distance of the chosen |delta| from the target, the alert says what it got
+DELTA_NOTE_GAP = 0.10
+
+
+@dataclass(frozen=True)
+class ChainEconomics:
+    """What `chain_economics` found: the economics of the chosen contract, or None with
+    `untradeable` True when the chain had rows of the wanted type but none was tradeable (the
+    desk's model fallback then says so), False when it had no such rows at all."""
+
+    economics: Economics | None
+    untradeable: bool = False
+
+
 def index_option_economics_from_chain(
     spec: InstrumentSpec,
     direction: str,
@@ -259,27 +278,62 @@ def index_option_economics_from_chain(
     bt: BacktestCfg | None = None,
 ) -> Economics | None:
     """Same contract as `index_option_economics`, but strike, premium, delta, IV and the
-    spread come from a LIVE Dhan option chain. Returns None when the chain is unusable
-    (caller falls back to the synthetic model)."""
+    spread come from a LIVE Dhan option chain (the chain of the monthly expiry the desk reads).
+
+    The contract is the one whose |delta| is nearest `bt.option_target_delta` (0.65) AMONG
+    CONTRACTS THAT TRADE (US-104, `option_pick`): a last price, a two-sided quote (bid and ask
+    above 0), open interest above 0 (not tested when the chain reports it for no row) and a
+    spread of at most `bt.option_max_spread_pct` (10%). With no delta on any of them, the
+    nearest in-the-money strike. The bid and the ask are the contract's own; you buy at the
+    ask. When the chosen |delta| is more than 0.10 from the target a note says so.
+
+    Returns None when nothing is tradeable or the chain is unusable (the caller falls back to
+    the synthetic model); `chain_economics` also tells those two apart."""
+    return chain_economics(spec, direction, entry, stop, target_r, chain, now, bt).economics
+
+
+def chain_economics(
+    spec: InstrumentSpec,
+    direction: str,
+    entry: float,
+    stop: float,
+    target_r: float,
+    chain,
+    now: dt.datetime,
+    bt: BacktestCfg | None = None,
+) -> ChainEconomics:
+    """`index_option_economics_from_chain`, with whether a chain that gave nothing had rows
+    of the wanted type that were all untradeable (`ChainEconomics.untradeable`)."""
     bt = bt or current_settings().backtest
     sign = 1 if direction == "long" else -1
     opt = "CE" if sign > 0 else "PE"
-    rows = [r for r in getattr(chain, "rows", []) if r.opt_type == opt and r.ltp and r.ltp > 0]
-    if not rows:
-        return None
+    rows = list(getattr(chain, "rows", None) or [])
     target_delta = bt.option_target_delta
-    with_delta = [r for r in rows if r.delta is not None]
-    if with_delta:
-        best = min(with_delta, key=lambda r: abs(abs(r.delta) - target_delta))
-    else:  # no greeks: nearest ITM strike by moneyness
-        itm = [r for r in rows if (r.strike <= entry if opt == "CE" else r.strike >= entry)]
-        best = min(itm or rows, key=lambda r: abs(r.strike - entry))
+    best = pick_contract(rows, opt, entry, target_delta, bt.option_max_spread_pct)
+    if best is None:
+        return ChainEconomics(None, any(getattr(r, "opt_type", None) == opt for r in rows))
+    return ChainEconomics(
+        _economics_of_row(spec, opt, sign, entry, stop, target_r, best, chain, target_delta)
+    )
+
+
+def _economics_of_row(
+    spec: InstrumentSpec,
+    opt: str,
+    sign: int,
+    entry: float,
+    stop: float,
+    target_r: float,
+    best,
+    chain,
+    target_delta: float,
+) -> Economics:
+    """The one-lot economics of the chosen, tradeable chain row `best`."""
     delta = abs(best.delta) if best.delta is not None else target_delta
     iv = best.iv if best.iv else None
-    ask = best.ask if best.ask and best.ask > 0 else best.ltp
-    bid = best.bid if best.bid and best.bid > 0 else best.ltp
-    prem = float(ask)  # you buy at the ask
-    spread_pct = ((ask - bid) / ask * 100.0) if ask else None
+    bid, ask = float(best.bid), float(best.ask)  # tradeable: both exist, ask >= bid > 0
+    prem = ask  # you buy at the ask
+    spread_pct = (ask - bid) / ask * 100.0
     risk_pts = abs(entry - stop)
     target = entry + sign * target_r * risk_pts if target_r > 0 else None
     # premium at stop / target: delta-translated (gamma ignored), floored at a tick
@@ -291,6 +345,12 @@ def index_option_economics_from_chain(
     risk = max(prem - prem_stop, 0.0) * lot + c
     reward = ((prem_target - prem) * lot - c) if prem_target is not None else None
     exp = getattr(chain, "expiry", None)
+    notes = [f"live chain quote: bid {bid:.2f} / ask {ask:.2f} (spread {spread_pct:.1f}%)"]
+    if best.delta is not None and round(abs(delta - target_delta), 9) > DELTA_NOTE_GAP:
+        notes.append(
+            f"nearest tradeable contract: delta {delta:.2f} (wanted about {target_delta:.2f})"
+        )
+    notes.append("premium at stop/target is delta-translated from the underlying levels")
     return Economics(
         "INDEX",
         f"BUY_{opt}",
@@ -318,14 +378,10 @@ def index_option_economics_from_chain(
             "lot": lot,
             "bid": bid,
             "ask": ask,
-            "spread_pct": round(spread_pct, 2) if spread_pct is not None else None,
+            "spread_pct": round(spread_pct, 2),
             "oi": best.oi,
             "security_id": best.security_id,
         },
         synthetic=False,
-        notes=[
-            f"live chain quote: bid {bid:.2f} / ask {ask:.2f}"
-            + (f" (spread {spread_pct:.1f}%)" if spread_pct is not None else ""),
-            "premium at stop/target is delta-translated from the underlying levels",
-        ],
+        notes=notes,
     )

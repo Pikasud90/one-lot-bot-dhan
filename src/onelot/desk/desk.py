@@ -47,10 +47,11 @@ from .audit import audit_signal, confidence, strategy_scoreboard
 from .config import DeskConfig, load_desk_config
 from .data import CompositeBars, build_source, is_delayed_source
 from .economics import (
+    NO_TRADEABLE_NOTE,
     Economics,
     alert_text,
+    chain_economics,
     index_option_economics,
-    index_option_economics_from_chain,
     stock_economics,
 )
 from .fillcost import FillCostRecorder, Watched, charges_check, half_spread_pct
@@ -301,6 +302,7 @@ class Desk:
             self._fill_stocks,
             self._fill_indices,
             roll_days=self.cfg.option_roll_days,
+            max_spread_pct=self.app_cfg.backtest.option_max_spread_pct,
         )
 
     def fill_charges(self, days: int = 365) -> dict:
@@ -1337,20 +1339,24 @@ class Desk:
         if t.cfg.kind == "STOCK":
             return stock_economics(t.instrument, v.direction, close, stop, target_r)
         chain = self._live_chain(t, now)
+        untradeable = False  # US-104: the chain had rows of the side, none tradeable
         if chain is not None:
             try:
-                eco = index_option_economics_from_chain(
-                    t.instrument, v.direction, close, stop, target_r, chain, now
-                )
+                got = chain_economics(t.instrument, v.direction, close, stop, target_r, chain, now)
+                eco = got.economics
                 if eco is not None:
                     if eco.option is not None:  # where its own bars live (real premiums)
                         eco.option.setdefault("segment", f"{t.series.exchange}_FNO")
                         eco.option.setdefault("underlying", t.series.key)
                     return eco
+                untradeable = got.untradeable
             except Exception:  # noqa: BLE001
                 log.exception("chain economics failed; using the synthetic model")
         vix = self._context_last("INDIAVIX")
-        return index_option_economics(t.instrument, v.direction, close, stop, target_r, now, vix)
+        model = index_option_economics(t.instrument, v.direction, close, stop, target_r, now, vix)
+        if untradeable:
+            model.notes.insert(0, NO_TRADEABLE_NOTE)
+        return model
 
     def _live_chain(self, t: InstrumentTracker, now: dt.datetime):
         """The option chain of the contract an index alert names (desk.yaml `option_expiry`:
