@@ -75,8 +75,8 @@ Dhan option chain is wired into the desk; the alert says so. Place the order off
 Every alert the desk raises also opens a **paper trade**, automatically, so strategy evidence
 builds up without you clicking anything (ADR-001, US-001). That includes alerts you
 skipped or let expire: the paper book is evidence, not permission. No risk governor blocks an
-alert or a paper trade. It never sends an order, never touches the risk governor's counters and never
-writes to your desk journal.
+alert or a paper trade. It never sends an order, never touches the risk governor's counters
+and never writes to your desk journal.
 
 * **Unit:** 1 share for a stock, one lot of the alerted option for an index (the lot the alert
   names; a lot that disagrees with `universe.yaml` is kept and logged), whatever `risk.lots_per_trade` says.
@@ -216,7 +216,8 @@ Every alert, F&O or stock, is handled the same way:
 Horizons: index options are **intraday** (square-off 15:15). `config/desk.yaml` sets
 `stock_horizon: intraday` and the stocks run as delivery trades (the pullback rule, with its own
 exits). The code default, used when the key is missing, is `swing` with `swing_max_sessions: 5`:
-a taken stock position is carried across sessions, recovered at the next start, resubscribed on the socket, and re-checked
+a taken stock position is carried across sessions, recovered at the next start, resubscribed
+on the socket, and re-checked
 against its strategy every poll until the strategy exits, the stop/target hits, or the time stop.
 
 ## Instrument focus (Live tab)
