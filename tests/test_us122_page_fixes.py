@@ -63,3 +63,35 @@ def test_a2_no_first_only_underscore_replace_remains() -> None:
 def test_a2_spaced_replaces_every_underscore() -> None:
     assert js(["spaced"], 'spaced("GAP_THROUGH_STOP")') == "GAP THROUGH STOP"
     assert js(["spaced"], "spaced(null)") == ""
+
+
+INDEX = ROOT / "src" / "onelot" / "ui" / "index.html"
+CHEATS = ROOT / "src" / "onelot" / "ui" / "cheats.js"
+
+
+def test_a3_explorer_says_what_it_shows() -> None:
+    page = INDEX.read_text(encoding="utf-8")
+    assert "what the backtests actually see" not in page
+    assert "the stored bars as they are, before the Lab's cleaning" in page
+
+
+def test_a4_lab_help_says_what_real_option_prices_are_used_for() -> None:
+    page = INDEX.read_text(encoding="utf-8")
+    assert "until the Dhan option-chain history is wired" not in page
+    assert "Simulator uses them" in page
+    assert "the Lab's own runs still price every option with a Black-76 model" in page
+
+
+def test_a5_settings_marks_mode_and_risk_as_old_engine() -> None:
+    page = INDEX.read_text(encoding="utf-8")
+    assert "belong to the old engine and do not limit the desk's alerts or its paper trades" in page
+
+
+def test_a9_cheat_sheet_matches_the_page() -> None:
+    cheats = CHEATS.read_text(encoding="utf-8")
+    assert "shown in UTC" not in cheats
+    assert "Read times on this tab as UTC" not in cheats
+    assert "Add 5 hours 30 minutes to the UTC times" not in cheats
+    assert "Its title says so, but it does not apply" not in cheats
+    assert "The page does not say so" not in cheats
+    assert "Option prices are not stored here for most history" not in cheats

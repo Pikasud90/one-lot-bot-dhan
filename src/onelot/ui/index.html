@@ -290,7 +290,7 @@
           <div class="card help">
             <h2>How to read the Lab</h2>
             <h3>What a backtest does</h3>
-            <p>Signals are decided on <b>closed bars</b> and filled at the next bar's open with slippage and the full Indian charge stack (brokerage, STT, exchange, SEBI, stamp, GST). One unit per trade: 1 share, or 1 lot. Index option trades are priced with a Black-76 model off the underlying and India VIX (<b>synthetic</b>) until the Dhan option-chain history is wired.</p>
+            <p>Signals are decided on <b>closed bars</b> and filled at the next bar's open with slippage and the full Indian charge stack (brokerage, STT, exchange, SEBI, stamp, GST). One unit per trade: 1 share, or 1 lot. Real traded prices of NIFTY and BANKNIFTY monthly options (Nov 2021 to Nov 2026) are stored and the Simulator uses them, but the Lab's own runs still price every option with a Black-76 model off the underlying and India VIX (<b>synthetic</b>).</p>
             <h3>The numbers that matter</h3>
             <ul>
               <li><b>Expectancy (R)</b> — average result per trade in units of initial risk. Positive after costs is the first bar to clear.</li>
@@ -343,7 +343,7 @@
     </div>
     <div class="card" id="data-quality-card" hidden><h2>Quality</h2><div class="scroll" id="data-quality-out"></div></div>
     <div class="card">
-      <div class="row between"><h2>Explore a series <small>what the backtests actually see</small></h2>
+      <div class="row between"><h2>Explore a series <small>the stored bars as they are, before the Lab's cleaning (mock sessions and two demergers stay in)</small></h2>
         <div class="actions"><select id="eda-series" aria-label="Series to explore"></select><select id="eda-res" aria-label="Resolution"><option>5m</option><option>2m</option><option>15m</option><option>60m</option></select><button class="btn small" id="eda-go">Explore</button></div></div>
       <div class="tiles small" id="eda-stats"></div>
       <div class="grid2">
@@ -727,6 +727,7 @@
         </div>
         <div class="card">
           <h2>Desk configuration <small>read-only here; edit config/config.yaml</small></h2>
+          <p class="hint">Mode and the Risk block below belong to the old engine and do not limit the desk's alerts or its paper trades.</p>
           <div id="cfg-view"></div>
           <div class="actions mt"><button class="btn" id="notify-test">Send a test notification</button></div>
         </div>
