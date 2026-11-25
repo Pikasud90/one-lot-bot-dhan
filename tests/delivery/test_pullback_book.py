@@ -77,3 +77,22 @@ def test_an_exit_pays_back_before_the_same_morning_entries():
 def test_without_the_cash_rule_nothing_is_refused():
     st, _ = run([(0, 1, 5, 100, 0, 0), (0, 1, 5, 100, 0, 1)], k=5, money=0, cash=False)
     assert list(st) == [pb.DONE, pb.DONE]
+
+
+def test_one_mornings_fills_are_paid_older_signal_first_unless_asked_otherwise():
+    # trade 0 signalled on evening 0 with no bar on 1, so it fills at 2 with trade 1 (evening 1,
+    # better rank); money pays only one of them
+    trades = [(0, 2, 6, 100, 0, 1), (1, 2, 6, 100, 0, 0)]
+    a = np.array(trades, dtype=float)
+    args = (
+        a[:, 0].astype(int),
+        a[:, 1].astype(int),
+        a[:, 2].astype(int),
+        a[:, 3],
+        a[:, 4],
+        a[:, 5],
+    )
+    st, _ = pb.run_book(*args, 2, 100, 10, True)
+    assert list(st) == [pb.DONE, pb.REFUSED]
+    st, _ = pb.run_book(*args, 2, 100, 10, True, older_first=False)
+    assert list(st) == [pb.REFUSED, pb.DONE]
