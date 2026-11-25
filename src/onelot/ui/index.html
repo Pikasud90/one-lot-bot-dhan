@@ -405,64 +405,240 @@
     </div>
   </section>
 
-  <!-- ─────────────────────────── SIMULATOR (US-075, US-076) ─────────── -->
+  <!-- ─────────────────────────── SIMULATOR (US-075, US-076, US-094) ──── -->
   <section data-tab="sim" class="tab">
-    <div id="sim-root">
-      <div id="sim-banner"></div>
-      <div id="sim-resume"></div>
-      <div class="card sim-setup-card">
-        <div class="sim-setup">
-          <div><label for="sim-mode">Mode</label><select id="sim-mode"><option value="past">Past data</option><option value="live">Live feed</option></select></div>
-          <div><label for="sim-inst">Instrument</label><select id="sim-inst"></select></div>
-          <div><label for="sim-strat">Strategy</label><select id="sim-strat"></select></div>
-          <div><label for="sim-tf">Timeframe</label><select id="sim-tf"></select></div>
-          <div id="sim-start-wrap"><label for="sim-start">Start date and time</label><input id="sim-start" type="datetime-local"></div>
-          <div class="sim-go-wrap"><button class="btn primary" id="sim-go" data-act="start">Start</button></div>
-        </div>
-        <div class="muted sim-note" id="sim-note">Loading the simulator…</div>
-      </div>
-      <div id="sim-run" hidden>
-        <div class="card sim-bar">
-          <div class="sim-clock-wrap"><span class="sim-clock" id="sim-clock">–</span> <span class="sim-badge" id="sim-badge"></span></div>
-          <div class="actions">
-            <button class="btn primary" id="sim-play" data-act="play">Play</button>
-            <button class="btn" id="sim-step" data-act="step">Step</button>
-            <span class="chips" id="sim-speeds"></span>
-            <label class="inline"><input type="checkbox" id="sim-pause-alert" checked> Pause on alert</label>
-            <label class="inline"><input type="checkbox" id="sim-sound" checked> Sound</label>
-            <button class="btn ghost small" id="sim-end" data-act="end">End session</button>
+    <div id="sim-root" class="sim-ws" data-panel="open">
+      <div class="sim-strip" id="sim-strip" role="toolbar" aria-label="Replay controls">
+        <div class="sim-row1">
+        <div class="sim-grp sim-g-choose">
+          <select id="sim-inst" class="sim-sel sim-sel-inst" aria-label="Instrument" title="Instrument"></select>
+          <select id="sim-strat" class="sim-sel sim-sel-strat" aria-label="Strategy" title="Strategy: the rule that raises the alerts"></select>
+          <select id="sim-tf" class="sim-sel sim-sel-tf" aria-label="Strategy timeframe" title="The strategy's own timeframe: its alerts come from these candles"></select>
+          <div class="sim-date" role="group" aria-label="Day to replay">
+            <button type="button" class="sim-ib" id="sim-day-prev" data-act="day-prev" title="The trading day before" aria-label="The trading day before"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            <button type="button" class="sim-daybtn" id="sim-day" data-act="day-pick" title="Choose the day to replay">–</button>
+            <input id="sim-day-input" class="sim-dayinput" type="date" aria-label="Day to replay" tabindex="-1">
+            <button type="button" class="sim-ib" id="sim-day-next" data-act="day-next" title="The trading day after" aria-label="The trading day after"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            <button type="button" class="sim-ib" id="sim-day-rand" data-act="day-rand" title="A random trading day (tick 'Hide the date' in the settings to practise blind)" aria-label="A random trading day"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="9" cy="9" r="1.6" fill="currentColor"/><circle cx="15" cy="15" r="1.6" fill="currentColor"/><circle cx="15" cy="9" r="1.6" fill="currentColor"/><circle cx="9" cy="15" r="1.6" fill="currentColor"/></svg></button>
           </div>
-          <div class="muted sim-status" id="sim-status"></div>
-          <div class="muted sim-status" id="sim-premium"></div>
-        </div>
-        <div class="sim-main">
-          <div class="card sim-chart-card"><div id="sim-chart" class="sim-chart"></div></div>
-          <div class="sim-side">
-            <div id="sim-alert"></div>
-            <div id="sim-pos"></div>
+          <div class="sim-seg sim-mode" role="group" aria-label="Past data or the live feed">
+            <button type="button" id="sim-mode-past" data-act="mode-past" aria-pressed="true" title="Replay a stored day">Past</button>
+            <button type="button" id="sim-mode-live" data-act="mode-live" aria-pressed="false" title="Practise on the live feed">Live</button>
           </div>
         </div>
-        <div class="tiles small" id="sim-summary"></div>
-        <div class="card">
-          <div class="actions sim-log-head">
-            <span class="chips"><span class="chip active" id="sim-view-session" data-act="view-session">This session</span><span class="chip" id="sim-view-all" data-act="view-all">All simulator trades</span></span>
-            <a class="sim-csv" href="/api/sim/trades.csv" download>Download CSV</a>
+        </div>
+        <div class="sim-grp sim-g-play">
+          <button type="button" class="sim-play" id="sim-play" data-act="play" title="Play or pause (Space)" aria-label="Play">
+            <svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l13-7.5z" fill="currentColor"/></svg>
+            <svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h4.5v16H6zM13.5 4H18v16h-4.5z" fill="currentColor"/></svg>
+            <span id="sim-play-word">Play</span>
+          </button>
+          <button type="button" class="sim-ib" id="sim-step" data-act="step" title="One minute forward (→). Shift + → goes to the close of the chart's candle." aria-label="One minute forward"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5v14l10-7z" fill="currentColor"/><path d="M17 5h2.6v14H17z" fill="currentColor"/></svg></button>
+          <button type="button" class="sim-ib" id="sim-next" data-act="next" title="Jump to the next alert (N)" aria-label="Jump to the next alert"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5v14l8-7zM11 5v14l8-7z" fill="currentColor"/><path d="M20 5h2v14h-2z" fill="currentColor"/></svg></button>
+          <div class="sim-seg sim-speeds" id="sim-speeds" role="group" aria-label="Speed (↑ faster, ↓ slower)"></div>
+          <select id="sim-speed-sel" class="sim-sel sim-sel-speed" aria-label="Speed"></select>
+          <div class="sim-clockbox" title="The replay clock (Indian time)">
+            <div class="sim-clock" id="sim-clock">–</div>
+            <div class="sim-state" id="sim-state">Paused</div>
           </div>
-          <div id="sim-log" class="sim-log"></div>
-          <h4 class="sim-h">What happened</h4>
-          <div id="sim-events" class="sim-events"></div>
+          <button type="button" class="sim-ib" id="sim-gear" data-act="settings" title="Settings" aria-label="Settings" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="16" cy="7" r="2.4" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="10" cy="17" r="2.4" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>
         </div>
       </div>
-      <details class="card sim-how">
-        <summary>How this simulator works</summary>
-        <ul>
-          <li>The market is replayed one minute at a time from stored data, or follows the live feed. The server decides what you can see, so nothing from the future leaks in.</li>
-          <li>A trade you take is filled at the open of the next minute, with slippage and charges, like a real order.</li>
-          <li>Option prices are real traded premiums where they are stored; otherwise they are modelled, and marked as modelled.</li>
-          <li>Stops and targets rest in the market and close the trade by themselves.</li>
-          <li>These are practice trades with dummy money, kept apart from the paper test. Past results are not a promise.</li>
-        </ul>
-      </details>
+
+      <div class="sim-chartbox" id="sim-chartbox">
+        <div id="sim-chart" class="sim-chart" tabindex="0" aria-label="Replay chart"></div>
+        <div id="sim-banner" class="sim-banner" hidden></div>
+        <div class="sim-chartbar" role="toolbar" aria-label="Chart">
+          <div class="sim-seg sim-ctfs" id="sim-ctfs" role="group" aria-label="Chart timeframe ([ down, ] up)"></div>
+          <select id="sim-ctf" class="sim-sel sim-sel-ctf" aria-label="Chart timeframe" title="Chart timeframe ([ down, ] up)"></select>
+          <button type="button" class="sim-ib" id="sim-fit" data-act="fit" title="Fit the chart: about 120 candles, the newest at the right (F)" aria-label="Fit the chart"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button type="button" class="sim-ib" id="sim-helpbtn" data-act="help" title="The keys (?)" aria-label="The keys">?</button>
+          <button type="button" class="sim-ib" id="sim-full" data-act="full" title="Full screen" aria-label="Full screen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10V4h6M14 4h6v6M20 14v6h-6M10 20H4v-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        </div>
+        <div class="sim-legend" id="sim-legend" aria-live="off">
+          <div class="sim-lg-row">
+            <b class="sim-lg-head" id="sim-lg-head">–</b>
+            <span class="sim-lg-ohlc"><i>O</i><b id="sim-lg-o">–</b><i>H</i><b id="sim-lg-h">–</b><i>L</i><b id="sim-lg-l">–</b><i>C</i><b id="sim-lg-c">–</b></span>
+            <b class="sim-lg-chg" id="sim-lg-chg"></b>
+            <span class="sim-lg-vol" id="sim-lg-vol"></span>
+            <span class="sim-countdown" id="sim-countdown" title="Time to the close of the chart's candle"></span>
+          </div>
+          <div class="sim-lg-lines" id="sim-lg-lines"></div>
+        </div>
+        <div class="sim-flag" id="sim-flag" hidden></div>
+        <div class="sim-build" id="sim-build" hidden><span class="sim-spin"></span><span id="sim-build-text"></span></div>
+        <div class="sim-pins" id="sim-pins"></div>
+        <button type="button" class="sim-tonow" id="sim-tonow" data-act="tonow" hidden title="Scroll to the newest candle">To now <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l7 7-7 7M13 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <div class="sim-veil" id="sim-veil" hidden>
+          <div class="sim-veil-box">
+            <span class="sim-spin" id="sim-veil-spin"></span>
+            <div class="sim-veil-text" id="sim-veil-text"></div>
+            <div class="sim-veil-sub" id="sim-veil-sub"></div>
+            <button type="button" class="sim-btn" id="sim-retry" data-act="retry" hidden>Try again</button>
+          </div>
+        </div>
+      </div>
+
+      <aside class="sim-dock" id="sim-dock" aria-label="Alert, trade and result">
+        <div class="sim-slot" id="sim-slot">
+          <div class="sim-card sim-hint" id="sim-hint">
+            <div class="sim-tag" id="sim-hint-tag">Ready</div>
+            <div class="sim-hint-title" id="sim-hint-title">Loading the simulator…</div>
+            <div class="sim-hint-text" id="sim-hint-text"></div>
+            <div class="sim-hint-btns" id="sim-hint-btns"></div>
+          </div>
+
+          <div class="sim-card sim-ticket" id="sim-ticket" hidden>
+            <div class="sim-tagrow"><span class="sim-tag alert">Alert</span><span class="sim-left" id="sim-tk-left"></span></div>
+            <div class="sim-action" id="sim-tk-action">–</div>
+            <div class="sim-what"><span id="sim-tk-what">–</span> <span class="sim-src" id="sim-tk-src">–</span></div>
+            <div class="sim-plan">
+              <div class="sim-buy" id="sim-tk-buy">–</div>
+              <div class="sim-pair"><span class="neg" id="sim-tk-stop">–</span><span class="pos" id="sim-tk-target">–</span></div>
+              <div class="sim-pair"><span>Risk <b class="neg" id="sim-tk-risk">–</b></span><span>Reward <b class="pos" id="sim-tk-reward">–</b></span></div>
+              <div class="sim-pair sim-quiet"><span>Charges <b id="sim-tk-costs">–</b></span><span><b id="sim-tk-ratio">–</b> reward to risk</span></div>
+            </div>
+            <div class="sim-btns"><button type="button" class="sim-btn take" data-act="take" title="Take this trade (T)">Take <kbd>T</kbd></button><button type="button" class="sim-btn" data-act="skip" title="Skip this alert (S)">Skip <kbd>S</kbd></button></div>
+            <div class="sim-trig" id="sim-tk-trig"></div>
+            <div class="sim-quiet" id="sim-tk-implied"></div>
+            <details class="sim-why"><summary>Why this alert</summary><ul id="sim-tk-reasons"></ul></details>
+          </div>
+
+          <div class="sim-card sim-pos" id="sim-pos" hidden>
+            <div class="sim-tagrow"><span class="sim-tag open" id="sim-ps-tag">Open trade</span><span class="sim-left" id="sim-ps-mins"></span></div>
+            <div class="sim-action sm" id="sim-ps-action">–</div>
+            <div class="sim-what"><span id="sim-ps-what">–</span> <span class="sim-src" id="sim-ps-src">–</span></div>
+            <div class="sim-pending" id="sim-ps-pending" hidden>Waiting for the fill at the next minute's open.</div>
+            <div id="sim-ps-live">
+              <div class="sim-pnl"><b id="sim-ps-pnl">–</b><span id="sim-ps-pct">–</span><span id="sim-ps-r">–</span></div>
+              <div class="sim-line" id="sim-ps-inout">–</div>
+              <div class="sim-line sim-quiet" id="sim-ps-index"></div>
+              <div class="sim-meter" id="sim-ps-meter" title="From the first stop (left) to the target (right); marks at 25%, 50% and 80% of the way">
+                <i class="sim-tick" id="sim-ps-t25"></i><i class="sim-tick" id="sim-ps-t50"></i><i class="sim-tick" id="sim-ps-t80"></i>
+                <i class="sim-mk stop" id="sim-ps-mstop"></i><i class="sim-mk entry" id="sim-ps-mentry"></i><i class="sim-mk price" id="sim-ps-mprice"></i>
+              </div>
+              <div class="sim-meter-words"><span>First stop</span><span id="sim-ps-way">–</span><span>Target</span></div>
+              <div class="sim-stage" id="sim-ps-stage">–</div>
+              <div class="sim-line neg" id="sim-ps-stop">–</div>
+              <div class="sim-line pos" id="sim-ps-target">–</div>
+            </div>
+            <div class="sim-exitsig" id="sim-ps-exit" hidden>The strategy says close this trade.</div>
+            <div class="sim-btns"><button type="button" class="sim-btn close" data-act="close" title="Close at the next minute's open (X)">Close <kbd>X</kbd></button></div>
+          </div>
+
+          <div class="sim-card sim-res" id="sim-res" hidden>
+            <div class="sim-tagrow"><span class="sim-tag" id="sim-rs-tag">Closed</span><span class="sim-left" id="sim-rs-r">–</span></div>
+            <div class="sim-action sm" id="sim-rs-reason">–</div>
+            <div class="sim-pnl"><b id="sim-rs-net">–</b><span>after charges of <span id="sim-rs-charges">–</span></span></div>
+            <div class="sim-line" id="sim-rs-what">–</div>
+            <div class="sim-line" id="sim-rs-inout">–</div>
+            <div class="sim-line sim-quiet" id="sim-rs-rule"></div>
+          </div>
+
+          <div class="sim-card sim-day" id="sim-dayc" hidden>
+            <div class="sim-tagrow"><span class="sim-tag">Day over</span></div>
+            <div class="sim-action sm" id="sim-dy-title">–</div>
+            <div class="sim-pnl"><b id="sim-dy-net">–</b><span id="sim-dy-trades">–</span></div>
+            <div class="sim-btns"><button type="button" class="sim-btn primary" data-act="nextday" title="Go on to the next trading day (Space)">Go on to the next day</button></div>
+          </div>
+        </div>
+
+        <div class="sim-card sim-nums" id="sim-nums" aria-label="This session">
+          <div><span>Trades</span><b id="sim-n-trades">0</b></div>
+          <div><span>Winners</span><b id="sim-n-win">–</b></div>
+          <div><span>Net</span><b id="sim-n-net">₹0.00</b></div>
+          <div><span>Equity</span><b id="sim-n-eq">–</b></div>
+        </div>
+      </aside>
+
+      <section class="sim-panel" id="sim-panel" aria-label="Trades, log and numbers">
+        <div class="sim-ptabs" role="tablist">
+          <button type="button" role="tab" class="sim-ptab" id="sim-pt-trades" data-ptab="trades" aria-selected="true">Trades <span class="sim-count" id="sim-pt-trades-n"></span></button>
+          <button type="button" role="tab" class="sim-ptab" id="sim-pt-log" data-ptab="log" aria-selected="false">Log <span class="sim-count" id="sim-pt-log-n"></span></button>
+          <button type="button" role="tab" class="sim-ptab" id="sim-pt-numbers" data-ptab="numbers" aria-selected="false">Numbers</button>
+          <button type="button" role="tab" class="sim-ptab" id="sim-pt-how" data-ptab="how" aria-selected="false">How it works</button>
+          <span class="sim-status" id="sim-status" aria-live="polite"></span>
+          <button type="button" class="sim-ib sim-ptoggle" id="sim-panel-toggle" data-act="panel" title="Show or hide this panel (L)" aria-label="Show or hide this panel" aria-expanded="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        </div>
+        <div class="sim-pbody">
+          <div class="sim-pane" id="sim-p-trades" role="tabpanel" aria-labelledby="sim-pt-trades">
+            <div class="sim-phead">
+              <div class="sim-seg"><button type="button" id="sim-view-session" data-act="view-session" aria-pressed="true">This session</button><button type="button" id="sim-view-all" data-act="view-all" aria-pressed="false">All sessions</button></div>
+              <span class="sim-quiet">Click a trade to see it on the chart.</span>
+              <a class="sim-csv" id="sim-csv" href="/api/sim/trades.csv" download>Download all as CSV</a>
+            </div>
+            <table class="sim-table" id="sim-trades-table">
+              <thead><tr><th>When</th><th>Trade</th><th class="n">Price in → out</th><th class="n">Index in → out</th><th>Why it closed</th><th class="n">Net</th><th class="n">R</th></tr></thead>
+              <tbody id="sim-trades"></tbody>
+            </table>
+            <div class="sim-empty" id="sim-trades-empty">No closed trades in this session yet.</div>
+          </div>
+          <div class="sim-pane" id="sim-p-log" role="tabpanel" aria-labelledby="sim-pt-log" hidden>
+            <ol class="sim-log" id="sim-log"></ol>
+            <div class="sim-empty" id="sim-log-empty">Nothing has happened yet. Events appear here at their own minute.</div>
+          </div>
+          <div class="sim-pane" id="sim-p-numbers" role="tabpanel" aria-labelledby="sim-pt-numbers" hidden>
+            <div class="sim-numgrid" id="sim-numgrid"></div>
+            <div class="sim-equity"><div class="sim-quiet">Equity, trade by trade</div><svg id="sim-equity" viewBox="0 0 600 90" preserveAspectRatio="none" aria-label="Equity line"><path id="sim-equity-path" d=""/></svg></div>
+          </div>
+          <div class="sim-pane sim-how" id="sim-p-how" role="tabpanel" aria-labelledby="sim-pt-how" hidden>
+            <div class="sim-howgrid">
+              <div>
+                <h4>On the chart</h4>
+                <ul class="sim-keylist">
+                  <li><i class="sw entry"></i>Entry of the trade (dashed while it is only an alert)</li>
+                  <li><i class="sw stop"></i>Stop, with the rupees you would lose there</li>
+                  <li><i class="sw target"></i>Target, with the rupees you would make there</li>
+                  <li><i class="sw faint"></i>The first stop and target, once the rule has moved them</li>
+                  <li><i class="sw zone"></i>Shaded: reward (green) and risk (red) from the entry</li>
+                  <li>A tag at the top or bottom edge: a level too far away to draw without squashing the candles</li>
+                </ul>
+              </div>
+              <div>
+                <h4>What is real and what is not</h4>
+                <ul>
+                  <li>The market is replayed from stored one-minute bars. The server decides what you can see, so nothing from the future leaks in.</li>
+                  <li>Inside a minute the candle moves along a drawn path from that minute's own open, high, low and close (Smooth candles in the settings). It never shows a price outside the real bar and ends on the real close.</li>
+                  <li>Stops and targets are decided by the server on each minute's real high and low. When both are touched in the same minute, the stop counts first.</li>
+                  <li>A trade you take fills at the open of the next minute, with slippage and charges, like a real order.</li>
+                  <li>Option prices are real traded premiums where they are stored; otherwise they are modelled and marked "modelled".</li>
+                  <li id="sim-premium"></li>
+                  <li>These are practice trades with dummy money, kept apart from the paper test. Past results are not a promise.</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="sim-actbar" id="sim-actbar" hidden>
+        <span class="sim-ab-text" id="sim-ab-text"></span>
+        <button type="button" class="sim-btn take" data-act="take" id="sim-ab-take">Take</button>
+        <button type="button" class="sim-btn" data-act="skip" id="sim-ab-skip">Skip</button>
+        <button type="button" class="sim-btn close" data-act="close" id="sim-ab-close">Close</button>
+      </div>
+
+      <div class="sim-sheet" id="sim-settings" role="dialog" aria-label="Settings" hidden>
+        <div class="sim-sheet-head"><b>Settings</b><button type="button" class="sim-ib" data-act="sheet-close" aria-label="Close">✕</button></div>
+        <label class="sim-check"><input type="checkbox" id="sim-o-smooth"> <span><b>Smooth candles</b>: draw each minute along a path from its own open, high, low and close. Off: one step a minute.</span></label>
+        <label class="sim-check"><input type="checkbox" id="sim-o-pause"> <span><b>Pause on an alert</b>, so you can take or skip it.</span></label>
+        <label class="sim-check"><input type="checkbox" id="sim-o-slow"> <span><b>Slow down in a trade</b>: at most 10x while a trade is open.</span></label>
+        <label class="sim-check"><input type="checkbox" id="sim-o-nextday"> <span><b>Go on to the next day</b> by itself at the close.</span></label>
+        <label class="sim-check"><input type="checkbox" id="sim-o-hide"> <span><b>Hide the date</b> of a random day until the day is over.</span></label>
+        <label class="sim-check"><input type="checkbox" id="sim-o-sound"> <span><b>Sound</b> on an alert.</span></label>
+        <div class="sim-sheet-foot"><button type="button" class="sim-btn" id="sim-help" data-act="help" title="The keys (?)">The keys <kbd>?</kbd></button><button type="button" class="sim-btn danger" id="sim-end" data-act="end" title="End this practice session">End this session</button></div>
+      </div>
+
+      <div class="sim-sheet sim-keysheet" id="sim-keys" role="dialog" aria-label="Keys" hidden>
+        <div class="sim-sheet-head"><b>Keys</b><button type="button" class="sim-ib" data-act="sheet-close" aria-label="Close">✕</button></div>
+        <dl class="sim-keys" id="sim-keys-list"></dl>
+        <div class="sim-quiet">The number keys still switch the app's tabs. Keys do nothing while you type in a field.</div>
+      </div>
+
+      <div class="sim-sheet sim-ask" id="sim-ask" role="alertdialog" aria-modal="true" aria-labelledby="sim-ask-text" hidden>
+        <div class="sim-ask-text" id="sim-ask-text"></div>
+        <div class="sim-btns"><button type="button" class="sim-btn primary" id="sim-ask-yes">Yes</button><button type="button" class="sim-btn" id="sim-ask-no">No</button></div>
+      </div>
     </div>
   </section>
 
@@ -556,6 +732,8 @@
 
 <script>window.ONELOT_TOKEN = "__API_TOKEN__";</script>
 <script src="/static/app.js" defer></script>
+<script src="/static/sim_core.js" defer></script>
+<script src="/static/sim_chart.js" defer></script>
 <script src="/static/sim.js" defer></script>
 <script src="/static/mlstates.js" defer></script>
 <script src="/static/volume.js" defer></script>

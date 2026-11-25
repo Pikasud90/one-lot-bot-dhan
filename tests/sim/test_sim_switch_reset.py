@@ -2,74 +2,87 @@
 
 After a NIFTY session with an alert or a trade, a RELIANCE session kept the index's stop,
 entry and target: the price scale ran from -2,218 to 30,720 and the share's candles got 2 of
-430 pixels. `resetRun` emptied `S.lineKey` to "" and `syncLines` then saw the same empty key
-and returned before it dropped the old levels (audit finding SIM-01).
+430 pixels (audit finding SIM-01). The page was rebuilt (US-094); these tests protect the same
+four things on the rebuilt page:
+
+1. no level, line or marker of an earlier session survives a switch;
+2. a change asks before it closes an open trade;
+3. the wait is said (a loading veil at once, the build's step while a session is built);
+4. the replay waits while another tab is shown.
 """
 
 from __future__ import annotations
 
 import json
 import re
-import shutil
-import subprocess
 from pathlib import Path
 
-import pytest
+from .test_sim_ui import DAY1, DAY2, OPEN_TRADE, needs_node, run_chart
 
 SIM_JS = Path(__file__).resolve().parents[2] / "src" / "onelot" / "ui" / "sim.js"
-NODE = shutil.which("node")
 
 
 def function_source(name: str) -> str:
     text = SIM_JS.read_text(encoding="utf-8")
-    found = re.search(rf"^function {name}\(.*?^}}$", text, re.S | re.M)
+    found = re.search(rf"^(?:async )?function {name}\(.*?^}}$", text, re.S | re.M)
     assert found, f"function {name} not found at the top level of sim.js"
     return found.group(0)
 
 
-def test_a_new_session_drops_every_level_of_the_old_one_in_the_source():
-    body = function_source("resetRun")
-    assert "clearTradeLines()" in body
-    assert "S.lineKey = null" in body  # a key that never equals a computed one
-    cleared = function_source("clearTradeLines")
-    for needed in ("S.scaleLevels = null", "removePriceLine", "setMarkers([])", "autoScale: true"):
-        assert needed in cleared
+def test_a_switch_drops_the_old_session_and_resets_the_chart_before_anything_is_awaited():
+    choose = function_source("choose")
+    assert choose.index("dropSession()") < choose.index("loadPicture()")
+    dropped = function_source("dropSession")
+    for needed in (
+        "S.alert = null",
+        "S.trade = null",
+        "S.markers = []",
+        "S.overlays = {}",
+        "S.events = []",
+    ):
+        assert needed in dropped
+    load = function_source("loadPicture")
+    assert load.index("S.chart.reset()") < load.index("await ")
 
 
-def test_start_asks_before_it_closes_an_open_trade_and_says_it_is_loading():
-    text = SIM_JS.read_text(encoding="utf-8")
-    assert "A trade is open in this session." in text
-    assert 'go.textContent = "Loading…"' in text
-    assert '!OL.tabShown("sim")' in function_source("tick")
-
-
-@pytest.mark.skipif(NODE is None, reason="node is not installed")
-def test_a_new_session_drops_every_level_of_the_old_one_when_run():
-    script = (
-        """
-const calls = [];
-const S = { scaleLevels: [23552.5, 23697.6, 24132.8], lines: ["stop", "entry", "target"],
-  lineKey: "t|23697.6|23552.5|24132.8||", trade: null, alert: null,
-  series: { removePriceLine: (l) => calls.push("rm:" + l), createPriceLine: (o) => o },
-  marks: { setMarkers: (m) => calls.push("marks:" + m.length) },
-  chart: { priceScale: () => ({ applyOptions: (o) => calls.push("auto:" + o.autoScale) }) } };
-const cssv = () => "x";
-"""
-        + function_source("clearTradeLines")
-        + "\n"
-        + function_source("syncLines")
-        + """
-S.lineKey = null; clearTradeLines();          // what resetRun does for the next session
-const after = { levels: S.scaleLevels, lines: S.lines.length, calls: calls.slice() };
-syncLines();                                  // the new session has no alert and no trade yet
-console.log(JSON.stringify({ after, key: S.lineKey, levels: S.scaleLevels, lines: S.lines.length }));
-"""
+@needs_node
+def test_no_level_line_marker_or_zone_of_a_nifty_trade_survives_a_switch_to_reliance():
+    out = run_chart(
+        f"""const {{ LW, log }} = makeLW(); const ch = SC.create({{}}, LW, {{}});
+        const nifty = []; for (let i = 0; i < 300; i++) nifty.push([{DAY1} + 180*i, 24000 + i, 24010 + i, 23990 + i, 24005 + i, 0]);
+        ch.load({{ key: 'NIFTY', label: 'NIFTY 50', kind: 'INDEX', tick: 0.05 }}, '3m', 3, nifty, null);
+        const trade = {json.dumps(OPEN_TRADE)};
+        ch.setLevels(trade, 'trade', C.levelLabels(trade, 'trade'));
+        ch.setZones({{ minute: {DAY1} + 180*290, entry: trade.entry, stop: trade.stop, target: trade.target }});
+        ch.setMarkers([C.markerFor({{kind: 'FILLED', ts: '2026-10-05T09:19:00+05:30', data: {{entry: 25018}}}}, 'LONG')]);
+        const before = log.lines.filter(l => l.o.lineVisible).length;
+        ch.reset();
+        const rel = []; for (let i = 0; i < 300; i++) rel.push([{DAY2} + 300*i, 1150, 1152, 1149, 1151, 5000]);
+        ch.load({{ key: 'RELIANCE', label: 'Reliance', kind: 'STOCK', tick: 0.1 }}, '5m', 5, rel, null);
+        const r = log.series[0].opts.autoscaleInfoProvider(() => ({{ priceRange: {{ minValue: 1149, maxValue: 1152 }} }}));
+        return {{ before, lines: log.lines.filter(l => l.o.lineVisible || l.o.axisLabelVisible).length,
+          markers: log.markers.length, levels: ch.levels, zones: ch.zones.get(), pinned: ch.pinned.length, range: r.priceRange }};"""
     )
-    out = subprocess.run([NODE, "-e", script], capture_output=True, text=True, timeout=30)
-    assert out.returncode == 0, out.stderr
-    got = json.loads(out.stdout.strip().splitlines()[-1])
-    assert got["after"]["levels"] is None
-    assert got["after"]["lines"] == 0
-    for call in ("rm:stop", "rm:entry", "rm:target", "marks:0", "auto:true"):
-        assert call in got["after"]["calls"]
-    assert got["key"] == "" and got["levels"] is None and got["lines"] == 0
+    assert out["before"] >= 3
+    assert out["lines"] == 0 and out["markers"] == 0 and out["levels"] is None
+    assert out["zones"] is None and out["pinned"] == 0
+    assert out["range"] == {"minValue": 1149, "maxValue": 1152}
+
+
+def test_a_change_asks_before_it_closes_an_open_trade():
+    choose = function_source("choose")
+    assert "tradeOpen()" in choose and "await confirm(" in choose
+    assert "Keep the trade" in choose
+    assert choose.index("await confirm(") < choose.index("endOld()")
+
+
+def test_the_wait_is_said():
+    load = function_source("loadPicture")
+    assert load.index("veil(`Loading") < load.index("await ")
+    assert "sim-build" in function_source("showBuild")
+
+
+def test_the_replay_waits_while_another_tab_is_shown():
+    frame = function_source("frame")
+    assert '!OL.tabShown("sim")' in frame and "setPlaying(false" in frame
+    assert "hashchange" in SIM_JS.read_text(encoding="utf-8")

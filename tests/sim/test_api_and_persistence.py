@@ -62,12 +62,13 @@ def run_a_trade(c: TestClient) -> str:
     r = c.post("/api/sim/sessions", json=BODY, headers=H)
     assert r.status_code == 200, r.text
     body = strict(r)
-    assert set(body) == {"session", "candles", "state"}
+    # SIM-API-2: the create answer gains the last events, the plots' points and the marks
+    assert set(body) == {"session", "candles", "state", "events", "overlays", "marks"}
     sid = body["session"]["id"]
     r = strict(c.post(f"/api/sim/sessions/{sid}/advance", json={"minutes": 15}, headers=H))
     assert r["alert"] is not None and r["cursor"] == T("10:14")
     assert set(r) == {"cursor", "minutes", "events", "alert", "trade", "summary", "last_price",
-                      "over", "day_end"}  # fmt: skip
+                      "over", "day_end", "marks", "overlays"}  # fmt: skip
     r = strict(
         c.post(f"/api/sim/sessions/{sid}/take", json={"alert_id": r["alert"]["id"]}, headers=H)
     )
@@ -151,9 +152,11 @@ def test_token_unknown_session_and_conflicts(app_engine, force):
     assert r.status_code == 400
     r = strict(c.post(f"/api/sim/sessions/{sid}/end", json={}, headers=H))
     assert r["session"]["status"] == "ENDED"
-    assert set(r) == {"session", "alert", "trade", "summary", "trades", "events", "minutes"}
+    assert set(r) == {"session", "alert", "trade", "summary", "trades", "events", "minutes",
+                      "marks"}  # fmt: skip
     got = strict(c.get(f"/api/sim/sessions/{sid}"))
-    assert set(got) == {"session", "alert", "trade", "summary", "trades", "candles"}
+    assert set(got) == {"session", "alert", "trade", "summary", "trades", "candles", "events",
+                        "overlays", "marks"}  # fmt: skip
     r = c.post(f"/api/sim/sessions/{sid}/advance", json={"minutes": 1}, headers=H)
     assert r.status_code == 409
 

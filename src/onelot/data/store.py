@@ -31,12 +31,24 @@ _coverage_lock = threading.Lock()
 _coverage_cache: dict[str, tuple[float, int, pd.DataFrame]] = {}
 _coverage_scan_lock = threading.Lock()
 _bars_generation = 0
+#: series -> how many times bars were written to it in this process (the data version of a
+#: series for every cache built on its bars: `series_generation`)
+_series_generations: dict[str, int] = {}
 
 
-def _bars_written() -> None:
+def _bars_written(series_key: str | None = None) -> None:
     global _bars_generation
     with _coverage_lock:
         _bars_generation += 1
+        if series_key is not None:
+            _series_generations[series_key] = _series_generations.get(series_key, 0) + 1
+
+
+def series_generation(series_key: str) -> int:
+    """How many times `save_bars` wrote bars of `series_key` in this process. A cache of
+    anything built on the series' bars keeps this number and is stale once it moves."""
+    with _coverage_lock:
+        return _series_generations.get(series_key, 0)
 
 
 def save_bars(
@@ -69,7 +81,7 @@ def save_bars(
         )
     # idempotent rows: commit per batch so a 5-year load never blocks the desk's writes
     written = upsert(engine, bars, rows, ["ts", "series_key", "resolution"], per_chunk=True)
-    _bars_written()
+    _bars_written(series_key)
     return written
 
 
@@ -160,8 +172,9 @@ def available_resolutions(
 # available_resolutions() counts every bar of the series (about 470,000 index entries: 0.4 to 6 s
 # on the owner's 15 GB store), and load_bars, the Lab and the Simulator asked for it several times
 # for one run (the Simulator's list of instruments: 23 times, 20 s cold). The spans alone are two
-# index seeks a resolution. One answer per engine and series is kept until a bar is written
-# through save_bars (the generation moves) or SPANS_TTL_S passes (another process may write).
+# index seeks a resolution. One answer per engine and series is kept until a bar of THAT series
+# is written through save_bars (its generation moves) or SPANS_TTL_S passes (another process
+# may write).
 SPANS_TTL_S = 120.0
 _spans_lock = threading.Lock()
 _spans_cache: weakref.WeakKeyDictionary[
@@ -179,7 +192,7 @@ def series_spans(engine: Engine, series_key: str) -> dict[str, tuple[dt.datetime
     """{resolution: (first bar, last bar)} of a series, in IST: what `available_resolutions`
     gives without its count, by index seeks. A resolution with no bar is absent."""
     now = time.monotonic()
-    generation = _bars_generation
+    generation = series_generation(series_key)
     with _spans_lock:
         hit = (_spans_cache.get(engine) or {}).get(series_key)
         if hit is not None and hit[1] == generation and now - hit[0] < SPANS_TTL_S:
