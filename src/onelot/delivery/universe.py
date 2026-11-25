@@ -21,7 +21,7 @@ from typing import Any
 from urllib.parse import quote
 
 import pandas as pd  # type: ignore[import-untyped]
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from ..clock import IST
 
