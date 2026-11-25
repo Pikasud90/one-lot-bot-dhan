@@ -4,7 +4,8 @@ Owner, 2026-11-24: "maintain proper setup-strategy book, noting the best alphas 
 This is that book: one place that says, for each instrument, which setup was tested at which
 timeframe, under which conditions it worked and failed, and what its standing is today. It is a
 living document: it is brought up to date after every study and every month of paper trades.
-Last brought up to date: 25 November 2026 (first edition, from the five studies of 24 November).
+Last brought up to date: 25 November 2026 (first edition, from the five studies of 24 November;
+the capped book of US-100 added the same day).
 
 Everything here is evidence from backtests and from the desk's paper record. It is not advice
 to trade, and a backtest is not a promise.
@@ -47,6 +48,12 @@ averages; sell above the 20-session average, after 30 sessions, or at a 15% stop
 - Living with it: about 10 alerts a week on 222 stocks; taking every signal needed up to
   Rs 13.4 lakh at the worst moment (March 2020), so a cap on open trades is needed.
 - The stop, target and trail rule makes it worse; it keeps its own exits (owner, 24 Nov).
+- As a BOOK the owner would hold (Rs 1 lakh, at most 10 open, the product's order;
+  `docs/research/PULLBACK_BOOK_2026-11-25.md`): Rs 1 lakh became Rs 1.30 lakh in 16 years
+  (+1.64% a year, worst fall −39.5%), against Rs 4.15 lakh in NIFTY held and Rs 2.27 lakh in the
+  222-stock basket at the same exposure: behind the basket beyond chance (−3.59% a year, 95%
+  interval −7.25 to −0.04). The cap keeps the quiet-evening signals (+0.14% a trade) and refuses
+  the bursts of broad dips (+1.09%). No other order or cap tested does better by the fixed rules.
 
 **Index options, bought and sold the same day: nothing earns after costs.** The grid tried
 every registered rule at four timeframes with three presets under nine kinds of condition:
@@ -107,8 +114,8 @@ each `_2026-11-24.md`); earlier work is listed in `STRATEGIES_TESTED_2026-11-12.
 
 | Instrument | Kind | Setup and preset | Timeframe | Condition | Exit | Trades a year | % a trade TUNE / CHOOSE / TEST (t whole span) | Real-premium or cost note | Status | Remark | Study |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 222 stocks | stock delivery | P1 pullback 8% | 1d | NIFTY above SMA200 | own (SMA20, 30 sessions, 15% stop) | 504 | +0.79 / +0.20 / +1.25 (4.0) | Rs 10,000, 0.50% round trip, DP included | WATCH | Positive in all periods, beats random dates; CHOOSE t 0.2 misses the confirm step | delivery, 222 stocks |
-| 161 new stocks | stock delivery | P1 pullback 8% | 1d | NIFTY above SMA200 | own | 380 | +0.83 / +0.10 / +1.19 (4.2) | as above | WATCH | Clean out-of-sample test; works in rising years, loses in 2011, 2013, 2018, 2019; flat in CHOOSE | delivery, 222 stocks |
+| 222 stocks | stock delivery | P1 pullback 8% | 1d | NIFTY above SMA200 | own (SMA20, 30 sessions, 15% stop) | 504 | +0.79 / +0.20 / +1.25 (4.0) | Rs 10,000, 0.50% round trip, DP included | WATCH | Positive in all periods, beats random dates; CHOOSE t 0.2 misses the confirm step. As a book of Rs 1 lakh with 10 places (US-100): +0.12 / +0.23 / +0.71 a trade (t 0.9), +1.64% a year, behind the 222-stock basket at the same exposure by −3.59% a year (interval −7.25 to −0.04); the cap refuses the best trades (+1.09) | delivery, 222 stocks; pullback book |
+| 161 new stocks | stock delivery | P1 pullback 8% | 1d | NIFTY above SMA200 | own | 380 | +0.83 / +0.10 / +1.19 (4.2) | as above | WATCH | Clean out-of-sample test; works in rising years, loses in 2011, 2013, 2018, 2019; flat in CHOOSE. The book reading above holds for the whole list, not this group alone | delivery, 222 stocks |
 | NIFTY | option same-day | cpr_breakout low | 60m | after an active session | desk rule | 20 | +3.75 / +1.20 / +2.00 (+2.6) | model; less 1 point +2.09 | WATCH | thin: 14 and 17 trades in CHOOSE and TEST | setup grid |
 | SENSEX | option same-day | supertrend_mtf default | 30m | VIX below its median | desk rule | 36 | +3.26 / +1.05 / +1.13 (+2.2) | model; live spreads wide | WATCH | spread of 1.5% a side would take it | setup grid |
 | SENSEX | option same-day | supertrend_mtf default | 30m | after a calm session | desk rule | 38 | +2.86 / +2.01 / +3.72 (+2.6) | model; live spreads wide | WATCH | the steadiest by year of the four | setup grid |
@@ -151,7 +158,7 @@ each `_2026-11-24.md`); earlier work is listed in `STRATEGIES_TESTED_2026-11-12.
 |---|---|---|
 | `microtrend` 3m, options on NIFTY, BANKNIFTY, FINNIFTY, SENSEX | no edge shown | The owner's chosen paper test. Since it went live the desk ran on 2 of 7 sessions, so the live record is 2 alerts. |
 | `pullback` delivery, 18 stocks, about Rs 10,000 | WATCH | Keeps its own exits. Few alerts with 18 stocks. |
-| `pullback` wide list, 204 more stocks, daily bars (US-099) | WATCH, paper test | Since 25 Nov 2026: every signal recorded, at most 10 open within the cap (the desk 18 counted), only those alerted. About ten signals a week. The product's round reproduces the study's trades on the research file (`docs/04_OPERATIONS.md`). |
+| `pullback` wide list, 204 more stocks, daily bars (US-099) | WATCH, paper test | Since 25 Nov 2026: every signal recorded, at most 10 open within the cap (the desk 18 counted), only those alerted. About ten signals a week. The product's round reproduces the study's trades on the research file (`docs/04_OPERATIONS.md`). Book reading (US-100): the cap tier is 2,560 of 8,085 trades, +0.19% a trade without a cash limit, +0.14 with Rs 1 lakh; tier all +0.77. The product's order (desk 18, then deepest) is as good as any of six tested; no cap beats 10 in all three periods. |
 | Stop, target and trail rule on micro-trend trades | neutral | Five years: it costs nothing measurable and adds nothing; the entries decide. |
 | Volume Watch alerts | information | A spike means a larger move is likely, never a direction. Not a trade alert. |
 
@@ -159,6 +166,12 @@ each `_2026-11-24.md`); earlier work is listed in `STRATEGIES_TESTED_2026-11-12.
 
 1. The pullback rule on the wide universe as a PAPER test on the desk: built (US-099, see
    section 5); what is left is to let it run and read its score in both tiers each month.
+   What the paper test must show (US-100): its yardstick is tier all, not the cap. Tier all
+   (about 42 trades a month over the history, 9 in the last year) could tell a result of
+   +0.77% a trade from zero at t = 2 in about 7 to 11 months; the capped tier (about 13 a
+   month, 5 in the last year) at its +0.14% would need over 50 years, so its score says
+   nothing on its own. Each month compare both tiers with NIFTY and with the 222-stock basket
+   at the same exposure; a capped book that only matches the basket shows no edge.
 2. Real put prices from the broker's history, to settle the long-volatility question and to
    price the Simulator's put trades exactly.
 3. The four WATCH option cells, followed on paper with real quotes for three months.
@@ -167,6 +180,8 @@ each `_2026-11-24.md`); earlier work is listed in `STRATEGIES_TESTED_2026-11-12.
 
 ## 7. Changes
 
+- 2026-11-25: the capped pullback book (US-100): the book of Rs 1 lakh and 10 places against
+  NIFTY and the basket; rows in sections 2, 4, 5 and 6 updated.
 - 2026-11-25: first edition. Five studies of 24 November 2026: the desk's own live alerts,
   new option setups and long volatility, delivery setups on 222 stocks, the volume study, and
   the setup grid (22 instruments, 3,948 cells).
