@@ -10,8 +10,18 @@ under the panels.
 
 | Panel | Instruments | Expressed as | Default strategies |
 |---|---|---|---|
-| Indices | BANKNIFTY, NIFTY, FINNIFTY, MIDCPNIFTY, SENSEX | **buy a CE** (bullish) / **buy a PE** (bearish), 1 lot; exit = sell it back | ema_cross 12m · supertrend_vol 5m · orb 5m |
-| Stocks | RELIANCE, M&M, SBIN, HDFCBANK, ITC, TMPV (Tata Motors PV), MARUTI, ADANIGREEN, ICICIBANK, HEROMOTOCO | **buy or sell 1 share**, intraday | ema_cross 15m · supertrend_vol 15m · mean_reversion 5m |
+| Indices | 5 (below) | **buy a CE** or **a PE**, 1 lot, intraday | microtrend 3m |
+| Stocks | 18 (below) | **delivery trade of about Rs 10,000** | pullback 1d |
+
+Indices: BANKNIFTY, NIFTY, FINNIFTY, SENSEX, and MIDCPNIFTY for tracking only (`trade: false`).
+Strategies in use: `primary_strategies: [pullback, microtrend]`.
+Stocks: RELIANCE, M&M, SBIN, HDFCBANK, ITC, TMPV (Tata Motors PV), MARUTI, ICICIBANK, HEROMOTOCO,
+INFY, TCS, AXISBANK, KOTAKBANK, LT, BAJFINANCE, BHARTIARTL, TATASTEEL, SUNPHARMA. The same pullback
+rule also runs as a paper test on the wide list of 204 more stocks (`wide: true`; at most
+`cap_open` = 10 trades open "within the cap", the 18 count toward it).
+
+The slots removed on 2026-11-13 (ema_cross, supertrend_vol, orb and mean_reversion on the desk) are
+in git history, and so is Adani Green, which the owner excluded from the basket.
 
 Every instrument can list its own `strategies:` (name, timeframe, params — the same keys the
 Lab's *Apply best params* prints). Edit the file and press **Reload desk config** in Settings.
@@ -27,11 +37,13 @@ strategy (green/red when its last bar fired), and a state badge:
 * **TRACKING** — bars arriving, no entry on the last closed bar of any strategy.
 * **BUY / SELL** — a signal is pending (a card appears above the panels with the full alert text).
 * **HOLD** — you confirmed a trade; the desk manages it every poll.
-* **HALTED** — the risk governor has stopped everything.
 
-Expanding a row shows four panels — **Market**, **Regime & volatility** (regime label, ADX, ATR
-and its percentile, RSI, VWAP, EMA20/50 trend, NIFTY bias), **Risk governor** (this instrument's
-trades today plus the global limits) and **Data health** (bar age, source, delay) — then a table of
+The old **HALTED** badge is gone: since 2026-11-07 the risk governor gates neither alerts nor
+paper trades and the desk's trades no longer feed it; it still guards the Bank Nifty engine.
+
+Expanding a row shows three panels: **Market**, **Regime & volatility** (regime label, ADX, ATR
+and its percentile, RSI, VWAP, EMA20/50 trend, NIFTY bias) and **Data health** (bar age, source,
+delay). Below them is a table of
 the strategies with their last verdict and reason, and the recent signals.
 
 ## Signals and positions (nothing is placed for you)
@@ -45,14 +57,15 @@ BUY 1 lot (30) BANKNIFTY 54300 CE (Δ≈0.65, est. premium ₹412.30 → outlay 
 Underlying 54,267.40 → stop 54,120.00 (premium ≈ ₹330.10, risk ≈ ₹2,560)
 Target 54,560.00 (premium ≈ ₹575.40, reward ≈ ₹4,810; net R/R 1.88)
 Exit = SELL the same option back. Charges ≈ ₹84 round trip. premium is a Black-76 estimate …
-Square off by 15:15. Strategy ema_cross 12m, signal bar 10:36.
+Square off by 15:15. Strategy microtrend 3m, signal bar 10:36.
 ```
 
 Press **Trade taken** (with your actual fill) or **Skipped**. A taken signal becomes a position
 the desk re-evaluates every poll: trailing stop, target, time stop, square-off time. When one of
-those triggers you get an **EXIT** alert every poll until you press **Closed** with your exit
-price; the trade then lands in the desk journal (Home) with net P&L after charges, and the risk
-governor's daily loss / drawdown / consecutive-loss counters update.
+those triggers you get one **EXIT** alert (the paper trade's close; it is not repeated) and the
+position closes at that alert's price. You may press **Closed** with your own exit price; the
+trade then lands in the desk journal (Home) with net P&L after charges. The risk governor's
+counters are not fed by the desk since 2026-11-07 (`src/onelot/desk/desk.py`, module docstring).
 
 Option premiums are **synthetic** (Black-76 off India VIX, the same model the Lab uses) until the
 Dhan option chain is wired into the desk; the alert says so. Place the order off the live chain.
@@ -60,9 +73,9 @@ Dhan option chain is wired into the desk; the alert says so. Place the order off
 ## Paper trades (every alert, never an order)
 
 Every alert the desk raises also opens a **paper trade**, automatically, so strategy evidence
-builds up without you clicking anything (ADR-001, US-001). That includes alerts the risk
-governor blocked and alerts you skipped or let expire: the paper book is evidence, not
-permission. It never sends an order, never touches the risk governor's counters and never
+builds up without you clicking anything (ADR-001, US-001). That includes alerts you
+skipped or let expire: the paper book is evidence, not permission. No risk governor blocks an
+alert or a paper trade. It never sends an order, never touches the risk governor's counters and never
 writes to your desk journal.
 
 * **Unit:** 1 share for a stock, one lot of the alerted option for an index (the lot the alert
@@ -192,23 +205,24 @@ Every alert, F&O or stock, is handled the same way:
 3. **Taken → Monitoring**: the position is re-checked every poll with the live price (the
    WebSocket tick when the Dhan socket is on): trailing stop, target, the originating strategy's
    own exit/opposite signal on its latest closed bar (`hold_check` says "still long — HOLD" or
-   why not), square-off time for intraday, a session time stop for swing. Each trigger is an
-   EXIT alert until you press **Closed** with the exit price.
+   why not), square-off time for intraday, a session time stop for swing. Each trigger is one
+   EXIT alert, raised once; you may press **Closed** with your own exit price.
 4. **Archive with outcome**: every archived alert (taken or not) is re-audited against the bars
    that followed, at its own entry/stop/target: TARGET, STOP, SQUARE_OFF (intraday horizon
    ended), OPEN, with best/worst excursion in R and the estimated one-unit P&L. Ties inside one
    bar go to the stop. The per-strategy **scoreboard** (hit rate, average R) is built from this
    and feeds the confidence score of the next alert.
 
-Horizons: index options are **intraday** (square-off 15:15). Stocks are **swing** by default
-(`stock_horizon: swing`, `swing_max_sessions: 5` in `config/desk.yaml`): a taken stock position is
-carried across sessions, recovered at the next start, resubscribed on the socket, and re-checked
+Horizons: index options are **intraday** (square-off 15:15). `config/desk.yaml` sets
+`stock_horizon: intraday` and the stocks run as delivery trades (the pullback rule, with its own
+exits). The code default, used when the key is missing, is `swing` with `swing_max_sessions: 5`:
+a taken stock position is carried across sessions, recovered at the next start, resubscribed on the socket, and re-checked
 against its strategy every poll until the strategy exits, the stop/target hits, or the time stop.
 
 ## Instrument focus (Live tab)
 
 A dropdown at the top of the Live tab selects any tracked instrument and shows its Market,
-Regime & volatility, Risk governor and Data health panels, its strategies' latest verdicts, and
+Regime & volatility and Data health panels, its strategies' latest verdicts, and
 a chart (any timeframe) with every alert raised on it marked. The accordion rows remain below.
 
 ## Live Data API path (once the token is valid and the plan active)
