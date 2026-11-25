@@ -619,6 +619,17 @@ paper_events = Table(
     Index("ix_paper_events_trade", "trade_id"),
 )
 
+# US-105: a paper trade on a contract that was not tradeable (open interest 0 on a live
+# chain quote) is marked here and left out of every score. The trade itself is untouched.
+paper_void = Table(
+    "paper_void",
+    METADATA,
+    Column("trade_id", Integer, primary_key=True, autoincrement=False),  # paper_trades.id
+    Column("alert_id", String(32), nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("marked_at", TZDateTime, nullable=False),  # explicit time, never the wall clock
+)
+
 
 # ── Telegram outbox (US-004, ADR-002 amendments 1 and 6) ─────────────────
 # Every phone message is a row before it is a request: queued -> sending (claimed and

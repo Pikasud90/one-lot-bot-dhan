@@ -276,6 +276,30 @@ places an order, and the desk 18 keep working exactly as above.
   `PYTHONPATH=src .venv/bin/python scripts/ratchet_desk_replay.py --store PATH/onelot.db`
   `--sessions 20 --instrument NIFTY`. It prints how many exits match and each one that does not.
 
+## Scoreboards and what they leave out (US-105)
+Three scores add up paper results: the strategy scoreboard by slot on Home (the paper ledger),
+the day's paper totals and last session totals on the Live Desk, and the audit scoreboard of
+alert outcomes (used when there is no paper book).
+
+A contract with no open interest is one nobody trades. When an index option alert came from a
+live chain quote (not the model) and the quote's open interest was exactly 0, the paper trade
+is marked in the table `paper_void` ("contract not tradeable") and left out of all three
+scores. This is decided from the alert's own stored facts (`onelot.void.void_reason`). Alerts
+with an unknown open interest (older ones), model estimates and stock alerts are never marked.
+
+- Each score that leaves trades out prints one line, for example "Left out of the score: 3
+  trades on contracts that were not tradeable (no open interest)". With nothing left out the
+  line is absent and every figure is exactly what it was.
+- Nothing is deleted or rewritten. The alert keeps its recorded prices and its paper exit, and
+  its row carries the tag "not counted: the contract had no open interest". The paper trade is
+  still listed, with the same tag.
+- A marked trade that is still open is managed and exits as usual; it is only never counted.
+- The mark is written when the trade opens, and a pass at every desk start marks the ones
+  already stored (a second pass changes nothing). The code never removes a mark.
+- The delivery and wide-list books, the Simulator and the fill-cost report are not changed.
+- The confidence score of a new alert still reads the audit record with these alerts kept, so
+  no alert text changes.
+
 ## Market snapshot button (US-071)
 Home, under "Today": the button "Take market snapshot" saves the last price of the 5 indices and
 18 stocks the desk tracks, with the day change, the previous close, the time of each price and

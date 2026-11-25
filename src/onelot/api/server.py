@@ -215,6 +215,7 @@ def _paper_scoreboard(desk: object) -> list[dict[str, Any]] | None:
 
     from ..paper.ledger import PaperLedger, Slot
     from ..paper.view import slot_scoreboard_view
+    from ..void import void_reason
 
     book = getattr(desk, "paper", None)
     delivery = getattr(desk, "delivery", None)
@@ -225,6 +226,7 @@ def _paper_scoreboard(desk: object) -> list[dict[str, Any]] | None:
         opened = Counter(
             Slot(str(t.strategy), str(t.timeframe), str(t.kind))
             for t in (book.open_trades() if book is not None else [])
+            if void_reason(t.plan.get("alert")) is None  # US-105: a void trade is not counted
         )
         if delivery is not None:  # US-067: the delivery pullback trades, a slot of their own
             try:
@@ -241,6 +243,27 @@ def _paper_scoreboard(desk: object) -> list[dict[str, Any]] | None:
     primary = desk.cfg.primary_slots() if hasattr(desk, "cfg") else ()
     paused = desk.cfg.paused_slots() if hasattr(desk, "cfg") else frozenset()
     return slot_scoreboard_view(totals, primary, opened, paused)
+
+
+def _paper_left_out(desk: object) -> dict[str, Any] | None:
+    """US-105: what the paper scoreboard left out, {trades, net, reason}, or None when it left
+    nothing out (or has no book). The count follows the scoreboard's own rule: the CLOSED
+    trades with a net that the book marked void. The delivery book is never part of it."""
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from ..paper.ledger import PaperLedger
+    from ..paper.money import format_rupees
+    from ..void import left_out_view
+
+    book = getattr(desk, "paper", None)
+    if book is None:
+        return None
+    try:
+        count, net = PaperLedger(book.engine).left_out()
+    except (SQLAlchemyError, OSError) as exc:
+        log.warning("the paper left-out figure could not be read: %s", type(exc).__name__)
+        return None
+    return left_out_view(count, format_rupees(net)) if count > 0 else None
 
 
 def create_app(engine, api_token: str) -> FastAPI:
@@ -454,6 +477,9 @@ def create_app(engine, api_token: str) -> FastAPI:
         out = d.signals_view(days)
         out["primary_strategies"] = list(d.cfg.primary_strategies())
         out["paper_scoreboard"] = _paper_scoreboard(d)
+        left_out = _paper_left_out(d)  # US-105: present only when something was left out
+        if left_out is not None:
+            out["paper_left_out"] = left_out
         return out
 
     @app.get("/api/delivery/wide")

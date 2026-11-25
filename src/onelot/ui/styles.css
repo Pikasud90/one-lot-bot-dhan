@@ -448,6 +448,9 @@ td.oos{color:var(--ok);font-weight:700}
 .alert-body h4{font:16px/1 var(--display);letter-spacing:.07em;color:var(--accent2);margin:12px 0 6px}
 .alert-body pre{white-space:pre-wrap;font-family:var(--ui);font-size:14.5px;line-height:1.45;margin:8px 0;background:var(--panel2);padding:10px 12px;border:1px solid var(--line)}
 .outc{font-weight:800;font-size:12px;letter-spacing:.06em}
+/* US-105: the tag of a trade left out of the score, and the line that says how many */
+.void-tag{display:block;margin-top:3px;font-size:14px;font-weight:700;color:var(--warn)}
+.void-note{font-weight:600}
 .outc.TARGET{color:var(--ok)} .outc.STOP,.outc.TRAIL_STOP{color:var(--bad)} .outc.OPEN{color:var(--cyan)} .outc.SQUARE_OFF{color:var(--warn)}
 /* OF-5: the exit alert's reasons (the paper book's names) */
 .outc.SIGNAL_EXIT,.outc.OPPOSITE_SIGNAL{color:var(--cyan)} .outc.SESSION_END,.outc.TIME_STOP{color:var(--warn)} .outc.NO_FILL,.outc.GAP_THROUGH_STOP,.outc.GAP_THROUGH_TARGET{color:var(--muted)}

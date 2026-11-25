@@ -321,7 +321,11 @@ function drawJournal() {
   const more = $("journal-more"); if (more) more.onclick = () => { journal.shown += 10; drawJournal(); };
 }
 /* ── Home: alerts (pending cards, monitoring, archive with audited outcomes) ── */
-const alerts = { open: store.get("alerts.open", {}), rows: [], rest: [], scoreboard: {}, paper: null, primary: [], shown: 10, loadedAt: 0 };
+const alerts = { open: store.get("alerts.open", {}), rows: [], rest: [], scoreboard: {}, paper: null, primary: [], shown: 10, loadedAt: 0, leftOut: null, paperLeftOut: null };
+// US-105: a trade on a contract that was not tradeable stays listed, tagged, and is left out of every score.
+const voidTag = (reason) => reason ? ` <span class="void-tag" title="${esc(reason)}">not counted: the contract had no open interest</span>` : "";
+const leftOutText = (lo) => lo && Number(lo.trades) > 0 ? `Left out of the score: ${Number(lo.trades)} trade${Number(lo.trades) === 1 ? "" : "s"} on contracts that were not tradeable (no open interest)` : "";
+const leftOutBar = (lo) => leftOutText(lo) ? `<div class="warnbar void-note mt">${esc(leftOutText(lo))}</div>` : "";
 const srcTag = (d) => d ? `${esc(d.source)} ${esc(d.resolution)}${d.delayed ? " · <span class='warn'>~15 min delayed</span>" : " · live"}` : "–";
 function confBadge(c) { return c ? `<div class="conf ${c.label}" title="${esc(JSON.stringify(c.parts))}">${fmt(confShown(c.score), 0)} ${esc(c.label)}</div>` : `<div class="conf medium">–</div>`; }
 // OF-5: every alert's one exit is its paper trade's close (s.exit); the audit is a fallback
@@ -350,7 +354,7 @@ function alertRow(s) {
     <div class="grid3">
       <div><h4>Alert</h4>${kv("Raised", tsf(s.created_at) + " IST")}${kv("Signal bar", hhmm(s.bar_ts))}${kv("Valid until", hhmm(s.expires_at))}${kv("Status", esc(s.status))}
         ${kv("Data", srcTag(s.data))}${kv("Horizon", esc(s.horizon || "intraday"))}
-        <h4>Exit alert</h4>${s.exit ? kv("Exit", exitCell(s.exit)) + kv("Exit at", tsf(s.exit.at) + " IST") + kv("Paper trade", "#" + esc(s.exit.trade_id) + " · " + esc(s.exit.grade || "")) : `<div class="muted">not yet: its paper trade is still waiting or open</div>`}</div>
+        <h4>Exit alert</h4>${s.exit ? kv("Exit", exitCell(s.exit)) + kv("Exit at", tsf(s.exit.at) + " IST") + kv("Paper trade", "#" + esc(s.exit.trade_id) + " · " + esc(s.exit.grade || "")) : `<div class="muted">not yet: its paper trade is still waiting or open</div>`}${voidTag(s.void_reason)}</div>
       <div><h4>One-unit economics</h4>${kv("Unit", esc(e.unit_label || ""))}${kv(s.kind === "INDEX" ? "Est. premium" : "Entry", rup2(e.entry_price))}${kv(s.kind === "INDEX" ? "Premium at stop" : "Stop", rup2(e.stop_price), "neg")}
         ${kv(s.kind === "INDEX" ? "Premium at target" : "Target", e.target_price != null ? rup2(e.target_price) : "trail", "pos")}${kv("Risk ₹ (incl. charges)", rup(e.risk_inr), "neg")}${kv("Net reward ₹", e.reward_inr != null ? rup(e.reward_inr) : "–", "pos")}${kv("Net R/R", fmt(e.rr_net))}
         ${s.kind === "INDEX" ? kv("Underlying entry / stop / target", `${fmt(e.underlying_entry, 0)} / ${fmt(e.underlying_stop, 0)} / ${e.underlying_target != null ? fmt(e.underlying_target, 0) : "–"}`) : ""}${e.synthetic ? `<div class="hint warn">premium synthetic (Black-76) — no live chain at alert time</div>` : (o.spread_pct != null ? kv("Chain spread", pct(o.spread_pct)) : "")}</div>
@@ -365,7 +369,7 @@ function alertRow(s) {
   return `<div class="alert-row ${s.status === "PENDING" ? "pending" : ""} ${s.status === "TAKEN" ? "taken" : ""} ${sell ? "sell" : ""} ${alerts.open[s.id] ? "open" : ""}" data-aid="${s.id}">
     <div class="alert-head" data-atoggle="${s.id}">
       <div class="when">${hhmm(s.created_at)}<small>${String(s.created_at || "").slice(0, 10)}</small></div>
-      <div class="what"><b>${what}</b><span class="dim">${esc(e.unit_label || "")} · ${s.kind === "INDEX" ? "~" + rup(e.outlay) + " outlay" : rup2(e.entry_price)} · ${srcTag(s.data)}</span></div>
+      <div class="what"><b>${what}</b><span class="dim">${esc(e.unit_label || "")} · ${s.kind === "INDEX" ? "~" + rup(e.outlay) + " outlay" : rup2(e.entry_price)} · ${srcTag(s.data)}</span>${voidTag(s.void_reason)}</div>
       <div class="strat"><b>${esc(s.strategy_label || s.strategy)}</b>${esc(s.timeframe)} · strength ${fmt(s.strength, 0)}</div>
       ${confBadge(c)}
       <div>${outcomeCell(s)}</div>
@@ -384,6 +388,7 @@ async function loadAlerts(force) {
   }
   alerts.delivery = r.delivery_alerts || [];
   alerts.rows = r.signals || []; alerts.scoreboard = r.scoreboard || {}; alerts.paper = r.paper_scoreboard || null; alerts.primary = r.primary_strategies || [];
+  alerts.leftOut = r.scoreboard_left_out || null; alerts.paperLeftOut = r.paper_left_out || null;
   const rows = alerts.rows.filter(s => !filt || s.status === filt || (filt === "TAKEN" && s.status === "CLOSED"));
   const pend = rows.filter(s => s.status === "PENDING");
   alerts.rest = rows.filter(s => s.status !== "PENDING");
@@ -412,7 +417,7 @@ function drawScoreboard() {
     const sb = Object.values(alerts.scoreboard).sort((a, b) => (b.avg_r || 0) - (a.avg_r || 0));
     $("home-scoreboard").innerHTML = table([{ l: "Strategy", k: "strategy" }, { l: "Alerts", n: 1, k: "n" }, { l: "Positive %", n: 1, f: x => pct(x.hit_rate) },
       { l: "Avg R", n: 1, f: x => fmt(x.avg_r, 2), c: x => cls(x.avg_r) }, { l: "Σ est. P&L", n: 1, f: x => rup(x.pnl_sum), c: x => cls(x.pnl_sum) }], sb,
-      { empty: "No resolved alerts yet." });
+      { empty: "No resolved alerts yet." }) + leftOutBar(alerts.leftOut);
     return;
   }
   // one row per strategy, timeframe and market (paper test, 2026-11-08): an earlier timeframe
@@ -432,7 +437,7 @@ function drawScoreboard() {
     { l: "No fill", n: 1, k: "no_fill" },
   ], prim, { empty: "No primary strategy configured." }) +
   `<div class="hint mt">One lot per option trade, every alert, net of costs; delivery trades are shares worth about ${esc(rup(latest && latest.desk && latest.desk.delivery && latest.desk.delivery.unit_inr != null ? latest.desk.delivery.unit_inr : 10000))} each. Each row is one strategy on one timeframe and market, so trades from an earlier setting are not counted in it. A row with no trades has not alerted yet.` +
-  (others.length ? ` Earlier strategies (no longer primary): ${others.map(x => `${esc(x.strategy)}${slot(x) ? ` ${esc(slot(x))}` : ""} ${x.trades} trades ${esc(inr(x.net))}`).join(" · ")}.` : "") + `</div>`;
+  (others.length ? ` Earlier strategies (no longer primary): ${others.map(x => `${esc(x.strategy)}${slot(x) ? ` ${esc(slot(x))}` : ""} ${x.trades} trades ${esc(inr(x.net))}`).join(" · ")}.` : "") + `</div>` + leftOutBar(alerts.paperLeftOut);
 }
 function wireAlerts(root) {
   root.querySelectorAll("[data-take]").forEach(b => b.onclick = async (e) => { e.stopPropagation();
@@ -694,7 +699,7 @@ const RATCHET_REASONS = { BREAKEVEN_STOP: "stop above breakeven", LOCK_STOP: "st
 const levelsText = (l) => l && typeof l === "object" ? `${RATCHET_STAGES[l.stage] || String(l.stage ?? "").toLowerCase()} · stop ${l.stop} (first ${l.first_stop}) · target ${l.target} (first ${l.first_target})` : "";
 const paperReason = (t) => t.close_reason ? (RATCHET_REASONS[t.close_reason] || String(t.close_reason).replace(/_/g, " ")) : (levelsText(t.levels) || "–");
 const positionLevels = (p) => p.stage ? ` <span class="dim">${esc(levelsText({ stage: p.stage, stop: fmt(p.stop_underlying), first_stop: fmt(p.initial_stop_underlying), target: fmt(p.target_underlying), first_target: fmt(p.first_target_underlying) }))}</span>` : (p.trail_active ? " <span class='dim'>trail</span>" : "");
-const paperRow = (t, today = todayIST()) => `<tr><td>${paperChip(t.status)}</td> <td><b>${esc(t.instrument)}</b> <span class="dim">${esc(t.strategy)} · ${esc(t.timeframe)}${t.qty > 1 ? ` · qty ${esc(t.qty)}` : ""}</span></td> <td>${esc(String(t.side ?? "").replace(/_/g, " "))}</td> <td class="${t.grade === "live" ? "pos" : "warn"}">${esc(t.grade)}</td> <td class="n">${esc(inr(t.entry))}</td> <td class="n">${esc(inr(t.exit))}</td> <td class="n ${t.gross == null ? "" : cls(Number(t.gross))}">${esc(inr(t.gross))}</td> <td class="n ${t.net == null ? "" : cls(Number(t.net))}">${esc(inr(t.net))}</td> <td>${esc(paperReason(t))}</td> <td class="n">${esc(paperWhen(t.created_at, today))}${t.closed_at ? ` → ${esc(paperWhen(t.closed_at, today))}` : ""}</td></tr>`;
+const paperRow = (t, today = todayIST()) => `<tr><td>${paperChip(t.status)}</td> <td><b>${esc(t.instrument)}</b> <span class="dim">${esc(t.strategy)} · ${esc(t.timeframe)}${t.qty > 1 ? ` · qty ${esc(t.qty)}` : ""}</span>${voidTag(t.void_reason)}</td> <td>${esc(String(t.side ?? "").replace(/_/g, " "))}</td> <td class="${t.grade === "live" ? "pos" : "warn"}">${esc(t.grade)}</td> <td class="n">${esc(inr(t.entry))}</td> <td class="n">${esc(inr(t.exit))}</td> <td class="n ${t.gross == null ? "" : cls(Number(t.gross))}">${esc(inr(t.gross))}</td> <td class="n ${t.net == null ? "" : cls(Number(t.net))}">${esc(inr(t.net))}</td> <td>${esc(paperReason(t))}</td> <td class="n">${esc(paperWhen(t.created_at, today))}${t.closed_at ? ` → ${esc(paperWhen(t.closed_at, today))}` : ""}</td></tr>`;
 const paperList = (trades) => Array.isArray(trades) ? trades.filter((t) => t && typeof t === "object") : [];
 const paperOpen = (trades) => paperList(trades).filter((t) => t.status === "PENDING_FILL" || t.status === "OPEN");
 const paperClosedOn = (trades, day) => paperList(trades).filter((t) => (t.status === "CLOSED" || t.status === "NO_FILL") && String(t.closed_at ?? "").slice(0, 10) === day);
@@ -707,10 +712,10 @@ const paperEmpty = (msg) => `<div class="empty-inline"><svg class="mascot sm"><u
 const paperGroup = (label) => `<tr class="pgroup"><td colspan="10">${esc(label)}</td></tr>`;
 const paperHead = (s, note) => `<div class="paper-head"><b>Last session · ${esc(paperDay(s.date))}</b>${note ? ` <span class="dim">${esc(note)}</span>` : ""}</div>`;
 const paperTable = (body) => `<table class="paper"><thead><tr><th>Status</th> <th>Instrument</th> <th>Side</th> <th>Grade</th> <th class="n" title="price per share, or per option unit of the lot">Entry / unit</th> <th class="n" title="price per share, or per option unit of the lot">Exit / unit</th> <th class="n" title="the whole trade before costs: (exit - entry) x qty for a buy or an option, (entry - exit) x qty for a sell">Gross (trade)</th> <th class="n" title="the whole trade after costs; empty until costs are applied">Net (trade)</th> <th>Close reason</th> <th class="n">Time</th></tr></thead><tbody>${body}</tbody></table>`;
-const paperCut = (s, past) => { const listed = paperList(past).filter((t) => t.status === "CLOSED").length, total = Number((s.totals || {}).closed) || 0; return listed < total ? `${listed} of ${total} closes listed (the list holds the 200 newest trades)` : ""; };
+const paperCut = (s, past) => { const listed = paperList(past).filter((t) => t.status === "CLOSED" && !t.void_reason).length, total = Number((s.totals || {}).closed) || 0; return listed < total ? `${listed} of ${total} closes listed (the list holds the 200 newest trades)` : ""; };
 const paperPanel = (p, view = "today") => { if (!p || !p.enabled) return paperEmpty("Paper trading is off: no new paper trades are opened."); const today = todayIST(), all = paperList(p.trades), s = paperSession(p), rows = (ts) => ts.map((t) => paperRow(t, today)).join(""), gone = "None of its trades is in the list (it holds the 200 newest)."; if (!all.length) return paperEmpty("No paper trades yet."); if (view === "all") return paperTable(rows(all)); if (view === "last") { if (!s) return paperEmpty("No earlier session with closed or no-fill paper trades yet."); const past = paperClosedOn(all, s.date); return paperHead(s, paperCut(s, past)) + (past.length ? paperTable(rows(past)) : paperEmpty(gone)); } if (!paperFallback(p)) { const shown = paperShown(all, today); return shown.length ? paperTable(rows(shown)) : paperEmpty("Nothing open, and none closed today."); } const now = [...paperOpen(all), ...paperClosedOn(all, today)], past = paperClosedOn(all, s.date), cut = paperCut(s, past), label = `Last session · ${paperDay(s.date)}`, head = paperHead(s, cut ? `nothing closed today yet · ${cut}` : "nothing closed today yet"); if (!now.length && !past.length) return head + paperEmpty(gone); return head + paperTable(rows(now) + (now.length || !past.length ? paperGroup(past.length ? label : `${label} · none of its trades is in the list`) : "") + rows(past)); };
 const paperSince = (s) => { const errors = (Number(s.hook_errors) || 0) + (Number(s.desk_hook_errors) || 0); return `since restart: ${s.opened ?? 0} opened · ${s.filled ?? 0} filled · ${s.no_fill ?? 0} no fill${errors ? ` · ${errors} errors (see the log)` : ""}`; };
-const paperTotals = (label, d) => `${label}: ${d.closed ?? 0} closed · ${d.wins ?? 0} won · ${d.losses ?? 0} lost · gross ${inr(d.gross_rupees)} · net ${inr(d.net_rupees)}${d.net_rupees == null ? " (no costs yet)" : ""}`;
+const paperTotals = (label, d) => `${label}: ${d.closed ?? 0} closed · ${d.wins ?? 0} won · ${d.losses ?? 0} lost · gross ${inr(d.gross_rupees)} · net ${inr(d.net_rupees)}${d.net_rupees == null ? " (no costs yet)" : ""}${leftOutText(d.left_out) ? ` · ${leftOutText(d.left_out)}` : ""}`;
 const paperMeta = (p, view = "today") => { if (!p || !p.enabled) return ""; const st = p.status || {}, s = paperSession(p), last = s ? paperTotals(`last session ${paperDay(s.date)}`, s.totals || {}) : "last session: none before today"; if (view === "all") return `all: ${paperList(p.trades).length} trades listed, newest first (at most 200) · ${paperSince(st)}`; if (view === "last") return `${last} · ${paperSince(st)}`; if (paperFallback(p)) return `${last} · today: nothing closed yet · ${paperSince(st)}`; return `${paperTotals("today", p.totals_today || {})} · ${paperSince(st)}`; };
 // US-032: which trades the panel shows. Arrow keys / Home / End move along the radio group.
 const PAPER_VIEWS = ["today", "last", "all"];

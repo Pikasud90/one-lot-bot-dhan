@@ -132,7 +132,9 @@ The **last session** is the most recent day before today on which a paper trade 
 stop, a target, a session end or a time stop). A day with only no-fills is the last session
 only when no trade has ever closed before today. When the list (the 200 newest trades) holds
 fewer of the session's closes than its totals count, the heading says so (*200 of 250 closes
-listed*); the totals always cover every close.
+listed*); the totals cover every close that is counted. A trade on a contract that was not
+tradeable (US-105, `paper_void`) is listed with a tag but left out of the totals, which then
+carry `left_out` {trades, net, reason}; the key is absent when nothing is left out.
 
 A trade belongs to the day of its close time: its exit time, or for a no-fill (which has none)
 the time the book wrote it. So alerts booked late, for example Friday's alerts reconciled at

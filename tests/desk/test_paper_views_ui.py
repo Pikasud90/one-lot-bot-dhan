@@ -43,6 +43,8 @@ HELPERS = [
     "levelsText",
     "paperReason",
     "paperRow",
+    "voidTag",
+    "leftOutText",
     "paperList",
     "paperOpen",
     "paperClosedOn",
