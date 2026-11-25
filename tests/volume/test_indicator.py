@@ -110,7 +110,8 @@ def test_minutes_after_1514_have_no_expected_and_no_rvol():
     m = ind.day_matrix(ind.turnover(pd.concat(frames)))
     e = ind.expected_matrix(m, lookback=20, min_n=1)
     assert e.iloc[2, 359] == 100.0 and e.iloc[2, 365] == 0.0
-    rv = ind.rvol_rows(m.iloc[2].to_numpy(), e.iloc[2].to_numpy())
+    ew = ind.expected_windows_matrix(m, lookback=20, min_n=1)
+    rv = ind.rvol_rows(m.iloc[2].to_numpy(), *(ew[w].iloc[2].to_numpy() for w in ind.WINDOWS))
     assert rv["rvol_1m"][359] == 1.0
     assert np.isnan(rv["rvol_1m"][365])  # no division error, no number
     assert ind.finite(rv["rvol_1m"][365]) is None
@@ -118,16 +119,49 @@ def test_minutes_after_1514_have_no_expected_and_no_rvol():
 
 def test_relative_volume_one_five_and_day():
     actual = np.array([2.0, 4.0, 6.0, 8.0, 10.0, 12.0] + [np.nan] * 369)
-    expected = np.full(375, 2.0)
-    rv = ind.rvol_rows(actual, expected)
+    e1 = np.full(375, 2.0)
+    e5 = np.full(375, 10.0)  # each window has its own expected turnover
+    eday = np.arange(1, 376) * 3.0
+    rv = ind.rvol_rows(actual, e1, e5, eday)
     assert rv["rvol_1m"][1] == 2.0
-    # last 5 minutes at column 5: (4+6+8+10+12) / (5*2)
+    # last 5 minutes at column 5: (4+6+8+10+12) / 10
     assert rv["rvol_5m"][5] == pytest.approx(40 / 10)
-    # at the open the window is shorter: column 1 -> (2+4)/(2+2)
-    assert rv["rvol_5m"][1] == pytest.approx(6 / 4)
-    # the day so far at column 5: 42 / 12
-    assert rv["rvol_day"][5] == pytest.approx(42 / 12)
+    # at the open the window is shorter: column 1 -> (2+4) / 10
+    assert rv["rvol_5m"][1] == pytest.approx(6 / 10)
+    # the day so far at column 5: 42 / 18
+    assert rv["rvol_day"][5] == pytest.approx(42 / 18)
     assert np.isnan(rv["rvol_5m"][6])  # not closed yet
+
+
+def test_expected_is_a_median_of_sums_not_a_sum_of_medians():
+    """Two minutes over three sessions: (0, 10), (10, 0), (10, 10). The day-so-far sums at
+    the second minute are 10, 10, 20 (median 10); the sum of the per-minute medians is 20."""
+    hist = np.zeros((3, 375))
+    hist[:, 0], hist[:, 1] = [0, 10, 10], [10, 0, 10]
+    full = np.ones(3, dtype=bool)
+    e = ind.expected_windows_row(hist, full, lookback=20, min_n=1)
+    assert e["1m"][0] == 10 and e["1m"][1] == 10  # per-minute medians
+    assert e["day"][1] == 10  # the median of the day-so-far sums, not 10 + 10
+    assert e["5m"][1] == 10
+
+
+def test_an_ordinary_day_reads_about_one():
+    """Sessions drawn from one skewed distribution: the median rvol of an ordinary day is
+    about 1.0 for every window (the old sum of per-minute medians read about 1.2 here)."""
+    rng = np.random.default_rng(11)
+    days = sessions("2026-01-05", 60)
+    frames = [day_bars(d, turnover=1e6, noise=rng) for d in days]
+    m = ind.day_matrix(ind.turnover(pd.concat(frames)))
+    ew = ind.expected_windows_matrix(m)
+    r5, rd = [], []
+    for r in range(25, 60):
+        rv = ind.rvol_rows(m.iloc[r].to_numpy(), *(ew[w].iloc[r].to_numpy() for w in ind.WINDOWS))
+        r5.append(rv["rvol_5m"])
+        rd.append(rv["rvol_day"][-1])
+    assert 0.95 <= float(np.nanmedian(np.concatenate(r5))) <= 1.05
+    assert 0.95 <= float(np.median(rd)) <= 1.05
+    old = ind.expected_matrix(m).to_numpy()[25:].sum(axis=1)
+    assert float(np.median(m.to_numpy()[25:].sum(axis=1) / old)) > 1.05
 
 
 def test_spike_score_from_previous_sessions():

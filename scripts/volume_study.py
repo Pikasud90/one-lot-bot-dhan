@@ -849,7 +849,58 @@ def stage_study() -> None:
     print(f"done in {time.time() - t0:.0f}s", flush=True)
 
 
+def stage_rvol() -> None:
+    """The lead's change of 25 Nov: expected turnover of a WINDOW is the median of that same
+    window's basket turnover (a median of sums). Recalibrates quiet and busy (TUNE 15th and
+    85th percentiles of rvol_5m) and checks that an ordinary day reads about 1.0. Only this
+    depends on the change: z, the alerts and V4 to V9 do not use the expected turnover."""
+    d = Data()
+    full_s = {}
+    tb = np.zeros((len(d.days), N))
+    for s in STOCKS:
+        t = d.frame(d.m[s]["turn"])
+        f = ind.full_days(t)
+        full_s[s] = f.to_numpy()
+        a = t.to_numpy().copy()
+        a[full_s[s]] = np.nan_to_num(a[full_s[s]])
+        tb += np.nan_to_num(a)
+    full = sum(full_s[s].astype(int) for s in STOCKS) >= 15
+    fs = pd.Series(full, index=d.days)
+    mu, _ = ind.zstats_matrix(d.frame(tb), fs)
+    use = full & np.isfinite(mu.to_numpy()).any(axis=1) & (d.period != "")
+    ew = ind.expected_windows_matrix(d.frame(tb), fs)
+    w = ind.window_values(tb)
+    rv5 = ind.safe_ratio(w["5m"], ew["5m"].to_numpy())
+    rvd = ind.safe_ratio(w["day"], ew["day"].to_numpy())
+    old = ind.safe_ratio(ind.window_sum(tb), ind.window_sum(sum(
+        ind.expected_matrix(d.frame(d.m[s]["turn"]), pd.Series(full_s[s], index=d.days)).to_numpy()
+        for s in STOCKS)))  # fmt: skip
+    out: dict[str, Any] = {}
+    lines = ["== rvol with window expectations (a median of sums) =="]
+    for p in NAMES:
+        m = use & (d.period == p)
+        r5 = rv5[m][np.isfinite(rv5[m])]
+        rd = rvd[m][np.isfinite(rvd[m])]
+        eod = rvd[m][:, 359]
+        q = np.percentile(r5, [15, 50, 85])
+        out[p] = {"p15": float(q[0]), "median_5m": float(q[1]), "p85": float(q[2]),
+                  "median_day": float(np.median(rd)), "median_day_close": float(np.nanmedian(eod)),
+                  "old_median_5m": float(np.nanmedian(old[m])), "sessions": int(m.sum())}  # fmt: skip
+        o = out[p]
+        lines.append(
+            f"{p}: rvol_5m p15 {o['p15']:.2f} median {o['median_5m']:.3f} p85 {o['p85']:.2f}; "
+            f"rvol_day median {o['median_day']:.3f} (at 15:14 {o['median_day_close']:.3f}); "
+            f"old rvol_5m median {o['old_median_5m']:.3f}; sessions {o['sessions']}"
+        )
+    out["quiet"] = round(out["TUNE"]["p15"], 1)
+    out["busy"] = round(out["TUNE"]["p85"], 1)
+    lines.append(f"quiet below {out['quiet']}, busy from {out['busy']}")
+    print("\n".join(lines), flush=True)
+    (OUT / "rvol.txt").write_text("\n".join(lines) + "\n")
+    (OUT / "rvol.json").write_text(json.dumps(out, indent=1))
+
+
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
     for stage in sys.argv[1:] or ["load", "study"]:
-        {"load": stage_load, "study": stage_study}[stage]()
+        {"load": stage_load, "study": stage_study, "rvol": stage_rvol}[stage]()

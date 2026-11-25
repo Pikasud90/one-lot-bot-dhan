@@ -143,7 +143,7 @@ class Baselines:
     day: dt.date
     hist: dict[str, pd.DataFrame]  # turnover day matrices, sessions before `day`
     full: dict[str, pd.Series]
-    expected: dict[str, np.ndarray]  # the row of `day`
+    expected: dict[str, dict[str, np.ndarray]]  # window -> the row of `day` (1m, 5m, day)
     mu: dict[str, np.ndarray]
     sd: dict[str, np.ndarray]
     prev_close: dict[str, float]
@@ -163,7 +163,7 @@ class Baselines:
 
     def has_history(self, key: str) -> bool:
         e = self.expected.get(key)
-        return e is not None and float(np.nansum(e)) > 0
+        return e is not None and float(np.nansum(e["1m"])) > 0
 
     def basket(self, keys: list[str]) -> dict[str, Any]:
         """For a set of stocks: their summed turnover matrix over the history, its full
@@ -185,6 +185,7 @@ class Baselines:
         full = pd.Series(nfull >= max(need, 1), index=idx)
         mu, sd = ind.zstats_row(tb, full.to_numpy())
         out = {
+            "exp": ind.expected_windows_row(tb, full.to_numpy()),
             "keys": list(keys),
             "tb": pd.DataFrame(tb, index=idx, columns=range(ind.SESSION_MINUTES)),
             "full": full,
@@ -215,7 +216,7 @@ def build_baselines(
 
     hist: dict[str, pd.DataFrame] = {}
     full: dict[str, pd.Series] = {}
-    expected: dict[str, np.ndarray] = {}
+    expected: dict[str, dict[str, np.ndarray]] = {}
     mu: dict[str, np.ndarray] = {}
     sd: dict[str, np.ndarray] = {}
     prev_close: dict[str, float] = {}
@@ -231,7 +232,7 @@ def build_baselines(
         filled = m.copy()
         filled.loc[f.to_numpy()] = filled.loc[f.to_numpy()].fillna(0.0)
         hist[s], full[s] = filled, f
-        expected[s] = ind.expected_row(m.to_numpy(), f.to_numpy())
+        expected[s] = ind.expected_windows_row(m.to_numpy(), f.to_numpy())
         mu[s], sd[s] = ind.zstats_row(m.to_numpy(), f.to_numpy())
         prev_close[s] = float(bars["close"].iloc[-1])
         d = _days(bars)
@@ -279,11 +280,11 @@ class DayView:
     no_history: list[str]
     t: dict[str, np.ndarray]  # per stock turnover row (0 to last_col)
     buy: dict[str, np.ndarray]
-    exp: dict[str, np.ndarray]
+    exp: dict[str, dict[str, np.ndarray]]  # stock -> window -> expected row
     z: dict[str, np.ndarray]
     last: dict[str, float]
     tb: np.ndarray
-    eb: np.ndarray
+    eb: dict[str, np.ndarray]  # the basket's expected rows by window (a median of sums)
     buy_b: np.ndarray
     zb: np.ndarray
     rv: dict[str, np.ndarray]
@@ -293,7 +294,8 @@ class DayView:
         return self.tb - self.buy_b
 
     def stock_rv(self, s: str) -> dict[str, np.ndarray]:
-        return ind.rvol_rows(self.t[s], self.exp[s])
+        e = self.exp[s]
+        return ind.rvol_rows(self.t[s], e["1m"], e["5m"], e["day"])
 
     def win(self, a: np.ndarray, col: int) -> float:
         return float(ind.window_sum(a)[0, col])
@@ -350,19 +352,20 @@ def compute_view(
         t[s] = ind.fill_through(rows_t[s], last_col)
         buy[s] = ind.fill_through(rows_b[s], last_col)
         e = base.expected.get(s)
-        exp[s] = np.zeros(ind.SESSION_MINUTES) if e is None else np.nan_to_num(e)
+        exp[s] = {w: (np.zeros(ind.SESSION_MINUTES) if e is None else np.nan_to_num(e[w]))
+                  for w in ind.WINDOWS}  # fmt: skip
         if s in base.mu:
             z[s] = ind.zscore(ind.log_window(t[s]), base.mu[s], base.sd[s])[0]
         else:
             z[s] = np.full(ind.SESSION_MINUTES, np.nan)
     tb = np.where(np.arange(ind.SESSION_MINUTES) <= last_col, 0.0, np.nan)
-    eb = np.zeros(ind.SESSION_MINUTES)
     bb = tb.copy()
     for s in keys:
         tb = tb + t[s]
         bb = bb + buy[s]
-        eb = eb + exp[s]
     bs = base.basket(keys) if keys else None
+    zero = np.zeros(ind.SESSION_MINUTES)
+    eb = bs["exp"] if bs is not None else dict.fromkeys(ind.WINDOWS, zero)
     zb = (
         ind.zscore(ind.log_window(tb), bs["mu"], bs["sd"])[0]
         if bs is not None
@@ -370,7 +373,7 @@ def compute_view(
     )
     return DayView(
         day, last_col, keys, missing, no_hist, t, buy, exp, z, last_px, tb, eb, bb, zb,
-        ind.rvol_rows(tb, eb),
+        ind.rvol_rows(tb, eb["1m"], eb["5m"], eb["day"]),
     )  # fmt: skip
 
 
@@ -641,9 +644,11 @@ class VolumeWatch:
     def alert_obj(self, view: DayView, base: Baselines, c: ind.Candidate) -> dict[str, Any]:
         col = c.t
         if c.scope == "MARKET":
-            a5, e5 = view.win(view.tb, col), view.win(view.eb, col)
+            a5, e5 = view.win(view.tb, col), float(view.eb["5m"][col])
             fs = ind.flow_share(view.win(view.buy_b, col), a5 - view.win(view.buy_b, col))
-            excess = {s: view.win(view.t[s], col) - view.win(view.exp[s], col) for s in view.keys}
+            excess = {
+                s: view.win(view.t[s], col) - float(view.exp[s]["5m"][col]) for s in view.keys
+            }
             leaders = sorted(excess, key=lambda k: -excess[k])[:2]
             score = {
                 k: sum(base.weights.get(k, ({}, None))[0].get(s, 0.0) for s in leaders)
@@ -653,7 +658,7 @@ class VolumeWatch:
             likely = [k for k in sorted(score, key=lambda k: -score[k]) if score[k] > 0][:2]
         else:
             s = c.key
-            a5, e5 = view.win(view.t[s], col), view.win(view.exp[s], col)
+            a5, e5 = view.win(view.t[s], col), float(view.exp[s]["5m"][col])
             fs = ind.flow_share(view.win(view.buy[s], col), a5 - view.win(view.buy[s], col))
             leaders = [s]
             score = {
@@ -958,7 +963,7 @@ class VolumeWatch:
         minutes = []
         for c in range(lc + 1):
             minutes.append([
-                int(view.ts(c).timestamp()), _r(view.tb[c], 0), _r(view.eb[c], 0),
+                int(view.ts(c).timestamp()), _r(view.tb[c], 0), _r(view.eb["1m"][c], 0),
                 _r(view.buy_b[c], 0), _r(view.tb[c] - view.buy_b[c], 0), _r(cum_net[c], 0),
                 _r(rv["rvol_5m"][c]), _r(view.zb[c]),
             ])  # fmt: skip
@@ -1027,7 +1032,7 @@ class VolumeWatch:
             "now": {
                 "minute": f"{stamp:%H:%M}",
                 "turnover_1m": _r(view.tb[lc], 0),
-                "expected_1m": _r(view.eb[lc], 0),
+                "expected_1m": _r(view.eb["1m"][lc], 0),
                 "rvol_1m": _r(rv["rvol_1m"][lc]),
                 "rvol_5m": _r(rv5),
                 "rvol_day": _r(rvd),
@@ -1061,9 +1066,9 @@ class VolumeWatch:
         for s in view.keys:
             n = 2 * view.buy[s] - view.t[s]
             net5[s] = view.win(n, lc)
-            e5[s] = view.win(view.exp[s], lc)
+            e5[s] = float(view.exp[s]["5m"][lc])
             netd[s] = float(np.nansum(n[: lc + 1]))
-            ed[s] = float(np.nansum(view.exp[s][: lc + 1]))
+            ed[s] = float(view.exp[s]["day"][lc])
         p5 = ind.pressure(w, net5, e5)
         pd_ = ind.pressure(w, netd, ed)
         top = sorted(((s, v) for s, v in w.items() if v > 0), key=lambda x: -x[1])[:3]

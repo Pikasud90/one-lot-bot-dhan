@@ -40,21 +40,23 @@ def stored_watch(store, **volume) -> VolumeWatch:
     return VolumeWatch(store, None, desk_cfg=desk_cfg(**volume), sync=True, clock=lambda: after)
 
 
-def direct_expected(frames, day: dt.date, col: int) -> float:
-    """Sum over the basket of the median turnover at `col` over the previous 20 full
-    sessions, straight from the bars."""
-    total = 0.0
+def direct_expected(frames, day: dt.date, col: int, window: str = "1m") -> float:
+    """The median, over the previous 20 full sessions, of the BASKET's turnover in the window
+    ending at `col` (one minute, or the day so far), straight from the bars."""
+    sums: dict[dt.date, float] = {}
+    minute = ind.OPEN_MINUTE + col
     for k in BASKET:
         df = frames[k]
         t = df["volume"] * df["close"]
-        dates = pd.DatetimeIndex(df.index).date
-        counts = pd.Series(dates).value_counts()
-        full = sorted(d for d, n in counts.items() if n >= 300 and d < day)[-20:]
-        minute = ind.OPEN_MINUTE + col
-        tod = pd.DatetimeIndex(df.index).hour * 60 + pd.DatetimeIndex(df.index).minute
-        vals = [float(t[(dates == d) & (tod == minute)].iloc[0]) for d in full]
-        total += float(np.median(vals))
-    return total
+        idx = pd.DatetimeIndex(df.index)
+        tod = idx.hour * 60 + idx.minute
+        lo = minute if window == "1m" else ind.OPEN_MINUTE
+        part = t[(tod >= lo) & (tod <= minute)].groupby(idx.date[(tod >= lo) & (tod <= minute)])
+        for d, v in part.sum().items():
+            sums[d] = sums.get(d, 0.0) + float(v)
+    counts = pd.Series(pd.DatetimeIndex(frames["SBIN"].index).date).value_counts()
+    full = sorted(d for d, n in counts.items() if n >= 300 and d < day)[-20:]
+    return float(np.median([sums[d] for d in full]))
 
 
 def test_past_session_has_the_contract_keys_and_hand_numbers(shared, frames):
@@ -72,6 +74,9 @@ def test_past_session_has_the_contract_keys_and_hand_numbers(shared, frames):
     turn = sum(float(frames[k].loc[last, "volume"] * frames[k].loc[last, "close"]) for k in BASKET)
     assert body["now"]["turnover_1m"] == pytest.approx(turn, abs=1)
     assert body["now"]["expected_1m"] == pytest.approx(direct_expected(frames, day, 374), abs=1)
+    assert body["now"]["expected_day"] == pytest.approx(
+        direct_expected(frames, day, 374, "day"), rel=1e-9
+    )
     m0 = body["minutes"][0]
     assert m0[0] == int(
         pd.Timestamp(dt.datetime.combine(day, dt.time(9, 15)), tz="Asia/Kolkata").timestamp()

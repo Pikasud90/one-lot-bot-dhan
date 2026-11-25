@@ -43,8 +43,8 @@ volume:                   # the Volume Watch (US-089; docs/research/VOLUME_STUDY
   alerts_on: true         # false: the watch decides no alert at all
   notify: true            # false: alerts are stored and shown, never sent
   book: true              # one quote request a minute for the basket's order book
-  quiet: 1.0              # rvol_5m below this reads quiet (a normal day runs near 1.4)
-  busy: 2.1               # rvol_5m at or above this reads busy
+  quiet: 0.7              # rvol_5m below this reads quiet (an ordinary day reads about 1.0)
+  busy: 1.5               # rvol_5m at or above this reads busy
 
 defaults:
   index_strategies:       # 5 index options

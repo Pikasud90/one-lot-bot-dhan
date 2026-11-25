@@ -5,7 +5,8 @@
 
 Opens the store READ-ONLY (SQLite URI mode=ro), runs the service for that date as
 `GET /api/volume?date=` does, prints the day's headline, its alerts and the top stocks, then
-recomputes the newest minute's turnover, expected turnover and spike score straight from the
+recomputes the newest minute's turnover, expected turnover (one minute and the day so
+far) and spike score straight from the
 stored bars with `onelot.volume.indicator` and says whether they agree. Exit 1 on a mismatch.
 """
 
@@ -45,12 +46,6 @@ def direct(engine, watch: vs.VolumeWatch, day: dt.date, col: int, keys: list[str
     idx = pd.DatetimeIndex(idx)
     row = idx.get_loc(pd.Timestamp(day))
     turn = sum(np.nan_to_num(mats[s].reindex(idx).to_numpy()[row, col]) for s in keys)
-    expected = sum(
-        ind.expected_matrix(mats[s].reindex(idx), fulls[s].reindex(idx).fillna(False)).to_numpy()[
-            row, col
-        ]
-        for s in keys
-    )
     tb = np.zeros((len(idx), ind.SESSION_MINUTES))
     nfull = np.zeros(len(idx))
     for s in keys:
@@ -62,9 +57,16 @@ def direct(engine, watch: vs.VolumeWatch, day: dt.date, col: int, keys: list[str
     full_b.iloc[row] = False
     tbf = pd.DataFrame(tb, index=idx, columns=range(ind.SESSION_MINUTES))
     mu, sd = ind.zstats_matrix(tbf.iloc[: row + 1], full_b.iloc[: row + 1])
+    # expected: the median of the BASKET's own window turnover (a median of sums)
+    ew = ind.expected_windows_matrix(tbf.iloc[: row + 1], full_b.iloc[: row + 1])
     today = ind.fill_through(tb[row], col)
     z = ind.zscore(ind.log_window(today), mu.to_numpy()[row], sd.to_numpy()[row])[0, col]
-    return {"turnover_1m": turn, "expected_1m": expected, "z": z}
+    return {
+        "turnover_1m": turn,
+        "expected_1m": float(ew["1m"].to_numpy()[row, col]),
+        "expected_day": float(ew["day"].to_numpy()[row, col]),
+        "z": z,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -100,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     keys = [k for k in keys if watch.baselines(day, wait=True).has_history(k)]
     d = direct(engine, watch, day, col, keys)
     bad = []
-    for k in ("turnover_1m", "expected_1m", "z"):
+    for k in ("turnover_1m", "expected_1m", "expected_day", "z"):
         got, want = now[k], d[k]
         tol = 0.011 if k == "z" else max(1.0, abs(want) * 1e-6)
         if got is None or not np.isfinite(want) or abs(got - want) > tol:

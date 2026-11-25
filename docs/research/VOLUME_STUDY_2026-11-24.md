@@ -26,8 +26,7 @@
 - t statistics treat one session as one draw. Costs: an option buyer needs 5 to 10 bp of index
   move in the trade's favour (ALPHA_SEARCH_2026-11-12).
 - Set after seeing V1 (labelled so): the words quiet and busy at the TUNE 15th and 85th
-  percentiles of rvol_5m (0.95 and 2.06, set as 1.0 and 2.1), because the median-based
-  expected turnover runs low.
+  percentiles of rvol_5m. Changed on 25 November with the contract (see V1): 0.7 and 1.5.
 
 ## V1. The day's shape
 Share of a normal day's basket turnover by half hour (09:15 first):
@@ -45,9 +44,10 @@ Share of a normal day's basket turnover by half hour (09:15 first):
   Monday); no weekday is quiet in all three periods.
 - NIFTY expiry days (Thursday, Tuesday from September 2025): day rvol 1.59 / 1.58 / 1.69
   against 1.46 / 1.46 / 1.53 on other days, about 9% busier.
-- The scale: a day's rvol averages about 1.45, not 1, because the expected turnover is a sum of
-  per-minute medians and minute turnover is skewed. The contract keeps the median; the state
-  words are set to this scale.
+- The scale: the day rvol figures above (about 1.45 on an average day) used a sum of per-minute
+  medians. The contract now takes the median of each window's own turnover (a median of sums):
+  median rvol_5m 0.999 / 0.995 / 1.008 and rvol_day 0.995 / 0.994 / 1.014, so an ordinary day
+  reads 1.0. TUNE 15th and 85th percentiles of rvol_5m: 0.71 and 1.49, set as quiet 0.7, busy 1.5.
 
 ## V2. The up-share rule
 Rank correlation of the basket's 5-minute flow share with NIFTY's return, same 5 minutes and
@@ -163,8 +163,7 @@ the indices where its leaders weigh most; that is the arithmetic of the weights,
 - The order book is recorded from today; it has no history and is not studied.
 - Whether the size effect pays an option buyer needs implied volatility around spikes (real
   premiums in `data/expired_options.db`); not done here.
-- The basket's expected turnover is a median per minute, so "1.0 times normal" is a quiet day.
-  A mean or a trimmed mean would read more naturally; the contract would have to change.
+- V1's weekday and expiry ratios are on the old scale; their comparisons stand.
 - TEST had been looked at in earlier studies, but not for volume; the volume numbers are new.
 - MIDCPNIFTY was left out (a training instrument).
 

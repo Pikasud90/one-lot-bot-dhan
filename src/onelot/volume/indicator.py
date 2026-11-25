@@ -363,24 +363,65 @@ def zscore(q: Any, mean: Any, sd: Any) -> Any:
     return safe_ratio(np.asarray(q, dtype=float) - np.asarray(mean, dtype=float), sd)
 
 
-def rvol_rows(actual: np.ndarray, expected: np.ndarray, n: int = WINDOW) -> dict[str, np.ndarray]:
-    """Relative volume along one session's minutes: 1 minute, the last n minutes (sums), and
-    the day so far (sums). NaN where the expected part is 0."""
+WINDOWS: tuple[str, ...] = ("1m", "5m", "day")
+
+
+def window_values(rows: Any, n: int = WINDOW) -> dict[str, np.ndarray]:
+    """A session's turnover by window at every minute: the minute itself, the last n minutes
+    (fewer at the open), the day so far. NaN where the minute itself is NaN."""
+    a = np.atleast_2d(np.asarray(rows, dtype=float))
+    day = np.cumsum(np.nan_to_num(a), axis=1)
+    day[np.isnan(a)] = np.nan
+    return {"1m": a, "5m": window_sum(a, n), "day": day}
+
+
+def expected_windows_row(
+    hist: Any, full: Any, lookback: int = EXPECTED_LOOKBACK, min_n: int = EXPECTED_MIN
+) -> dict[str, np.ndarray]:
+    """For the session right after `hist`: the expected turnover of each window, the median
+    over the previous `lookback` full sessions of that same window's turnover (a median of
+    sums, never a sum of medians). 0 where there is no history."""
+    w = window_values(_filled(hist, full))
+    return {k: np.nan_to_num(_prior_rows(v, full, lookback, min_n, "median")) for k, v in w.items()}
+
+
+def expected_windows_matrix(
+    turn: pd.DataFrame,
+    full: pd.Series | None = None,
+    lookback: int = EXPECTED_LOOKBACK,
+    min_n: int = EXPECTED_MIN,
+) -> dict[str, pd.DataFrame]:
+    """`expected_windows_row` for every session of a day matrix (the study's version)."""
+    full = full_days(turn) if full is None else full
+    f = full.reindex(turn.index).fillna(False).to_numpy(dtype=bool)
+    filled = turn.to_numpy(dtype=float).copy()
+    filled[f] = np.nan_to_num(filled[f])
+    out = {}
+    for k, v in window_values(filled).items():
+        frame = pd.DataFrame(v, index=turn.index, columns=turn.columns)
+        out[k] = _prior_full(frame, full, lookback, min_n, "median").fillna(0.0)
+    return out
+
+
+def rvol_rows(
+    actual: np.ndarray, e1: np.ndarray, e5: np.ndarray, eday: np.ndarray, n: int = WINDOW
+) -> dict[str, np.ndarray]:
+    """Relative volume along one session's minutes, each window over its own expected
+    turnover: 1 minute, the last n minutes, the day so far. NaN where that expected is 0 or
+    the minute has not closed."""
     a = np.asarray(actual, dtype=float)
-    e = np.asarray(expected, dtype=float)
-    e_masked = np.where(np.isnan(a), np.nan, e)
-    a5 = window_sum(a, n)[0]
-    e5 = window_sum(e_masked, n)[0]
-    ad = np.where(np.isnan(a), np.nan, np.nancumsum(a))
-    ed = np.where(np.isnan(a), np.nan, np.nancumsum(np.nan_to_num(e_masked)))
+    w = window_values(a, n)
+    closed = ~np.isnan(a)
+    e5m = np.where(closed, np.asarray(e5, dtype=float), np.nan)
+    edm = np.where(closed, np.asarray(eday, dtype=float), np.nan)
     return {
-        "rvol_1m": safe_ratio(a, e),
-        "rvol_5m": safe_ratio(a5, e5),
-        "rvol_day": safe_ratio(ad, ed),
-        "actual_5m": a5,
-        "expected_5m": e5,
-        "actual_day": ad,
-        "expected_day": ed,
+        "rvol_1m": safe_ratio(a, e1),
+        "rvol_5m": safe_ratio(w["5m"][0], e5m),
+        "rvol_day": safe_ratio(w["day"][0], edm),
+        "actual_5m": w["5m"][0],
+        "expected_5m": e5m,
+        "actual_day": w["day"][0],
+        "expected_day": edm,
     }
 
 

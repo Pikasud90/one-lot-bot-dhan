@@ -250,12 +250,13 @@ session and the day's profile.
 - What it reads: the one-minute bars the desk already holds for today, and the store's bars for
   the sessions before (read queries only; it asks the broker for no bars of its own). Turnover is
   volume x close in rupees; a minute's buying part comes from the `bvc` rule (the study's choice).
-- Baselines: the expected turnover of each minute is the median of that minute over the previous
-  20 full sessions; the spike score compares the last 5 minutes with the previous 60 full
-  sessions at the same minute. A session with fewer than 300 one-minute bars is never a baseline.
+- Baselines: the expected turnover of a window (one minute, the last 5 minutes, the day so far)
+  is the median of that same window's turnover over the previous 20 full sessions, for a stock
+  or for the basket as a whole, so an ordinary day reads about 1.0. The spike score compares
+  the last 5 minutes with the previous 60 full sessions at the same minute. A session with fewer than 300 one-minute bars is never a baseline.
   They are built once a session on their own thread; until then the page says so in its notes.
-- Note on the scale: a median is below a mean, so a normal day reads about 1.4 times "normal".
-  The words quiet (below 1.0) and busy (2.1 or more) are set to that scale.
+- The words: quiet below 0.7 times normal over the last 5 minutes, busy from 1.5 (the study's
+  15th and 85th percentiles).
 - When it alerts: a market spike score of 2.5 or more (about 1.3 a day), a single stock at 4.0
   or more (about 2.6 a day), never twice for the same market or stock inside 15 minutes, at most
   12 a day, and only for the last three closed minutes (in time or not at all). Each alert is
