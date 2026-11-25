@@ -61,11 +61,14 @@ averages; sell above the 20-session average, after 30 sessions, or at a 15% stop
   same 222 stocks held over the same days, the rule earned −0.16% a trade (t −2.3; −0.17 / −0.58 /
   +0.93). Of 13 cells (signals that evening, NIFTY below its 20-session high, India VIX against
   its 60-session median, and all) none is discovered on that excess and none is AVOID: the cells
-  most negative in TUNE are positive in TEST. Luck gives the same (0 in the placebo). The money
-  of broad dips is the basket's (20 or more signals: +3.40 a trade, the basket +3.13 over the
-  same days), and after TUNE there were 2 broad evenings. Books that wait for broad or deep
-  evenings, or skip quiet ones, are not ahead of NIFTY or the basket beyond chance and are
-  behind US-100's book in TEST, so the wide list stays as it is.
+  most negative in TUNE are positive in TEST, but TEST as a whole was +0.93 over the basket.
+  Luck gives the same (0 in the placebo). Before costs the trades beat the basket by +0.34 a
+  trade (t +4.5); the rule's 0.51% round trip more than eats it. Most of the money of broad dips
+  is the basket's (20 or more signals: +3.40 a trade, the basket +3.13 over the same days; +0.79
+  before costs, t +4.6), and after TUNE there were 2 broad evenings. Against NIFTY instead of the
+  basket the rule is ahead (+0.30, t +2.7), which is the flattery of today's 222 survivors. Books
+  that wait for broad or deep evenings, or skip quiet ones, are not ahead of NIFTY or the basket
+  over the span beyond chance and are behind US-100's book in TEST, so the wide list stays.
 
 **Index options, bought and sold the same day: nothing earns after costs.** The grid tried
 every registered rule at four timeframes with three presets under nine kinds of condition:
@@ -150,9 +153,9 @@ each `_2026-11-24.md`); earlier work is listed in `STRATEGIES_TESTED_2026-11-12.
 | 4 indices, pool | option same-day | S5 call after VIX-UP | 1m | VIX rose over 5% | ratchet, 15:15 | 140 | +1.49 / −3.20 / +0.85 (+0.5) | real −0.27 | REJECTED | TUNE t +0.8 | option setups |
 | 4 indices, pool | option same-day | S5 put after VIX-DOWN | 1m | VIX fell over 5% | ratchet, 15:15 | 120 | −2.15 / −6.82 / +0.03 (−1.9) | real −3.40 | REJECTED | falls after VIX drops are not there | option setups |
 | 4 indices, pool | option same-day | S6 high turnover first half hour | 1m | ratio over 1.2 | ratchet, 15:15 | 270 | +0.43 / −1.02 / −3.25 (−0.9) | real −1.62 | REJECTED | bigger range, no direction | option setups |
-| 222 stocks | stock delivery | P1 pullback 8% | 1d | 10 or more signals that evening (broad dip) | own | 188 | EXCESS over the basket −0.05 / −0.47 / +0.75 (10 to 19), +0.28 / none / none (20 or more); RAW +3.40 TUNE | 0.50% round trip; basket without costs | REJECTED | The broad-dip gain is the basket's (RAW +3.40, basket +3.13 over the same days); 2 broad evenings after TUNE; a book of such evenings less B3 −0.01% a year [−2.31 to +2.26] | pullback conditions |
+| 222 stocks | stock delivery | P1 pullback 8% | 1d | 10 or more signals that evening (broad dip) | own | 188 | EXCESS over the basket −0.05 / −0.47 / +0.75 (10 to 19), +0.28 / none / none (20 or more); RAW +3.40 TUNE | 0.50% round trip; basket without costs | REJECTED | Most of the broad-dip gain is the basket's (RAW +3.40, basket +3.13 over the same days); before costs +0.79 over it (t +4.6), after the 0.51% costs +0.28 (t 1.6); 2 broad evenings after TUNE; a book of such evenings less B3 −0.01% a year [−2.31 to +2.26] | pullback conditions |
 | 222 stocks | stock delivery | P1 pullback 8% | 1d | 1 to 2 signals that evening (quiet) | own | 95 | EXCESS −0.40 / −0.95 / +1.02 (−2.6) | as above | REJECTED | Not an AVOID: TUNE t −2.47 and positive in TEST; a book that skips quiet evenings is behind US-100's book in TEST | pullback conditions |
-| 222 stocks | stock delivery | P1 pullback 8% | 1d | NIFTY 2% or more below its 20-session high | own | 267 | EXCESS −0.08 / −1.42 / +1.90 (2 to 4%), +0.00 / −1.27 / +0.74 (4% or more) | as above | REJECTED | No excess in TUNE; the book of such evenings is behind B2 and B3 in CHOOSE | pullback conditions |
+| 222 stocks | stock delivery | P1 pullback 8% | 1d | NIFTY 2% or more below its 20-session high | own | 267 | EXCESS −0.08 / −1.42 / +1.90 (2 to 4%), +0.00 / −1.27 / +0.74 (4% or more) | as above | REJECTED | No excess in TUNE; the book of such evenings is behind B2 and B3 in CHOOSE; its TEST evenings all fall in January 2026 | pullback conditions |
 | 222 stocks | stock delivery | P1 pullback 8% | 1d | India VIX over its 60-session median, four bands | own | 45 to 270 | best TUNE EXCESS −0.19 (1.1 to 1.3) | as above | REJECTED | No VIX band beats the basket in TUNE; from March 2017 only | pullback conditions |
 | 13 NIFTY leavers | stock delivery | P1 pullback 8% | 1d | NIFTY above SMA200 | own | 37 | +0.39 / +0.32 / +2.13 (1.0) | as above | REJECTED | No better than random dates (116 of 200 runs at or above) | delivery, 222 stocks |
 | 222 stocks | stock delivery | P1b pullback 10% | 1d | NIFTY above SMA200 | own | 302 | +1.31 / −0.26 / +2.57 (4.7) | as above | REJECTED | Larger than 8% but negative in CHOOSE (127 trades) | delivery, 222 stocks |
@@ -203,7 +206,9 @@ each `_2026-11-24.md`); earlier work is listed in `STRATEGIES_TESTED_2026-11-12.
 - 2026-11-25: the pullback rule by market condition (US-101): 13 cells, none discovered on the
   excess over the basket, none AVOID; three books that wait for broad or deep evenings or skip
   quiet ones, none ahead beyond chance; no change to the wide list. Four REJECTED headline rows in
-  the register (no cell is other than REJECTED); sections 2, 5 and 6 updated.
+  the register (no cell is other than REJECTED); sections 2, 5 and 6 updated. After two reviews
+  the same day: the excess before costs (+0.34, t +4.5) is named beside the one after costs; over
+  NIFTY or `bench_pct` some cells would be DISCOVERED only (none selects); no status changed.
 - 2026-11-25: the capped pullback book (US-100): the book of Rs 1 lakh and 10 places against
   NIFTY and the basket; rows in sections 2, 4, 5 and 6 updated. After two reviews the same day:
   "behind the basket" is borderline (outside zero with the fixed seed only); paper-test months are

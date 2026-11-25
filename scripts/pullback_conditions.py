@@ -52,6 +52,7 @@ SEEDS = range(40)
 PLACEBO_RUNS = 20
 PLACEBO_SEED = 101_000
 TRUNC_N = 50
+MIN_WEEKS = 5  # display only: no t printed for a period of fewer entry weeks (review)
 CONDITIONS: dict[str, tuple[tuple[float, ...], tuple[str, ...]]] = {
     # a value x falls in the first name whose upper edge is above x (edges are "x < edge")
     "BREADTH": ((3, 10, 20), ("1 to 2", "3 to 9", "10 to 19", "20 or more")),
@@ -234,13 +235,23 @@ def stage_prep() -> None:
     tr["nifty_pct"] = (n1 / n0.to_numpy() - 1) * 100
     tr["excess_nifty"] = tr.net_pct - tr.nifty_pct
     tr["excess_study"] = tr.net_pct - tr.bench_pct  # the study's own column, unchanged
+    # A sensitivity added after the first results (review of 2026-11-25), never selecting:
+    # the trade before its costs, fill to fill, less the same basket (which has no costs).
+    tr["gross_pct"] = (tr.exit_raw / tr.entry_open - 1) * 100
+    tr["gross_excess"] = tr.gross_pct - tr.basket_pct
+    L.append(f"costs a trade (net_pct less the fill-to-fill move): mean "
+             f"{fs((tr.gross_pct - tr.net_pct).mean())}%, median "
+             f"{fs((tr.gross_pct - tr.net_pct).median())}%")  # fmt: skip
     L.append(f"basket: stocks in it per trade min {nb.min()}, median {int(np.median(nb))}, "
              f"max {nb.max()}; NIFTY open missing on entry or exit for "
              f"{int(tr.nifty_pct.isna().sum())} trades")  # fmt: skip
     # labels
     for name, (edges, names) in CONDITIONS.items():
         tr[f"lab_{name}"] = bin_label(tr[COND_COL[name]].to_numpy(), edges, names)
-    # no look-ahead: cut every input after the signal evening and recompute (50 signals)
+    # no look-ahead: cut every input after the signal evening and recompute (50 signals).
+    # For BREADTH this holds by construction (the count is taken from the fixed trade list);
+    # the count is known at the close because the study's loop (swing_universe.py `loop`)
+    # lets a stock signal again from its sale day's close and the NIFTY filter is a close.
     rng = np.random.default_rng(PLACEBO_SEED)
     pick = rng.choice(len(tr), size=TRUNC_N, replace=False)
     bad = 0
@@ -309,7 +320,8 @@ def counts(cells: dict, measure: str) -> dict:
 
 def stage_cells() -> None:
     tr = pd.read_pickle(OUT / "cond.pkl")
-    measures = ["excess_basket", "net_pct", "excess_nifty", "excess_study", "basket_pct"]
+    measures = ["excess_basket", "net_pct", "excess_nifty", "excess_study", "basket_pct",
+                "gross_excess"]  # fmt: skip
     labels = {c: tr[f"lab_{c}"].to_numpy(object) for c in CONDITIONS}
     real = cell_table(tr, labels, measures)
     # placebo: each condition's labels shuffled over the evenings inside each calendar year
@@ -469,6 +481,9 @@ def stage_report() -> None:  # noqa: C901 - a report, read top to bottom
             return " / ".join(f(st[p]) for p in ("TUNE", "CHOOSE", "TEST"))
 
         def mt(s):
+            # a t on fewer than MIN_WEEKS entry weeks is not printed (it selects unchanged)
+            if s["weeks"] < MIN_WEEKS:
+                return f"{fs(s['mean'])} (n/a)" if s["n"] else "none"
             return f"{fs(s['mean'])} ({fs(s['t'], 1)})"
 
         stx = status(e, lk["excess_basket"])
@@ -487,19 +502,32 @@ def stage_report() -> None:  # noqa: C901 - a report, read top to bottom
         "\n### The other excesses and the basket itself (% a trade, TUNE / CHOOSE / TEST, span)\n"
     )
     L.append("| Cell | basket over the holding days | over NIFTY, same days | over the study's "
-             "bench_pct (same stock, same length) | entry days TUNE |")  # fmt: skip
-    L.append("|---|---|---|---|---|")
+             "bench_pct (same stock, same length) | before costs, over the basket "
+             "(sensitivity added after the first results) | entry days TUNE |")  # fmt: skip
+    L.append("|---|---|---|---|---|---|")
     for key, c in real.items():
         cells = []
-        for mm in ("basket_pct", "excess_nifty", "excess_study"):
+        for mm in ("basket_pct", "excess_nifty", "excess_study", "gross_excess"):
             s = c[mm]["stats"]
             cells.append(" / ".join(fs(s[p]["mean"]) for p in PERIODS))
         L.append(
             f"| {key} | " + " | ".join(cells) + f" | {c['net_pct']['stats']['TUNE']['days']} |"
         )
+    L.append("\nThe selection run on these other measures (reported only, none selects): step "
+             "reached (TUNE t, span t)\n")  # fmt: skip
+    L.append("| Cell | over NIFTY | over bench_pct | before costs, over the basket |")
+    L.append("|---|---|---|---|")
+    for key, c in real.items():
+        L.append(f"| {key} | " + " | ".join(
+            f"{status(c[mm], {'clearly_above': False})} ({fs(c[mm]['stats']['TUNE']['t'], 1)}, "
+            f"{fs(c[mm]['stats']['ALL']['t'], 1)})"
+            for mm in ("excess_nifty", "excess_study", "gross_excess")) + " |")  # fmt: skip
     # luck
-    L.append("\n## Against luck (13 cells; placebo: 20 shuffles of each condition's labels over the "
-             "evenings inside each calendar year, ALL keeps its real result)\n")  # fmt: skip
+    head = (
+        "\n## Against luck (13 cells; placebo: 20 shuffles of each condition's labels "
+        "over the evenings inside each calendar year, ALL keeps its real result)\n"
+    )
+    L.append(head)
     L.append("| Measure | | Examined | Discovered | Confirmed | Passed | AVOID |")
     L.append("|---|---|---|---|---|---|---|")
     for mm, lab in (("excess_basket", "EXCESS"), ("net_pct", "RAW (with drift)")):
@@ -612,11 +640,13 @@ def stage_report() -> None:  # noqa: C901 - a report, read top to bottom
                      ("evenings with 3 or more signals", tr.breadth >= 3),
                      ("evenings with NIFTY 2% or more below", tr.depth_nifty >= 2)):  # fmt: skip
         got = set(mon[msk.to_numpy()])
+        in_test = msk.to_numpy() & (tr.period == "TEST").to_numpy()
+        got_test = sorted({str(p) for p in mon[in_test]})  # months of the TEST evenings only
         test_m = [p for p in all_m if p >= pd.Period("2025-11", "M")]
-        n_test = tr[msk.to_numpy() & (tr.period == "TEST").to_numpy()].signal_date.nunique()
+        n_test = tr[in_test].signal_date.nunique()
         L.append(f"- {lab}: in {len(got)} of {len(all_m)} calendar months; TEST: {n_test} "
-                 f"evenings, in {sum(p in got for p in test_m)} of the {len(test_m)} calendar "
-                 f"months it touches")  # fmt: skip
+                 f"evenings, in {len(got_test)} of the {len(test_m)} calendar months it "
+                 f"touches ({', '.join(got_test)})")  # fmt: skip
     txt = "\n".join(L)
     (OUT / "report.md").write_text(txt + "\n")
     print(txt)
