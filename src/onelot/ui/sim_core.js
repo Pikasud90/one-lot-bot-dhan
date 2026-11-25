@@ -216,6 +216,31 @@ function liveLagText(drawnUnix, nowMs) {
   return `Waiting for the feed: the newest stored minute is ${clockText(drawnUnix)}. New minutes appear here as the feed writes them.`;
 }
 
+/* A strategy line's points ([candle start, value]) as chart data. A point the server left out (a value not defined yet:
+   the opening range before it is complete, a warm-up) leaves a gap instead of a diagonal joining two values that never
+   touched (found on real bars: the ORB lines ramped from the day before into the opening range). The chart library
+   joins a line across whitespace, so the gap is made by the colour of the point BEFORE it ("transparent" colours the
+   segment that starts there). `after` is the last point already drawn ([time, value]): when the gap follows it, it is
+   sent again with that colour (an update of the same time replaces it). A line that goes on at the next day's open
+   stays joined (a Supertrend). */
+function overlayData(points, tfm, after) {
+  const out = [], w = tfm * 60;
+  let prev = after && isNum(after[0]) ? { time: after[0], value: after[1] } : null;
+  (points || []).forEach((p) => {
+    const t = p[0];
+    if (prev && t - prev.time > w) {
+      const open = t - ((((t + IST) % 86400) + 86400) % 86400 - DAY_OPEN);
+      if (prev.time >= open || t > open) {
+        if (out.length && out[out.length - 1].time === prev.time) out[out.length - 1].color = "transparent";
+        else out.push({ time: prev.time, value: prev.value, color: "transparent" });
+      }
+    }
+    const item = { time: t, value: p[1] };
+    out.push(item); prev = item;
+  });
+  return out;
+}
+
 /* ── the price scale (owner's first bug) ───────────────────────────── */
 /* The range the chart shows: the visible candles' own range, widened by a level (entry, stop, target) only when it lies
    within `reach` (60%) of the candles' height beyond their range. A level farther away is not drawn into the scale: it
@@ -434,7 +459,7 @@ const api = {
   isNum, esc, num, money, rupees, signedMoney, rText, pctText, tone, volText, sourceWord, sideWord, stageText, reasonText, reasonShort,
   tfMinutes, unixOf, isoOf, dateText, dayText, hhmmOf, hhmmssOf, clockText, readyText, binStart, binEnd, countdownText, stepMinutes, eventMinute,
   mergeBar, foldMinutes, minutePath, partialMinute, playMinutes, minuteSeconds, speedInForce, chunkSize, speedStep, tfStep,
-  strategiesFor, startIsoOf, minuteBefore, defaultDay, snapDay, shiftDay, randomDay, resumeLine, marketOpenAt, liveLagText,
+  strategiesFor, startIsoOf, minuteBefore, defaultDay, snapDay, shiftDay, randomDay, resumeLine, marketOpenAt, liveLagText, overlayData,
   scaleRule, pinnedText, legendParts, legendLine, keyAction, isOption, qtyText, rupeesAt, minutesLeft,
   ticketModel, positionModel, resultModel, ruleWords, numbersModel, tradeCells, eventWord, eventCells, levelLabels, markerFor, equityPath,
 };

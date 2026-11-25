@@ -54,7 +54,7 @@ function create(el, LW, opts = {}) {
   const cssv = opts.cssv || ((n) => n);
   const pinBox = opts.pinBox || null;
   const state = { bars: [], tfm: 3, tf: "3m", meta: null, minute: null, levels: null, levelKey: null, pinned: [], pinKey: "",
-    markers: [], overlays: [], overlayOn: false, hideDates: false, zones: null, view: null };
+    markers: [], overlays: [], overlayLast: [], overlayOn: false, hideDates: false, zones: null, view: null };
   const fmtTime = (t) => state.hideDates ? C.hhmmOf(t) : `${C.dateText(t)} ${C.hhmmOf(t)}`;
   const tickMark = (t, type) => {
     if (type === 3 || type === 4) return C.hhmmOf(t);
@@ -136,7 +136,7 @@ function create(el, LW, opts = {}) {
       state.bars = []; state.minute = null; state.levels = null; state.levelKey = null; state.markers = []; state.zones = null;
       candles.setData([]); volume.setData([]);
       overlays.forEach((s) => { s.setData([]); s.applyOptions({ visible: false }); });
-      state.overlays = []; state.overlayOn = false;
+      state.overlays = []; state.overlayLast = []; state.overlayOn = false;
       LEVELS.forEach((n) => lines[n].applyOptions({ lineVisible: false, axisLabelVisible: false, title: "" }));
       zones.set(null);
       marks.setMarkers([]);
@@ -185,8 +185,10 @@ function create(el, LW, opts = {}) {
       let px = Math.max(bottomOf(opts.topBox), narrow ? bottomOf(opts.legendBox) : 0) + 8;
       if (narrow) px += state.pinned.filter((p) => p.edge === "top").length * 30;
       if (px <= 8) px = 44;
-      const h = (el && el.clientHeight) || 0, top = Math.min(0.25, Math.max(0.1, h ? px / h : 0.1));
-      try { chart.priceScale("right").applyOptions({ autoScale: true, scaleMargins: hasVolume() ? { top: Math.max(0.08, top), bottom: 0.22 } : { top, bottom: 0.1 } }); } catch (e) {}
+      // A phone keeps the candles at 55% or more of the pane: a lower cap on the band and a slimmer volume strip.
+      const h = (el && el.clientHeight) || 0, top = Math.min(narrow ? 0.2 : 0.25, Math.max(0.1, h ? px / h : 0.1)), vb = narrow ? 0.16 : 0.22;
+      try { chart.priceScale("right").applyOptions({ autoScale: true, scaleMargins: hasVolume() ? { top: Math.max(0.08, top), bottom: vb } : { top, bottom: 0.1 } }); } catch (e) {}
+      try { chart.priceScale("vol").applyOptions({ scaleMargins: { top: 1 - vb + 0.04, bottom: 0 } }); } catch (e) {}
     },
     toNow() { chart.timeScale().scrollToRealTime(); },
     /* Draw minute `bar` up to fraction f (1: the whole minute; it is then part of its candle). */
@@ -247,6 +249,7 @@ function create(el, LW, opts = {}) {
     /* The strategy's lines: defs [{id, label}] for the session; shown only while `on` (chart timeframe = strategy timeframe). */
     setOverlayDefs(defs) {
       state.overlays = (defs || []).slice(0, overlays.length);
+      state.overlayLast = [];
       overlays.forEach((s, i) => { s.setData([]); s.applyOptions({ visible: false, color: cssv(OVERLAY_COLOURS[i]) }); });
     },
     overlayIndex(id) { return state.overlays.findIndex((d) => d.id === id); },
@@ -254,12 +257,14 @@ function create(el, LW, opts = {}) {
     setOverlay(id, points) {
       const i = ctl.overlayIndex(id);
       if (i < 0) return;
-      overlays[i].setData((points || []).map((p) => ({ time: p[0], value: p[1] })));
+      const d = C.overlayData(points, state.tfm, null);
+      overlays[i].setData(d);
+      state.overlayLast[i] = d.length ? [d[d.length - 1].time, d[d.length - 1].value] : null;
     },
     addOverlay(id, points) {
       const i = ctl.overlayIndex(id);
       if (i < 0) return;
-      (points || []).forEach((p) => { try { overlays[i].update({ time: p[0], value: p[1] }); } catch (e) {} });
+      C.overlayData(points, state.tfm, state.overlayLast[i]).forEach((p) => { try { overlays[i].update(p); state.overlayLast[i] = [p.time, p.value]; } catch (e) {} });
     },
     showOverlays(on) { state.overlayOn = !!on; overlays.forEach((s, i) => s.applyOptions({ visible: !!on && i < state.overlays.length })); },
     overlayValue(id, t) {
@@ -267,7 +272,7 @@ function create(el, LW, opts = {}) {
       if (i < 0) return null;
       const d = overlays[i].data ? overlays[i].data() : [];
       let lo = 0, hi = d.length - 1, ans = null;
-      while (lo <= hi) { const m = (lo + hi) >> 1; if (d[m].time <= t) { ans = d[m].value; lo = m + 1; } else hi = m - 1; }
+      while (lo <= hi) { const m = (lo + hi) >> 1; if (d[m].time <= t) { ans = d[m].color === "transparent" && d[m].time < t ? null : (d[m].value ?? null); lo = m + 1; } else hi = m - 1; }   // none inside a gap
       return ans;
     },
     hideDates(on) { state.hideDates = !!on; chart.applyOptions({ timeScale: { tickMarkFormatter: tickMark }, localization: { timeFormatter: fmtTime } }); },

@@ -940,3 +940,28 @@ def test_a_theme_change_keeps_the_zoom_and_the_price_margins():
         return [c.opts.timeScale.barSpacing, c.opts.timeScale.rightOffset, c.opts.rightPriceScale.scaleMargins, !!c.opts.layout];"""
     )
     assert out == [None, None, None, True]
+
+
+@needs_node
+def test_a_strategy_line_breaks_where_the_server_left_points_out():
+    # 3m: yesterday's last candle 15:27, today's opening range only from 09:45 -> a gap at today's open, no diagonal
+    y_last = DAY1 - 86400 + 375 * 60 - 180
+    out = run(
+        f"""const C2 = C; return [
+          C2.overlayData([[{y_last}, 10], [{DAY1} + 1800, 12], [{DAY1} + 1980, 12]], 3, null),
+          C2.overlayData([[{y_last}, 10], [{DAY1}, 11]], 3, null),
+          C2.overlayData([[{DAY1} + 1800, 12]], 3, [{DAY1}, 11]),
+          C2.overlayData([[{DAY1} + 180, 12]], 3, [{DAY1}, 11])];"""
+    )
+    gap = {"time": y_last, "value": 10, "color": "transparent"}
+    assert out[0] == [gap, {"time": DAY1 + 1800, "value": 12}, {"time": DAY1 + 1980, "value": 12}]
+    assert out[1] == [
+        {"time": y_last, "value": 10},
+        {"time": DAY1, "value": 11},
+    ]  # Supertrend goes on at the open
+    # a gap after the last point drawn: that point is sent again, transparent
+    assert out[2] == [
+        {"time": DAY1, "value": 11, "color": "transparent"},
+        {"time": DAY1 + 1800, "value": 12},
+    ]
+    assert out[3] == [{"time": DAY1 + 180, "value": 12}]
