@@ -50,8 +50,8 @@ governor.
 |---|---|---|
 | Health `DEGRADED`, "WebSocket down" | Socket died; REST failover is live | Signals are suppressed by design. Open positions are still managed. Usually self-heals. |
 | Health `DEAD` | No usable data | Manage any open position **manually on your terminal**. Do not trust displayed prices. |
-| "access token expires in Xh" | Dhan token is ageing out | Generate a new token and update `.env`, then restart. |
-| "access token EXPIRED" | Token is dead | Same, urgently. The engine cannot see the market. |
+| "access token expires in Xh" | Dhan token is ageing out | Open Settings, Dhan card: press **Renew token now** (needs the PIN and TOTP secret saved there), or paste a new token and press **Save credentials**. No restart. With the PIN and TOTP secret saved, the desk renews by itself under 90 minutes left. |
+| "access token EXPIRED" | Token is dead | Same, urgently, then press **Go live** if the feed stays synthetic. The engine cannot see the market. |
 | `RL001` / rate limited | Broker throttled us | The limiter backs off automatically. If persistent, check nothing else is using the same API key. |
 | "another engine is already running" | Lock file held | Two engines would share one quota and race position state. Stop the other. If certain it is stale, delete `data/engine.pid`. |
 | No signals for days | Probably by design | Open the gate histogram. It names the responsible gate. |
