@@ -198,12 +198,20 @@ class Day:
 
     def bad(self, px: float, call: bool, k: float, minute: int) -> bool:
         """The study's filter: a print whose volatility is outside 0.25 to 4 times the model's
-        (or has none) is a bad print."""
+        is a bad print. Where the volatility says nothing (a price at or under its intrinsic
+        value, or the last day of the contract, when an option is little more than its
+        intrinsic value), the print is bad only when it is more than 0.2% of the index under
+        its intrinsic value or carries a time value over 2% of the index."""
         s = self.spot_at(minute)
         if not np.isfinite(s) or not np.isfinite(self.ivm):
             return False
-        iv = float(leg_iv(np.array([px]), call, np.array([s]), k, self.t_of([minute]), self.r)[0])
-        return not np.isfinite(iv) or iv < BAD_LO * self.ivm or iv > BAD_HI * self.ivm
+        t = self.t_of([minute])
+        intrinsic = max(s - k, 0.0) if call else max(k - s, 0.0)
+        iv = float(leg_iv(np.array([px]), call, np.array([s]), k, t, self.r)[0])
+        floor_iv = np.isfinite(iv) and iv <= 0.0051
+        if float(t[0]) * 365.0 < 1.0 or not np.isfinite(iv) or floor_iv:
+            return px < intrinsic - 0.002 * s or px > intrinsic + 0.02 * s
+        return iv < BAD_LO * self.ivm or iv > BAD_HI * self.ivm
 
     def estimate_closes(self, call: bool, k: float, minutes: np.ndarray) -> tuple:
         """Closes of strike k at `minutes`: the real close where a bar of k exists, else
