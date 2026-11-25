@@ -34,7 +34,7 @@ backtest:
   net_pct: {net_pct}
   winners_pct: {winners}
   period: "{first} to {last}"
-  note: "The study's trades of this rule on the {n} stocks, after costs. Not proven: about +0.6 of the result a trade is the market's drift."
+  note: "The study's trades of this rule on the {n} stocks, after costs. Not proven: about +0.6 of the result a trade is the market's drift, and a book of ten such trades on Rs 1 lakh became Rs 1.30 lakh from 2010 to 2026 against Rs 4.15 lakh for NIFTY simply held (docs/research/PULLBACK_BOOK_2026-11-25.md)."
 stocks:
 """
 

@@ -10,7 +10,7 @@ backtest:
   net_pct: 0.774
   winners_pct: 67.6
   period: "2010-10-19 to 2026-11-05"
-  note: "The study's trades of this rule on the 222 stocks, after costs. Not proven: about +0.6 of the result a trade is the market's drift."
+  note: "The study's trades of this rule on the 222 stocks, after costs. Not proven: about +0.6 of the result a trade is the market's drift, and a book of ten such trades on Rs 1 lakh became Rs 1.30 lakh from 2010 to 2026 against Rs 4.15 lakh for NIFTY simply held (docs/research/PULLBACK_BOOK_2026-11-25.md)."
 stocks:
   - {key: "RELIANCE", name: "Reliance Industries", symbol: "RELIANCE", security_id: "2885", segment: NSE_EQ, group: desk}
   - {key: "MM", name: "Mahindra & Mahindra", symbol: "M&M", security_id: "2031", segment: NSE_EQ, group: desk}

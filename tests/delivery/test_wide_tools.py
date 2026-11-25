@@ -145,3 +145,18 @@ def test_the_replay_tool_finds_the_reference_trades_on_a_small_fixture_file(tmp_
         in out
     )
     assert "MISMATCH" not in out and "sizes are not compared" in out
+
+
+def test_the_backtest_note_carries_the_book_level_reading():
+    """US-100 (25 Nov): the page must not show "+0.77% a trade" without the book-level result:
+    a ten-trade book did not beat NIFTY held. The shipped file and its generator agree."""
+    from pathlib import Path
+
+    from onelot.delivery.universe import load_universe
+
+    root = Path(__file__).resolve().parents[2]
+    note = str(load_universe(root / "config" / "delivery_universe.yaml").backtest["note"])
+    assert "Not proven" in note and "market's drift" in note
+    assert "Rs 1.30 lakh" in note and "Rs 4.15 lakh" in note and "NIFTY simply held" in note
+    template = (root / "scripts" / "write_delivery_universe.py").read_text("utf-8")
+    assert note.split("stocks, after costs. ")[1] in template
