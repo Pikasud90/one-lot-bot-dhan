@@ -37,6 +37,7 @@ from sqlalchemy import create_engine, select
 
 from onelot.clock import IST, TradingCalendar
 from onelot.config import SessionCfg
+from onelot.data.store import save_bars
 from onelot.delivery.money import delivery_model, depository_paise, rupees_to_paise, trade_result
 from onelot.delivery.runner import DeliveryDesk
 from onelot.delivery.wide import (
@@ -51,7 +52,6 @@ from onelot.delivery.wide import (
     REVIEW,
     ROUND_TRIES,
 )
-from onelot.data.store import save_bars
 from onelot.desk.config import WideCfg, load_desk_config
 from onelot.store.schema import METADATA, wide_state, wide_trades
 
