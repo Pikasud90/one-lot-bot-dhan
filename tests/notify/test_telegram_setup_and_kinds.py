@@ -285,3 +285,35 @@ def test_the_test_message_reasons_are_plain() -> None:
     assert "press Start" in result_words(blocked)
     nochat = SendResult(False, "permanent", None, None, "HTTP 400: Bad Request: chat not found")
     assert "Find my chat id" in result_words(nochat)
+
+
+# ── a network that blocks the bot address (found on 25 Nov 2026 on an institute's network) ──
+@pytest.mark.parametrize("exc", [httpx.ConnectTimeout, httpx.ConnectError])
+def test_a_connection_that_cannot_be_opened_says_the_network_may_block_telegram(exc) -> None:
+    def boom(request: httpx.Request) -> httpx.Response:
+        raise exc(f"cannot connect to {request.url}")
+
+    found = find_chats(TOKEN, httpx.Client(transport=httpx.MockTransport(boom)))
+    assert not found.ok and exc.__name__ in found.message
+    assert "This network may be blocking api.telegram.org" in found.message
+    assert "phone hotspot" in found.message and "Try again" not in found.message
+    assert TOKEN not in found.message and TOKEN.split(":")[1] not in found.message
+
+
+def test_an_answer_that_times_out_part_way_still_says_try_again() -> None:
+    def slow(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("the answer did not come")
+
+    found = find_chats(TOKEN, httpx.Client(transport=httpx.MockTransport(slow)))
+    assert found.message == "Could not reach Telegram (ReadTimeout). Try again."
+
+
+def test_the_test_message_says_so_too_when_the_network_blocks_telegram() -> None:
+    from onelot.notify.telegram import SendResult
+
+    for name in ("ConnectTimeout", "ConnectError"):
+        words = result_words(SendResult(False, "transient", None, None, f"network error: {name}"))
+        assert words.startswith(f"not sent: could not reach Telegram ({name}).")
+        assert "This network may be blocking api.telegram.org" in words
+    other = SendResult(False, "transient", None, None, "network error: ReadTimeout")
+    assert result_words(other) == "not sent: network error: ReadTimeout"

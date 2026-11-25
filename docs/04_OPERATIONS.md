@@ -404,6 +404,17 @@ Settings card.
 desk: a token that ends overnight while the desk is stopped is told at the next start ("expired"),
 not before.
 
+**A network that blocks Telegram** (found on 25 Nov 2026): office and institute networks may
+block `api.telegram.org`, the one address these messages go through, while the Telegram app
+itself still works. "Find my chat id" and "Send a test message" then say "Could not reach
+Telegram (ConnectTimeout). This network may be blocking api.telegram.org ...". Nothing is wrong
+with the token or the desk. On such a network no message leaves: each waits in the queue and is
+sent when the desk is back on a network that reaches Telegram. To use Telegram there, ask the
+network's admin to allow `api.telegram.org` on port 443, or run the desk on another network
+(home broadband, a phone hotspot). To test from a terminal, with no token in the command:
+`curl -m 10 -o /dev/null -w "%{http_code}\n" https://api.telegram.org/` prints `302` when the
+address is reachable and `000` when it is blocked.
+
 **Status** (no secret): `GET /api/notify/status` says for Telegram whether it is configured and
 in use, when the last message was confirmed, the class of the last error ("HTTP 403") and how
 many messages are waiting.

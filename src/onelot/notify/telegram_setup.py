@@ -35,6 +35,15 @@ NO_UPDATES = (
 )
 TOKEN_REFUSED = "The token was refused by Telegram. Check it, paste it again and save."
 NO_TOKEN = "Save the bot token first."
+#: httpx errors that mean no connection could be opened at all: what a network that blocks
+#: the bot address looks like (seen on 25 Nov 2026 on an institute's network: the two
+#: addresses of api.telegram.org timed out while Telegram's other sites answered)
+_CONNECT_ERRORS = ("ConnectTimeout", "ConnectError")
+BLOCKED_HINT = (
+    " This network may be blocking api.telegram.org, the address these messages go through: "
+    "office and institute networks often do. Use another network, such as a phone hotspot, "
+    "or ask the network's admin to allow it."
+)
 _CAP_NAME = 40
 MAX_CHATS = 10
 TEST_TEXT = (
@@ -110,7 +119,7 @@ def find_chats(token: str, http: httpx.Client | None = None) -> ChatSearch:
     try:
         response = client.get(f"{api_base()}/bot{token}/getUpdates", timeout=TIMEOUT)
     except httpx.HTTPError as exc:  # the class name only: the text can quote the address
-        return ChatSearch(False, f"Could not reach Telegram ({type(exc).__name__}). Try again.")
+        return ChatSearch(False, unreachable_words(type(exc).__name__))
     except Exception as exc:  # noqa: BLE001 - the contract: an answer, never a raise
         log.warning("telegram getUpdates failed unexpectedly: %s", type(exc).__name__)
         return ChatSearch(False, "Could not ask Telegram. Try again.")
@@ -137,6 +146,15 @@ def find_chats(token: str, http: httpx.Client | None = None) -> ChatSearch:
     return ChatSearch(True, f"{len(chats)} chat{'s' if len(chats) != 1 else ''} found.", chats)
 
 
+def unreachable_words(error: str) -> str:
+    """Plain words for a request that never reached Telegram, from the error's class name
+    only. A connection that could not be opened at all gets the hint that the network may
+    be blocking the bot address; anything else is worth trying again."""
+    if error in _CONNECT_ERRORS:
+        return f"Could not reach Telegram ({error}).{BLOCKED_HINT}"
+    return f"Could not reach Telegram ({error}). Try again."
+
+
 def result_words(result: SendResult) -> str:
     """The plain reason a test message did not go; 'sent' for one that did."""
     if result.ok:
@@ -144,6 +162,9 @@ def result_words(result: SendResult) -> str:
     detail = result.detail
     if result.kind == "unavailable":
         return f"not sent: {detail}"
+    if result.kind == "transient" and detail.removeprefix("network error: ") in _CONNECT_ERRORS:
+        error = detail.removeprefix("network error: ")
+        return f"not sent: could not reach Telegram ({error}).{BLOCKED_HINT}"
     if result.detail.startswith(("HTTP 401", "HTTP 404")):
         return "not sent: Telegram refused the token. Paste it again and save."
     if result.detail.startswith("HTTP 403"):
