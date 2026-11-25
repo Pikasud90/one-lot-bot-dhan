@@ -1048,3 +1048,78 @@ class TestReviews:
         js = SIM_JS.read_text("utf-8")
         flag = re.search(r"function renderFlag\(\) \{.*?\n\}", js, re.S).group(0)
         assert "take it (T)" not in flag
+
+
+# ── the lead's look at 1440x900 on real bars, 25 Nov 2026 ─────────────────────────────────────
+class TestTheDockAndThePanelOnALaptop:
+    """With a trade open the slot shrank under the numbers card and the Close button was covered;
+    the chart was 480px high with the panel open; the day button named the day the session began;
+    "Target Rs 750.40 (index 25,893.21)" wrapped by one pixel."""
+
+    def test_the_slot_keeps_its_height_and_the_numbers_give_way(self):
+        css = re.sub(r"/\*.*?\*/", "", SIM_CSS.read_text("utf-8"), flags=re.S)
+        slot = re.search(r"#sim-root \.sim-slot\{([^}]*)\}", css).group(1)
+        assert "flex:0 0 auto" in slot
+        assert "#sim-root .sim-nums[hidden]{display:none}" in css
+        assert re.search(r"#sim-root \.sim-dock\{[^}]*overflow:auto", css)
+        js = SIM_JS.read_text("utf-8")
+        body = re.search(r"function fitDock\(\) \{.*?\n\}", js, re.S).group(0)
+        assert "dock.clientHeight - slot.offsetHeight" in body and "nums.hidden = hide" in body
+        assert "window.innerWidth < 1200" in body  # the row and the phone layouts keep the numbers
+        assert "new ResizeObserver(() => fitDock())" in js
+
+    def test_the_panel_starts_closed_under_960px_until_the_owner_chooses(self):
+        js = SIM_JS.read_text("utf-8")
+        assert "S.view.panel === null ? window.innerHeight >= 960 : !!S.view.panel" in js
+
+    def test_the_day_button_follows_the_replay_clock(self):
+        js = SIM_JS.read_text("utf-8")
+        body = re.search(r"function followDay\(\) \{.*?\n\}", js, re.S).group(0)
+        assert "live()" in body and "S.drawn === null" in body and "S.choice.day = d" in body
+        assert re.search(r"function renderAll\(\) \{\s*followDay\(\);", js)
+
+    def test_stop_and_target_are_written_as_two_parts(self):
+        js = SIM_JS.read_text("utf-8")
+        assert 'setPair("sim-ps-stop", m.stop); setPair("sim-ps-target", m.target)' in js
+        css = re.sub(r"/\*.*?\*/", "", SIM_CSS.read_text("utf-8"), flags=re.S)
+        two = re.search(r"#sim-root \.sim-line\.sim-two\{([^}]*)\}", css).group(1)
+        assert "white-space:nowrap" in two and "justify-content:space-between" in two
+        idx = re.search(r"#sim-root \.sim-idx\{([^}]*)\}", css).group(1)
+        assert re.search(r"font:\d+ 14px", idx)  # nothing under 14px
+
+    @needs_node
+    def test_set_pair_splits_the_index_part_and_falls_back_to_the_whole_text(self):
+        js = SIM_JS.read_text("utf-8")
+        src = re.search(r"const setPair = \(id, text\) => \{.*?\n\};", js, re.S).group(0)
+        out = _node(
+            """
+            const mk = () => ({ textContent: "", className: "", dataset: {}, kids: [],
+              classList: { s: new Set(), add(c) { this.s.add(c); }, remove(c) { this.s.delete(c); } },
+              replaceChildren(...k) { this.kids = k;
+                this.textContent = k.map(x => typeof x === "string" ? x : x.textContent).join(""); } });
+            const els = { a: mk() };
+            const $ = (id) => els[id];
+            const set = (id, text) => { const el = $(id);
+              if (el && el.textContent !== text) { el.textContent = text; el.kids = []; } };
+            const document = { createElement: () => mk() };
+            """
+            + src
+            + """
+            const out = [];
+            setPair("a", "Stop ₹338.20 (index 25,311.60)");
+            out.push([els.a.kids.length, els.a.kids[0].textContent, els.a.kids[2].textContent,
+              els.a.kids[2].className, els.a.classList.s.has("sim-two")]);
+            setPair("a", "Stop ₹1,398.00");
+            out.push([els.a.kids.length, els.a.textContent, els.a.classList.s.has("sim-two"),
+              "pair" in els.a.dataset]);
+            setPair("a", "Stop ₹338.20 (index 25,311.60)");
+            out.push([els.a.kids.length, els.a.textContent]);
+            setPair("missing", "x");
+            console.log(JSON.stringify(out));
+            """
+        )
+        assert out == [
+            [3, "Stop ₹338.20", "index 25,311.60", "sim-idx", True],
+            [0, "Stop ₹1,398.00", False, False],
+            [3, "Stop ₹338.20 index 25,311.60"],
+        ]

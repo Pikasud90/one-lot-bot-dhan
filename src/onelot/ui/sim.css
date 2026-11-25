@@ -117,7 +117,14 @@
 
 /* ── the dock ──────────────────────────────────────────────────────── */
 #sim-root .sim-dock{grid-area:dock;display:flex;flex-direction:column;gap:8px;min-height:0;min-width:0;overflow:auto}
-#sim-root .sim-slot{display:flex;flex-direction:column;gap:8px;flex:1 1 auto;min-height:0}
+/* the slot keeps its own height: it never shrinks under the numbers below it (that covered the Close button on a
+   900px window); when both do not fit the numbers give way (sim.js fitDock) and, at the worst, the dock scrolls */
+#sim-root .sim-slot{display:flex;flex-direction:column;gap:8px;flex:0 0 auto;min-height:0}
+@media (min-width:1200px){#sim-root .sim-nums{margin-top:auto}}
+#sim-root .sim-nums[hidden]{display:none}
+/* "Stop Rs 338.20" on the left, "index 25,311.60" quietly on the right: one line each, never wrapped */
+#sim-root .sim-line.sim-two{display:flex;justify-content:space-between;align-items:baseline;gap:10px;white-space:nowrap}
+#sim-root .sim-idx{font:500 14px/1.45 var(--mono);color:var(--muted)}
 #sim-root .sim-card{background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow);padding:14px 16px;min-width:0}
 #sim-root .sim-tagrow{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
 #sim-root .sim-tag{display:inline-block;padding:3px 10px;font:700 14px/1.2 var(--ui);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:var(--panel2);border:1px solid var(--line2)}

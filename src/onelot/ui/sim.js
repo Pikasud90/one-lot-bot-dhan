@@ -68,6 +68,21 @@ const daysNow = (key) => { const d = S.days.get(key); return Array.isArray(d) ? 
 
 /* ── small view helpers ─────────────────────────────────────────────── */
 const set = (id, text) => { const el = $(id); if (el && el.textContent !== text) el.textContent = text; };
+/* "Stop ₹338.20 (index 25,311.60)" as two parts on one line: the premium on the left, the index quietly on the right
+   (the whole sentence wrapped in the 340px dock). A text without an index part, or a bare test element, is set whole. */
+const setPair = (id, text) => {
+  const el = $(id), t = String(text), i = t.indexOf(" (index ");
+  if (!el) return;
+  if (i < 0 || !t.endsWith(")") || !el.classList || !el.dataset || typeof el.replaceChildren !== "function") {
+    if (el.classList) el.classList.remove("sim-two");
+    if (el.dataset) delete el.dataset.pair;
+    set(id, t); return;
+  }
+  if (el.dataset.pair === t) return;
+  const a = document.createElement("span"), b = document.createElement("span");
+  a.textContent = t.slice(0, i); b.className = "sim-idx"; b.textContent = t.slice(i + 2, -1);
+  el.replaceChildren(a, " ", b); el.classList.add("sim-two"); el.dataset.pair = t;
+};
 const show = (id, on) => { const el = $(id); if (el && el.hidden === !!on) el.hidden = !on; };
 const setTone = (id, t) => { const el = $(id); if (el) { el.classList.toggle("pos", t === "pos"); el.classList.toggle("neg", t === "neg"); } };
 function disable(id, why) {
@@ -148,7 +163,25 @@ function fitRoot() {
   root.style.setProperty("--panel-h", pv);
   if (S.chart) requestAnimationFrame(() => S.chart.margins());
 }
-function panelOpen() { return S.view.panel === null ? window.innerHeight >= 800 : !!S.view.panel; }
+/* Until the owner opens or closes it, the panel is open only where the chart keeps a good height beside it: on a
+   laptop-height window (under 960px) it starts closed, so the chart is about 610px at 1440x900 and not 480px. */
+function panelOpen() { return S.view.panel === null ? window.innerHeight >= 960 : !!S.view.panel; }
+/* The dock on a wide screen: the ticket or the open trade is never covered. When both cards do not fit, the session's
+   numbers give way (they are also in the panel's Numbers tab); the slot's and the dock's sizes call this. */
+function fitDock() {
+  const dock = $("sim-dock"), slot = $("sim-slot"), nums = $("sim-nums");
+  if (!dock || !slot || !nums) return;
+  if (phone() || window.innerWidth < 1200) { if (nums.hidden) nums.hidden = false; return; }
+  if (!nums.hidden && nums.offsetHeight) nums.dataset.h = String(nums.offsetHeight);
+  const hide = dock.clientHeight - slot.offsetHeight - 8 < (Number(nums.dataset.h) || 118);
+  if (nums.hidden !== hide) nums.hidden = hide;
+}
+/* The day button names the day the replay clock is in (it named the day the session began until that day ended). */
+function followDay() {
+  if (live() || !S.sess || S.drawn === null) return;
+  const d = C.isoOf(S.drawn).slice(0, 10);
+  if (d !== S.choice.day) { S.choice.day = d; saveChoice(); }
+}
 function renderPanelOpen() {
   const open = panelOpen();
   $("sim-root").dataset.panel = open ? "open" : "closed";
@@ -873,7 +906,7 @@ function renderPositionLive() {
   if (m.pending) { set("sim-ps-mins", ""); return; }
   set("sim-ps-pnl", m.pnl); setTone("sim-ps-pnl", m.pnlTone); set("sim-ps-pct", m.pct); set("sim-ps-r", m.r);
   set("sim-ps-inout", m.inOut); set("sim-ps-index", m.index); set("sim-ps-stage", m.stage);
-  set("sim-ps-stop", m.stop); set("sim-ps-target", m.target); set("sim-ps-mins", m.minutes); set("sim-ps-way", m.way);
+  setPair("sim-ps-stop", m.stop); setPair("sim-ps-target", m.target); set("sim-ps-mins", m.minutes); set("sim-ps-way", m.way);
   const at = (id, pct) => { const el = $(id); el.hidden = pct === null; if (pct !== null) el.style.left = pct.toFixed(1) + "%"; };
   at("sim-ps-mprice", m.bar.price); at("sim-ps-mstop", m.bar.stop); at("sim-ps-mentry", m.bar.entry);
   at("sim-ps-t25", m.bar.ticks[0]); at("sim-ps-t50", m.bar.ticks[1]); at("sim-ps-t80", m.bar.ticks[2]);
@@ -1001,6 +1034,7 @@ async function showTradesView(v) {
 
 /* ── everything that depends on the state, not per frame ────────────── */
 function renderAll() {
+  followDay();
   renderPlay(); renderClock(); renderDock(); renderDay();
   disable("sim-inst", S.offline ? "The engine is not running" : null);
 }
@@ -1223,6 +1257,8 @@ function wire() {
   if (typeof ResizeObserver === "function") {
     const ro = new ResizeObserver(() => requestAnimationFrame(fitRoot));
     [document.querySelector("header.top"), $("warnings")].forEach(el => { if (el) ro.observe(el); });   // not the root: fitRoot resizes it (R9)
+    const rd = new ResizeObserver(() => fitDock());   // at once (a late frame left the Close button covered for a moment)
+    [$("sim-dock"), $("sim-slot")].forEach(el => { if (el) rd.observe(el); });
   }
   new MutationObserver(() => { if (S.chart) { S.chart.theme(); resetLegendLines(); renderLegend(); } }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 }
