@@ -80,6 +80,9 @@ REQUEST_GAP_S = 0.5
 FETCH_DAYS = 45
 #: a fetched close this far from the stored one on the overlap means a re-based history
 ADJUST_LIMIT = 0.005
+#: one session's fall (the close or the open against the close before) beyond this reads as a
+#: corporate action the broker may have left unadjusted (a 1:4 bonus is -20%, a 1:1 split -50%)
+JUMP_LIMIT = 0.15
 #: where a whole-history refetch starts (the study's first day)
 FULL_FROM = dt.date(2010, 1, 1)
 #: an alert no channel accepted is tried again after this long
@@ -298,6 +301,13 @@ class WideBook:
             dp_paise=r.dp_paise, net_paise=r.net_paise, net_pct=r.net_pct,
         )  # fmt: skip
 
+    def rescale(self, t: WideTrade, now: dt.datetime, **values: Any) -> bool:
+        """A re-based history: the trade's prices (and size) on the new basis, status kept."""
+        return self._cas(t.id, (t.status,), now, **values)
+
+    def set_note(self, t: WideTrade, note: str, now: dt.datetime) -> bool:
+        return self._cas(t.id, (t.status,), now, note=note[:500])
+
     def mark_told(self, trade_id: int, which: str, now: dt.datetime) -> None:
         col = {"entry": "entry_told_at", "exit": "exit_told_at"}[which]
         with self.engine.begin() as conn:
@@ -512,7 +522,7 @@ class WideDesk:
         self.note: str | None = None
         self.errors = 0
         self.requests = 0  # broker requests made: for the tests and the round's note
-        self._summary: tuple[tuple[int, int | None], dict[str, Any]] | None = None
+        self._summary: tuple[tuple[Any, ...], dict[str, Any]] | None = None
 
     # ── when a round runs ────────────────────────────────────────────────────
     def session_for(self, now: dt.datetime) -> dt.date | None:
@@ -545,6 +555,11 @@ class WideDesk:
         if row is not None and (row["finished_at"] is not None or int(row["tries"]) >= ROUND_TRIES):
             return
         if self._last_try is not None and now - self._last_try < ROUND_GAP:
+            return
+        if self._fetch is not None and self._source is None and not self._can_fetch():
+            # never a round on the stored bars alone while a broker is configured: it would
+            # close the session with no new bar and no try left when the Data API comes back
+            self.note = "no Dhan data now (the Data API is off): the evening round waits for it"
             return
         if not self._can_fetch() and self._source is None and not self._store_has_bars():
             self.note = "no daily bars of the wide list in the store and no Dhan data"
@@ -614,9 +629,15 @@ class WideDesk:
         summary: dict[str, Any] = {
             "session": s.isoformat(), "stocks": len(self.stocks), "fetched": 0, "refetched": [],
             "stale": [], "errors": [], "waiting": [], "scanned": 0, "signals": 0, "alerted": 0,
-            "recorded": 0, "late": 0, "exits": 0, "note": None,
+            "recorded": 0, "late": 0, "exits": 0, "held": [], "jumps": [], "rebased": [],
+            "note": None,
         }  # fmt: skip
         fetching = self._can_fetch()
+        if self._fetch is not None and self._source is None and not fetching:
+            # a broker is configured but its Data API is off (a token expired, the adapter not
+            # built yet): nothing is read and nothing is finished; the round runs when it is on
+            self.note = "no Dhan data now (the Data API is off): the evening round waits for it"
+            return RoundResult(s, False, {"session": s.isoformat(), "note": self.note})
         if fetching:
             self._fetch_all(s, now, summary, stop)
         elif self._source is None:
@@ -627,7 +648,7 @@ class WideDesk:
         nifty = self._nifty(now)
         if nifty is None or not len(nifty[0]) or nifty[0][-1] < s:
             summary["note"] = f"waiting for NIFTY's session of {s}"
-            self.book.save_round(s, started, tries, summary, None)
+            self.book.save_round(s, started, tries - 1, summary, None)  # not a try of its own
             self.note = summary["note"]
             return RoundResult(s, False, summary)
         self._evaluate(s, days, nifty, states, now, summary)
@@ -635,7 +656,7 @@ class WideDesk:
             prev = dict(row["summary"] or {})
             for k in ("signals", "alerted", "recorded", "late", "exits", "fetched", "scanned"):
                 summary[k] += int(prev.get(k) or 0)  # each stock is read once a session
-            for k in ("refetched", "errors"):
+            for k in ("refetched", "errors", "held", "jumps", "rebased"):
                 summary[k] = [*list(prev.get(k) or []), *summary[k]][-50:]
         waiting = [
             k for k, d in days.items() if d.index_of(s) is None and k not in summary["stale"]
@@ -699,24 +720,27 @@ class WideDesk:
         if stock.key.upper() in self.protected:
             raise ValueError(f"{stock.key} is a desk instrument: the round never writes it")
         stored = self._stored(stock.key)
-        full = len(stored) < self.floor
+        full = not len(stored)  # the whole history only when none is stored (or it disagrees)
+        rebased = False
         got: pd.DataFrame | None = None
         if not full:
             self._pace()
             got = self._fetch(stock, s - dt.timedelta(days=FETCH_DAYS), s)  # type: ignore[misc]
             if _disagrees(stored, got):
-                full = True
+                full = rebased = True
         if full:
             self._pace()
             try:
                 whole = self._fetch(stock, FULL_FROM, s)  # type: ignore[misc]
             except Exception:
-                if len(stored) >= self.floor:
+                if len(stored):
                     log.warning("wide list: %s disagrees and its refetch failed", stock.key)
                     return "stale"
                 raise
+            # an active trade of the stock is put on the new basis in its next reading
+            # (`_rebase`, from the bars themselves: safe across a restart at any point)
             self._replace(stock.key, whole)
-            outcome = "refetched" if len(stored) else "ok"
+            outcome = "refetched" if rebased else "ok"
             got = whole
         else:
             self._save(stock.key, got)
@@ -840,6 +864,8 @@ class WideDesk:
         c = sd.close[: i + 1]
         t = self.book.active().get(key)
         reading: dict[str, Any] = {"session": d.isoformat()}
+        if t is not None:
+            t = self._rebase(t, sd, i, now, summary)
         if t is not None and t.status == PENDING_ENTRY and t.signal_date < d:
             self.book.fill_entry(t, d, entry_fill(float(sd.open[i]), p), now)
             t = self.book.active().get(key)
@@ -852,7 +878,19 @@ class WideDesk:
             if e is not None and e <= i and t.entry_paise is not None:
                 r = exit_reading(c, e, t.entry_paise / 100, i, p)
                 reading["trade"] = {"sessions": r.sessions, "reasons": list(r.reasons)}
-                if r.hit and self.book.signal_exit(t, d, r.reasons, r.sessions, now):
+                jump = _jump(sd, e + 1, i)
+                if r.hit and jump is not None:
+                    # a price jump since the entry may be an action the broker left unadjusted:
+                    # the exit is held for the owner (never a false STOP alert)
+                    held = (
+                        f"exit held for review: the price moved {jump[1] * 100:+.1f}% on "
+                        f"{jump[0]:%d %b %Y} (a split or bonus not adjusted?)"
+                    )
+                    reading["trade"]["held"] = held
+                    summary.setdefault("held", []).append(key)
+                    if t.note != held:
+                        self.book.set_note(t, held, now)
+                elif r.hit and self.book.signal_exit(t, d, r.reasons, r.sessions, now):
                     summary["exits"] += 1
         if t is not None:
             reading["busy"] = True
@@ -860,6 +898,14 @@ class WideDesk:
         lo = max(0, i + 1 - self.floor)
         window = RuleHistory(sd.hist.days.iloc[lo : i + 1], bad=sd.hist.bad)
         why = problem(window, d, self.calendar, self.floor)
+        if why is None:
+            jump = _jump(sd, max(1, i + 1 - p.high_lookback), i)
+            if jump is not None:
+                why = (
+                    f"the price moved {jump[1] * 100:+.1f}% on {jump[0]:%d %b %Y}: a split or "
+                    f"bonus not adjusted? No entry is read across it"
+                )
+                summary.setdefault("jumps", []).append(key)
         if why is not None:
             reading["entry_blocked"] = why
             return None, reading
@@ -871,6 +917,42 @@ class WideDesk:
             return None, reading
         depth = float(er.below_high_pct or 0.0)
         return _Candidate(self.stocks[key], d, float(c[-1]), depth, reading), reading
+
+    def _rebase(
+        self, t: WideTrade, sd: StockDays, i: int, now: dt.datetime, summary: dict[str, Any]
+    ) -> WideTrade | None:
+        """An active trade put on the basis of the bars it is read on. When the broker re-based
+        the history (a split, a bonus) after the signal or the fill, the booked signal close or
+        entry fill no longer matches its own bar: they are rescaled by that ratio (the share count
+        of a filled trade by its inverse, as the owner's holding is), so the stop is read on the
+        same basis as the closes. Idempotent: once rescaled, they match."""
+        p = self.params
+        j = sd.index_of(t.signal_date)
+        if j is None or j > i or sd.close[j] <= 0 or t.signal_close <= 0:
+            return t
+        r_sig = float(sd.close[j]) / t.signal_close
+        values: dict[str, Any] = {}
+        r_ent = 1.0
+        if t.entry_session is not None and t.entry_paise:
+            e = sd.index_of(t.entry_session)
+            if e is not None and e <= i and sd.open[e] > 0:
+                r_ent = entry_fill(float(sd.open[e]), p) * 100 / t.entry_paise
+        if abs(r_sig - 1.0) > ADJUST_LIMIT:
+            values["signal_close"] = float(sd.close[j])
+        if abs(r_ent - 1.0) > ADJUST_LIMIT:
+            values["entry_paise"] = int(round(t.entry_paise * r_ent))  # type: ignore[operator]
+            values["qty"] = max(1, int(round(t.qty / r_ent)))
+        if not values:
+            return t
+        ratio = r_ent if "entry_paise" in values else r_sig
+        values["note"] = (
+            f"history re-based by the broker (x{ratio:.4f}): the trade was put on the new basis "
+            f"on {now:%d %b %Y}" + (f"; {t.note}" if t.note else "")
+        )[:500]
+        if self.book.rescale(t, now, **values):
+            summary.setdefault("rebased", []).append(t.series_key)
+            log.warning("wide list: %s re-based x%.4f: its trade rescaled", t.series_key, ratio)
+        return self.book.active().get(t.series_key)
 
     def _admit(
         self,
@@ -1015,7 +1097,8 @@ class WideDesk:
         """The compact block of the desk's snapshot, rebuilt only after a write."""
         desk = self._desk_count_quiet()
         hit = self._summary
-        if hit is not None and hit[0] == (self.book.version, desk):
+        key = (self.book.version, desk, self.note, self.errors)
+        if hit is not None and hit[0] == key:
             return dict(hit[1])
         active = self.book.active_now()
         last = self.book.last_round()
@@ -1038,7 +1121,7 @@ class WideDesk:
             "note": self.note,
             "errors": self.errors,
         }
-        self._summary = ((self.book.version, desk), out)
+        self._summary = (key, out)
         return dict(out)
 
     def _desk_count_quiet(self) -> int | None:
@@ -1124,6 +1207,9 @@ def _round_view(row: Mapping[str, Any] | None) -> dict[str, Any] | None:
         "fetched": s.get("fetched"),
         "stale": list(s.get("stale") or []),
         "refetched": list(s.get("refetched") or []),
+        "rebased": list(s.get("rebased") or []),
+        "held": sorted(set(s.get("held") or [])),
+        "jumps": sorted(set(s.get("jumps") or [])),
         "errors": list(s.get("errors") or [])[:10],
         "error_count": len(s.get("errors") or []),
         "waiting": list(s.get("waiting") or [])[:10],
@@ -1134,6 +1220,24 @@ def _round_view(row: Mapping[str, Any] | None) -> dict[str, Any] | None:
         "exits": s.get("exits"),
         "note": s.get("note"),
     }
+
+
+def _jump(sd: StockDays, lo: int, hi: int) -> tuple[dt.date, float] | None:
+    """The deepest one-session FALL beyond `JUMP_LIMIT` on sessions lo to hi (the lower of the
+    close and the open against the close before), as (session, change), or None. Only a fall:
+    a split or a bonus left unadjusted lowers the price, and a rise is never a false pullback."""
+    lo = max(1, lo)
+    if hi < lo:
+        return None
+    prev = sd.close[lo - 1 : hi]
+    low = np.minimum(sd.close[lo : hi + 1], sd.open[lo : hi + 1])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        moves = low / prev - 1.0
+    moves = np.where(np.isfinite(moves) & (prev > 0), moves, 0.0)
+    k = int(np.argmin(moves))
+    if moves[k] >= -JUMP_LIMIT:
+        return None
+    return sd.dates[lo + k], float(moves[k])
 
 
 def _utc(t: Any) -> dt.datetime:
