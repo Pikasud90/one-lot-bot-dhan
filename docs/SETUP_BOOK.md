@@ -36,14 +36,22 @@ to trade, and a backtest is not a promise.
 **No setup has passed yet.** 41 rows are in the register: 0 CANDIDATE,
 6 WATCH, 7 AVOID, 28 REJECTED.
 
-**The best so far: the stock pullback rule, as a delivery trade (WATCH).** Buy a large stock
-that has fallen 8% from its 20-session high while it and NIFTY are above their 200-session
-averages; sell above the 20-session average, after 30 sessions, or at a 15% stop.
+**The best so far, and not an edge: the stock pullback rule, as a delivery trade (WATCH on its
+own result; no edge shown against the same stocks held).** Buy a large stock that has fallen
+8% from its 20-session high while it and NIFTY are above their 200-session averages; sell
+above the 20-session average, after 30 sessions, or at a 15% stop.
+
+The short version after the two studies of 25 November: the rule makes money because the
+stocks rose. After costs it earned a little less than the same stocks simply held on the same
+days, and a book of ten such trades did not beat NIFTY held. It stays on the desk as a paper
+test only; nothing here supports real money.
 - It has now been positive on three sets of stocks: the 18 desk stocks, 43 other large stocks,
   and 161 stocks nobody had looked at (+0.81% a trade after costs, 6,102 trades since 2010,
   68% winners, t 4.2; all 222 together +0.79 / +0.20 / +1.25).
 - Honest size of the edge: about +0.6% of that is what ANY entry in those stocks in those
-  years earned (they are survivors in rising years). The rule's own timing adds +0.2% to +0.3%.
+  years earned (they are survivors in rising years). Against random dates the rule's timing
+  added +0.2% to +0.3%; against the same stocks held over the same days it is +0.34% before
+  costs and −0.16% after them (US-101, below).
 - It missed CANDIDATE because the middle period had few trades and a small result (t 0.2).
 - Living with it: about 10 alerts a week on 222 stocks; taking every signal needed up to
   Rs 13.4 lakh at the worst moment (March 2020), so a cap on open trades is needed.
@@ -129,7 +137,7 @@ each `_2026-11-24.md`); earlier work is listed in `STRATEGIES_TESTED_2026-11-12.
 
 | Instrument | Kind | Setup and preset | Timeframe | Condition | Exit | Trades a year | % a trade TUNE / CHOOSE / TEST (t whole span) | Real-premium or cost note | Status | Remark | Study |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 222 stocks | stock delivery | P1 pullback 8% | 1d | NIFTY above SMA200 | own (SMA20, 30 sessions, 15% stop) | 504 | +0.79 / +0.20 / +1.25 (4.0) | Rs 10,000, 0.50% round trip, DP included | WATCH | Positive in all periods, beats random dates; CHOOSE t 0.2 misses the confirm step. As a book of Rs 1 lakh with 10 places (US-100): +0.12 / +0.23 / +0.71 a trade (t 0.9), +1.64% a year, behind the 222-stock basket at the same exposure by −3.59% a year, borderline (interval −7.25 to −0.04 with the fixed seed, crossing zero with most other seeds; costs Rs 1.23 lakh exceed the gap); held trades +0.14, refused by the cap +1.09, because quiet-evening signals fill the places, not because the cap drops an evening's better signals | delivery, 222 stocks; pullback book |
+| 222 stocks | stock delivery | P1 pullback 8% | 1d | NIFTY above SMA200 | own (SMA20, 30 sessions, 15% stop) | 504 | +0.79 / +0.20 / +1.25 (4.0) | Rs 10,000, 0.51% round trip, DP included | WATCH | Positive in all periods, beats random dates; CHOOSE t 0.2 misses the confirm step. As a book of Rs 1 lakh with 10 places (US-100): +0.12 / +0.23 / +0.71 a trade (t 0.9), +1.64% a year, behind the 222-stock basket at the same exposure by −3.59% a year, borderline (interval −7.25 to −0.04 with the fixed seed, crossing zero with most other seeds; costs Rs 1.23 lakh exceed the gap); held trades +0.14, refused by the cap +1.09, because quiet-evening signals fill the places, not because the cap drops an evening's better signals | delivery, 222 stocks; pullback book |
 | 161 new stocks | stock delivery | P1 pullback 8% | 1d | NIFTY above SMA200 | own | 380 | +0.83 / +0.10 / +1.19 (4.2) | as above | WATCH | Clean out-of-sample test; works in rising years, loses in 2011, 2013, 2018, 2019; flat in CHOOSE. The book reading above holds for the whole list, not this group alone | delivery, 222 stocks |
 | NIFTY | option same-day | cpr_breakout low | 60m | after an active session | desk rule | 20 | +3.75 / +1.20 / +2.00 (+2.6) | model; less 1 point +2.09 | WATCH | thin: 14 and 17 trades in CHOOSE and TEST | setup grid |
 | SENSEX | option same-day | supertrend_mtf default | 30m | VIX below its median | desk rule | 36 | +3.26 / +1.05 / +1.13 (+2.2) | model; live spreads wide | WATCH | spread of 1.5% a side would take it | setup grid |
@@ -153,7 +161,7 @@ each `_2026-11-24.md`); earlier work is listed in `STRATEGIES_TESTED_2026-11-12.
 | 4 indices, pool | option same-day | S5 call after VIX-UP | 1m | VIX rose over 5% | ratchet, 15:15 | 140 | +1.49 / −3.20 / +0.85 (+0.5) | real −0.27 | REJECTED | TUNE t +0.8 | option setups |
 | 4 indices, pool | option same-day | S5 put after VIX-DOWN | 1m | VIX fell over 5% | ratchet, 15:15 | 120 | −2.15 / −6.82 / +0.03 (−1.9) | real −3.40 | REJECTED | falls after VIX drops are not there | option setups |
 | 4 indices, pool | option same-day | S6 high turnover first half hour | 1m | ratio over 1.2 | ratchet, 15:15 | 270 | +0.43 / −1.02 / −3.25 (−0.9) | real −1.62 | REJECTED | bigger range, no direction | option setups |
-| 222 stocks | stock delivery | P1 pullback 8% | 1d | 10 or more signals that evening (broad dip) | own | 188 | EXCESS over the basket −0.05 / −0.47 / +0.75 (10 to 19), +0.28 / none / none (20 or more); RAW +3.40 TUNE | 0.50% round trip; basket without costs | REJECTED | Most of the broad-dip gain is the basket's (RAW +3.40, basket +3.13 over the same days); before costs +0.79 over it (t +4.6), after the 0.51% costs +0.28 (t 1.6); 2 broad evenings after TUNE; a book of such evenings less B3 −0.01% a year [−2.31 to +2.26] | pullback conditions |
+| 222 stocks | stock delivery | P1 pullback 8% | 1d | 10 or more signals that evening (broad dip) | own | 188 | EXCESS over the basket −0.05 / −0.47 / +0.75 (10 to 19), +0.28 / none / none (20 or more); RAW +3.40 TUNE | 0.51% round trip; basket without costs | REJECTED | Most of the broad-dip gain is the basket's (RAW +3.40, basket +3.13 over the same days); before costs +0.79 over it (t +4.6), after the 0.51% costs +0.28 (t 1.6); 2 broad evenings after TUNE; a book of such evenings less B3 −0.01% a year [−2.31 to +2.26] | pullback conditions |
 | 222 stocks | stock delivery | P1 pullback 8% | 1d | 1 to 2 signals that evening (quiet) | own | 95 | EXCESS −0.40 / −0.95 / +1.02 (−2.6) | as above | REJECTED | Not an AVOID: TUNE t −2.47 and positive in TEST; a book that skips quiet evenings is behind US-100's book in TEST | pullback conditions |
 | 222 stocks | stock delivery | P1 pullback 8% | 1d | NIFTY 2% or more below its 20-session high | own | 267 | EXCESS −0.08 / −1.42 / +1.90 (2 to 4%), +0.00 / −1.27 / +0.74 (4% or more) | as above | REJECTED | No excess in TUNE; the book of such evenings is behind B2 and B3 in CHOOSE; its TEST evenings all fall in January 2026 | pullback conditions |
 | 222 stocks | stock delivery | P1 pullback 8% | 1d | India VIX over its 60-session median, four bands | own | 45 to 270 | best TUNE EXCESS −0.19 (1.1 to 1.3) | as above | REJECTED | No VIX band beats the basket in TUNE; from March 2017 only | pullback conditions |
@@ -198,11 +206,15 @@ each `_2026-11-24.md`); earlier work is listed in `STRATEGIES_TESTED_2026-11-12.
 2. Real put prices from the broker's history, to settle the long-volatility question and to
    price the Simulator's put trades exactly.
 3. The four WATCH option cells, followed on paper with real quotes for three months.
-4. Whether option alerts should be kept to NIFTY and BANKNIFTY until the spreads on FINNIFTY
-   and SENSEX are measured over more sessions (the owner's rule says four indices).
+4. Decided on 25 November: the four indices stay (the owner's rule). Each option alert now
+   carries its live spread and warns from 1% a side, so the spreads on FINNIFTY and SENSEX are
+   measured on every alert (US-097).
 
 ## 7. Changes
 
+- 2026-11-25 (lead, after both studies): the pullback rule's headline in section 2 now says in
+  plain words what they found (no edge against the same stocks held; a paper test only); item 4
+  of section 6 records the owner's decision on the four indices.
 - 2026-11-25: the pullback rule by market condition (US-101): 13 cells, none discovered on the
   excess over the basket, none AVOID; three books that wait for broad or deep evenings or skip
   quiet ones, none ahead beyond chance; no change to the wide list. Four REJECTED headline rows in
