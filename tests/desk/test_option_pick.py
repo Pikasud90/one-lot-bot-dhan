@@ -287,8 +287,8 @@ def test_t6_the_desk_falls_back_to_the_model_and_says_why_first(app_cfg, db, mon
     assert eco.synthetic is True
     assert eco.notes[0] == NO_TRADEABLE_NOTE
     assert NO_TRADEABLE_NOTE == (
-        "no tradeable contract in the live chain (no open interest or no two-sided quote): "
-        "the premium is the model's estimate"
+        "no tradeable contract in the live chain (no open interest, no two-sided quote or too "
+        "wide a spread): the strike and the premium are the model's estimate"
     )
 
 
