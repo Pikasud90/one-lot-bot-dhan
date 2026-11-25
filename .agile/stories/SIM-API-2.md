@@ -159,7 +159,7 @@ page (US-094) and the join (a third agent) can rely on these.
    `"status": "building"` and the page asks again (it polls every second). `ms` is the time so
    far while building, the build's own time once ready. A bad instrument, strategy or timeframe
    is a 400, as for a create. It writes nothing.
-6. A session that is not in memory (a restart, or one of the oldest four left memory) is read
+6. A session that is not in memory (a restart, or it left memory: four built ones are kept) is read
    from its stored row at once: status BUILDING with its stored trades, summary and last
    events and the candles to its stored cursor, while it is rebuilt; RUNNING as soon as the
    rebuild is done (in the same answer when its frames are kept). Actions on it are a 409 until
