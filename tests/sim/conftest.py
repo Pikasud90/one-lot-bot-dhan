@@ -13,6 +13,7 @@ import pytest
 
 from onelot.clock import IST
 from onelot.sim import engine as sim_engine
+from onelot.sim import manager as sim_manager
 from onelot.sim.manager import SimManager, default_deps
 
 MIN = pd.Timedelta(minutes=1)
@@ -98,6 +99,13 @@ class MemBars:
         if df is None or df.empty:
             return None
         return pd.Timestamp(df.index[0]), pd.Timestamp(df.index[-1])
+
+
+@pytest.fixture(autouse=True)
+def inline_builds(monkeypatch):
+    """Sessions are built in the request in these tests (the app builds them in its worker;
+    `tests/sim/test_async_build.py` tests that path with `build="thread"`)."""
+    monkeypatch.setattr(sim_manager, "BUILD_MODE", "inline")
 
 
 @pytest.fixture
