@@ -880,3 +880,12 @@ class TestStatic:
             assert "innerHTML" not in part
         log = re.search(r"function logEvent\(ev, restoring\) \{.*?\n\}", js, re.S).group(0)
         assert "appendChild" in log and "innerHTML" not in log
+
+    def test_a_switch_veils_and_clears_at_once_and_reads_the_days_beside_the_candles(self):
+        # the owner's second bug: the old picture must not wait for the new instrument's days (one more round trip)
+        js = SIM_JS.read_text("utf-8")
+        choose = re.search(r"async function choose\(patch, opts = \{\}\) \{.*?\n\}", js, re.S).group(0)
+        assert choose.index("loadPicture()") < choose.index("await daysOf(")
+        load = re.search(r"async function loadPicture\(\) \{.*?\n\}", js, re.S).group(0)
+        first_await = load.index("await ")
+        assert load.index("S.chart.reset()") < first_await and load.index("veil(`Loading") < first_await

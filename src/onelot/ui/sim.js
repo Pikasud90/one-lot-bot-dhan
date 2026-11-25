@@ -408,18 +408,24 @@ async function choose(patch, opts = {}) {
   dropSession();
   Object.assign(S.choice, patch);
   settleChoice();
-  const days = await daysOf(S.choice.instrument);
-  if (keepClock && S.drawn !== null) {
-    S.startIso = C.isoOf(S.drawn + 60);
-    S.choice.day = S.startIso.slice(0, 10);
-  } else {
-    if (opts.random) S.hidden = !!S.view.hideDate; else if (patch.day || patch.instrument || patch.mode) S.hidden = false;
-    S.choice.day = C.snapDay(days, S.choice.day);
-    S.startIso = live() ? null : C.startIsoOf(S.choice.day);
-  }
+  if (!keepClock) { if (opts.random) S.hidden = !!S.view.hideDate; else if (patch.day || patch.instrument || patch.mode) S.hidden = false; }
   if (S.chart) S.chart.hideDates(S.hidden);
+  // The switch is instant: the old picture goes and the veil comes in this same task. When the new instrument's days are
+  // not known yet they are read IN PARALLEL with the candles (the chosen day is the guess); a day the store lacks is
+  // corrected when they arrive (one more candles read, only then).
+  const known = keepClock ? null : daysNow(S.choice.instrument);
+  const place = (days) => { S.choice.day = C.snapDay(days, S.choice.day); S.startIso = live() ? null : C.startIsoOf(S.choice.day); };
+  if (keepClock && S.drawn !== null) { S.startIso = C.isoOf(S.drawn + 60); S.choice.day = S.startIso.slice(0, 10); }
+  else if (known) place(known);
+  else S.startIso = live() || !S.choice.day ? null : C.startIsoOf(S.choice.day);
   saveChoice(); renderChoice();
-  await loadPicture();
+  const pic = loadPicture(), my = S.req, guess = S.choice.day;
+  if (keepClock || known) { await pic; prepare(); return; }
+  const days = await daysOf(S.choice.instrument);
+  if (my !== S.req) return;
+  place(days);
+  saveChoice(); renderDay();
+  if (S.choice.day !== guess) await loadPicture(); else await pic;
   prepare();
 }
 
