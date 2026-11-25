@@ -31,8 +31,8 @@ from typing import Any
 import numpy as np
 import pandas as pd  # type: ignore[import-untyped]
 
-from ..clock import IST, now_ist
 from .. import settings as _settings
+from ..clock import IST, now_ist
 from ..config import PROJECT_ROOT, BacktestCfg
 from ..costs import CostModel
 from ..data.expired_options import OptionBarStore, Underlying
