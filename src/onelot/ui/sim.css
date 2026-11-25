@@ -319,9 +319,9 @@
   #sim-root .sim-strip{order:1;flex-direction:column;align-items:stretch;flex-wrap:nowrap;gap:6px;padding:6px}
   #sim-root .sim-row1{display:block}
   #sim-root .sim-g-choose{flex-wrap:wrap;gap:6px}
-  #sim-root .sim-sel-inst,#sim-root .sim-sel-strat{flex:1 1 0;max-width:none;min-width:0}
+  #sim-root .sim-sel-inst,#sim-root .sim-sel-strat{flex:1 1 34%;max-width:none;min-width:0}
   #sim-root .sim-sel-tf{flex:0 0 76px}
-  #sim-root .sim-date{flex:1 1 auto;min-width:0}
+  #sim-root .sim-date{flex:1 1 200px;min-width:0}
   #sim-root .sim-daybtn{flex:1 1 auto;min-width:0;padding:0 6px}
   #sim-root .sim-g-play{justify-content:flex-start;gap:6px}
   #sim-root .sim-sel,#sim-root .sim-daybtn{height:44px}
