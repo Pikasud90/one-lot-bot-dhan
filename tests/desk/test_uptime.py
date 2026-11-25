@@ -122,7 +122,7 @@ def test_the_cover_of_a_month_with_a_holiday_a_missed_day_and_a_late_start(db) -
 def test_today_counts_the_session_so_far_and_is_not_finished(db) -> None:
     rec = recorder(db)
     run(rec, at(23, "09:00"), at(23, "12:15"))
-    (today,) = [c for c in coverage(db.engine, CLOCK, CAL.is_trading_day, at(23, "12:15"), days=1)]
+    (today,) = list(coverage(db.engine, CLOCK, CAL.is_trading_day, at(23, "12:15"), days=1))
     d = today.as_dict()
     assert d["finished"] is False and d["missed"] is False
     assert d["share"] == pytest.approx(1.0, abs=0.01)
