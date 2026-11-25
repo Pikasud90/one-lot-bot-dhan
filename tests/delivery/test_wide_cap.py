@@ -38,9 +38,7 @@ def run(w, first: int, last: int, rec: Recorder | None = None) -> None:
 
 def test_the_cap_takes_the_desk_group_first_then_the_deepest_and_records_the_rest():
     depths = {"D00": 0.085, **{f"N{i:02d}": 0.085 + 0.005 * i for i in range(1, 11)}}
-    frames = {
-        k: frame(DATES, closes([(SIG, -d), (SIG + 1, 0.03)], N)) for k, d in depths.items()
-    }
+    frames = {k: frame(DATES, closes([(SIG, -d), (SIG + 1, 0.03)], N)) for k, d in depths.items()}
     stocks = [stock("D00", "desk")] + [stock(k) for k in depths if k != "D00"]
     rec = Recorder()
     w = wide_desk(stocks, DATES, source=source_of(frames), cap_open=10, notifier=rec)
@@ -114,9 +112,7 @@ def test_a_desk_count_that_cannot_be_read_counts_the_cap_as_full():
         raise RuntimeError("no table")
 
     rec = Recorder()
-    w = wide_desk(
-        [stock("AAA")], DATES, source=source_of(frames), notifier=rec, desk_active=broken
-    )
+    w = wide_desk([stock("AAA")], DATES, source=source_of(frames), notifier=rec, desk_active=broken)
     run(w, SIG - 1, SIG + 1)
     (t,) = w.book.all()
     assert t.tier == "test" and rec.sent == []

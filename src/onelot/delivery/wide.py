@@ -746,7 +746,18 @@ class WideDesk:
         if self._source is not None:
             return dict(self._source(keys))
         out: dict[str, StockDays] = {}
+        with self.engine.connect() as conn:  # one read for which stocks have daily bars
+            have = {
+                str(k)
+                for (k,) in conn.execute(
+                    select(bars.c.series_key)
+                    .where(bars.c.resolution == "1d", bars.c.series_key.in_(list(keys)))
+                    .distinct()
+                )
+            }
         for k in keys:
+            if k not in have:
+                continue
             try:
                 frame = self._stored(k)
                 if len(frame):

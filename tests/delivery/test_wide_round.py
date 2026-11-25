@@ -59,7 +59,9 @@ def three_exits() -> dict[str, pd.DataFrame]:
 
 def rows(engine, table):
     with engine.connect() as conn:
-        return [dict(r) for r in conn.execute(select(table).order_by(*table.primary_key)).mappings()]
+        return [
+            dict(r) for r in conn.execute(select(table).order_by(*table.primary_key)).mappings()
+        ]
 
 
 def test_a_signal_fills_next_session_and_exits_by_each_of_the_three_exits(tmp_path):
@@ -84,7 +86,12 @@ def test_a_signal_fills_next_session_and_exits_by_each_of_the_three_exits(tmp_pa
     assert set(trades) == {"AAA", "BBB", "CCC"}
     for k, t in trades.items():
         c = frames[k]["close"].to_numpy(float)
-        assert (t.status, t.tier, t.late, t.signal_date) == ("PENDING_ENTRY", "cap", False, DATES[SIG])
+        assert (t.status, t.tier, t.late, t.signal_date) == (
+            "PENDING_ENTRY",
+            "cap",
+            False,
+            DATES[SIG],
+        )
         assert t.qty == quantity(float(c[SIG]), 10000)
     assert sorted(rec.titles()) == sorted(
         f"BUY {trades[k].qty} shares of {k} Ltd at the next open · pullback 1d (delivery, wide list)"
@@ -96,7 +103,12 @@ def test_a_signal_fills_next_session_and_exits_by_each_of_the_three_exits(tmp_pa
     w.maybe_round(at(DATES[SIG], "19:00"))
     w.run_round(at(DATES[SIG], "19:30"), DATES[SIG])
     w.tell(at(DATES[SIG], "19:40"))
-    assert (rows(eng, wide_trades), rows(eng, wide_state), len(broker.calls), len(rec.sent)) == before
+    assert (
+        rows(eng, wide_trades),
+        rows(eng, wide_state),
+        len(broker.calls),
+        len(rec.sent),
+    ) == before
 
     # pacing: never two requests within half a second
     gaps = np.diff(broker.times)
