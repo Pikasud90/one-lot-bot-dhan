@@ -171,6 +171,8 @@ h3{font:20px/1 var(--display);letter-spacing:.07em;margin:18px 0 10px;color:var(
 .kv span:last-child{font-family:var(--mono);text-align:right;font-weight:600}
 .hint{font-size:14px;color:var(--muted);margin-top:5px}
 .warnbar{background:var(--warn-bg);color:var(--warn);padding:12px 14px;margin-bottom:14px;font-size:14.5px;border-left:4px solid var(--warn)}
+.build-bar{display:flex;gap:12px;align-items:center;justify-content:center;margin-bottom:0}
+.build-bar[hidden]{display:none}
 .warnbar ul{margin:6px 0 0;padding-left:20px}
 .notice{background:var(--cyan-bg);border-left:4px solid var(--cyan);padding:12px 14px;margin-bottom:14px;font-size:14.5px}
 .foot{margin-top:24px;color:var(--dim);font-size:14px;text-align:center}
