@@ -260,3 +260,33 @@ def test_a_stored_session_is_read_from_its_row_while_it_is_rebuilt(stored, tmp_p
     m2.builder.idle(10.0)
     again = m2.read(sid)
     assert again["session"]["status"] == "RUNNING" and again["session"]["cursor"] == s.cursor
+
+
+def test_the_next_window_is_prepared_ahead_never_inside_an_advance(db_engine, tmp_path):
+    """F6: the reload at the end of a window happens in the worker, ahead of time."""
+    from .conftest import walk_minutes
+
+    store_frames(
+        db_engine,
+        {
+            "RELIANCE": walk_minutes("2025-01-06", 90, 1300.0, 0.0008, seed=5, volume=True),
+            "NIFTY": walk_minutes("2025-01-06", 90, 25000.0, 0.0006, seed=6, volume=False),
+        },
+    )
+    m = make_manager(db_engine, StoreBars(db_engine), tmp_path, build="thread")
+    m.builder.idle_s = 0.2
+    start = trading_days("2025-01-06", 90)[10]
+    sid = m.create(body(day=start))["session"]["id"]
+    s = m.get(sid)
+    first = s.window
+    assert first is not None and first.hi is not None
+    crossed = False
+    while not crossed:
+        m.builder.idle(10.0)  # what the worker prepared happens between two advances
+        builds = m.frame_cache.builds
+        r = m.act(sid, lambda s: s.advance(390))
+        assert not r["over"]
+        if s.window != first:
+            crossed = True
+            assert m.frame_cache.builds == builds, "the advance built the next window itself"
+    assert s.window.lo_strategy > first.lo_strategy
