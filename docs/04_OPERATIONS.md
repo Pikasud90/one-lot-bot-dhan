@@ -169,10 +169,18 @@ places an order, and the desk 18 keep working exactly as above.
   request failed). When the bars are there, the session's signals are on time: they take the
   free places within the cap and are alerted. Once one stock has the bar, the tries count as
   above. If the bars never come before 15:35 of the next trading day, that day's round reads
-  the old session late (recorded, never alerted). Measured on 25 Nov 2026: the bars of the day
-  were not there at 15:42.
+  the old session late (recorded, never alerted).
 
-  First seen at: TO BE MEASURED
+  What Dhan does (found on 25 Nov 2026): its daily history ends at the PREVIOUS trading day.
+  Dhan's support page says so ("provides data only up to the previous trading day and does
+  not include the current day's data"), and on 25 Nov the bars of the day were not there at
+  15:42, at 18:11 or at 19:22. So this round never reads a session on its own evening: it
+  reads it once Dhan has added the day, which is some time on the next day. The hour is not
+  measured yet (the round's own record, `wide_rounds.finished_at`, will show it). If that
+  hour is after 09:00 the round cannot read at all, because from 15:35 it waits for the new
+  day instead. Dhan's quote answer does hold the day's open, high, low, closing price and
+  volume after the close, for every stock in one request: reading the day from it the same
+  evening is the next piece of work (US-106).
 
 - Adjustments: when the fetched closes differ from the stored ones by more than 0.5% on the
   overlap (a split, a bonus, a demerger), the stock's whole history is fetched again and
