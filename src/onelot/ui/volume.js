@@ -83,7 +83,8 @@ const minuteReadout = (row, idx) => !row ? "" :
 const bookIsEmpty = (b) => !b || !Array.isArray(b.stocks) || !b.stocks.length;
 const stateChip = (s) => `<span class="vol-chip ${esc(STATE_TEXT[s] ? s : "normal")}" title="${esc(STATE_HELP[s] || "")}">${esc(stateWord(s))}</span>`;
 const shareBar = (s) => `<span class="vol-bs" title="${esc(buyersText(s))}"><i style="width:${sharePct(s)}%"></i><u></u></span>`;
-const pressureWord = (p) => num(p) === null ? "–" : (p > 0.05 ? "Buying pressure" : (p < -0.05 ? "Selling pressure" : "Balanced"));
+const PRESSURE_FLOOR = 0.05;   // only the fallback for a demo answer without settings: the engine's own floor comes in settings.pressure_floor
+const pressureWord = (p, floor = PRESSURE_FLOOR) => num(p) === null ? "–" : (p > floor ? "Buying pressure" : (p < -floor ? "Selling pressure" : "Balanced"));
 const pressBar = (p5, pd) => `<div class="vol-press" aria-hidden="true"><i class="${num(p5) < 0 ? "sell" : "buy"}" style="${num(p5) < 0 ? "right" : "left"}:50%;width:${Math.abs(clampHalf(p5))}%"></i><b class="${num(pd) < 0 ? "sell" : "buy"}" style="${num(pd) < 0 ? "right" : "left"}:50%;width:${Math.abs(clampHalf(pd))}%"></b><u></u></div>`;
 const nameOf = (stocks, key) => { const s = (stocks || []).find(x => x.key === key); return s ? s.label : key; };
 const directionWord = (d) => d === "BUYING" ? "mostly buying" : (d === "SELLING" ? "mostly selling" : "two-way trade");
@@ -124,11 +125,11 @@ function stocksTableHtml(stocks, sort) {
     + `<td class="b">${shareBar(s.flow_share_5m)} <span class="vol-bp">${esc(buyersPct(s.flow_share_5m))}</span></td><td class="l">${stateChip(s.state)}</td></tr>`).join("");
   return `<div class="scroll"><table class="vol-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
-function indexCardHtml(ix, stocks) {
+function indexCardHtml(ix, stocks, floor) {
   const top = (ix.top || []).map(t => `${esc(nameOf(stocks, t[0]))} ${Math.round(Number(t[1]) * 100)}%`).join(", ");
   const train = ix.trade === false ? ` <span class="vol-train">Training only</span>` : "";
   return `<div class="card vol-index"><h3>${esc(ix.label || ix.key)}${train}</h3>`
-    + `<div class="vol-pword ${num(ix.pressure_5m) < 0 ? "neg" : (num(ix.pressure_5m) > 0 ? "pos" : "")}">${esc(pressureWord(ix.pressure_5m))}</div>`
+    + `<div class="vol-pword ${num(ix.pressure_5m) < 0 ? "neg" : (num(ix.pressure_5m) > 0 ? "pos" : "")}">${esc(pressureWord(ix.pressure_5m, floor))}</div>`
     + `<div class="vol-presslabels"><span>Selling</span><span>Buying</span></div>${pressBar(ix.pressure_5m, ix.pressure_day)}`
     + `<div class="muted vol-pnums">Last 5 minutes (thick bar): ${esc(signed(ix.pressure_5m))}. Day so far (thin bar): ${esc(signed(ix.pressure_day))}. Net buying or selling in units of normal volume.</div>`
     + (num(ix.r2) === null ? "" : `<div>The basket explains ${Math.round(ix.r2 * 100)}% of its minute moves.</div>`)
@@ -136,7 +137,7 @@ function indexCardHtml(ix, stocks) {
 }
 function indicesHtml(d) {
   const list = d.indices || [];
-  return list.length ? `<div class="vol-grid">${list.map(ix => indexCardHtml(ix, d.stocks)).join("")}</div>` : `<div class="card muted">No index pressure yet.</div>`;
+  return list.length ? `<div class="vol-grid">${list.map(ix => indexCardHtml(ix, d.stocks, d.settings && d.settings.pressure_floor)).join("")}</div>` : `<div class="card muted">No index pressure yet.</div>`;
 }
 function bookHtml(book) {
   if (bookIsEmpty(book)) return `<p class="vol-nobook">${esc(NO_BOOK)}</p>`;

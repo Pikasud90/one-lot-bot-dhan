@@ -291,3 +291,26 @@ def test_index_choice_and_options(shared):
 
 def test_settings_name_the_rule_in_use(shared):
     assert shared.body(DAYS[40].isoformat())["settings"]["rule"] == shared.cfg.rule
+
+
+def test_one_floor_decides_the_pressure_word_on_the_server_and_the_page(
+    store_template, monkeypatch
+):
+    """A pressure of 0.07 reads as buying in the sentence, and the settings hand the page the
+    very floor the sentence used, which is the floor the alerts use for "likely to move"."""
+    from sqlalchemy import create_engine
+
+    engine = create_engine(f"sqlite:///{store_template}")
+    try:
+        day = DAYS[40].isoformat()
+        monkeypatch.setattr(ind, "pressure", lambda *a, **k: 0.07)
+        body = stored_watch(engine).body(day)
+        assert body["settings"]["pressure_floor"] == ind.LIKELY_FLOOR
+        assert body["indices"]
+        for row in body["indices"]:
+            assert row["text"].startswith("Buying pressure"), row["text"]
+        monkeypatch.setattr(ind, "pressure", lambda *a, **k: 0.03)
+        for row in stored_watch(engine).body(day)["indices"]:
+            assert row["text"] == "No clear pressure."
+    finally:
+        engine.dispose()

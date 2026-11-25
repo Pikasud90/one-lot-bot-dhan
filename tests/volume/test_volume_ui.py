@@ -51,6 +51,7 @@ VOL_ONE_LINERS = [
     "bookIsEmpty",
     "stateChip",
     "shareBar",
+    "PRESSURE_FLOOR",
     "pressureWord",
     "splitText",
     "legendHtml",
@@ -415,6 +416,33 @@ class TestRules:
         )
         assert out[:8] == ["Selling pressure", "Buying pressure", "Balanced", "–", -21, 50, -50, 0]
         assert "right:50%;width:21%" in out[8] and "left:50%;width:5%" in out[8]
+
+
+@needs_node
+class TestOnePressureFloor:
+    def test_the_word_in_the_heading_follows_the_floor_of_the_settings(self):
+        out = run(
+            "return [pressureWord(0.07, 0.05), pressureWord(0.07, 0.1), pressureWord(-0.07, 0.05),"
+            " pressureWord(0.03, 0.05), pressureWord(0.07), pressureWord(null, 0.05)];"
+        )
+        assert out == [
+            "Buying pressure",
+            "Balanced",
+            "Selling pressure",
+            "Balanced",
+            "Buying pressure",
+            "–",
+        ]
+
+    def test_the_card_heading_uses_the_floor_it_is_given(self):
+        card = run(
+            "const ix = {key:'N', label:'N', pressure_5m: 0.07, pressure_day: 0, text:'x', top:[]};"
+            " return [indexCardHtml(ix, [], 0.05), indexCardHtml(ix, [], 0.1)];"
+        )
+        assert "Buying pressure</div>" in card[0] and "Balanced</div>" in card[1]
+
+    def test_the_page_reads_the_floor_from_the_settings(self):
+        assert "d.settings && d.settings.pressure_floor" in VOL_JS.read_text("utf-8")
 
 
 @needs_node

@@ -45,7 +45,7 @@ log = logging.getLogger(__name__)
 EVIDENCE_PATH = Path(__file__).with_name("evidence.json")
 HISTORY_DAYS = 100  # calendar days read before a session: about 65 sessions
 BASKET_FULL = 0.8  # a session is full for the basket when this part of its stocks are full
-PRESSURE_WORDS = 0.1  # |pressure_5m| below this reads "no clear pressure"
+PRESSURE_WORDS = ind.LIKELY_FLOOR  # |pressure_5m| below this reads "no clear pressure": the one floor
 BOOK_KEEP_DAYS = 60
 BOOK_FRESH = dt.timedelta(minutes=3)
 BOOK_MAX_FAILURES = 3
@@ -912,7 +912,7 @@ class VolumeWatch:
         c = self.cfg
         return {"z_alert": c.z_alert, "stock_z_alert": c.stock_z_alert,
                 "cooldown_min": c.cooldown_min, "alerts_on": c.alerts_on, "notify": c.notify,
-                "rule": c.rule}  # fmt: skip
+                "rule": c.rule, "pressure_floor": PRESSURE_WORDS}  # fmt: skip
 
     def book_view(self) -> dict[str, Any] | None:
         b = self.book_last
