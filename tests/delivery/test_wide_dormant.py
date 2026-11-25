@@ -51,6 +51,7 @@ from onelot.delivery.wide import (
     REVIEW,
     ROUND_TRIES,
 )
+from onelot.data.store import save_bars
 from onelot.desk.config import WideCfg, load_desk_config
 from onelot.store.schema import METADATA, wide_state, wide_trades
 
@@ -1357,3 +1358,25 @@ def test_the_page_shows_what_the_product_answers_for_a_released_trade(tmp_path):
     ):
         assert text in html, text
     assert "evenings in a row" not in html and "a mark" not in html
+
+
+# ── 9. three changes a reviewer made to the code that no test noticed ────────
+def test_a_round_with_no_broker_and_no_replay_source_counts_and_releases_nothing(tmp_path):
+    # stored bars alone are nobody's answer: AAA stopped after SIG + 1 holding an open trade,
+    # BBB and CCC trade every session, and no evening round may count or release AAA
+    last = SIG + 1
+    frames = {"AAA": cut(slow(SIG), last), "BBB": PLAIN, "CCC": PLAIN.copy()}
+    eng = create_engine(f"sqlite:///{tmp_path / 'w.db'}")
+    first, broker = desk(frames, engine=eng, dormant_after=3)
+    for i in range(SIG - 1, last + 1):  # the trade is opened through the broker
+        go(first, broker, i)
+    assert by_key(first)["AAA"].status == "OPEN"
+    for k in ("BBB", "CCC"):  # the bars of the sessions after, as the store comes to hold them
+        save_bars(eng, k, "1d", frames[k], "dhan")
+    w = wide_desk([stock(k) for k in frames], DATES, engine=eng, dormant_after=3)
+    for i in range(last + 1, SIG + 12):
+        r = w.run_round(at(DATES[i]), DATES[i])
+        assert r.summary["note"] == "no Dhan data: the round read the stored daily bars only"
+        assert r.summary["released"] == [] and r.summary["dormant"] == [], i
+        assert by_key(w)["AAA"].status == "OPEN", i
+    assert quiet(w)[1] == 0 and "dormant" not in reading(w)  # no evening was ever counted
