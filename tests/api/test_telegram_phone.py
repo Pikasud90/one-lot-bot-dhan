@@ -40,6 +40,19 @@ HEAD = {"x-onelot-token": API_TOKEN}
 L = NotificationLevel
 
 
+@pytest.fixture(autouse=True)
+def _no_redactor_left_on_the_shared_capture_handler(
+    caplog: pytest.LogCaptureFixture,
+) -> Iterator[None]:
+    """pytest shares ONE capture handler across the whole run. Two tests here put the app's
+    redactor on it; left there, it empties `exc_info` of every later test's records (it turns
+    a traceback into scrubbed text), which broke two paper-book tests in the full run."""
+    yield
+    from onelot.logging_setup import get_redactor
+
+    caplog.handler.removeFilter(get_redactor())
+
+
 @pytest.fixture
 def fake(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeTelegram]:
     server = FakeTelegram()
