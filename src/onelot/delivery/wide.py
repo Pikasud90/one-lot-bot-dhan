@@ -38,18 +38,19 @@ and 15:35), on the delivery desk's background thread:
    bars: the trading days of the app's calendar since its last bar on which at least half of
    the list's other stocks did get a bar (never a holiday the calendar does not list, a
    special session off the calendar or an evening on which the bars of a few stocks only
-   came). Once it has `dormant_after` missing sessions, found so on `CONFIRM_ROUNDS` evening
-   rounds in a row, and still has no bar at the next evening's round, the stock is DORMANT
-   (the bar of the last session counted has had a day to arrive; after the desk was off for
-   weeks, one bad evening releases nothing): an open trade is closed at its last stored
-   close with the exit reason NO_DATA, a pending entry is cancelled (never filled), the
-   place within the cap is free for a new signal of that very round, and the round no longer
-   waits for the stock's bar. It is asked for every evening all the same and read again when
-   bars return; a released trade stays released. An exit HELD FOR REVIEW (an unadjusted
-   action, step 2's guard) is released on the `dormant_after`-th session counted from the
-   one that first held it, once as many evening rounds in a row before have seen it held, at
-   that session's close, with the exit reason REVIEW. Neither is the rule's own exit: the
-   score counts them apart (`WideBook.score`, "released").
+   came). Once `CONFIRM_ROUNDS` evening rounds have each found it with `dormant_after`
+   missing sessions or more, the round of the next session finds it DORMANT if it still has
+   no bar: three evenings in all (after the desk was off for weeks, two bad evenings release
+   nothing), the round of session `dormant_after` + 2 with the desk running every evening.
+   Only a stock the try asked the broker for is counted or released. An open trade is closed
+   at its last stored close with the exit reason NO_DATA, a pending entry is cancelled
+   (never filled), the place within the cap is free for a new signal of that very try, and
+   the round no longer waits for the stock's bar. It is asked for every evening all the same
+   and read again when bars return; a released trade stays released. An exit HELD FOR REVIEW
+   (an unadjusted action, step 2's guard) is released on the same count of its held
+   sessions, with the exit reason REVIEW and NO money booked: its price basis is in doubt.
+   Neither is the rule's own exit: the score counts them apart (`WideBook.score`,
+   "released").
 
 State lives in three tables of its own (`wide_trades`, `wide_state`, `wide_rounds`): the desk
 18's `delivery_trades` is never written here. Every trade change is a compare-and-set on its
@@ -107,9 +108,9 @@ RELEASES = (NO_DATA, REVIEW)
 #: market sessions with no new daily bar after which a stock is dormant (the slot's
 #: `dormant_after`; the study file's longest hole in one stock's bars is 5 sessions)
 DORMANT_AFTER = 10
-#: ... and the evening rounds in a row that must have found it so (or have seen an exit held
-#: for review) before the round that releases: after the desk was off for weeks, one bad
-#: evening releases nothing
+#: ... and the evening rounds that must have found it with that many (or have seen an exit
+#: held that long) before the round that releases: after the desk was off for weeks, two
+#: bad evenings release nothing
 CONFIRM_ROUNDS = 2
 #: a trading day of the calendar is a market session when at least this share of the list's
 #: other stocks have its daily bar
@@ -273,8 +274,19 @@ class WideBook:
         return sum(1 for t in self.active().values() if t.tier == CAP)
 
     def closed(self, limit: int | None = None) -> list[WideTrade]:
-        """The trades that are over, newest first: the closed ones and the cancelled entries."""
-        return self._select(wide_trades.c.status.in_(ENDED), limit=limit, newest=True)
+        """The trades that are over, the closed ones and the cancelled entries, by the session
+        they ended on, newest first (a release is of an old signal: by its id it would fall
+        below the newer trades and off the page)."""
+        t = wide_trades.c
+        stmt = (
+            select(wide_trades)
+            .where(t.status.in_(ENDED))
+            .order_by(t.exit_session.desc(), t.id.desc())
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        with self.engine.connect() as conn:
+            return [WideTrade.from_row(r) for r in conn.execute(stmt).mappings()]
 
     def _changed(self) -> None:
         self.version += 1
@@ -359,26 +371,31 @@ class WideBook:
         self,
         t: WideTrade,
         session: dt.date,
-        price: float,
+        price: float | None,
         reason: str,
         held: int | None,
         note: str,
         now: dt.datetime,
     ) -> bool:
         """A filled trade closed WITHOUT the rule's exit (US-103: `reason` is one of
-        `RELEASES`), on `session`, at `price` (its last stored close), booked as a sale is:
-        both legs' charges and the depository charge. An exit already signalled keeps its
-        signal date; `held` None keeps the session count."""
+        `RELEASES`), on `session`. At `price` (its last stored close) it is booked as a sale
+        is: both legs' charges and the depository charge. With no price (a REVIEW release: the
+        price basis is in doubt) NO money is booked: exit price, gross, charges and net stay
+        empty. An exit already signalled keeps its signal date; `held` None keeps the session
+        count."""
         if t.entry_paise is None:
             return False
-        exit_paise = rupees_to_paise(price)
-        r = trade_result(self.model, t.entry_paise, exit_paise, t.qty, self.dp_paise)
         values: dict[str, Any] = {
             "status": CLOSED, "exit_reason": reason, "exit_session": session.isoformat(),
-            "exit_paise": exit_paise, "gross_paise": r.gross_paise,
-            "charges_paise": r.charges_paise, "dp_paise": r.dp_paise, "net_paise": r.net_paise,
-            "net_pct": r.net_pct, "note": note[:500],
+            "note": note[:500],
         }  # fmt: skip
+        if price is not None:
+            exit_paise = rupees_to_paise(price)
+            r = trade_result(self.model, t.entry_paise, exit_paise, t.qty, self.dp_paise)
+            values.update(
+                exit_paise=exit_paise, gross_paise=r.gross_paise, charges_paise=r.charges_paise,
+                dp_paise=r.dp_paise, net_paise=r.net_paise, net_pct=r.net_pct,
+            )  # fmt: skip
         if t.exit_signal_date is None:
             values["exit_signal_date"] = session.isoformat()
         if held is not None:
@@ -489,9 +506,10 @@ class WideBook:
     def score(self) -> dict[str, dict[str, Any]]:
         """Closed trades of both tiers: "all" (every signal) and "cap" (within the cap). The
         figures are the rule's own exits. A trade closed without one (US-103, `RELEASES`: no
-        data, held for review) is counted apart under "released" (how many of each reason,
-        their winners and their net at the last stored close), and an entry cancelled before
-        its fill is never a trade ("cancelled")."""
+        data, held for review) is counted apart under "released": how many of each reason, and
+        the winners and the net of those with a booked result ("booked": a NO_DATA release at
+        the last stored close; a REVIEW release books none). An entry cancelled before its
+        fill is never a trade ("cancelled")."""
         t = wide_trades.c
         own = or_(t.exit_reason.is_(None), t.exit_reason.notin_(RELEASES))
         out: dict[str, dict[str, Any]] = {}
@@ -503,7 +521,7 @@ class WideBook:
                 func.sum(t.net_paise),
             )
             apart = (
-                select(t.status, t.exit_reason, *figures)
+                select(t.status, t.exit_reason, *figures, func.count(t.net_paise))
                 .where(or_(t.status == CANCELLED, and_(t.status == CLOSED, ~own)), *where)
                 .group_by(t.status, t.exit_reason)
             )
@@ -512,13 +530,16 @@ class WideBook:
                     select(*figures).where(t.status == CLOSED, own, *where)
                 ).one()
                 rows = conn.execute(apart).all()
-            released = {"trades": 0, "winners": 0, "net": 0.0, "no_data": 0, "review": 0}
+            released = {
+                "trades": 0, "booked": 0, "winners": 0, "net": 0.0, "no_data": 0, "review": 0,
+            }  # fmt: skip
             cancelled = 0
-            for status, reason, rn, rwins, _avg, rnet in rows:
+            for status, reason, rn, rwins, _avg, rnet, rbooked in rows:
                 if status == CANCELLED:
                     cancelled += int(rn or 0)
                     continue
                 released["trades"] += int(rn or 0)
+                released["booked"] += int(rbooked or 0)
                 released["winners"] += int(rwins or 0)
                 released["net"] = round(released["net"] + (rnet or 0) / 100, 2)
                 released[str(reason).lower()] += int(rn or 0)
@@ -635,6 +656,13 @@ class WideDesk:
         self.cap = int(cap_open)
         self.evening_round = bool(evening_round)
         self.dormant_after = max(0, int(dormant_after))  # 0: no stock is ever dormant
+        if 0 < self.dormant_after < 5:
+            log.warning(
+                "wide list: dormant_after is %d: under 5 would release stocks that still trade "
+                "(the study's longest hole is 5 sessions)",
+                self.dormant_after,
+            )
+        self._asked: set[str] = set()  # the stocks the last try's fetch asked the broker for
         self.floor = max(int(min_bars), params.min_bars)
         self.notifier = notifier
         self._fetch = fetch
@@ -802,7 +830,11 @@ class WideDesk:
             self.book.save_round(s, started, tries - 1, summary, None)  # not a try of its own
             self.note = summary["note"]
             return RoundResult(s, False, summary)
-        quiet = self._quiet(s, days, states)  # US-103: the stocks with no bar of `s`, counted
+        # US-103: the stocks with no bar of `s`, counted. Only a stock this try asked the
+        # broker for is counted or released (a round stopped at 09:00 never reached the rest);
+        # the bars in memory of a replay are every stock's answer, the stored bars alone none
+        reached = self._asked if fetching else None if self._source is not None else set()
+        quiet = self._quiet(s, days, states, reached)
         dormant = {k for k, q in quiet.items() if q.since is not None}
         summary["dormant"] = sorted(dormant)
         # before the evaluation: a place a dormant stock's trade gives up is free for a signal
@@ -856,6 +888,7 @@ class WideDesk:
             return bool(st.get("fetched_for")) and str(st["fetched_for"]) >= s.isoformat()
 
         there = any(done(states.get(k) or {}) for k in self.stocks)
+        self._asked = set()
         asked = failed = 0
         held: list[dict[str, Any]] = []  # states of the answers before the first bar of `s`
         items = list(self.stocks.items())
@@ -870,6 +903,7 @@ class WideDesk:
                 continue  # fetched for this session already (a resumed round)
             if not there and asked >= PROBE:
                 break  # not published yet: the check has seen enough
+            self._asked.add(key)  # asked: its answer, or its failure, is this try's word on it
             try:
                 outcome = self._fetch_one(stock, s, check=not there)
             except Exception as exc:  # noqa: BLE001 - one stock never stops the others
@@ -1068,9 +1102,9 @@ class WideDesk:
         own: bool = True,
     ) -> tuple[_Candidate | None, dict[str, Any]]:
         """One stock, one session: fills at its open, exits and entry on its close. `seen`:
-        the evening rounds in a row before this one that left the trade's exit held for
-        review; `own`: the session is the newest the round reads of this stock (not a
-        catch-up of an earlier one)."""
+        the evening rounds before this one that left the trade's exit held for review for
+        `dormant_after` sessions or more; `own`: the session is the newest the round reads of
+        this stock (not a catch-up of an earlier one)."""
         p = self.params
         c = sd.close[: i + 1]
         t = self.book.active().get(key)
@@ -1097,14 +1131,20 @@ class WideDesk:
                         f"exit held for review: the price moved {jump[1] * 100:+.1f}% on "
                         f"{jump[0]:%d %b %Y} (a split or bonus not adjusted?)"
                     )
-                    if own and self._release_held(
-                        t, sd, e, i, d, r.sessions, seen, held, now, summary
+                    n = self.dormant_after
+                    held_for = self._held_sessions(t, sd, e, i)
+                    if (
+                        own
+                        and n > 0
+                        and seen >= CONFIRM_ROUNDS
+                        and self._release_held(t, d, r.sessions, held_for, held, now, summary)
                     ):
                         reading["trade"]["released"] = REVIEW
                         reading["busy"] = True  # no entry is read on the close it ended on
                         return None, reading
                     reading["trade"]["held"] = held
-                    reading["trade"]["held_rounds"] = seen + 1  # this evening counts one
+                    # an evening counts once the exit has been held for `dormant_after` sessions
+                    reading["trade"]["held_rounds"] = seen + 1 if 0 < n <= held_for else 0
                     summary.setdefault("held", []).append(key)
                     if t.note != held:
                         self.book.set_note(t, held, now)
@@ -1222,7 +1262,11 @@ class WideDesk:
 
     # ── dormant stocks and released trades (step 4, US-103) ──────────────────
     def _quiet(
-        self, s: dt.date, days: Mapping[str, StockDays], states: Mapping[str, Mapping[str, Any]]
+        self,
+        s: dt.date,
+        days: Mapping[str, StockDays],
+        states: Mapping[str, Mapping[str, Any]],
+        asked: set[str] | None = None,
     ) -> dict[str, _Quiet]:
         """The stocks of the list that have daily bars but none of session `s`, each with its
         two counts.
@@ -1234,17 +1278,21 @@ class WideDesk:
         Muhurat, a Budget weekend) and an evening on which the bars of a few stocks only came
         are never counted.
 
-        ROUNDS: the evening rounds in a row that found the stock so, kept in its state and
-        started again by a new bar. The round of `s` counts one, once, when `s` is a market
-        session.
+        ROUNDS: the evening rounds that found the stock with `dormant_after` missing sessions
+        or more, kept in its state and started again by a new bar. The round of `s` counts
+        one, once, when `s` is a market session. An evening that finds fewer sessions is not
+        one of them: a failed request before the desk was off for weeks confirms nothing.
 
-        The stock turns DORMANT (`since`) at the round of a market session when both counts
-        were met on an evening BEFORE it (`dormant_after` sessions, `CONFIRM_ROUNDS` rounds)
-        and it still has no new bar. So the bar of the last session counted has had a day to
-        arrive, no particular try of the evening is needed, and after the desk was off for
-        weeks one bad evening releases nothing. (A stock that trades again on the very evening
-        it turns dormant, its bar coming after that try, is released all the same.) It stays
-        dormant until a new bar is stored."""
+        The stock turns DORMANT (`since`) at the round of a LATER session than the last one
+        counted, on any try, once `CONFIRM_ROUNDS` rounds are counted and it still has no bar
+        of `s`. That release does not ask whether `s` is a market session yet (on a first try
+        with few bars in, the place must be free for that try's signals). So three evenings
+        find the stock so, two that count and the one that releases; with the desk running
+        every evening that is the round of session `dormant_after` + 2.
+
+        `asked`: the stocks this try asked the broker for (None: all of them). Only a stock
+        that was asked is counted or released: a round stopped at 09:00 says nothing of the
+        stocks it never reached. A dormant stock stays dormant until a new bar is stored."""
         n = self.dormant_after
         if n <= 0:
             return {}
@@ -1267,7 +1315,6 @@ class WideDesk:
                 hit = known[d] = listed > 1 and have >= MARKET_SHARE * (listed - 1)
             return hit
 
-        need = min(n, CONFIRM_ROUNDS)
         out: dict[str, _Quiet] = {}
         for key, sd in mine.items():
             i = sd.last_at_or_before(s)
@@ -1283,18 +1330,18 @@ class WideDesk:
                     _day(mark.get("since")) or s,
                 )  # fmt: skip
                 continue
-            before, rounds, counted = 0, 0, None  # as the evening before left them
+            rounds, counted = 0, None  # as the evenings before left them
             if isinstance(was, Mapping) and was.get("last_bar") == last.isoformat():
-                before, rounds = int(was.get("sessions") or 0), int(was.get("rounds") or 0)
-                counted = _day(was.get("counted"))
-            fresh = market(s) and (counted is None or counted < s)  # this round counts one
-            asleep = fresh and before >= n and rounds >= need
-            if fresh:
-                rounds, counted = rounds + 1, s
+                rounds, counted = int(was.get("rounds") or 0), _day(was.get("counted"))
             sessions, d = 0, last + dt.timedelta(days=1)
             while d <= s:
                 sessions += int(market(d))
                 d += dt.timedelta(days=1)
+            here = asked is None or key in asked
+            later = counted is None or counted < s  # not counted for this session yet
+            asleep = here and later and rounds >= CONFIRM_ROUNDS
+            if here and later and not asleep and sessions >= n and market(s):
+                rounds, counted = rounds + 1, s
             if sessions or rounds:
                 out[key] = _Quiet(last, sessions, rounds, counted, s if asleep else None)
         return out
@@ -1398,21 +1445,21 @@ class WideDesk:
         t = self._rebase(t, sd, i, now, summary) or t
         key = t.series_key
         why = (
-            f"no daily bar for {q.sessions} market sessions after {last:%d %b %Y}, found so on "
-            f"{q.rounds} evenings in a row (a suspension, a merger or a delisting?)"
+            f"no daily price for {q.sessions} trading days after {last:%d %b %Y} "
+            f"(a suspension, a merger or a delisting?)"
         )
         if t.status == PENDING_ENTRY:
             note = f"entry cancelled on {on:%d %b %Y}: {why}; never filled"
             if self.book.cancel_entry(t, on, NO_DATA, _notes(note, t.note), now):
                 summary["released"].append(f"{key} (no data, entry cancelled)")
-                log.warning("wide list: %s: %s", key, note)
+                log.warning("wide list: %s: %s (%d rounds counted)", key, note, q.rounds)
             return
         price = float(sd.close[i])
         e = sd.index_of(t.entry_session) if t.entry_session is not None else None
         held = i - e + 1 if e is not None and e <= i and t.status == OPEN else None
         note = (
-            f"released on {on:%d %b %Y}: {why}; closed at the last stored close, "
-            f"Rs {price:,.2f}: a mark, not the rule's exit"
+            f"released on {on:%d %b %Y}: {why}; closed at its last known close, "
+            f"Rs {price:,.2f}, not by the rule"
         )
         if t.status == EXIT_PENDING and t.exit_signal_date is not None:
             note += (
@@ -1421,33 +1468,14 @@ class WideDesk:
             )
         if self.book.release(t, on, price, NO_DATA, held, _notes(note, t.note), now):
             summary["released"].append(f"{key} (no data)")
-            log.warning("wide list: %s: %s", key, note)
+            log.warning("wide list: %s: %s (%d rounds counted)", key, note, q.rounds)
 
-    def _release_held(
-        self,
-        t: WideTrade,
-        sd: StockDays,
-        e: int,
-        i: int,
-        d: dt.date,
-        sessions: int,
-        seen: int,
-        held: str,
-        now: dt.datetime,
-        summary: dict[str, Any],
-    ) -> bool:
-        """An exit held for review is not held for ever: on the `dormant_after`-th session it
-        is held (counted from the first session that held it, on the stored bars), once
-        `CONFIRM_ROUNDS` evening rounds in a row before this one have seen it held (`seen`),
-        the trade is closed at that session's close with the exit reason REVIEW, booked as a
-        sale. Not the rule's exit, and the result may be on another price basis than the
-        entry: the note says so."""
-        n = self.dormant_after
-        if n <= 0 or t.entry_paise is None or seen < min(n, CONFIRM_ROUNDS):
-            return False
+    def _held_sessions(self, t: WideTrade, sd: StockDays, e: int, i: int) -> int:
+        """The sessions up to `i` since the one that first held the trade's exit for review,
+        that one counted, on the stored bars (`i` is a held session)."""
         p = self.params
         c = sd.close[: i + 1]
-        avg, fill = sma(c, p.exit_sma), t.entry_paise / 100
+        avg, fill = sma(c, p.exit_sma), (t.entry_paise or 0) / 100
         first = next(
             (
                 u
@@ -1456,16 +1484,28 @@ class WideDesk:
             ),
             i,
         )
-        if i - first + 1 < n:
-            return False
+        return i - first + 1
+
+    def _release_held(
+        self,
+        t: WideTrade,
+        d: dt.date,
+        sessions: int,
+        held_for: int,
+        held: str,
+        now: dt.datetime,
+        summary: dict[str, Any],
+    ) -> bool:
+        """An exit held for review is not held for ever: once `CONFIRM_ROUNDS` evening rounds
+        have seen it held for `dormant_after` sessions or more, the next round closes the trade
+        on the newest session it reads, with the exit reason REVIEW. NO money is booked: a
+        result on a price basis in doubt would be a wrong figure. The note says so."""
         note = (
-            f"released on {d:%d %b %Y}: its exit was held for review for {i - first + 1} "
-            f"sessions, seen on {seen + 1} evenings in a row; closed at that session's close, "
-            f"Rs {float(c[i]):,.2f}: not the rule's exit, and the result may be on another "
-            f"price basis than the entry. Check by hand; {held}"
+            f"released on {d:%d %b %Y}: its exit was held for review for {held_for} sessions. "
+            f"Its result is not booked: the price basis is in doubt. Check by hand; {held}"
         )
         note = _notes(note, None if t.note == held else t.note)
-        if not self.book.release(t, d, float(c[i]), REVIEW, sessions, note, now):
+        if not self.book.release(t, d, None, REVIEW, sessions, note, now):
             return False
         summary["released"].append(f"{t.series_key} (held for review)")
         log.warning("wide list: %s: %s", t.series_key, note)
@@ -1723,8 +1763,9 @@ def _mark(state: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def _held_rounds(state: Mapping[str, Any]) -> int:
-    """The evening rounds in a row that left the stock's open trade with its exit held for
-    review, as the state row says (0 when the last session read was not held)."""
+    """The evening rounds that left the stock's open trade with its exit held for review for
+    `dormant_after` sessions or more, as the state row says (0 when the last session read was
+    not held, or not that long yet)."""
     reading = state.get("reading")
     trade = reading.get("trade") if isinstance(reading, Mapping) else None
     if not isinstance(trade, Mapping) or not trade.get("held"):

@@ -49,7 +49,7 @@ from onelot.config import CostConfig, SessionCfg  # noqa: E402
 from onelot.delivery.money import delivery_model, depository_paise  # noqa: E402
 from onelot.delivery.rule import PullbackParams  # noqa: E402
 from onelot.delivery.universe import UniverseStock, load_universe, stamped  # noqa: E402
-from onelot.delivery.wide import StockDays, WideDesk  # noqa: E402
+from onelot.delivery.wide import RELEASES, StockDays, WideDesk  # noqa: E402
 from onelot.desk.config import load_desk_config  # noqa: E402
 
 LAST = dt.date(2026, 11, 7)
@@ -277,6 +277,8 @@ def product_records(book: Any) -> dict[tuple[str, dt.date], dict[str, Any]]:
     for t in book.all():
         if t.status == "CLOSED":
             ex = t.exit_session
+        elif t.status == "CANCELLED":  # US-103: an entry never filled, not an open trade
+            ex = "cancelled"
         elif t.status == "EXIT_PENDING":
             ex = "pending"
         else:
@@ -359,7 +361,9 @@ def leg_by_hand(turnover: Decimal, side: str) -> Decimal:
 
 
 def check_costs(desk: WideDesk, bars: dict[str, pd.DataFrame], n: int = 10) -> int:
-    closed = [t for t in desk.book.all() if t.status == "CLOSED"]
+    # the rule's own exits only: a release (US-103) has no bar on its exit session, and a
+    # REVIEW release books no money
+    closed = [t for t in desk.book.all() if t.status == "CLOSED" and t.exit_reason not in RELEASES]
     closed.sort(key=lambda t: (t.signal_date.toordinal() * 7919) % 1009)
     picks: list[Any] = []
     for want in ("STOP", "TIME", "SMA20"):
@@ -525,7 +529,11 @@ def main() -> int:
                 bad = check_tiers(desk, bars, groups, m, cfg.wide.cap_open)
                 print(f"  days whose places differ from my own admission in {m}: {bad}")
             closed = [
-                t for t in desk.book.all() if t.status == "CLOSED" and t.signal_date >= a.since
+                t
+                for t in desk.book.all()
+                if t.status == "CLOSED"
+                and t.exit_reason not in RELEASES  # the rule's own exits (US-103)
+                and t.signal_date >= a.since
             ]
             sc = study[[pd.Timestamp(x).date() >= a.since for x in study.signal_date]]
             sc = sc[~sc.open_at_end]
