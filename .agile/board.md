@@ -1,7 +1,7 @@
 # Board
-_Generated 2026-11-25T23:39+05:30 by agile_board.py; do not edit by hand._
+_Generated 2026-11-25T23:41+05:30 by agile_board.py; do not edit by hand._
 
-## backlog — 44 stories, 167 pts
+## backlog — 50 stories, 183 pts
 | ID | Title | Pts | Priority | Sprint | Protocol |
 |---|---|---|---|---|---|
 | SP-004 | Study: the pullback book against NIFTY held, every month | 3 | Must | 5 | ping-pong-tdd |
@@ -18,6 +18,7 @@ _Generated 2026-11-25T23:39+05:30 by agile_board.py; do not edit by hand._
 | US-026 | Desk poll never blocks on notifications; SQLite contention bounded | 3 | Must | 3 | driver-navigator |
 | US-027 | Swing carry rules for stocks: shorts intraday, delivery costs, gap quarantine | 3 | Must | 3 | ping-pong-tdd |
 | US-031 | Lab option runs do not slip the underlying before pricing the option | 3 | Must | 2 | ping-pong-tdd |
+| US-117 | The exchange holiday list for 2027 is complete before January | 1 | Must | 5 | driver-navigator |
 | US-121 | The desk stocks' day close is the exchange's closing price, not the 15:14 minute | 5 | Must | 5 | ping-pong-tdd |
 | SP-002 | Spike: which Data API features add edge and ergonomics | 3 | Should | 6 | driver-navigator |
 | SP-003 | Study: follow the four WATCH option cells on paper with real quotes | 5 | Should | 5 | driver-navigator |
@@ -43,18 +44,23 @@ _Generated 2026-11-25T23:39+05:30 by agile_board.py; do not edit by hand._
 | US-114 | Three small page defects: gap outcome names, News times in UTC, Volume axis text | 2 | Should | 5 | ping-pong-tdd |
 | US-115 | A way to run the whole test suite with the clock moved forward | 3 | Should | 5 | driver-navigator |
 | US-116 | Every story file has the header the board reads, and the board is current | 2 | Should | 5 | driver-navigator |
+| US-118 | The Backtest Lab prices an option from real traded prices where the store has them | 5 | Should | 5 | ping-pong-tdd |
+| US-123 | The confidence badge says no evidence yet when its parts are all defaults | 2 | Should | 5 | ping-pong-tdd |
+| US-124 | The Lab can cost a stock run as a delivery trade held for days | 3 | Should | 5 | ping-pong-tdd |
+| US-125 | The price model names the monthly contract by the real expiry day of each period | 3 | Should | 5 | ping-pong-tdd |
 | SP-001 | Spike: review fnolab.in end to end for reference ideas | 2 | Could | 5 | driver-navigator |
 | SP-007 | Study: real puts on FINNIFTY and SENSEX, does long volatility lose there too | 5 | Could | 5 | driver-navigator |
 | SP-008 | Study: is there any buy-only use of the next move's size | 5 | Could | 5 | driver-navigator |
 | US-012 | Paper vs taken reconciliation and slippage report | 3 | Could | 6 | ping-pong-tdd |
 | US-113 | Real put prices for FINNIFTY, MIDCPNIFTY and SENSEX and for weekly contracts | 5 | Could | 5 | driver-navigator |
+| US-126 | The market pulse uses the monthly expiry for its put call ratio and stores no made-up confidence | 2 | Could | 5 | driver-navigator |
 
 ## ready — 1 story, 0 pts
 | ID | Title | Pts | Priority | Sprint | Protocol |
 |---|---|---|---|---|---|
 | US-106 | the wide list reads each session the same evening from Dhan's quote answer | ? | Must | 4 | ping-pong-tdd |
 
-## done — 19 stories, 47 pts
+## done — 21 stories, 55 pts
 | ID | Title | Pts | Priority | Sprint | Protocol |
 |---|---|---|---|---|---|
 | US-000 | Quality gate baseline is green: format, pins, mypy ratchet, repo hygiene | 3 | Must | 0 | driver-navigator |
@@ -71,10 +77,12 @@ _Generated 2026-11-25T23:39+05:30 by agile_board.py; do not edit by hand._
 | US-097 | the desk tells when it was not running, never alerts on unclean bars, shows the spread | ? | Must | 4 | ping-pong-tdd |
 | US-099 | the pullback rule as a paper test on a wide list of stocks | ? | Must | 4 | ping-pong-tdd |
 | US-102 | the wide list's evening round waits for the broker's daily bars of the session | ? | Must | 4 | ping-pong-tdd |
+| US-103 | A wide-list stock that stops trading never holds a place for good | 5 | Must | 4 | driver-navigator |
 | US-104 | an option alert never names a dead contract | ? | Must | 4 | ping-pong-tdd |
 | US-105 | a paper trade on a contract that was not tradeable is marked and left out of the score | ? | Must | 4 | ping-pong-tdd |
+| US-120 | A cheat sheet in every tab, with how far each tab can be trusted | 3 | Must | 4 | driver-navigator |
 | US-098 | real put prices, and the long-volatility question settled (study) | ? | Should | 4 | ping-pong-tdd |
 | US-100 | the capped pullback book against the index (study) | ? | Should | 4 | ping-pong-tdd |
 | US-101 | the pullback rule by market condition (study) | ? | Should | 4 | ping-pong-tdd |
 
-**Total:** 64 stories, 47/214 points done
+**Total:** 72 stories, 55/238 points done
