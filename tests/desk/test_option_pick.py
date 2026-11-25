@@ -10,6 +10,7 @@ Every "now" is explicit; nothing reads the wall clock.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import itertools
 import math
@@ -177,12 +178,10 @@ def test_t4_a_row_with_a_broken_delta_put_first_is_never_picked(delta):
 
 
 def _row(**kw) -> ChainRow:
-    base = dict(
-        strike=25800.0, opt_type="PE", security_id="x", ltp=262.0, bid=261.0, ask=263.0,
-        oi=50_000.0, iv=0.13, delta=-0.61,
-    )  # fmt: skip
-    base.update(kw)
-    return ChainRow(**base)
+    base = ChainRow(
+        25800.0, "PE", "x", ltp=262.0, bid=261.0, ask=263.0, oi=50_000.0, iv=0.13, delta=-0.61
+    )
+    return dataclasses.replace(base, **kw)
 
 
 @pytest.mark.parametrize(
