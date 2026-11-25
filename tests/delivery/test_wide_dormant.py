@@ -37,6 +37,7 @@ from sqlalchemy import create_engine, select
 
 from onelot.clock import IST, TradingCalendar
 from onelot.config import SessionCfg
+from onelot.data.store import save_bars
 from onelot.delivery.money import delivery_model, depository_paise, rupees_to_paise, trade_result
 from onelot.delivery.runner import DeliveryDesk
 from onelot.delivery.wide import (
@@ -1357,3 +1358,59 @@ def test_the_page_shows_what_the_product_answers_for_a_released_trade(tmp_path):
     ):
         assert text in html, text
     assert "evenings in a row" not in html and "a mark" not in html
+
+
+# ── 9. three changes a reviewer made to the code that no test noticed ────────
+def test_a_round_with_no_broker_and_no_replay_source_counts_and_releases_nothing(tmp_path):
+    # stored bars alone are nobody's answer: AAA stopped after SIG + 1 holding an open trade,
+    # BBB and CCC trade every session, and no evening round may count or release AAA
+    last = SIG + 1
+    frames = {"AAA": cut(slow(SIG), last), "BBB": PLAIN, "CCC": PLAIN.copy()}
+    eng = create_engine(f"sqlite:///{tmp_path / 'w.db'}")
+    first, broker = desk(frames, engine=eng, dormant_after=3)
+    for i in range(SIG - 1, last + 1):  # the trade is opened through the broker
+        go(first, broker, i)
+    assert by_key(first)["AAA"].status == "OPEN"
+    for k in ("BBB", "CCC"):  # the bars of the sessions after, as the store comes to hold them
+        save_bars(eng, k, "1d", frames[k], "dhan")
+    w = wide_desk([stock(k) for k in frames], DATES, engine=eng, dormant_after=3)
+    for i in range(last + 1, SIG + 12):
+        r = w.run_round(at(DATES[i]), DATES[i])
+        assert r.summary["note"] == "no Dhan data: the round read the stored daily bars only"
+        assert r.summary["released"] == [] and r.summary["dormant"] == [], i
+        assert by_key(w)["AAA"].status == "OPEN", i
+    assert quiet(w)[1] == 0 and "dormant" not in reading(w)  # no evening was ever counted
+
+
+def test_switching_dormant_after_to_0_keeps_a_held_trade_held():
+    raw = unadjusted(slow(SIG), SIG + 5, 0.5)  # an unadjusted split: the exit is held
+    w, broker = desk({"AAA": raw, "BBB": PLAIN}, dormant_after=3)
+    for i in range(SIG - 2, SIG + 9):
+        r = go(w, broker, i)
+        assert r.summary["released"] == []
+    assert reading(w)["trade"]["held_rounds"] == 2  # two held evenings are counted
+    w.dormant_after = 0  # the switch: the desk as before, nothing is ever released
+    for i in (SIG + 9, SIG + 10):
+        r = go(w, broker, i)
+        assert r.summary["released"] == [] and r.summary["held"] == ["AAA"]
+        a = by_key(w)["AAA"]
+        assert a.status == "OPEN" and a.exit_reason is None and "exit held for review" in a.note
+        assert reading(w)["trade"]["held_rounds"] == 0 and "released" not in reading(w)["trade"]
+
+
+def test_two_trades_that_end_on_the_same_session_are_listed_with_the_higher_id_first():
+    last = SIG + 1
+    frames = {
+        "AAA": cut(slow(SIG), last),
+        "CCC": cut(slow(SIG), last),
+        "BBB": PLAIN,
+    }
+    w, broker = desk(frames, dormant_after=3)
+    for i in range(SIG - 1, SIG + 7):
+        r = go(w, broker, i)
+    assert sorted(r.summary["released"]) == ["AAA (no data)", "CCC (no data)"]  # one evening
+    t = by_key(w)
+    assert t["AAA"].exit_session == t["CCC"].exit_session == DATES[SIG + 6]
+    assert t["AAA"].id < t["CCC"].id
+    assert [x.id for x in w.book.closed()] == [t["CCC"].id, t["AAA"].id]
+    assert [x["series_key"] for x in w.view()["closed"]] == ["CCC", "AAA"]
