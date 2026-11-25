@@ -33,7 +33,7 @@ const CHEATS = {
     trust: [
       { level: "real", text: "Alert times, signal bars, the data source tag, Trade taken or Skipped, and the prices you type are recorded facts." },
       { level: "estimate", text: "Confidence is a score built from the strategy's own past record and the signal's strength. It is NOT a probability of profit and NOT a machine-learning forecast." },
-      { level: "estimate", text: "For the micro-trend rule strength is always 50 and regime fit is 70 for any known regime, so 53 medium means no evidence. Only backtest evidence and live record can move it, between 28 and 78." },
+      { level: "estimate", text: "For the micro-trend rule strength is always 50 and regime fit is 70 for any known regime, so 53 medium means no evidence. Only backtest evidence and live record can move it, between about 24 and 78." },
       { level: "estimate", text: "A paper trade fills at the open of the first bar after the alert with modelled spread and charges. An option leg uses the contract's traded one-minute price when found, else a Black-76 model price. The page does not say which." },
       { level: "estimate", text: "Cost rates are not yet checked against a real Dhan contract note (the app warns at start), so every Net is an estimate. The model's 0.6% option half spread is above the measured 0.25% to 0.3% on NIFTY and BANKNIFTY and below 1.5% on FINNIFTY and SENSEX." },
       { level: "estimate", text: "Audit rupee figures for options re-price the contract with a model, so they can differ from the paper trade's own result for the same alert." },
@@ -96,7 +96,7 @@ const CHEATS = {
   },
   "volume": {
     what: [
-      "This tab shows how much is being traded right now compared with a normal day, read from the large stocks. Index bars carry no volume in the exchange feed, so it reads 17 to 18 large stocks (the tab says how many) and their rupee turnover.",
+      "This tab shows how much is being traded right now compared with a normal day, read from the large stocks. Index bars carry no volume in the exchange feed, so it reads the desk's 18 large stocks (the tab says how many had bars) and their rupee turnover.",
       "Minute bars come from the Dhan feed the desk already holds. Past days come from the stored history. Buyers' share and pressure are estimates from bar shapes, not a count of buyers.",
       "It is a watchdog page. It tells you where unusual volume is. It does not tell you what to trade.",
     ],
@@ -104,7 +104,7 @@ const CHEATS = {
       { term: "Volume now (1 minute)", meaning: "The last closed minute's turnover (shares times price, in rupees) against the median of the same minute in the previous 20 full sessions. 1.0 times is usual, 2.0 times is double." },
       { term: "Last 5 minutes", meaning: "The last five minutes' turnover against the usual for those five minutes. This figure decides the state word Quiet, Normal or Busy." },
       { term: "Day so far", meaning: "Turnover since 09:15 against the usual for this time of day. A busy open lifts it all day, so it moves slowly later on." },
-      { term: "Quiet", meaning: "Last 5 minutes below 0.7 times the usual. The tooltip text on the page says 0.6, but the setting in config/desk.yaml is 0.7. An ordinary day reads about 1.0." },
+      { term: "Quiet", meaning: "Last 5 minutes below the quiet setting in config/desk.yaml (0.7 now) times the usual. An ordinary day reads about 1.0." },
       { term: "Busy", meaning: "Last 5 minutes at 1.5 times the usual or more, but no spike. Normal is anything between Quiet and Busy." },
       { term: "Spike", meaning: "The Spike score is at or above the alert level: 2.5 for the whole market, 4.0 for a single stock. It beats the other words. It says unusual size, not up or down." },
       { term: "Spike score", meaning: "How far the last 5 minutes' turnover is above its own mean in the last 60 full sessions at this time, in standard deviations of the log turnover. Needs at least 20 earlier sessions." },
@@ -113,7 +113,7 @@ const CHEATS = {
       { term: "Buying pressure", meaning: "An index card word. Pressure is the sum over stocks of (influence weight x net flow over normal turnover). Above 0.05 reads Buying, below minus 0.05 Selling, else Balanced. The line below says No clear pressure under 0.1." },
       { term: "Biggest influence", meaning: "The stocks that moved the index most in its last 60 sessions of minute returns (a fitted weight). The card also says what share of the index's minute moves the basket explains." },
       { term: "Training only", meaning: "A tag on an index card (MIDCPNIFTY). It is shown for study and is left out when an alert names the indices likely to move." },
-      { term: "Buyers' share of resting orders", meaning: "Order book: quantity waiting to buy against waiting to sell in the best five price steps, by value. Orders can be pulled at any moment. The study did not test it." },
+      { term: "Buyers' share of resting orders", meaning: "Order book: shares waiting to buy against shares waiting to sell in the best five price steps, counted in shares and not in rupees. Orders can be pulled at any moment. The study did not test it." },
       { term: "Gap between prices", meaning: "The spread between best bid and best ask, in basis points (1 bp is 0.01%) of the mid price. Wider means thinner trading." },
       { term: "Likely to move", meaning: "In a market alert: up to two indices whose pressure in the spike is largest, each at 0.05 or more. It is the arithmetic of the weights, not a forecast of direction." },
     ],
@@ -296,7 +296,7 @@ const CHEATS = {
       "Before 09:15 the pulse shows the last computed values, which may be from yesterday. Press recompute after the desk has started and bars are flowing.",
       "During the session read the four parts, not only the total. Breadth and trend come from the desk's own bars, so they are as fresh as the feed. VIX and PCR move slowly.",
       "Use the pulse as a one-line summary of what the desk already sees on its other tabs. It adds no new information.",
-      "After the close, the score history is mainly useful if you want to test a sentiment gate in the Lab, and only once enough days are stored. Read times on this tab as UTC (see the warnings).",
+      "After the close, the score history is mainly useful if you want to test a sentiment gate in the Lab, and only once enough days are stored. Read times on this tab as UTC (5 hours 30 minutes behind India time).",
     ],
     trust: [
       { level: "real", text: "Breadth, trend, VIX and PCR are measured inputs: the desk's bars, the India VIX series and Dhan's option chain open interest. Each part's note shows the actual counts or values." },
@@ -336,10 +336,10 @@ const CHEATS = {
       { term: "±x.xx% 68%", meaning: "In a model cell: half width of the band that should hold the next close about 68% of the time, with its low to high price, and the 95% band beneath. This is the range, not a direction." },
       { term: "last 100: 68% band held / 95% band held", meaning: "How often the model's own last 100 bands held the real next close. The page says about 7 in 10 and 93 in 100 were seen. With only 100 forecasts the figure moves a few points." },
       { term: "up NN · not a signal", meaning: "The model's probability that the next close is higher. Tested: right no more often than a coin. EWMA is always exactly 50%." },
-      { term: "Move size / opening candle", meaning: "Move size is calm (lowest third), normal or active (highest third) of this instrument's own recent volatility; it needs 80 returns. Opening candle has its own wider band because it carries the overnight gap." },
+      { term: "Move size / opening candle", meaning: "Move size is calm (lowest third), normal or active (highest third) of this instrument's own past volatility: the current width ranked among its earlier values. It needs 80 returns. The opening candle has its own wider band because it carries the overnight gap." },
     ],
     use: [
-      "Before 09:15, open the tab on the daily view (1d) and the Market states card. Read the Next session's range line first: if it leans ACTIVE, expect a wider day, and size your risk and stops for a wider day. Treat the direction lean as background.",
+      "Before 09:15, open the tab on the daily view (1d) and the Market states card. Read the Next session's range line first: if it leans ACTIVE, a wider day has been more likely in the past data. Treat the direction lean as background and never as a call.",
       "At the open, switch the table to 15m or 60m. Look at Move size and the opening candle note: the opening candle band is wider on purpose. Use the 68% band half width as a yardstick for how far one candle usually travels.",
       "During the day, compare your stop or target distance with the band. A stop nearer than one band half width is inside ordinary noise. A close outside the 95% band is unusual, but the page's tests found nothing about what comes after it.",
       "After the close, check Checked on N past sessions and the cases n. If n is small or conviction is none or weak, the card says almost nothing. Never use this tab to decide direction.",
@@ -347,12 +347,12 @@ const CHEATS = {
     trust: [
       { level: "real", text: "Sessions, their returns and ranges, the chips and the counts are measured from stored and live bars. Usual and the percentages are real counts of that instrument's history." },
       { level: "estimate", text: "Percentages are counts pulled toward usual by 10 pseudo-sessions. With about 290 sessions on the page they rest on tens of cases, so a single percentage can easily move 5 to 10 points by luck." },
-      { level: "estimate", text: "Band prices come from a normal-curve model fitted on the last 1000 returns at most (refitted every 20 steps in the self-check). Returns have fat tails, so the 68% band held about 69 to 76% and the 95% band about 90 to 95% in tests." },
-      { level: "estimate", text: "Move size and the calm to active size lean carry real memory: after an active session the next was active 57% of the time against 49% usual (23 instruments, about 55,000 sessions). That says how big, not which way." },
+      { level: "estimate", text: "Four models draw the band from a normal curve fitted on the last 1000 returns at most (Empirical uses percentiles of the last 250). Returns have fat tails, so the 68% band held about 69 to 76% for the fitted models and the 95% band about 90 to 95% in tests." },
+      { level: "estimate", text: "The Next session's range line carries real memory: after an active session the next was active 57% of the time against 49% usual (23 instruments, about 55,000 sessions). Move size was followed by moves about 1.4 to 1.6 times larger when active than when calm. Both say how big, not which way." },
       { level: "gap", text: "Direction has almost no memory. Two bulls in a row was followed by a bull 33% of the time in indices and 29% in stocks, the same as usual, and the walk-forward hit rate was 42.1% against 42.5% for always naming the most common." },
       { level: "gap", text: "The up probability is a coin flip: on all five timeframes and 23 instruments, the next candle closed up 47% to 52% of the time whether all models agreed or not (MLLAB_CONFIDENCE, 13 Nov 2026)." },
       { level: "gap", text: "Following a lean paid about +3 basis points a session before costs (t 0.7). A stock round trip costs about 16 basis points and an index option needs 5 to 10 basis points of index move to cover costs. Nothing here clears it." },
-      { level: "gap", text: "The page's own evidence is far thinner than the study's: the desk loads about 420 calendar days of daily bars, so each card has roughly 270 stated sessions and a walk-forward of only a few dozen, against about 2,400 in the study." },
+      { level: "gap", text: "The page's own evidence is far thinner than the study's: the desk loads about 420 calendar days of daily bars, so each card has roughly 270 stated sessions and a walk-forward check of only about 20. The study had about 2,400 stated sessions per instrument." },
     ],
     dont: [
       "Do not read the percentage or conviction as the chance your trade will make money. It is only how often a similar pattern was followed by that kind of session in past data.",

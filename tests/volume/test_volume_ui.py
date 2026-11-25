@@ -335,7 +335,9 @@ class TestFormatters:
             "return [['quiet','normal','busy','spike','nonsense'].map(stateWord), STATE_HELP.quiet, STATE_HELP.busy, stateChip('spike'), stateChip('nonsense')];"
         )
         assert out[0] == ["Quiet", "Normal", "Busy", "Spike", "–"]
-        assert "0.6" in out[1] and "1.5" in out[2]
+        # the quiet line names the setting of config/desk.yaml (0.7); it said 0.6, the
+        # indicator's default, which the desk never uses (US-120 review)
+        assert "0.7" in out[1] and "0.6" not in out[1] and "1.5" in out[2]
         assert 'class="vol-chip spike"' in out[3] and ">Spike<" in out[3]
         assert (
             'class="vol-chip normal"' in out[4]

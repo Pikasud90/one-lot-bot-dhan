@@ -16,7 +16,7 @@ const WATCH_NOT_ALERT = "A watch alert is not a trade alert: it tells you where 
 const MONTH = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const STATE_TEXT = { quiet: "Quiet", normal: "Normal", busy: "Busy", spike: "Spike" };
 const STATE_HELP = {
-  quiet: "Less than 0.6 times the usual volume for this time of day.",
+  quiet: "Well below the usual volume for this time of day (under the quiet setting, 0.7 unless changed).",
   normal: "About the usual volume for this time of day.",
   busy: "At least 1.5 times the usual volume for this time of day.",
   spike: "An unusual jump: far above what the last 60 sessions had at this time of day.",

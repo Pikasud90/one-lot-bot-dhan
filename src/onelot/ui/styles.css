@@ -565,7 +565,7 @@ a:focus-visible,button:focus-visible,select:focus-visible,input:focus-visible,[t
 .cheat-part h4{margin:14px 0 6px;font-size:15px;color:var(--text)}
 .cheat-list{margin:0;padding-left:20px}
 .cheat-list li{margin:4px 0}
-.cheat-terms{display:grid;grid-template-columns:minmax(120px,max-content) 1fr;gap:6px 16px;margin:0}
+.cheat-terms{display:grid;grid-template-columns:minmax(120px,32%) 1fr;gap:6px 16px;margin:0}
 .cheat-terms dt{font-weight:600;color:var(--text)}
 .cheat-terms dd{margin:0;color:var(--muted)}
 .cheat-tag{font-weight:700;font-size:14px}
