@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import importlib.util
 import os
 import sqlite3
 import sys
@@ -365,10 +366,20 @@ def build_source(rate: float) -> tuple[Any, dict[str, Underlying]]:
     The engine's dashboard secret is not needed here: a placeholder keeps `Secrets.load` from
     reading or creating `data/api_token.txt`."""
     os.environ.setdefault("ONELOT_API_TOKEN", "research-fetch-placeholder-" + "x" * 24)
-    from expired_options_fetch import research_adapter, underlyings
+    eof = app_fetch_module()
+    unds = eof.underlyings()
+    return eof.research_adapter(rate), {k: unds[k] for k in SERIES}
 
-    unds = underlyings()
-    return research_adapter(rate), {k: unds[k] for k in SERIES}
+
+def app_fetch_module() -> Any:
+    """The MAIN checkout's `scripts/expired_options_fetch.py`, by file path (this file's own
+    folder would otherwise give the worktree's copy, whose root holds no credentials)."""
+    path = Path.cwd().resolve() / "scripts" / "expired_options_fetch.py"
+    spec = importlib.util.spec_from_file_location("expired_options_fetch_app", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert Path(mod.ROOT).resolve() == Path.cwd().resolve(), "not the main checkout's fetcher"
+    return mod
 
 
 def gate_today(t: dt.time) -> dt.datetime:
@@ -427,9 +438,7 @@ def stage_plan(stops: str | None) -> None:
     ledger = Ledger(ledger_path)
     OptionBarStore(store_path).close()  # the schema exists before it is read
     mine, app = ReadOnlyBlocks(store_path), ReadOnlyBlocks(app_path)
-    from expired_options_fetch import underlyings
-
-    unds = {k: v for k, v in underlyings().items() if k in SERIES}
+    unds = {k: v for k, v in app_fetch_module().underlyings().items() if k in SERIES}
     if stops:
         print("tier 7 added:", ledger.add_needs(stop_needs(Path(stops))))
         return
