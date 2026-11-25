@@ -15,6 +15,7 @@
 <script src="/static/charts.js" defer></script>
 </head>
 <body>
+<div class="warnbar build-bar" id="build-bar" role="status" hidden><span>The desk was updated. Reload this page to get the new version.</span> <button class="btn small" id="build-reload" type="button">Reload</button></div>
 <!-- ── mascots: Ichi (the "1") and Moo (the 2-D cow) ─────────────────────── -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="m-ichi" viewBox="0 0 64 64">
@@ -742,6 +743,7 @@
 </div>
 
 <script>window.ONELOT_TOKEN = "__API_TOKEN__";</script>
+<script>window.ONELOT_BUILD = "__BUILD__";</script>
 <script src="/static/cheats.js" defer></script>
 <script src="/static/app.js" defer></script>
 <script src="/static/sim_core.js" defer></script>

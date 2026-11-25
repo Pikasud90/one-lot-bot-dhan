@@ -95,3 +95,13 @@ def test_a9_cheat_sheet_matches_the_page() -> None:
     assert "Its title says so, but it does not apply" not in cheats
     assert "The page does not say so" not in cheats
     assert "Option prices are not stored here for most history" not in cheats
+
+
+@needs_node
+def test_a6_build_changed_compares_the_two_builds() -> None:
+    out = js(
+        ["buildChanged"],
+        '[buildChanged("a1", "a1"), buildChanged("a1", "b2"), buildChanged("", "b2"),'
+        ' buildChanged("a1", null), buildChanged(undefined, undefined)]',
+    )
+    assert out == [False, True, False, False, False]

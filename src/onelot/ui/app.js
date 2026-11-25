@@ -19,6 +19,8 @@ const spct = (v, d = 2) => (v === null || v === undefined || Number.isNaN(Number
 const tsf = (s) => { if (!s) return "–"; const t = String(s); if (/T.*(Z|[+-]\d\d:?\d\d)$/.test(t)) { const d = new Date(t); if (!Number.isNaN(d.getTime())) { const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).formatToParts(d).map((x) => [x.type, x.value])); return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`; } } return t.replace("T", " ").slice(0, 16); };
 // A code such as GAP_THROUGH_STOP as words: every underscore becomes a space.
 const spaced = (v) => String(v ?? "").replaceAll("_", " ");
+// The page is out of date when the desk reports a build and this page was served with another one. A missing build on either side never counts.
+const buildChanged = (mine, served) => !!mine && !!served && mine !== served;
 const hhmm = (s) => s ? String(s).slice(11, 16) : "–";
 const hms = (s) => s ? String(s).slice(11, 19) : "–";
 const tile = (l, v, i = "", c = "") => `<div class="tile"><small>${l}</small><b class="${c}">${v}</b><i>${i}</i></div>`;
@@ -886,6 +888,13 @@ $("snap-list").addEventListener("click", (e) => {
 });
 loadSnaps();
 
+async function checkBuild() {
+  let h; try { h = await fetch("/api/health").then((r) => r.ok ? r.json() : null); } catch (e) { return; }
+  const bar = $("build-bar"); if (bar && h && buildChanged(window.ONELOT_BUILD, h.build)) bar.hidden = false;
+}
+$("build-reload").addEventListener("click", () => location.reload());
+setInterval(checkBuild, 60000);
+setTimeout(checkBuild, 5000);
 async function loadUptime() {
   try { uptimeBody = await fetch("/api/desk/uptime?days=30").then((r) => r.ok ? r.json() : null); } catch (e) { return; }
   if (latest) renderToday(); // before the first state load the strip would say "not running"

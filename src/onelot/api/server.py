@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import hashlib
 import json
 import logging
 import threading
@@ -38,6 +39,17 @@ from ..volume.routes import register as register_volume
 log = logging.getLogger(__name__)
 
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
+
+
+def _ui_build() -> str:
+    """A short id of the page files (names, sizes, modified times): it changes when the desk is
+    restarted on a new version of the page. No git call, no network."""
+    h = hashlib.sha256()
+    for p in sorted(UI_DIR.rglob("*")):
+        if p.is_file():
+            st = p.stat()
+            h.update(f"{p.relative_to(UI_DIR).as_posix()}|{st.st_size}|{st.st_mtime_ns}\n".encode())
+    return h.hexdigest()[:12]
 #: guards the lazy build of the Machine Learning Lab (`/api/mllab`): one MlLab per desk
 _MLLAB_LOCK = threading.Lock()
 
@@ -274,6 +286,7 @@ def create_app(engine, api_token: str) -> FastAPI:
         docs_url="/api/docs",
     )
     db = engine.db
+    build = _ui_build()
 
     def require_token(request: Request) -> None:
         """Reads are open; MUTATIONS always require the secret."""
@@ -299,6 +312,7 @@ def create_app(engine, api_token: str) -> FastAPI:
             "ok": bool(snap.get("health")),
             "health": snap.get("health"),
             "status": snap.get("status"),
+            "build": build,
         }
 
     @app.get("/api/notifications")
@@ -1179,7 +1193,7 @@ def create_app(engine, api_token: str) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
         html = (UI_DIR / "index.html").read_text(encoding="utf-8")
-        return html.replace("__API_TOKEN__", api_token)
+        return html.replace("__API_TOKEN__", api_token).replace("__BUILD__", build)
 
     @app.get("/static/{name:path}")
     def static(name: str):
