@@ -408,7 +408,7 @@ class TestWords:
             f"return [levelLabels({json.dumps(ALERT)}, 'alert'), levelLabels({json.dumps(OPEN_TRADE)}, 'trade')];"
         )
         # short words beside the price scale, whose own label says the price (review R3)
-        assert out[0] == {"entry": "Alert", "stop": "Stop −₹2,288", "target": "Target +₹6,713"}
+        assert out[0] == {"entry": "", "stop": "Stop −₹2,288", "target": "Target +₹6,713"}
         assert out[1]["stop"] == "Stop +₹518" and out[1]["entry"] == "In"
 
     def test_markers_say_what_happened(self):

@@ -358,7 +358,7 @@
   #sim-root .sim-actbar{position:fixed;z-index:35;left:0;right:0;bottom:0;display:flex;align-items:center;gap:8px;padding:8px 12px calc(8px + env(safe-area-inset-bottom));
     background:var(--panel);border-top:1px solid var(--line2);box-shadow:0 -8px 24px -12px color-mix(in srgb,var(--text) 40%,transparent)}
   #sim-root .sim-actbar[hidden]{display:none}
-  #sim-root .sim-ab-text{flex:1 1 auto;min-width:0;font:700 15px/1.25 var(--mono);overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}
+  #sim-root .sim-ab-text{flex:1 1 auto;min-width:0;font:700 15px/1.25 var(--mono);overflow:hidden;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical}
   #sim-root .sim-actbar .sim-btn{flex:0 0 auto;min-height:48px;min-width:88px}
   #sim-root .sim-sheet,#sim-root .sim-keysheet,#sim-root .sim-ask{position:fixed;top:auto;bottom:0;left:0;right:0;transform:none;width:auto;max-width:none;max-height:80svh;overflow:auto}
 }

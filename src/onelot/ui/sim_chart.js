@@ -223,7 +223,7 @@ function create(el, LW, opts = {}) {
         LEVELS.forEach((n) => {
           const p = src[n], faintSame = (n === "stop0" && Number(src.stop0) === Number(src.stop)) || (n === "target0" && Number(src.target0) === Number(src.target));
           if (!C.isNum(p) || faintSame || (kind === "alert" && n.endsWith("0"))) { lines[n].applyOptions({ lineVisible: false, axisLabelVisible: false, title: "" }); return; }
-          lines[n].applyOptions({ ...lineStyle(n, kind), price: Number(p), lineVisible: true, title: (labels && labels[n]) || n });
+          lines[n].applyOptions({ ...lineStyle(n, kind), price: Number(p), lineVisible: true, title: labels && labels[n] !== undefined ? labels[n] : n });   // "" : the axis label and the marker say it
           if (!n.endsWith("0")) lv.push({ name: n, label: n === "entry" ? (kind === "alert" ? "Alert entry" : "Entry") : (n === "stop" ? "Stop" : "Target"), price: Number(p) });
         });
         state.levels = lv;

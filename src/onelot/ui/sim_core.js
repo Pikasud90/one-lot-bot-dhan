@@ -421,7 +421,7 @@ function eventCells(ev) {
 function levelLabels(src, kind) {
   if (!src) return null;
   if (kind === "alert") {
-    return { entry: "Alert", stop: `Stop ${rupees(-Math.abs(Number(src.risk_inr) || 0))}`, target: `Target ${rupees(Math.abs(Number(src.reward_inr) || 0))}` };
+    return { entry: "", stop: `Stop ${rupees(-Math.abs(Number(src.risk_inr) || 0))}`, target: `Target ${rupees(Math.abs(Number(src.reward_inr) || 0))}` };
   }
   // short words beside the price scale, whose own label already says the price (review R3: long titles piled up at the
   // right edge); the premiums and the full plan are in the dock

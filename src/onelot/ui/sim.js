@@ -397,8 +397,9 @@ function prepare() {
   let tries = 0;
   const once = () => getJson(url).then((r) => {
     if (my !== S.req || S.sess) return;
-    if (r && r.status === "ready") status(`Ready: ${stratOf(c.strategy) ? stratOf(c.strategy).label : c.strategy} · ${c.timeframe} is prepared. Press Play.`);
-    else if (r && r.status === "building" && ++tries < 30) { status("Preparing the strategy in the background…"); setTimeout(once, 1000); }
+    const pre = S.swapNote ? S.swapNote + " " : "";
+    if (r && r.status === "ready") status(pre + `Ready: ${stratOf(c.strategy) ? stratOf(c.strategy).label : c.strategy} · ${c.timeframe} is prepared. Press Play.`);
+    else if (r && r.status === "building" && ++tries < 30) { status(pre + "Preparing the strategy in the background…"); setTimeout(once, 1000); }
   }).catch(() => {});
   once();
 }
@@ -437,6 +438,7 @@ async function choose(patch, opts = {}) {
     const a = stratOf(wanted), b = stratOf(S.choice.strategy), inst = instOf(S.choice.instrument);
     swapNote = `${a ? a.label : wanted} does not fit ${inst ? inst.label : S.choice.instrument}: using ${b ? b.label : S.choice.strategy}.`;
   }
+  S.swapNote = swapNote;   // said before the prepare lines, which would otherwise replace it
   if (!keepClock) { if (opts.random) S.hidden = !!S.view.hideDate; else if (patch.day || patch.instrument || patch.mode) S.hidden = false; }
   if (S.chart) S.chart.hideDates(S.hidden);
   // The switch is instant: the old picture goes and the veil comes in this same task. When the new instrument's days are
