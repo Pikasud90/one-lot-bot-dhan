@@ -596,6 +596,7 @@ class Desk:
                 data_api_active=lambda: bool(self._data_api_active()),
             )
             delivery.also_top_up = list(self.trackers)  # all 23: the indices' 4h rungs too
+            delivery.context_top_up = {VIX_KEY: ("1d", "1m")}  # what _top_up_bars writes
             return delivery
         except Exception:  # noqa: BLE001 - the intraday desk runs whatever this does
             log.exception("delivery: the delivery desk could not be built; it is off")
