@@ -1228,7 +1228,10 @@ class Engine:
                         self.notifier.critical("Index feed disagreement", why)
                         self.health.note_api_error(why)
                 self._maybe_auto_renew(now)
-                self._remind_about_the_token(now)
+                try:
+                    self._remind_about_the_token(now)
+                except Exception:  # noqa: BLE001 - a reminder never starves the pass below
+                    log.exception("token reminders: the step failed")
                 today = now.date().isoformat()
                 if today != last_iv_record and self.chain and self.chain.snapshot:
                     iv = self.chain.atm_iv()
