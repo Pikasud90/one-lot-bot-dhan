@@ -476,6 +476,7 @@ class WideDesk:
         background: bool = True,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
+        wall: Callable[[], dt.datetime] | None = None,
     ) -> None:
         self.engine = engine
         self.protected = {k.upper() for k in protected}
@@ -497,6 +498,7 @@ class WideDesk:
         self.book = WideBook(engine, model, dp_paise)
         self._background = background
         self._sleep, self._monotonic = sleep, monotonic
+        self._wall = wall or (lambda: dt.datetime.now(IST))  # the 09:00 stop reads it
         self._last_request: float | None = None
         self._thread: threading.Thread | None = None
         self._last_try: dt.datetime | None = None
@@ -550,7 +552,7 @@ class WideDesk:
         )
 
         def stop() -> bool:
-            return dt.datetime.now(IST) >= stop_at
+            return self._wall() >= stop_at
 
         def run() -> None:
             try:
