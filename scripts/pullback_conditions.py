@@ -166,7 +166,8 @@ def store_daily(key: str, col: str = "close") -> pd.Series:
         (key,),
     ).fetchall()
     con.close()
-    ts = pd.to_datetime([r[0] for r in rows], utc=True).tz_convert("Asia/Kolkata")
+    # UTC to India's clock time (+05:30), with no zone object (tests/test_ist_zone.py)
+    ts = pd.to_datetime([r[0] for r in rows], utc=True) + np.timedelta64(330, "m")
     s = pd.Series([float(r[1]) for r in rows], index=ts.tz_localize(None).normalize())
     s = s[~s.index.duplicated(keep="last")]
     return s[s.index <= pb.LAST]

@@ -91,7 +91,8 @@ def load_nifty() -> pd.Series:
         "SELECT ts, close FROM bars WHERE series_key = 'NIFTY' AND resolution = '1d' ORDER BY ts"
     ).fetchall()
     con.close()
-    ts = pd.to_datetime([r[0] for r in rows], utc=True).tz_convert("Asia/Kolkata")
+    # UTC to India's clock time (+05:30), with no zone object (tests/test_ist_zone.py)
+    ts = pd.to_datetime([r[0] for r in rows], utc=True) + np.timedelta64(330, "m")
     st = pd.Series([r[1] for r in rows], index=pd.DatetimeIndex(ts.date))
     st = st[~st.index.duplicated(keep="last")]
     y = pd.read_csv(NIFTY_CSV, index_col=0, parse_dates=True)["close"].dropna()

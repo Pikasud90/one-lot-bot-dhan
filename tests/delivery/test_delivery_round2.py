@@ -21,7 +21,7 @@ sys.path.insert(0, str(HERE))
 from desk_harness import new_desk  # noqa: E402
 from test_us067_tester_desk import FULL, STORE, L, World, at  # noqa: E402
 
-from onelot.clock import IST, TradingCalendar  # noqa: E402
+from onelot.clock import IST, TradingCalendar, now_ist  # noqa: E402
 from onelot.desk.config import load_desk_config  # noqa: E402
 from onelot.notify.base import Notification, NotificationLevel  # noqa: E402
 from onelot.notify.manager import Notifier  # noqa: E402
@@ -177,7 +177,10 @@ def test_the_repeat_window_counts_as_told_only_after_a_real_acceptance(tmp_path)
     assert w.notifier.suppresses(key)  # a repeat within the window now gives {}
     assert (t.id, "entry") in desk._accepted
     other = notifier(DashboardChannel())
-    other._dedup.should_send(key, at(L[3], "15:45"))  # a repeat before any acceptance here
+    # a repeat before any acceptance here. The window is read on the real clock
+    # (Notifier.suppresses), so the earlier send is stamped with it too: a fixed session
+    # time passed only while that day was still ahead (it failed from 25 Nov 2026 15:45)
+    other._dedup.should_send(key, now_ist())
     assert (
         other.suppresses(key)
         and other.send(

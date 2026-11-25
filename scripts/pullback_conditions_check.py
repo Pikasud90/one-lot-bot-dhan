@@ -70,7 +70,8 @@ def vix_series() -> pd.Series:
         "SELECT ts, close FROM bars WHERE series_key = 'INDIAVIX' AND resolution = '1d' ORDER BY ts"
     ).fetchall()
     con.close()
-    ts = pd.to_datetime([r[0] for r in rows], utc=True).tz_convert("Asia/Kolkata")
+    # UTC to India's clock time (+05:30), with no zone object (tests/test_ist_zone.py)
+    ts = pd.to_datetime([r[0] for r in rows], utc=True) + np.timedelta64(330, "m")
     s = pd.Series([float(r[1]) for r in rows], index=ts.tz_localize(None).normalize())
     return s[~s.index.duplicated(keep="last")]
 
