@@ -1,0 +1,236 @@
+# The pullback rule's wide list (US-099): a PAPER test on 222 stocks. The system never places
+# an order. Written by scripts/write_delivery_universe.py from the swing-universe study of
+# 24 Nov 2026 (docs/research/SWING_UNIVERSE_2026-11-24.md); edit with care.
+# group: desk = one of the desk's 18 stocks (live bars, a card, its own alert near the close);
+#        alpha = the alpha study's 43; new = the 161 names nobody had looked at.
+# Every stock that is not a desk instrument is DELIVERY-ONLY: daily bars only, no feed, no card.
+# segment and security_id: how Dhan names the stock (daily bars through the desk's adapter).
+backtest:
+  trades: 8085
+  net_pct: 0.774
+  winners_pct: 67.6
+  period: "2010-10-19 to 2026-11-05"
+  note: "The study's trades of this rule on the 222 stocks, after costs. Not proven: about +0.6 of the result a trade is the market's drift."
+stocks:
+  - {key: "RELIANCE", name: "Reliance Industries", symbol: "RELIANCE", security_id: "2885", segment: NSE_EQ, group: desk}
+  - {key: "MM", name: "Mahindra & Mahindra", symbol: "M&M", security_id: "2031", segment: NSE_EQ, group: desk}
+  - {key: "SBIN", name: "State Bank of India", symbol: "SBIN", security_id: "3045", segment: NSE_EQ, group: desk}
+  - {key: "HDFCBANK", name: "HDFC Bank", symbol: "HDFCBANK", security_id: "1333", segment: NSE_EQ, group: desk}
+  - {key: "ITC", name: "ITC", symbol: "ITC", security_id: "1660", segment: NSE_EQ, group: desk}
+  - {key: "TMPV", name: "Tata Motors Passenger Vehicles", symbol: "TMPV", security_id: "3456", segment: NSE_EQ, group: desk}
+  - {key: "MARUTI", name: "Maruti Suzuki", symbol: "MARUTI", security_id: "10999", segment: NSE_EQ, group: desk}
+  - {key: "ICICIBANK", name: "ICICI Bank", symbol: "ICICIBANK", security_id: "4963", segment: NSE_EQ, group: desk}
+  - {key: "HEROMOTOCO", name: "Hero Motocorp", symbol: "HEROMOTOCO", security_id: "1348", segment: NSE_EQ, group: desk}
+  - {key: "INFY", name: "Infosys", symbol: "INFY", security_id: "1594", segment: NSE_EQ, group: desk}
+  - {key: "TCS", name: "Tata Consultancy Services", symbol: "TCS", security_id: "11536", segment: NSE_EQ, group: desk}
+  - {key: "AXISBANK", name: "Axis Bank", symbol: "AXISBANK", security_id: "5900", segment: NSE_EQ, group: desk}
+  - {key: "KOTAKBANK", name: "Kotak Bank", symbol: "KOTAKBANK", security_id: "1922", segment: NSE_EQ, group: desk}
+  - {key: "LT", name: "Larsen & Toubro", symbol: "LT", security_id: "11483", segment: NSE_EQ, group: desk}
+  - {key: "BAJFINANCE", name: "Bajaj Finance", symbol: "BAJFINANCE", security_id: "317", segment: NSE_EQ, group: desk}
+  - {key: "BHARTIARTL", name: "Bharti Airtel", symbol: "BHARTIARTL", security_id: "10604", segment: NSE_EQ, group: desk}
+  - {key: "TATASTEEL", name: "Tata Steel", symbol: "TATASTEEL", security_id: "3499", segment: NSE_EQ, group: desk}
+  - {key: "SUNPHARMA", name: "Sun Pharmaceutical", symbol: "SUNPHARMA", security_id: "3351", segment: NSE_EQ, group: desk}
+  - {key: "ADANIENT", name: "Adani Enterprises", symbol: "ADANIENT", security_id: "25", segment: NSE_EQ, group: alpha}
+  - {key: "ADANIPORTS", name: "Adani Ports & SEZ", symbol: "ADANIPORTS", security_id: "15083", segment: NSE_EQ, group: alpha}
+  - {key: "APOLLOHOSP", name: "Apollo Hospitals", symbol: "APOLLOHOSP", security_id: "157", segment: NSE_EQ, group: alpha}
+  - {key: "ASIANPAINT", name: "Asian Paints", symbol: "ASIANPAINT", security_id: "236", segment: NSE_EQ, group: alpha}
+  - {key: "BAJAJ-AUTO", name: "Bajaj Auto", symbol: "BAJAJ-AUTO", security_id: "16669", segment: NSE_EQ, group: alpha}
+  - {key: "BAJAJFINSV", name: "Bajaj Finserv", symbol: "BAJAJFINSV", security_id: "16675", segment: NSE_EQ, group: alpha}
+  - {key: "BEL", name: "Bharat Electronics", symbol: "BEL", security_id: "383", segment: NSE_EQ, group: alpha}
+  - {key: "BPCL", name: "Bharat Petroleum", symbol: "BPCL", security_id: "526", segment: NSE_EQ, group: alpha}
+  - {key: "BRITANNIA", name: "Britannia Industries", symbol: "BRITANNIA", security_id: "547", segment: NSE_EQ, group: alpha}
+  - {key: "CIPLA", name: "Cipla", symbol: "CIPLA", security_id: "694", segment: NSE_EQ, group: alpha}
+  - {key: "COALINDIA", name: "Coal India", symbol: "COALINDIA", security_id: "20374", segment: NSE_EQ, group: alpha}
+  - {key: "DIVISLAB", name: "Divis Laboratories", symbol: "DIVISLAB", security_id: "10940", segment: NSE_EQ, group: alpha}
+  - {key: "DRREDDY", name: "Dr Reddys Laboratories", symbol: "DRREDDY", security_id: "881", segment: NSE_EQ, group: alpha}
+  - {key: "EICHERMOT", name: "Eicher Motors", symbol: "EICHERMOT", security_id: "910", segment: NSE_EQ, group: alpha}
+  - {key: "GRASIM", name: "Grasim Industries", symbol: "GRASIM", security_id: "1232", segment: NSE_EQ, group: alpha}
+  - {key: "HCLTECH", name: "HCL Technologies", symbol: "HCLTECH", security_id: "7229", segment: NSE_EQ, group: alpha}
+  - {key: "HINDALCO", name: "Hindalco Industries", symbol: "HINDALCO", security_id: "1363", segment: NSE_EQ, group: alpha}
+  - {key: "HINDUNILVR", name: "Hindustan Unilever", symbol: "HINDUNILVR", security_id: "1394", segment: NSE_EQ, group: alpha}
+  - {key: "INDUSINDBK", name: "Indusind Bank", symbol: "INDUSINDBK", security_id: "5258", segment: NSE_EQ, group: alpha}
+  - {key: "JSWSTEEL", name: "JSW Steel", symbol: "JSWSTEEL", security_id: "11723", segment: NSE_EQ, group: alpha}
+  - {key: "NESTLEIND", name: "Nestle", symbol: "NESTLEIND", security_id: "17963", segment: NSE_EQ, group: alpha}
+  - {key: "NTPC", name: "NTPC", symbol: "NTPC", security_id: "11630", segment: NSE_EQ, group: alpha}
+  - {key: "ONGC", name: "Oil & Natural Gas Corporation", symbol: "ONGC", security_id: "2475", segment: NSE_EQ, group: alpha}
+  - {key: "POWERGRID", name: "Power Grid Corporation of India", symbol: "POWERGRID", security_id: "14977", segment: NSE_EQ, group: alpha}
+  - {key: "SHRIRAMFIN", name: "Shriram Finance", symbol: "SHRIRAMFIN", security_id: "4306", segment: NSE_EQ, group: alpha}
+  - {key: "TATACONSUM", name: "Tata Consumer Products", symbol: "TATACONSUM", security_id: "3432", segment: NSE_EQ, group: alpha}
+  - {key: "TECHM", name: "Tech Mahindra", symbol: "TECHM", security_id: "13538", segment: NSE_EQ, group: alpha}
+  - {key: "TITAN", name: "Titan", symbol: "TITAN", security_id: "3506", segment: NSE_EQ, group: alpha}
+  - {key: "ULTRACEMCO", name: "UltraTech Cement", symbol: "ULTRACEMCO", security_id: "11532", segment: NSE_EQ, group: alpha}
+  - {key: "WIPRO", name: "Wipro", symbol: "WIPRO", security_id: "3787", segment: NSE_EQ, group: alpha}
+  - {key: "ACC", name: "ACC", symbol: "ACC", security_id: "22", segment: NSE_EQ, group: alpha}
+  - {key: "AMBUJACEM", name: "Ambuja Cements", symbol: "AMBUJACEM", security_id: "1270", segment: NSE_EQ, group: alpha}
+  - {key: "BHEL", name: "Bharat Heavy Electricals", symbol: "BHEL", security_id: "438", segment: NSE_EQ, group: alpha}
+  - {key: "DLF", name: "DLF", symbol: "DLF", security_id: "14732", segment: NSE_EQ, group: alpha}
+  - {key: "GAIL", name: "GAIL", symbol: "GAIL", security_id: "4717", segment: NSE_EQ, group: alpha}
+  - {key: "JINDALSTEL", name: "Jindal Steel", symbol: "JINDALSTEL", security_id: "6733", segment: NSE_EQ, group: alpha}
+  - {key: "PNB", name: "Punjab National Bank", symbol: "PNB", security_id: "10666", segment: NSE_EQ, group: alpha}
+  - {key: "RELINFRA", name: "Reliance Infrastructure", symbol: "RELINFRA", security_id: "4791", segment: NSE_EQ, group: alpha}
+  - {key: "RPOWER", name: "Reliance Power", symbol: "RPOWER", security_id: "15259", segment: NSE_EQ, group: alpha}
+  - {key: "SAIL", name: "Steel Authority of India", symbol: "SAIL", security_id: "2963", segment: NSE_EQ, group: alpha}
+  - {key: "SIEMENS", name: "Siemens", symbol: "SIEMENS", security_id: "3150", segment: NSE_EQ, group: alpha}
+  - {key: "TATAPOWER", name: "Tata Power", symbol: "TATAPOWER", security_id: "3426", segment: NSE_EQ, group: alpha}
+  - {key: "VEDL", name: "Vedanta", symbol: "VEDL", security_id: "3063", segment: NSE_EQ, group: alpha}
+  - {key: "HDFCLIFE", name: "HDFC Life Insurance", symbol: "HDFCLIFE", security_id: "467", segment: NSE_EQ, group: new}
+  - {key: "SBILIFE", name: "SBI Life Insurance", symbol: "SBILIFE", security_id: "21808", segment: NSE_EQ, group: new}
+  - {key: "JIOFIN", name: "Jio Financial Services", symbol: "JIOFIN", security_id: "18143", segment: NSE_EQ, group: new}
+  - {key: "BANKBARODA", name: "Bank of Baroda", symbol: "BANKBARODA", security_id: "4668", segment: NSE_EQ, group: new}
+  - {key: "CANBK", name: "Canara Bank", symbol: "CANBK", security_id: "10794", segment: NSE_EQ, group: new}
+  - {key: "UNIONBANK", name: "Union Bank of India", symbol: "UNIONBANK", security_id: "10753", segment: NSE_EQ, group: new}
+  - {key: "INDIANB", name: "Indian Bank", symbol: "INDIANB", security_id: "14309", segment: NSE_EQ, group: new}
+  - {key: "BANKINDIA", name: "Bank of India", symbol: "BANKINDIA", security_id: "4745", segment: NSE_EQ, group: new}
+  - {key: "FEDERALBNK", name: "Federal Bank", symbol: "FEDERALBNK", security_id: "1023", segment: NSE_EQ, group: new}
+  - {key: "IDFCFIRSTB", name: "IDFC First Bank", symbol: "IDFCFIRSTB", security_id: "11184", segment: NSE_EQ, group: new}
+  - {key: "AUBANK", name: "AU Small Finance Bank", symbol: "AUBANK", security_id: "21238", segment: NSE_EQ, group: new}
+  - {key: "BANDHANBNK", name: "Bandhan Bank", symbol: "BANDHANBNK", security_id: "2263", segment: NSE_EQ, group: new}
+  - {key: "YESBANK", name: "Yes Bank", symbol: "YESBANK", security_id: "11915", segment: NSE_EQ, group: new}
+  - {key: "RBLBANK", name: "RBL Bank", symbol: "RBLBANK", security_id: "18391", segment: NSE_EQ, group: new}
+  - {key: "CHOLAFIN", name: "Cholamandalam Investment", symbol: "CHOLAFIN", security_id: "685", segment: NSE_EQ, group: new}
+  - {key: "BAJAJHLDNG", name: "Bajaj Holdings & Investments", symbol: "BAJAJHLDNG", security_id: "305", segment: NSE_EQ, group: new}
+  - {key: "MUTHOOTFIN", name: "Muthoot Finance", symbol: "MUTHOOTFIN", security_id: "23650", segment: NSE_EQ, group: new}
+  - {key: "MANAPPURAM", name: "Manappuram Finance", symbol: "MANAPPURAM", security_id: "19061", segment: NSE_EQ, group: new}
+  - {key: "LICHSGFIN", name: "LIC Housing Finance", symbol: "LICHSGFIN", security_id: "1997", segment: NSE_EQ, group: new}
+  - {key: "M&MFIN", name: "M&M Financial Services", symbol: "M&MFIN", security_id: "13285", segment: NSE_EQ, group: new}
+  - {key: "SBICARD", name: "SBI Cards", symbol: "SBICARD", security_id: "17971", segment: NSE_EQ, group: new}
+  - {key: "HDFCAMC", name: "HDFC AMC", symbol: "HDFCAMC", security_id: "4244", segment: NSE_EQ, group: new}
+  - {key: "ABCAPITAL", name: "Aditya Birla Capital", symbol: "ABCAPITAL", security_id: "21614", segment: NSE_EQ, group: new}
+  - {key: "PFC", name: "Power Finance Corporation", symbol: "PFC", security_id: "14299", segment: NSE_EQ, group: new}
+  - {key: "RECLTD", name: "REC", symbol: "RECLTD", security_id: "15355", segment: NSE_EQ, group: new}
+  - {key: "ICICIGI", name: "ICICI Lombard General Insurance", symbol: "ICICIGI", security_id: "21770", segment: NSE_EQ, group: new}
+  - {key: "ICICIPRULI", name: "ICICI Life Insurance", symbol: "ICICILIFE", security_id: "18652", segment: NSE_EQ, group: new}
+  - {key: "MFSL", name: "Max Financial Services", symbol: "MFSL", security_id: "2142", segment: NSE_EQ, group: new}
+  - {key: "LTF", name: "L&T Finance", symbol: "LTF", security_id: "24948", segment: NSE_EQ, group: new}
+  - {key: "IIFL", name: "IIFL Finance", symbol: "IIFL", security_id: "11809", segment: NSE_EQ, group: new}
+  - {key: "ANGELONE", name: "Angel One", symbol: "ANGELONE", security_id: "324", segment: NSE_EQ, group: new}
+  - {key: "BSE", name: "BSE", symbol: "BSE", security_id: "19585", segment: NSE_EQ, group: new}
+  - {key: "MCX", name: "MCX", symbol: "MCX", security_id: "31181", segment: NSE_EQ, group: new}
+  - {key: "CDSL", name: "CDSL", symbol: "CDSL", security_id: "21174", segment: NSE_EQ, group: new}
+  - {key: "IRFC", name: "IRFC", symbol: "IRFC", security_id: "2029", segment: NSE_EQ, group: new}
+  - {key: "LICI", name: "LIC of India", symbol: "LICI", security_id: "9480", segment: NSE_EQ, group: new}
+  - {key: "POONAWALLA", name: "Poonawalla Fincorp", symbol: "POONAWALLA", security_id: "11403", segment: NSE_EQ, group: new}
+  - {key: "TVSMOTOR", name: "TVS Motors", symbol: "TVSMOTOR", security_id: "8479", segment: NSE_EQ, group: new}
+  - {key: "ASHOKLEY", name: "Ashok Leyland", symbol: "ASHOKLEY", security_id: "212", segment: NSE_EQ, group: new}
+  - {key: "BALKRISIND", name: "Balkrishna Industries", symbol: "BALKRISIND", security_id: "335", segment: NSE_EQ, group: new}
+  - {key: "BHARATFORG", name: "Bharat Forge", symbol: "BHARATFORG", security_id: "422", segment: NSE_EQ, group: new}
+  - {key: "ESCORTS", name: "Escorts Kubota", symbol: "ESCORTS", security_id: "958", segment: NSE_EQ, group: new}
+  - {key: "EXIDEIND", name: "Exide Industries", symbol: "EXIDEIND", security_id: "676", segment: NSE_EQ, group: new}
+  - {key: "MOTHERSON", name: "Samvardhana Motherson International", symbol: "MOTHERSON", security_id: "4204", segment: NSE_EQ, group: new}
+  - {key: "MRF", name: "MRF", symbol: "MRF", security_id: "2277", segment: NSE_EQ, group: new}
+  - {key: "APOLLOTYRE", name: "Apollo Tyres", symbol: "APOLLOTYRE", security_id: "163", segment: NSE_EQ, group: new}
+  - {key: "TIINDIA", name: "Tube Investment", symbol: "TIINDIA", security_id: "312", segment: NSE_EQ, group: new}
+  - {key: "BOSCHLTD", name: "Bosch", symbol: "BOSCHLTD", security_id: "2181", segment: NSE_EQ, group: new}
+  - {key: "UNOMINDA", name: "UNO Minda", symbol: "UNOMINDA", security_id: "14154", segment: NSE_EQ, group: new}
+  - {key: "SONACOMS", name: "Sona BLW Precision Forgings", symbol: "SONACOMS", security_id: "4684", segment: NSE_EQ, group: new}
+  - {key: "ABB", name: "ABB", symbol: "ABB", security_id: "13", segment: NSE_EQ, group: new}
+  - {key: "HAL", name: "Hindustan Aeronautics", symbol: "HAL", security_id: "2303", segment: NSE_EQ, group: new}
+  - {key: "BDL", name: "Bharat Dynamics", symbol: "BDL", security_id: "2144", segment: NSE_EQ, group: new}
+  - {key: "MAZDOCK", name: "Mazagon Dock Shipbuilders", symbol: "MAZDOCK", security_id: "509", segment: NSE_EQ, group: new}
+  - {key: "COCHINSHIP", name: "Cochin Shipyard", symbol: "COCHINSHIP", security_id: "21508", segment: NSE_EQ, group: new}
+  - {key: "CGPOWER", name: "CG Power & Industrial Solutions", symbol: "CGPOWER", security_id: "760", segment: NSE_EQ, group: new}
+  - {key: "CUMMINSIND", name: "Cummins", symbol: "CUMMINSIND", security_id: "1901", segment: NSE_EQ, group: new}
+  - {key: "POLYCAB", name: "Polycab", symbol: "POLYCAB", security_id: "9590", segment: NSE_EQ, group: new}
+  - {key: "KEI", name: "KEI Industries", symbol: "KEI", security_id: "13310", segment: NSE_EQ, group: new}
+  - {key: "SUZLON", name: "Suzlon Energy", symbol: "SUZLON", security_id: "12018", segment: NSE_EQ, group: new}
+  - {key: "THERMAX", name: "Thermax", symbol: "THERMAX", security_id: "3475", segment: NSE_EQ, group: new}
+  - {key: "GMRAIRPORT", name: "GMR Airports", symbol: "GMRAIRPORT", security_id: "13528", segment: NSE_EQ, group: new}
+  - {key: "IRB", name: "IRB Infrastructure Developers", symbol: "IRB", security_id: "15313", segment: NSE_EQ, group: new}
+  - {key: "NBCC", name: "NBCC", symbol: "NBCC", security_id: "31415", segment: NSE_EQ, group: new}
+  - {key: "NCC", name: "NCC", symbol: "NCC", security_id: "2319", segment: NSE_EQ, group: new}
+  - {key: "RVNL", name: "Rail Vikas Nigam", symbol: "RVNL", security_id: "9552", segment: NSE_EQ, group: new}
+  - {key: "CONCOR", name: "Container Corporation of India", symbol: "CONCOR", security_id: "4749", segment: NSE_EQ, group: new}
+  - {key: "INDIGO", name: "Interglobe Aviation", symbol: "INDIGO", security_id: "11195", segment: NSE_EQ, group: new}
+  - {key: "HINDPETRO", name: "Hindustan Petroleum", symbol: "HINDPETRO", security_id: "1406", segment: NSE_EQ, group: new}
+  - {key: "IOC", name: "Indian Oil Corporation", symbol: "IOC", security_id: "1624", segment: NSE_EQ, group: new}
+  - {key: "PETRONET", name: "Petronet LNG", symbol: "PETRONET", security_id: "11351", segment: NSE_EQ, group: new}
+  - {key: "IGL", name: "Indraprastha Gas", symbol: "IGL", security_id: "11262", segment: NSE_EQ, group: new}
+  - {key: "MGL", name: "Mahanagar Gas", symbol: "MGL", security_id: "17534", segment: NSE_EQ, group: new}
+  - {key: "OIL", name: "Oil India", symbol: "OIL", security_id: "17438", segment: NSE_EQ, group: new}
+  - {key: "NHPC", name: "NHPC", symbol: "NHPC", security_id: "17400", segment: NSE_EQ, group: new}
+  - {key: "SJVN", name: "SJVN", symbol: "SJVN", security_id: "18883", segment: NSE_EQ, group: new}
+  - {key: "TORNTPOWER", name: "Torrent Power", symbol: "TORNTPOWER", security_id: "13786", segment: NSE_EQ, group: new}
+  - {key: "JSWENERGY", name: "JSW Energy", symbol: "JSWENERGY", security_id: "17869", segment: NSE_EQ, group: new}
+  - {key: "ADANIPOWER", name: "Adani Power", symbol: "ADANIPOWER", security_id: "17388", segment: NSE_EQ, group: new}
+  - {key: "NLCINDIA", name: "NLC India", symbol: "NLCINDIA", security_id: "8585", segment: NSE_EQ, group: new}
+  - {key: "CESC", name: "CESC", symbol: "CESC", security_id: "628", segment: NSE_EQ, group: new}
+  - {key: "ADANIENSOL", name: "Adani Energy Solutions", symbol: "ADANIENSOL", security_id: "10217", segment: NSE_EQ, group: new}
+  - {key: "NATIONALUM", name: "NALCO", symbol: "NATIONALUM", security_id: "6364", segment: NSE_EQ, group: new}
+  - {key: "NMDC", name: "NMDC", symbol: "NMDC", security_id: "15332", segment: NSE_EQ, group: new}
+  - {key: "HINDZINC", name: "Hindustan Zinc", symbol: "HINDZINC", security_id: "1424", segment: NSE_EQ, group: new}
+  - {key: "JSL", name: "Jindal Stainless", symbol: "JSL", security_id: "11236", segment: NSE_EQ, group: new}
+  - {key: "APLAPOLLO", name: "APL Apollo Tubes", symbol: "APLAPOLLO", security_id: "25780", segment: NSE_EQ, group: new}
+  - {key: "HINDCOPPER", name: "Hindustan Copper", symbol: "HINDCOPPER", security_id: "17939", segment: NSE_EQ, group: new}
+  - {key: "SHREECEM", name: "Shree Cement", symbol: "SHREECEM", security_id: "3103", segment: NSE_EQ, group: new}
+  - {key: "DALBHARAT", name: "Dalmia Bharat", symbol: "DALBHARAT", security_id: "8075", segment: NSE_EQ, group: new}
+  - {key: "RAMCOCEM", name: "Ramco Cements", symbol: "RAMCOCEM", security_id: "2043", segment: NSE_EQ, group: new}
+  - {key: "JKCEMENT", name: "JK Cement", symbol: "JKCEMENT", security_id: "13270", segment: NSE_EQ, group: new}
+  - {key: "PIDILITIND", name: "Pidilite Industries", symbol: "PIDILITIND", security_id: "2664", segment: NSE_EQ, group: new}
+  - {key: "BERGEPAINT", name: "Berger Paints", symbol: "BERGEPAINT", security_id: "404", segment: NSE_EQ, group: new}
+  - {key: "KANSAINER", name: "Kansai Nerolac Paints", symbol: "KANSAINER", security_id: "1196", segment: NSE_EQ, group: new}
+  - {key: "ASTRAL", name: "Astral", symbol: "ASTRAL", security_id: "14418", segment: NSE_EQ, group: new}
+  - {key: "SUPREMEIND", name: "Supreme Industries", symbol: "SUPREMEIND", security_id: "3363", segment: NSE_EQ, group: new}
+  - {key: "DABUR", name: "Dabur India", symbol: "DABUR", security_id: "772", segment: NSE_EQ, group: new}
+  - {key: "MARICO", name: "Marico", symbol: "MARICO", security_id: "4067", segment: NSE_EQ, group: new}
+  - {key: "GODREJCP", name: "Godrej Consumer Products", symbol: "GODREJCP", security_id: "10099", segment: NSE_EQ, group: new}
+  - {key: "COLPAL", name: "Colgate Palmolive", symbol: "COLPAL", security_id: "15141", segment: NSE_EQ, group: new}
+  - {key: "UNITDSPR", name: "United Spirits", symbol: "UNITDSPR", security_id: "10447", segment: NSE_EQ, group: new}
+  - {key: "UBL", name: "United Breweries", symbol: "UBL", security_id: "16713", segment: NSE_EQ, group: new}
+  - {key: "VBL", name: "Varun Beverages", symbol: "VBL", security_id: "18921", segment: NSE_EQ, group: new}
+  - {key: "JUBLFOOD", name: "Jubilant FoodWorks", symbol: "JUBLFOOD", security_id: "18096", segment: NSE_EQ, group: new}
+  - {key: "PAGEIND", name: "Page Industries", symbol: "PAGEIND", security_id: "14413", segment: NSE_EQ, group: new}
+  - {key: "BATAINDIA", name: "Bata", symbol: "BATAINDIA", security_id: "371", segment: NSE_EQ, group: new}
+  - {key: "VOLTAS", name: "Voltas", symbol: "VOLTAS", security_id: "3718", segment: NSE_EQ, group: new}
+  - {key: "HAVELLS", name: "Havells", symbol: "HAVELLS", security_id: "9819", segment: NSE_EQ, group: new}
+  - {key: "CROMPTON", name: "Crompton Greaves", symbol: "CROMPTON", security_id: "17094", segment: NSE_EQ, group: new}
+  - {key: "WHIRLPOOL", name: "Whirlpool", symbol: "WHIRLPOOL", security_id: "18011", segment: NSE_EQ, group: new}
+  - {key: "BLUESTARCO", name: "Blue Star", symbol: "BLUESTARCO", security_id: "8311", segment: NSE_EQ, group: new}
+  - {key: "DIXON", name: "Dixon Technologies", symbol: "DIXON", security_id: "21690", segment: NSE_EQ, group: new}
+  - {key: "TRENT", name: "Trent", symbol: "TRENT", security_id: "1964", segment: NSE_EQ, group: new}
+  - {key: "DMART", name: "Avenue Supermarts DMart", symbol: "DMART", security_id: "19913", segment: NSE_EQ, group: new}
+  - {key: "INDHOTEL", name: "Indian Hotels Company", symbol: "INDHOTEL", security_id: "1512", segment: NSE_EQ, group: new}
+  - {key: "IRCTC", name: "IRCTC", symbol: "IRCTC", security_id: "13611", segment: NSE_EQ, group: new}
+  - {key: "ETERNAL", name: "Eternal", symbol: "ETERNAL", security_id: "5097", segment: NSE_EQ, group: new}
+  - {key: "KALYANKJIL", name: "Kalyan Jewellers", symbol: "KALYANKJIL", security_id: "2955", segment: NSE_EQ, group: new}
+  - {key: "NAUKRI", name: "Info Edge", symbol: "NAUKRI", security_id: "13751", segment: NSE_EQ, group: new}
+  - {key: "LTIM", name: "LTM", symbol: "LTM", security_id: "17818", segment: NSE_EQ, group: new}
+  - {key: "MPHASIS", name: "Mphasis", symbol: "MPHASIS", security_id: "4503", segment: NSE_EQ, group: new}
+  - {key: "COFORGE", name: "Coforge", symbol: "COFORGE", security_id: "11543", segment: NSE_EQ, group: new}
+  - {key: "PERSISTENT", name: "Persistent Systems", symbol: "PERSISTENT", security_id: "18365", segment: NSE_EQ, group: new}
+  - {key: "LTTS", name: "L&T Technology Services", symbol: "LTTS", security_id: "18564", segment: NSE_EQ, group: new}
+  - {key: "TATAELXSI", name: "Tata Elxsi", symbol: "TATAELXSI", security_id: "3411", segment: NSE_EQ, group: new}
+  - {key: "OFSS", name: "Oracle Financial Services Software", symbol: "OFSS", security_id: "10738", segment: NSE_EQ, group: new}
+  - {key: "KPITTECH", name: "KPIT Technologies", symbol: "KPITTECH", security_id: "9683", segment: NSE_EQ, group: new}
+  - {key: "TATACOMM", name: "Tata Communications", symbol: "TATACOMM", security_id: "3721", segment: NSE_EQ, group: new}
+  - {key: "IDEA", name: "Vodafone Idea", symbol: "IDEA", security_id: "14366", segment: NSE_EQ, group: new}
+  - {key: "INDUSTOWER", name: "Indus Towers", symbol: "INDUSTOWER", security_id: "29135", segment: NSE_EQ, group: new}
+  - {key: "SUNTV", name: "Sun TV Network", symbol: "SUNTV", security_id: "13404", segment: NSE_EQ, group: new}
+  - {key: "ZEEL", name: "Zee Entertainment", symbol: "ZEEL", security_id: "3812", segment: NSE_EQ, group: new}
+  - {key: "TORNTPHARM", name: "Torrent Pharmaceuticals", symbol: "TORNTPHARM", security_id: "3518", segment: NSE_EQ, group: new}
+  - {key: "ZYDUSLIFE", name: "Zydus Life Science", symbol: "ZYDUSLIFE", security_id: "7929", segment: NSE_EQ, group: new}
+  - {key: "ALKEM", name: "Alkem Laboratories", symbol: "ALKEM", security_id: "11703", segment: NSE_EQ, group: new}
+  - {key: "LUPIN", name: "Lupin", symbol: "LUPIN", security_id: "10440", segment: NSE_EQ, group: new}
+  - {key: "AUROPHARMA", name: "Aurobindo Pharma", symbol: "AUROPHARMA", security_id: "275", segment: NSE_EQ, group: new}
+  - {key: "BIOCON", name: "Biocon", symbol: "BIOCON", security_id: "11373", segment: NSE_EQ, group: new}
+  - {key: "GLENMARK", name: "Glenmark Pharmaceuticals", symbol: "GLENMARK", security_id: "7406", segment: NSE_EQ, group: new}
+  - {key: "IPCALAB", name: "IPCA Laboratories", symbol: "IPCALAB", security_id: "1633", segment: NSE_EQ, group: new}
+  - {key: "LAURUSLABS", name: "Laurus Labs", symbol: "LAURUSLABS", security_id: "19234", segment: NSE_EQ, group: new}
+  - {key: "ABBOTINDIA", name: "Abbott", symbol: "ABBOTINDIA", security_id: "17903", segment: NSE_EQ, group: new}
+  - {key: "FORTIS", name: "Fortis Healthcare", symbol: "FORTIS", security_id: "14592", segment: NSE_EQ, group: new}
+  - {key: "MAXHEALTH", name: "Max Healthcare Institute", symbol: "MAXHEALTH", security_id: "22377", segment: NSE_EQ, group: new}
+  - {key: "SYNGENE", name: "Syngene International", symbol: "SYNGENE", security_id: "10243", segment: NSE_EQ, group: new}
+  - {key: "GRANULES", name: "Granules", symbol: "GRANULES", security_id: "11872", segment: NSE_EQ, group: new}
+  - {key: "GODREJPROP", name: "Godrej Properties", symbol: "GODREJPROP", security_id: "17875", segment: NSE_EQ, group: new}
+  - {key: "OBEROIRLTY", name: "Oberoi Realty", symbol: "OBEROIRLTY", security_id: "20242", segment: NSE_EQ, group: new}
+  - {key: "PRESTIGE", name: "Prestige Estates Projects", symbol: "PRESTIGE", security_id: "20302", segment: NSE_EQ, group: new}
+  - {key: "PHOENIXLTD", name: "Phoenix Mills", symbol: "PHOENIXLTD", security_id: "14552", segment: NSE_EQ, group: new}
+  - {key: "LODHA", name: "Lodha Developers", symbol: "LODHA", security_id: "3220", segment: NSE_EQ, group: new}
+  - {key: "SRF", name: "SRF", symbol: "SRF", security_id: "3273", segment: NSE_EQ, group: new}
+  - {key: "PIIND", name: "PI Industries", symbol: "PIIND", security_id: "24184", segment: NSE_EQ, group: new}
+  - {key: "UPL", name: "UPL", symbol: "UPL", security_id: "11287", segment: NSE_EQ, group: new}
+  - {key: "DEEPAKNTR", name: "Deepak Nitrite", symbol: "DEEPAKNTR", security_id: "19943", segment: NSE_EQ, group: new}
+  - {key: "AARTIIND", name: "Aarti Industries", symbol: "AARTIIND", security_id: "7", segment: NSE_EQ, group: new}
+  - {key: "TATACHEM", name: "Tata Chemicals", symbol: "TATACHEM", security_id: "3405", segment: NSE_EQ, group: new}
+  - {key: "NAVINFLUOR", name: "Navin Fluorine International", symbol: "NAVINFLUOR", security_id: "14672", segment: NSE_EQ, group: new}
+  - {key: "CHAMBLFERT", name: "Chambal Fertilisers & Chemicals", symbol: "CHAMBLFERT", security_id: "637", segment: NSE_EQ, group: new}
+  - {key: "COROMANDEL", name: "Coromandel International", symbol: "COROMANDEL", security_id: "739", segment: NSE_EQ, group: new}
