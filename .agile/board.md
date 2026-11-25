@@ -1,9 +1,11 @@
 # Board
-_Generated 2026-11-12T13:27+05:30 by agile_board.py; do not edit by hand._
+_Generated 2026-11-25T23:39+05:30 by agile_board.py; do not edit by hand._
 
-## backlog — 27 stories, 108 pts
+## backlog — 44 stories, 167 pts
 | ID | Title | Pts | Priority | Sprint | Protocol |
 |---|---|---|---|---|---|
+| SP-004 | Study: the pullback book against NIFTY held, every month | 3 | Must | 5 | ping-pong-tdd |
+| SP-005 | Study: how many micro-trend alerts before anything can be said | 3 | Must | 5 | ping-pong-tdd |
 | US-005 | Reads require authentication whenever the app is reachable off-loopback | 5 | Must | 2 | driver-navigator |
 | US-006 | Supervised service with crash recovery | 3 | Must | 3 | driver-navigator |
 | US-008 | Reproducible build and CI | 3 | Must | 3 | driver-navigator |
@@ -13,11 +15,14 @@ _Generated 2026-11-12T13:27+05:30 by agile_board.py; do not edit by hand._
 | US-019 | Resumable five-year Dhan backfill | 5 | Must | 2 | driver-navigator |
 | US-020 | Matrix sweep at scale with pre-registered gate | 8 | Must | 4 | driver-navigator |
 | US-021 | Verify the charge table against a real contract note | 3 | Must | 6 | ping-pong-tdd |
-| US-024 | Telegram settings, test message, status and quiet hours | 3 | Must | 2 | driver-navigator |
 | US-026 | Desk poll never blocks on notifications; SQLite contention bounded | 3 | Must | 3 | driver-navigator |
 | US-027 | Swing carry rules for stocks: shorts intraday, delivery costs, gap quarantine | 3 | Must | 3 | ping-pong-tdd |
 | US-031 | Lab option runs do not slip the underlying before pricing the option | 3 | Must | 2 | ping-pong-tdd |
+| US-121 | The desk stocks' day close is the exchange's closing price, not the 15:14 minute | 5 | Must | 5 | ping-pong-tdd |
 | SP-002 | Spike: which Data API features add edge and ergonomics | 3 | Should | 6 | driver-navigator |
+| SP-003 | Study: follow the four WATCH option cells on paper with real quotes | 5 | Should | 5 | driver-navigator |
+| SP-006 | Study: do the option results change on the contract the new pick names | 5 | Should | 5 | driver-navigator |
+| SP-009 | Study: the spread table by index and time of day, and the option rows it changes | 3 | Should | 5 | ping-pong-tdd |
 | US-007 | Observability: metrics, health and a system status panel | 3 | Should | 5 | driver-navigator |
 | US-009 | Schema migrations and backups | 5 | Should | 5 | driver-navigator |
 | US-010 | Integer-paise money in the manual journal and risk governor | 5 | Should | 6 | ping-pong-tdd |
@@ -29,10 +34,27 @@ _Generated 2026-11-12T13:27+05:30 by agile_board.py; do not edit by hand._
 | US-025 | Desk manual positions adopt the shared rules; fix short costing | 3 | Should | 3 | ping-pong-tdd |
 | US-029 | Fallback bars never pollute a Dhan series; alerts report the resolution that served them | 3 | Should | 2 | ping-pong-tdd |
 | US-033 | Dhan feed shuts down cleanly (MarketFeed.disconnect awaited) | 1 | Should | 2 | ping-pong-tdd |
+| US-107 | An open page tells the owner when the server runs a new version | 3 | Should | 5 | ping-pong-tdd |
+| US-108 | The wide list tells the phone when it releases a paper trade | 2 | Should | 5 | ping-pong-tdd |
+| US-109 | A stock taken off the delivery list keeps its open wide-list trade managed | 3 | Should | 5 | ping-pong-tdd |
+| US-110 | The spread cap of an option alert is set for each index from measured spreads | 3 | Should | 5 | ping-pong-tdd |
+| US-111 | Decision: an index alert when no contract in the chain trades | 3 | Should | 5 | driver-navigator |
+| US-112 | The wide list's page shows when the round first read a session and from which source | 2 | Should | 5 | ping-pong-tdd |
+| US-114 | Three small page defects: gap outcome names, News times in UTC, Volume axis text | 2 | Should | 5 | ping-pong-tdd |
+| US-115 | A way to run the whole test suite with the clock moved forward | 3 | Should | 5 | driver-navigator |
+| US-116 | Every story file has the header the board reads, and the board is current | 2 | Should | 5 | driver-navigator |
 | SP-001 | Spike: review fnolab.in end to end for reference ideas | 2 | Could | 5 | driver-navigator |
+| SP-007 | Study: real puts on FINNIFTY and SENSEX, does long volatility lose there too | 5 | Could | 5 | driver-navigator |
+| SP-008 | Study: is there any buy-only use of the next move's size | 5 | Could | 5 | driver-navigator |
 | US-012 | Paper vs taken reconciliation and slippage report | 3 | Could | 6 | ping-pong-tdd |
+| US-113 | Real put prices for FINNIFTY, MIDCPNIFTY and SENSEX and for weekly contracts | 5 | Could | 5 | driver-navigator |
 
-## done — 10 stories, 44 pts
+## ready — 1 story, 0 pts
+| ID | Title | Pts | Priority | Sprint | Protocol |
+|---|---|---|---|---|---|
+| US-106 | the wide list reads each session the same evening from Dhan's quote answer | ? | Must | 4 | ping-pong-tdd |
+
+## done — 19 stories, 47 pts
 | ID | Title | Pts | Priority | Sprint | Protocol |
 |---|---|---|---|---|---|
 | US-000 | Quality gate baseline is green: format, pins, mypy ratchet, repo hygiene | 3 | Must | 0 | driver-navigator |
@@ -41,9 +63,18 @@ _Generated 2026-11-12T13:27+05:30 by agile_board.py; do not edit by hand._
 | US-003 | Telegram client and compact alert formatter, with redaction hardening | 5 | Must | 1 | ping-pong-tdd |
 | US-004 | Alerts reach Telegram through a durable outbox | 5 | Must | 1 | driver-navigator |
 | US-023 | Paper ledger in integer paise, with correct costs and option repricing | 3 | Must | 1 | ping-pong-tdd |
+| US-024 | Telegram settings, test message, status and quiet hours | 3 | Must | 2 | driver-navigator |
 | US-028 | Fix: alerts served by the Yahoo fallback are labelled live | 1 | Must | 1 | ping-pong-tdd |
 | US-030 | Paper trades visible on the desk (thin slice of US-016) | 2 | Must | 1 | driver-navigator |
 | US-032 | Paper panel shows the last session when nothing closed today | 2 | Must | 1 | driver-navigator |
 | US-067 | The pullback rule as delivery stock trades in the paper test | 13 | Must | - | driver-navigator |
+| US-097 | the desk tells when it was not running, never alerts on unclean bars, shows the spread | ? | Must | 4 | ping-pong-tdd |
+| US-099 | the pullback rule as a paper test on a wide list of stocks | ? | Must | 4 | ping-pong-tdd |
+| US-102 | the wide list's evening round waits for the broker's daily bars of the session | ? | Must | 4 | ping-pong-tdd |
+| US-104 | an option alert never names a dead contract | ? | Must | 4 | ping-pong-tdd |
+| US-105 | a paper trade on a contract that was not tradeable is marked and left out of the score | ? | Must | 4 | ping-pong-tdd |
+| US-098 | real put prices, and the long-volatility question settled (study) | ? | Should | 4 | ping-pong-tdd |
+| US-100 | the capped pullback book against the index (study) | ? | Should | 4 | ping-pong-tdd |
+| US-101 | the pullback rule by market condition (study) | ? | Should | 4 | ping-pong-tdd |
 
-**Total:** 37 stories, 44/152 points done
+**Total:** 64 stories, 47/214 points done
