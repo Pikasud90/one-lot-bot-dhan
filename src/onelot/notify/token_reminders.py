@@ -6,6 +6,8 @@ page, the computer and the phone:
 
     60, 30, 15 and 5 minutes before the expiry, then "expired", then (while still expired) one
     reminder at 08:30 IST on each trading day, and one message when the token is renewed.
+    When the desk first looks later that trading day (it was started after 09:15, or the laptop
+    slept), the reminder is sent at that first look, once that day, until the market closes.
 
 Two parts, kept apart so the ladder can be tested without a clock or a database:
 
@@ -42,6 +44,7 @@ log = logging.getLogger(__name__)
 STAGE_MINUTES = (60, 30, 15, 5)
 MORNING_FROM = dt.time(8, 30)  # IST: the reminder on a trading day while still expired
 MARKET_OPEN = dt.time(9, 15)  # IST: the morning reminder says "before 09:15"
+MORNING_UNTIL = dt.time(15, 30)  # IST: a first look until the close still sends it (US-097)
 MIN_STEP_SECONDS = 55.0  # the step runs from a loop that ticks faster than once a minute
 KIND = "token"
 _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
@@ -66,6 +69,7 @@ class Reminder:
     stage: int | None  # 60, 30, 15 or 5 for a stage
     minutes_left: int | None  # the true time left, rounded up to a whole minute
     key: str  # the durable dedup key of the message
+    late: bool = False  # a morning reminder sent after 09:15: the market is already open
 
 
 def _iso(moment: dt.datetime) -> str:
@@ -107,10 +111,12 @@ def decide(
             state = replace(state, morning_day=today)  # that message is today's reminder
         elif (
             trading_day
-            and MORNING_FROM <= now.time().replace(tzinfo=None) < MARKET_OPEN
+            and MORNING_FROM <= now.time().replace(tzinfo=None) < MORNING_UNTIL
             and state.morning_day != today
         ):
-            out.append(Reminder("morning", None, None, f"token:{_iso(expiry)}:morning:{today}"))
+            late = now.time().replace(tzinfo=None) >= MARKET_OPEN
+            key = f"token:{_iso(expiry)}:morning:{today}"
+            out.append(Reminder("morning", None, None, key, late=late))
             state = replace(state, morning_day=today)
     else:
         due = [m for m in STAGE_MINUTES if left <= m * 60]
@@ -157,6 +163,11 @@ def reminder_text(
         return (
             "Dhan token expired",
             f"It ran out at {at}. The live data stops until it is renewed: {do}{tries}",
+        )
+    if reminder.kind == "morning" and reminder.late:
+        return (
+            "Dhan token is still expired",
+            f"The market is open and the live data is off. Renew it now: {do}{tries}",
         )
     if reminder.kind == "morning":
         return (

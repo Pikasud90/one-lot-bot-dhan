@@ -250,6 +250,42 @@ def test_the_morning_reminder_survives_a_restart_without_repeating(rig: Rig) -> 
     assert len(rig.sent) == n
 
 
+# ── US-097: a desk that first looks after 09:15 still sends the day's reminder ───────
+def test_a_first_look_at_10_30_on_a_trading_day_sends_one_reminder(rig: Rig) -> None:
+    rig.run(at(25, 21, 0), at(25, 21, 40))  # expired on Wednesday evening
+    rig.sent.clear()
+    rig.step = rig.build()  # the desk was stopped overnight and started at 10:30
+    got = rig.run(at(26, 10, 30), at(26, 15, 0))
+    assert got == [("26 10:30", "Dhan token is still expired")]
+    assert "market is open" in rig.sent[0].body
+    assert "before 09:15" not in rig.sent[0].body
+    assert rig.sent[0].dedup_key == f"token:{E.isoformat(timespec='minutes')}:morning:2026-11-26"
+
+
+def test_a_second_look_the_same_day_sends_no_second_reminder(rig: Rig) -> None:
+    rig.run(at(25, 21, 0), at(25, 21, 40))
+    rig.sent.clear()
+    rig.step.look(at(26, 10, 30))
+    rig.step = rig.build()  # a restart at noon
+    assert rig.run(at(26, 12, 0), at(26, 15, 29)) == []
+    assert len(rig.sent) == 1
+
+
+def test_a_late_first_look_on_a_non_trading_day_sends_none(rig: Rig) -> None:
+    rig.run(at(25, 21, 0), at(25, 21, 40))
+    rig.sent.clear()
+    rig.trading = lambda d: weekday(d) and d != dt.date(2026, 11, 26)
+    assert rig.run(at(26, 10, 30), at(26, 12, 0)) == []
+    assert rig.run(at(28, 10, 30), at(28, 12, 0)) == []  # Saturday
+
+
+def test_no_reminder_after_the_close(rig: Rig) -> None:
+    rig.run(at(25, 21, 0), at(25, 21, 40))
+    rig.sent.clear()
+    rig.step = rig.build()
+    assert rig.run(at(26, 15, 30), at(26, 18, 0)) == []
+
+
 # ── the loop that hosts it ticks faster than a minute ─────────────────────────────
 def test_looking_again_within_55_seconds_does_nothing(rig: Rig) -> None:
     rig.step.look(at(25, 21, 0))
