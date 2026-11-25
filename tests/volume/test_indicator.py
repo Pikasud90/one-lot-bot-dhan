@@ -338,7 +338,7 @@ W = {
     "FINNIFTY": {"HDFCBANK": 0.40, "ICICIBANK": 0.30, "BAJFINANCE": 0.30},
     "SENSEX": {"ITC": 0.08, "RELIANCE": 0.92},
 }
-EXP = {k: 1e7 for k in ("ITC", "HDFCBANK", "ICICIBANK", "RELIANCE", "BAJFINANCE")}
+EXP = dict.fromkeys(("ITC", "HDFCBANK", "ICICIBANK", "RELIANCE", "BAJFINANCE"), 10000000.0)
 
 
 def test_a_spike_led_by_itc_does_not_name_the_bank_indices():
@@ -362,7 +362,7 @@ def test_the_sum_runs_over_all_basket_stocks_and_signs_can_cancel():
 
 
 def test_nothing_above_the_floor_names_nothing():
-    net = {k: 1e4 for k in EXP}
+    net = dict.fromkeys(EXP, 10000.0)
     assert ind.likely_indices(W, net, EXP) == []
     assert ind.likely_indices({}, net, EXP) == []
     assert ind.likely_indices(W, {}, EXP) == []

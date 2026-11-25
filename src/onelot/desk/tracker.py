@@ -201,6 +201,10 @@ class InstrumentTracker:
         self._ladder_memo: tuple[tuple, pd.DataFrame] | None = None
         self._daily_memo: tuple[tuple, pd.DataFrame, str | None] | None = None
         self._trend_failed = False
+        #: US-097: today's bars that did not come as one-minute bars of the live source
+        #: (bar start -> its width in minutes), and why the micro-trend rule waits (the card)
+        self.unclean_bars: dict[pd.Timestamp, int] = {}
+        self.clean_note: str | None = None
 
     # ── bars ──────────────────────────────────────────────────────────────
     def update_bars(self, df: pd.DataFrame) -> None:
@@ -564,6 +568,13 @@ class InstrumentTracker:
         return Verdict("none", why, bar_ts, None, close, None, [], fresh)
 
     # ── reporting ─────────────────────────────────────────────────────────
+    def _trend_shown(self) -> dict:
+        """The trend as the card shows it: with the clean-bars note (US-097) beside its own."""
+        if not self.clean_note or not self.trend:
+            return self.trend
+        note = "; ".join(n for n in (self.trend.get("note"), self.clean_note) if n)
+        return {**self.trend, "note": note}
+
     def as_dict(
         self, now: dt.datetime, source_name: str, delayed: bool, market_open: bool = True
     ) -> dict:
@@ -604,7 +615,7 @@ class InstrumentTracker:
             },
             "strategies": [s.as_dict() for s in self.slots],
             "regime": self.regime,
-            "trend": self.trend,
+            "trend": self._trend_shown(),
             "risk": {
                 "trades_today": self.trades_today,
                 "consecutive_losses": self.consecutive_losses,
@@ -618,8 +629,14 @@ class InstrumentTracker:
                 "delayed": delayed,
                 "resolution_min": self.fine_minutes,
                 "last_error": self.last_error,
+                "clean_note": self.clean_note,
             },
         }
+
+
+def needs_one_minute(slot: StrategySlot) -> bool:
+    """A slot whose strategy reads the micro-trend ladder from one-minute bars (US-097)."""
+    return bool(getattr(slot.strategy, "ladder_timeframes", None))
 
 
 def _params(slot: StrategySlot) -> Any:

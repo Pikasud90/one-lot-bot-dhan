@@ -42,6 +42,7 @@ from ..data.universe import load_specs
 from ..indicators import mtf
 from ..lab.real_options import premium_in_minute
 from ..notify.base import Notification, NotificationLevel, shown_confidence
+from . import clean_bars
 from .audit import audit_signal, confidence, strategy_scoreboard
 from .config import DeskConfig, load_desk_config
 from .data import CompositeBars, build_source, is_delayed_source
@@ -55,7 +56,7 @@ from .economics import (
 from .fillcost import FillCostRecorder, Watched, charges_check
 from .history import daily_history, minute_history
 from .rules import pick_expiry
-from .tracker import InstrumentTracker, StrategySlot, Verdict
+from .tracker import InstrumentTracker, StrategySlot, Verdict, needs_one_minute
 
 if TYPE_CHECKING:  # annotation only: the paper package is never imported by the desk
     from ..paper.book import PaperBook
@@ -505,6 +506,7 @@ class Desk:
             for k, df in got.items():
                 if k in self.trackers:
                     self.trackers[k].update_bars(df)
+                    self._note_bar_source(self.trackers[k], df, now)
                 else:
                     self.context_bars[k] = df
                 if k in self.trackers and k in (c.key for c in self.cfg.context):
@@ -516,6 +518,7 @@ class Desk:
             window = self.session_clock.current_window(now)
             entries_ok = bool(window and window.entries_allowed(now))
             market_ok = bool(window and window.is_open(now))
+            self._refresh_clean_notes(now, market_ok)
             nifty = self.trackers.get("NIFTY")
             market_bars = nifty.bars if nifty is not None else self.context_bars.get("NIFTY")
             self._expire_signals(now)
@@ -829,10 +832,55 @@ class Desk:
         for t in self.trackers.values():
             t.fine_minutes = self.fine_minutes
             t.bars = pd.DataFrame()
+            t.unclean_bars, t.clean_note = {}, None
             t.live_quote = None
             for s in t.slots:
                 s.last_bar_ts = None
         self.context_bars = {}
+
+    # ── clean one-minute bars for the micro-trend rule (US-097) ──────────────
+    def _note_bar_source(self, t: InstrumentTracker, df: pd.DataFrame, now: dt.datetime) -> None:
+        """Remember which of today's bars of `t` did not come as one-minute bars of the live
+        source. Only trackers with a slot that needs them; a failure is counted, never raised."""
+        if not any(needs_one_minute(s) for s in t.slots):
+            return
+        try:
+            src = self._served_by(t.cfg.key)
+            delayed = is_delayed_source(src)
+            clean = not delayed and self.fine_minutes == 1
+            width = self.fine_minutes
+            if delayed:
+                fallback = getattr(self.source, "fallback", None)
+                width = int(str(getattr(fallback, "resolution", "2m"))[:-1] or 2)
+            t.unclean_bars = clean_bars.note_frame(
+                t.unclean_bars, df, now.astimezone(IST).date(), clean, width
+            )
+        except Exception:  # noqa: BLE001 - a record for the gate, never stops the poll
+            self.hook_errors += 1
+            log.exception("desk: the bar source of %s could not be noted", t.cfg.key)
+
+    def _unclean(self, t: InstrumentTracker, until: pd.Timestamp) -> clean_bars.Unclean | None:
+        now = until.tz_convert(IST) if until.tzinfo is not None else until.tz_localize(IST)
+        opens = str(t.series.session_times.get("open", "09:15"))
+        h, m = (int(x) for x in opens.split(":"))
+        return clean_bars.problem(t.bars, t.unclean_bars, now.date(), until, dt.time(h, m))
+
+    def _refresh_clean_notes(self, now: dt.datetime, open_: bool) -> None:
+        """The card's note (US-097): why the micro-trend rule waits, for each tracker with
+        such a slot, while the market is open. A failure leaves no note and is counted."""
+        for t in self.trackers.values():
+            if not any(needs_one_minute(s) for s in t.slots):
+                continue
+            if not open_ or t.bars.empty:
+                t.clean_note = None
+                continue
+            try:
+                u = self._unclean(t, pd.Timestamp(now))
+                t.clean_note = u.text() if u is not None else None
+            except Exception:  # noqa: BLE001 - a note for the card, never stops the poll
+                self.hook_errors += 1
+                t.clean_note = None
+                log.exception("desk: the clean-bars note of %s failed", t.cfg.key)
 
     def _served_by(self, key: str) -> str:
         """The source that served `key` on the last poll (e.g. "yahoo" when Dhan had no bars),
@@ -889,6 +937,20 @@ class Desk:
                 busy,
             )
             return
+        if needs_one_minute(slot):
+            held = self._clean_bars_hold(t, slot, v)
+            if held is not None:
+                slot.last_verdict = Verdict(
+                    "none", held, v.bar_ts, None, v.close, v.strength, [], v.fresh
+                )
+                log.info(
+                    "desk: %s %s %s not alerted: %s",
+                    t.cfg.key,
+                    slot.cfg.name,
+                    slot.cfg.timeframe,
+                    held,
+                )
+                return
         rset = rlive.settings_of(getattr(slot.strategy, "p", None))
         risk: float | None = None
         if rset is not None:  # US-079: the first stop is the stop and trail rule's
@@ -1070,6 +1132,24 @@ class Desk:
             dedup_key=f"desk:{sid}",
         )
         self.version += 1
+
+    def _clean_bars_hold(self, t: InstrumentTracker, slot: StrategySlot, v: Verdict) -> str | None:
+        """Why a micro-trend verdict is not alerted for want of clean one-minute bars today
+        (US-097), or None. A check that fails holds nothing: it never stops an alert that
+        the desk raised before this story."""
+        if v.bar_ts is None:
+            return None
+        try:
+            until = pd.Timestamp(v.bar_ts) + pd.Timedelta(minutes=slot.tf_min)
+            u = self._unclean(t, until)
+        except Exception:  # noqa: BLE001
+            self.hook_errors += 1
+            log.exception("desk: the clean-bars check of %s failed", t.cfg.key)
+            return None
+        if u is None:
+            return None
+        t.clean_note = u.text()
+        return u.text()
 
     def _busy_reason(
         self, instrument_key: str, strategy: str, timeframe: str, v: Verdict
