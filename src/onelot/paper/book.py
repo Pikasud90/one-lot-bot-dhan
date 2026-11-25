@@ -651,7 +651,9 @@ class PaperBook:
         try:
             with self.engine.connect() as conn:
                 found = conn.execute(
-                    select(e.trade_id, e.detail).where(e.kind == "FILLED", e.trade_id.in_(trade_ids))
+                    select(e.trade_id, e.detail).where(
+                        e.kind == "FILLED", e.trade_id.in_(trade_ids)
+                    )
                 ).all()
         except Exception as exc:  # noqa: BLE001 - the listing never fails for a label
             log.warning("paper: price sources not read: %s: %s", type(exc).__name__, exc)

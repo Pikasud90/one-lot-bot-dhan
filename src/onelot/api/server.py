@@ -50,6 +50,8 @@ def _ui_build() -> str:
             st = p.stat()
             h.update(f"{p.relative_to(UI_DIR).as_posix()}|{st.st_size}|{st.st_mtime_ns}\n".encode())
     return h.hexdigest()[:12]
+
+
 #: guards the lazy build of the Machine Learning Lab (`/api/mllab`): one MlLab per desk
 _MLLAB_LOCK = threading.Lock()
 
