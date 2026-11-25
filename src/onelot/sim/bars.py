@@ -112,7 +112,12 @@ class StoreBars:
     A series' data version is the number of writes to it in this process and its first and last
     stored bar (`data.store.series_spans`, which another process' writes reach within its TTL):
     when it moves, everything kept for that series is dropped. `reads` counts the store reads
-    (the tests count them)."""
+    (the tests count them).
+
+    Known limits (server review F10, left on purpose): the version is whole-series, so a
+    backfill that adds one day drops every kept block and frame of that series, windows wholly
+    in the past included; an edit by ANOTHER process inside the stored range (the same first
+    and last bar) is not seen until this process restarts or a bar is written here."""
 
     def __init__(self, engine: Engine, cap_mb: float = MINUTE_CACHE_MB) -> None:
         self.engine = engine
@@ -124,6 +129,9 @@ class StoreBars:
         self._bytes = 0
         self._daily: dict[str, tuple[tuple, pd.DataFrame | None]] = {}
         self._days: dict[str, tuple[tuple, list[str]]] = {}
+        #: blocks being read right now: a second reader of one block waits for the first
+        #: (server review F3: ten overlapping creates read every block again)
+        self._reading: dict[tuple[str, int, tuple], threading.Event] = {}
 
     def has_volume(self, series_key: str) -> bool:
         spec = self.series.get(series_key)
@@ -154,22 +162,35 @@ class StoreBars:
 
     def _block(self, series_key: str, block: int, version: tuple) -> pd.DataFrame:
         key = (series_key, block)
-        with self.lock:
-            hit = self._blocks.get(key)
-            if hit is not None and hit[0] == version:
-                self._blocks.move_to_end(key)
-                return hit[1]
-        df = self._read_block(series_key, block)
-        with self.lock:
-            old = self._blocks.pop(key, None)
-            if old is not None:
-                self._bytes -= frame_nbytes(old[1])
-            self._blocks[key] = (version, df)
-            self._bytes += frame_nbytes(df)
-            while self._bytes > self.cap_bytes and len(self._blocks) > 1:
-                _, (_, gone) = self._blocks.popitem(last=False)
-                self._bytes -= frame_nbytes(gone)
-        return df
+        flight = (series_key, block, version)
+        while True:
+            with self.lock:
+                hit = self._blocks.get(key)
+                if hit is not None and hit[0] == version:
+                    self._blocks.move_to_end(key)
+                    return hit[1]
+                wait = self._reading.get(flight)
+                if wait is None:
+                    mine = threading.Event()
+                    self._reading[flight] = mine
+                    break
+            wait.wait(30.0)  # another thread reads this block: join its read
+        try:
+            df = self._read_block(series_key, block)
+            with self.lock:
+                old = self._blocks.pop(key, None)
+                if old is not None:
+                    self._bytes -= frame_nbytes(old[1])
+                self._blocks[key] = (version, df)
+                self._bytes += frame_nbytes(df)
+                while self._bytes > self.cap_bytes and len(self._blocks) > 1:
+                    _, (_, gone) = self._blocks.popitem(last=False)
+                    self._bytes -= frame_nbytes(gone)
+            return df
+        finally:
+            with self.lock:
+                self._reading.pop(flight, None)
+            mine.set()
 
     def minute_bars(
         self, series_key: str, start: pd.Timestamp | None, end: pd.Timestamp | None

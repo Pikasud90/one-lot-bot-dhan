@@ -137,6 +137,45 @@ class SimStore:
         return rows
 
     # ── events ────────────────────────────────────────────────────────────
+    def save_step(
+        self,
+        session_id: str,
+        events: list[dict[str, Any]],
+        trade: tuple[int, dict[str, Any]] | None = None,
+        session: tuple[dt.datetime, str, dict] | None = None,
+    ) -> None:
+        """The events of a step, the open trade and the session's cursor in ONE transaction
+        (server review F8: a kill between two writes left events with an older cursor)."""
+        if not events and trade is None and session is None:
+            return
+        with self.engine.begin() as c:
+            if events:
+                c.execute(insert(sim_events), self._event_rows(session_id, events))
+            if trade is not None:
+                tid, fields = trade
+                c.execute(update(sim_trades).where(sim_trades.c.id == tid).values(**fields))
+            if session is not None:
+                cursor, status, params = session
+                c.execute(
+                    update(sim_sessions)
+                    .where(sim_sessions.c.id == session_id)
+                    .values(cursor_ts=cursor, status=status, params=params)
+                )
+
+    @staticmethod
+    def _event_rows(session_id: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "session_id": session_id,
+                "seq": e["seq"],
+                "ts": e["_ts"],
+                "kind": e["kind"],
+                "text": e["text"],
+                "data": e.get("data") or {},
+            }
+            for e in events
+        ]
+
     def add_events(self, session_id: str, events: list[dict[str, Any]]) -> None:
         if not events:
             return

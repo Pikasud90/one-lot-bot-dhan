@@ -9,13 +9,15 @@ expired-options store (also read-only); without it option premiums are modelled.
 
 For NIFTY micro trend 3m, BANKNIFTY and two stocks with two strategies each it prints:
 `GET /api/sim/options` cold and warm, `GET /api/sim/candles` cold and warm, the create
-answer, the time to RUNNING cold (nothing kept) and warm (the same choice again), `advance`
+answer, `GET /api/sim/days` cold, the time to RUNNING cold (nothing kept) and warm (the same choice again), `advance`
 p50 and p95 for chunks of 1 and 30 minutes, and what a thread ticking every 10 ms saw while
 the builds ran (its worst gap and 99th percentile), each against its budget with PASS or MISS.
 
 "Cold" is a new manager with empty caches (the store's pages may still sit in the operating
 system's cache: a first run after a reboot can be slower). Times are wall clock, the BEST of
-`--runs` runs (the machine is shared); the CPU time of the cold builds is printed beside.
+`--runs` runs per case (the machine is shared), except the tail budgets (`TAIL`: the create
+answer and the ticker), which are the WORST run; the CPU time of the cold builds is printed
+beside.
 """
 
 from __future__ import annotations
@@ -54,6 +56,7 @@ BUDGETS: dict[str, tuple[float, str]] = {
     "options warm": (100.0, "ms"),
     "candles cold": (1000.0, "ms"),
     "candles warm": (200.0, "ms"),
+    "days cold": (1000.0, "ms"),
     "create answer": (150.0, "ms"),
     "RUNNING cold": (2500.0, "ms"),
     "RUNNING warm": (400.0, "ms"),
@@ -62,6 +65,9 @@ BUDGETS: dict[str, tuple[float, str]] = {
     "ticker worst gap": (250.0, "ms"),
     "ticker p99 gap": (50.0, "ms"),
 }
+#: tail budgets: judged on the WORST run, never the best (server review F1: a best-of-N figure
+#: hid single runs with a 416 ms gap, and an app-wide hitch is exactly the owner's complaint)
+TAIL = frozenset({"create answer", "ticker worst gap", "ticker p99 gap"})
 
 
 def read_only(path: str) -> Engine:
@@ -170,6 +176,7 @@ def measure(
 
                     found["candles cold"].append(_ms(candles)[0])
                     found["candles warm"].append(min(_ms(candles)[0] for _ in range(3)))
+                    found["days cold"].append(_ms(lambda m=m, i=inst: m.days(i))[0])
                 for inst, strategy, tf in todo:
                     body = {"instrument": inst, "strategy": strategy, "timeframe": tf,
                             "mode": "past", "start": starts[inst], "params": {}}  # fmt: skip
@@ -227,22 +234,30 @@ def measure(
             "starts": starts}  # fmt: skip
 
 
+def value_of(what: str, vals: list[float], runs: int) -> float:
+    """The one value judged against a budget: for a tail budget (`TAIL`) the worst of every
+    run and case; for any other the best of the runs per case, then the worst case."""
+    if what in TAIL:
+        return max(vals)
+    per_run = len(vals) // runs if runs and len(vals) >= runs else 1
+    if per_run > 1:
+        return max(min(vals[i::per_run]) for i in range(per_run))
+    return min(vals)
+
+
 def report(got: dict[str, Any], runs: int) -> tuple[list[str], bool]:
     """Lines to print and whether every budget holds."""
     found = got["found"]
-    lines = [f"Simulator budgets (best of {runs} runs; per-case values: their worst)"]
+    lines = [
+        f"Simulator budgets ({runs} runs: best run per case, then the worst case; "
+        "the create answer and the ticker: the WORST run)"
+    ]
     ok_all = True
     for what in list(BUDGETS) + ["advance 1 p50", "advance 30 p50"]:
         vals = found.get(what) or []
         if not vals:
             continue
-        # best of the runs per case, then the worst case: one value against the budget
-        per_run = len(vals) // runs if runs and len(vals) >= runs else 1
-        if per_run > 1:
-            cases = [min(vals[i::per_run]) for i in range(per_run)]
-            value = max(cases)
-        else:
-            value = min(vals)
+        value = value_of(what, vals, runs)
         budget = BUDGETS.get(what)
         if budget is None:
             lines.append(f"  {what:<18} {value:8.1f} ms")

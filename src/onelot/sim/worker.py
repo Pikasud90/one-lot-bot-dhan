@@ -48,7 +48,7 @@ class Job:
 
     @property
     def ok(self) -> bool:
-        return self.done.is_set() and self.error is None and not self.replaced
+        return self.done.is_set() and self.error is None and not self.replaced and not self.dropped
 
     def elapsed_ms(self) -> float:
         end = self.finished_at or time.monotonic()

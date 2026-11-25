@@ -21,6 +21,8 @@ import dataclasses
 import datetime as dt
 import json
 import math
+import os
+import threading
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -30,7 +32,8 @@ import numpy as np
 import pandas as pd  # type: ignore[import-untyped]
 
 from ..clock import IST, now_ist
-from ..config import BacktestCfg
+from .. import settings as _settings
+from ..config import PROJECT_ROOT, BacktestCfg
 from ..costs import CostModel
 from ..data.expired_options import OptionBarStore, Underlying
 from ..data.hygiene import consistent_daily
@@ -310,6 +313,29 @@ def session_view_of(setup: Setup, cursor: str, status: str, premium_note: str) -
     }
 
 
+_MKT_LOCK = threading.Lock()
+_MKT: dict[str, Any] = {}
+
+
+def market_key() -> str:
+    """`data.universe.market_index_key()`, read once per change of `config/universe.yaml`
+    (server review F2: the YAML load took 18 to 33 ms and ran several times per request)."""
+    root = _settings._override["project_root"] or PROJECT_ROOT
+    path = f"{root}/config/universe.yaml"
+    try:
+        st = os.stat(path)
+        stamp: tuple = (path, st.st_mtime_ns, st.st_size)
+    except OSError:
+        stamp = (path, None, None)
+    with _MKT_LOCK:
+        if _MKT.get("stamp") == stamp:
+            return str(_MKT["key"])
+    key = market_index_key()
+    with _MKT_LOCK:
+        _MKT["stamp"], _MKT["key"] = stamp, key
+    return key
+
+
 class Frames:
     """Where a session's frames come from: built at once (any `BarSource`), or kept in a
     `FrameCache` when the bars carry a data version (`StoreBars.version`). `prefetch(setup,
@@ -319,7 +345,7 @@ class Frames:
     def __init__(
         self,
         cache: FrameCache | None = None,
-        prefetch: Callable[[Setup, BarSource, Window], None] | None = None,
+        prefetch: Callable[[Setup, BarSource, Window], Any] | None = None,
     ) -> None:
         self.cache = cache
         self.prefetch = prefetch
@@ -330,7 +356,7 @@ class Frames:
             return None
         sp = _session_params(setup.spec, {}, setup.strategy)
         params = get_strategy(setup.strategy, {**sp, "timeframe": setup.timeframe}).p
-        mkt = market_index_key()
+        mkt = market_key()
         series = (setup.series_key,) if mkt == setup.series_key else (setup.series_key, mkt)
         versions = tuple(version(k) for k in series)
         atr_tf = atr_timeframe(setup.timeframe, str(setup.params.get("stop_atr_tf", "60m")))
@@ -628,7 +654,15 @@ class SimSession:
         assert w is not None and w.hi is not None
         if self.cursor_ns + BLOCK_DAYS * _DAY_NS >= int(w.hi.value):
             self._prefetched = nxt
-            self.frames.prefetch(self.setup, self.bars, nxt)
+            job = self.frames.prefetch(self.setup, self.bars, nxt)
+            if job is not None:
+                # dropped (a session's build waited), replaced or failed: ask again on a later
+                # advance (server review F4), so the swap never builds inside `advance`
+                def retry(j: Any, nxt: Window = nxt) -> None:
+                    if not j.ok and self._prefetched == nxt:
+                        self._prefetched = None
+
+                job.then(retry)
 
     def _more_past_data(self) -> bool:
         """Move a past session to its next window when the cursor reached the last minute
@@ -1561,11 +1595,11 @@ class SimSession:
         """Events are written as they happen; the cursor and the open trade with them, on a
         pause-like action (`force`) and at least every `SAVE_EVERY` revealed minutes (F8: not
         on every advance). A restart resumes from the last cursor written."""
-        self.store.add_events(self.setup.id, events)
         if not (force or events or self.revealed - self.saved_revealed >= SAVE_EVERY):
             return
         cursor = pd.Timestamp(self.cursor_ns, tz="UTC").to_pydatetime()
         t = self.trade
+        trade: tuple[int, dict[str, Any]] | None = None
         if t is not None:
             row = self._trade_row(t)
             fields = {k: row[k] for k in _OPEN_KEYS}
@@ -1574,8 +1608,11 @@ class SimSession:
             )
             fields["detail"] = t.detail()
             fields["updated_at"] = now_ist()
-            self.store.save_trade(t.id, fields)
-        self.store.save_session(self.setup.id, cursor, self.status, self._params_json())
+            trade = (t.id, fields)
+        # events, trade and cursor in one transaction (server review F8)
+        self.store.save_step(
+            self.setup.id, events, trade, (cursor, self.status, self._params_json())
+        )
         self.saved_revealed = self.revealed
 
     def _restore(self, row: dict[str, Any]) -> None:
@@ -1761,7 +1798,7 @@ def build_signals(
         return None, candles
     has_volume = bool(series.has_volume) if series is not None else True
     daily = _daily_for(bars.daily_bars(series_key), minute)
-    mkt_key = market_index_key()
+    mkt_key = market_key()
     market = None
     market_daily = None
     if mkt_key != series_key:

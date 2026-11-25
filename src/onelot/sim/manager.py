@@ -51,6 +51,7 @@ from .engine import (
     _hhmm_min,
     _iso,
     _ns_of,
+    _ts_ns,
     base_premium_note,
     closed_row,
     lot_unit_of,
@@ -169,6 +170,7 @@ class Entry:
         self.job: Job | None = None
         self.lock = threading.RLock()
         self.row: dict[str, Any] | None = None  # the stored row, for a session being rebuilt
+        self.evicted = False  # saved and dropped from the table (`SimManager._evict`)
         self.started = time.monotonic()
 
     @property
@@ -491,11 +493,13 @@ class SimManager:
         key = self.frames.key(setup, bars, window)
         return ("frame", key) if key is not None else ("session", setup.id)
 
-    def _prefetch(self, setup: Setup, bars: BarSource, window: Window) -> None:
-        """A past session's next window, prepared in the worker (`SimSession._maybe_prefetch`)."""
+    def _prefetch(self, setup: Setup, bars: BarSource, window: Window) -> Job | None:
+        """A past session's next window, prepared in the worker (`SimSession._maybe_prefetch`).
+        The job is returned so that the session asks again when it was dropped, replaced or
+        failed (server review F4)."""
         if self.frames.ready(setup, bars, window):
-            return
-        self.builder.submit(
+            return None
+        return self.builder.submit(
             self._frame_job_key(setup, bars, window),
             lambda job: self.frames.frame(setup, bars, window, job.set_step),
             "prefetch",
@@ -578,7 +582,9 @@ class SimManager:
         except Exception:  # noqa: BLE001 - the answer in memory stands
             pass
 
-    def _schedule(self, entry: Entry, restore: dict[str, Any] | None) -> None:
+    def _schedule(
+        self, entry: Entry, restore: dict[str, Any] | None, fkey: tuple | None | bool = False
+    ) -> None:
         """Build at once when the frame is ready (or in inline mode); else in the worker, and
         the entry answers BUILDING until then."""
         setup = entry.setup
@@ -594,11 +600,14 @@ class SimManager:
             )
         else:
             window = window_at(setup.strategy, _ns_of(setup.start))
-        ready = setup.mode == "past" and self.frames.ready(setup, bars, window)
+        if fkey is False:  # not computed by the caller (F2: the key is computed once)
+            fkey = self.frames.key(setup, bars, window) if setup.mode == "past" else None
+        assert fkey is None or isinstance(fkey, tuple)
+        ready = setup.mode == "past" and fkey is not None and self.frame_cache.has(fkey)
         if ready or self.builder.inline:
             self._run_build(entry, restore)
             return
-        if setup.mode == "live" or self.frames.key(setup, bars, window) is None:
+        if setup.mode == "live" or fkey is None:
             # nothing to keep for these bars: the whole build runs in `_run_build`
             key: tuple = ("session", setup.id)
 
@@ -606,7 +615,7 @@ class SimManager:
                 return None
 
         else:
-            key = self._frame_job_key(setup, bars, window)
+            key = ("frame", fkey)
 
             def build(job: Job) -> Any:
                 return self.frames.frame(setup, bars, window, job.set_step)
@@ -633,6 +642,13 @@ class SimManager:
         """At most `max_sessions` built sessions in memory: the least recently used ones are
         saved and dropped (they are rebuilt from their rows when asked for)."""
         with self.lock:
+            # FAILED entries hold nothing worth keeping beyond the last few (F5: the table no
+            # longer grows with every failed create); their rows still answer
+            failed = [
+                e for e in self.sessions.values() if e.status == "FAILED" and e.session is None
+            ]
+            for e in failed[: max(0, len(failed) - self.max_sessions)]:
+                self.sessions.pop(e.setup.id, None)
             built = [e for e in self.sessions.values() if e.session is not None]
             extra = len(built) - self.max_sessions
             victims = []
@@ -648,7 +664,9 @@ class SimManager:
                 if e.session is not None:
                     e.session.save()
                 with self.lock:
-                    self.sessions.pop(e.setup.id, None)
+                    if self.sessions.get(e.setup.id) is e:
+                        self.sessions.pop(e.setup.id, None)
+                    e.evicted = True  # a request holding this entry asks the table again
             finally:
                 e.lock.release()
 
@@ -685,7 +703,8 @@ class SimManager:
         }
         bars = self._bars(setup.mode)
         window = window_at(setup.strategy, _ns_of(setup.start))
-        ready = setup.mode == "past" and self.frames.ready(setup, bars, window)
+        fkey = self.frames.key(setup, bars, window) if setup.mode == "past" else None
+        ready = fkey is not None and self.frame_cache.has(fkey)
         if ready or self.builder.inline:
             entry = Entry(setup, setup.start.isoformat())
             session = self._new_session(entry, None, None)  # a SimError is the 400, as before
@@ -705,10 +724,13 @@ class SimManager:
         else:
             cursor, candles = setup.start.isoformat(), []
         entry = Entry(setup, cursor)
-        row.update(cursor_ts=_ts(cursor).to_pydatetime(), params={**setup.params, "_state": {}})
+        # the window is stored with the BUILDING row: a build cut short resumes on the very
+        # window this create used (server review F8)
+        state = {"window": [_ts_ns(window.lo), _ts_ns(window.lo_strategy), _ts_ns(window.hi)]}
+        row.update(cursor_ts=_ts(cursor).to_pydatetime(), params={**setup.params, "_state": state})
         self.store.add_session(row)
         self._remember(entry)
-        self._schedule(entry, None)
+        self._schedule(entry, None, fkey)
         return self._created(entry, candles)
 
     def _created(self, entry: Entry, candles: list[list]) -> dict[str, Any]:
@@ -837,18 +859,32 @@ class SimManager:
             raise SimError(409, BUILDING_TEXT)
         return entry.session
 
+    def _locked(self, sid: str) -> Entry:
+        """The session's entry with its lock HELD (the caller releases it). An entry evicted
+        between the lookup and the lock is looked up again, so one session never has two
+        live copies (server review F5)."""
+        for _ in range(5):
+            entry = self.entry(sid)
+            entry.lock.acquire()
+            if not entry.evicted:
+                return entry
+            entry.lock.release()
+        raise SimError(409, BUILDING_TEXT)
+
     def read(self, sid: str) -> dict[str, Any]:
         """`GET /api/sim/sessions/{id}`."""
-        entry = self.entry(sid)
-        with entry.lock:
+        entry = self._locked(sid)
+        try:
             if entry.session is not None:
                 return entry.session.read()
             return self._pending(entry)
+        finally:
+            entry.lock.release()
 
     def act(self, sid: str, fn: Callable[[SimSession], Any]) -> Any:
         """An action on a session: 409 while it is BUILDING or when it FAILED."""
-        entry = self.entry(sid)
-        with entry.lock:
+        entry = self._locked(sid)
+        try:
             s = entry.session
             if s is None:
                 if entry.status == "FAILED":
@@ -858,6 +894,8 @@ class SimManager:
             entry.status = s.status
             entry.cursor = s.cursor
             return out
+        finally:
+            entry.lock.release()
 
     def _setup_stored(self, body: dict[str, Any], row: dict[str, Any]) -> Setup:
         inst = self._instrument(body["instrument"])

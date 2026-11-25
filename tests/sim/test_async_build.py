@@ -44,19 +44,36 @@ def body(strategy: str = "ema_cross", tf: str = "5m", at: str = "10:00", day=Non
 
 @pytest.fixture
 def slow(monkeypatch):
-    """Builds that take `slow.seconds` (and raise when `slow.fail` is set)."""
+    """Builds that take `slow.seconds` (and raise when `slow.fail` is set). A build also waits
+    for `slow.hold` (an Event, set by default): a test clears it to keep a build running and
+    proves by structure, not by wall clock, that a request did not wait (reviews F6 and R2:
+    the timing asserts failed on a loaded machine)."""
     real = sim_engine.build_signals
-    state = {"seconds": 0.3, "fail": False, "calls": 0}
+    hold = threading.Event()
+    hold.set()
+    state = {"seconds": 0.3, "fail": False, "calls": 0, "hold": hold, "finished": 0}
 
     def build(*a, **k):
         state["calls"] += 1
+        assert hold.wait(30.0), "the test never released the build"
         time.sleep(state["seconds"])
         if state["fail"]:
             raise ValueError("the fixture bars cannot be read")
-        return real(*a, **k)
+        out = real(*a, **k)
+        state["finished"] += 1
+        return out
 
     monkeypatch.setattr(sim_engine, "build_signals", build)
-    return state
+    yield state
+    hold.set()
+
+
+def wait_running_job(m, timeout: float = 10.0) -> None:
+    """Until the worker has picked a job up (so the next one WAITS behind it)."""
+    end = time.monotonic() + timeout
+    while m.builder.running is None:
+        assert time.monotonic() < end, "the worker never started"
+        time.sleep(0.005)
 
 
 @pytest.fixture
@@ -114,12 +131,11 @@ def wait_status(c: TestClient, sid: str, timeout: float = 10.0) -> dict:
 
 
 def test_create_answers_building_at_once_then_running(app, slow):
-    t0 = time.perf_counter()
+    slow["hold"].clear()  # the build cannot finish until the test says so
     r = app.post("/api/sim/sessions", json=body(), headers=H)
-    took = time.perf_counter() - t0
     assert r.status_code == 200, r.text
     made = r.json()
-    assert took < slow["seconds"], "the create waited for the build"
+    assert slow["finished"] == 0, "the create waited for the build"
     assert made["session"]["status"] == "BUILDING"
     assert made["session"]["cursor"] == T("09:59")
     assert made["state"]["alert"] is None and made["state"]["trade"] is None
@@ -134,6 +150,8 @@ def test_create_answers_building_at_once_then_running(app, slow):
     for action in ("take", "skip", "close", "end"):
         r = app.post(f"/api/sim/sessions/{sid}/{action}", json={"alert_id": "a_1"}, headers=H)
         assert r.status_code == 409
+    assert slow["finished"] == 0
+    slow["hold"].set()
     got = wait_status(app, sid)
     assert got["session"]["status"] == "RUNNING" and "build" not in got
     assert got["candles"] == made["candles"]  # the cheap read drew what the session draws
@@ -159,25 +177,41 @@ def test_a_build_that_raises_turns_failed_with_a_plain_sentence(app, slow):
     assert later["session"]["status"] == "FAILED" and "could not be prepared" in later["detail"]
 
 
-def test_a_newer_choice_replaces_the_waiting_build(manager, slow):
+def test_a_start_in_the_same_block_joins_the_running_build(manager, slow):
+    slow["hold"].clear()
     a = manager.create(body())["session"]["id"]  # runs
-    b = manager.create(body(day=DAYS[3]))["session"]["id"]  # waits (another block? no: joins)
-    c = manager.create(body("supertrend_vol"))["session"]["id"]  # replaces the waiting one
+    wait_running_job(manager)
+    same = body(at="11:00")  # the same day: the same block window, so the same frame key
+    b = manager.create(same)["session"]["id"]  # joins a's build
+    assert manager.builder.waiting is None, "a start in the same block was queued, not joined"
+    slow["hold"].set()
     manager.builder.idle(10.0)
-    status = {k: manager.entry(k).state_status for k in (a, b, c)}
-    assert status[a] == "RUNNING" and status[c] == "RUNNING"
-    if manager.entry(b).state_status == "FAILED":
-        assert manager.entry(b).detail == (
-            "A newer choice replaced this session before it was ready."
-        )
-    else:  # the same block as `a`: it joined a's build
-        assert status[b] == "RUNNING"
+    assert manager.entry(a).state_status == "RUNNING"
+    assert manager.entry(b).state_status == "RUNNING"
+    assert slow["calls"] == 1
+
+
+def test_a_newer_choice_replaces_the_waiting_build(manager, slow):
+    slow["hold"].clear()
+    a = manager.create(body())["session"]["id"]  # runs
+    wait_running_job(manager)
+    b = manager.create(body("supertrend_vol"))["session"]["id"]  # waits
+    c = manager.create(body("squeeze"))["session"]["id"]  # replaces the waiting one
+    slow["hold"].set()
+    manager.builder.idle(10.0)
+    assert manager.entry(a).state_status == "RUNNING"
+    assert manager.entry(c).state_status == "RUNNING"
+    assert manager.entry(b).state_status == "FAILED"
+    assert manager.entry(b).detail == "A newer choice replaced this session before it was ready."
 
 
 def test_a_waiting_build_of_another_choice_is_replaced_and_failed(manager, slow):
+    slow["hold"].clear()
     manager.create(body())
+    wait_running_job(manager)
     b = manager.create(body("supertrend_vol"))["session"]["id"]
     c = manager.create(body("donchian_breakout"))["session"]["id"]
+    slow["hold"].set()
     manager.builder.idle(10.0)
     assert manager.entry(b).state_status == "FAILED"
     assert manager.entry(b).detail == "A newer choice replaced this session before it was ready."
@@ -231,11 +265,14 @@ def test_prepare_builds_in_the_background_and_joins(app, slow):
 
 
 def test_a_warm_up_never_pushes_out_a_waiting_session(manager, slow):
+    slow["hold"].clear()
     manager.create(body())  # runs
+    wait_running_job(manager)
     waiting = manager.create(body("supertrend_vol"))["session"]["id"]
     got = manager.prepare({"instrument": "RELIANCE", "strategy": "squeeze", "timeframe": "5m",
                            "start": T("10:00")})  # fmt: skip
     assert got["status"] == "building"
+    slow["hold"].set()
     manager.builder.idle(10.0)
     assert manager.entry(waiting).state_status == "RUNNING"
 
@@ -249,14 +286,14 @@ def test_a_stored_session_is_read_from_its_row_while_it_is_rebuilt(stored, tmp_p
     s = m.get(sid)
     s.advance(100)
     s.save()
-    slow["seconds"] = 0.5
+    slow["hold"].clear()  # the rebuild cannot finish until the test says so
     m2 = make_manager(stored, StoreBars(stored), tmp_path, build="thread")
-    t0 = time.perf_counter()
     got = m2.read(sid)
-    assert time.perf_counter() - t0 < 0.4
+    assert slow["finished"] == 1, "the read waited for the rebuild"
     assert got["session"]["status"] == "BUILDING" and got["session"]["cursor"] == s.cursor
     assert got["candles"] == s.candles_view()
     assert m2.options()["instruments"]  # the options never touch a session
+    slow["hold"].set()
     m2.builder.idle(10.0)
     again = m2.read(sid)
     assert again["session"]["status"] == "RUNNING" and again["session"]["cursor"] == s.cursor

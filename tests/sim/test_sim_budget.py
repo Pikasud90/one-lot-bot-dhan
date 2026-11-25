@@ -22,6 +22,40 @@ def load_script():
     return mod
 
 
+def verdict(line: str) -> str:
+    words = line.split()
+    return next(w for w in words if w in ("PASS", "MISS"))
+
+
+def test_the_report_judges_a_known_fast_and_a_known_slow_case():
+    """Server review F1 and F6: the best run for a steady budget, the WORST run for a tail
+    budget (the create answer and the ticker), each against its exact budget."""
+    sb = load_script()
+    got = {
+        "found": {
+            "options cold": [2000.0, 10.0, 30.0],  # best run 10 ms: PASS
+            "candles warm": [250.0, 260.0, 300.0],  # best run 250 ms against 200: MISS
+            "create answer": [20.0, 400.0, 30.0],  # one run of 400 ms: MISS
+            "ticker worst gap": [100.0, 300.0, 90.0],  # one run of 300 ms: MISS
+            "ticker p99 gap": [10.0, 20.0, 30.0],  # worst run 30 ms: PASS
+            "days cold": [900.0, 1200.0, 950.0],  # best 900 ms: PASS
+        },
+        "cpu_cold_ms": [],
+        "notes": [],
+        "cases": [],
+        "starts": {},
+    }
+    lines, ok = sb.report(got, 3)
+    want = {"options cold": "PASS", "candles warm": "MISS", "create answer": "MISS",
+            "ticker worst gap": "MISS", "ticker p99 gap": "PASS", "days cold": "PASS"}  # fmt: skip
+    for what, v in want.items():
+        line = next(x for x in lines if x.strip().startswith(what))
+        assert verdict(line) == v, line
+    assert not ok
+    assert sb.value_of("create answer", [20.0, 400.0, 30.0], 3) == 400.0
+    assert sb.value_of("options cold", [2000.0, 10.0, 30.0], 3) == 10.0
+
+
 def test_the_budget_script_on_a_fixture_store(tmp_path, capsys):
     path = tmp_path / "store.db"
     db = init_database(f"sqlite:///{path}")
@@ -54,9 +88,7 @@ def test_the_budget_script_on_a_fixture_store(tmp_path, capsys):
     text = "\n".join(lines)
     for what in sb.BUDGETS:
         line = next(x for x in lines if x.strip().startswith(what))
-        assert line.rstrip().split("   ")[2].strip() in ("PASS", "MISS") or (
-            "PASS" in line or "MISS" in line
-        ), line
+        assert verdict(line) in ("PASS", "MISS"), line
     assert "HDFCBANK has no stored bars" in text  # a missing instrument is said, not a crash
     assert hashlib.sha1(path.read_bytes()).hexdigest() == before  # never written
     assert not Path(f"{path}-wal").exists() or Path(f"{path}-wal").stat().st_size == 0
