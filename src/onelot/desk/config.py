@@ -59,6 +59,21 @@ class DeliveryCfg:
 
 
 @dataclass(frozen=True)
+class WideCfg:
+    """The pullback slot's wide list (US-099): the rule as a PAPER test on the stocks of
+    `universe` (config/delivery_universe.yaml). Off (`wide: false`) the desk is as before."""
+
+    on: bool = False  # the slot's `wide:`
+    cap_open: int = 10  # trades open "within the cap" at a time (the desk 18 count toward it)
+    evening_round: bool = True  # the evening round of the delivery-only stocks
+    universe: str = "config/delivery_universe.yaml"  # relative to the project root
+
+
+#: the pullback slot's keys of the wide list (US-099), beside name, timeframe and params
+WIDE_KEYS = ("wide", "cap_open", "evening_round", "universe")
+
+
+@dataclass(frozen=True)
 class VolumeCfg:
     """desk.yaml `volume:` (US-089, `.agile/stories/VOL-API.md`): the Volume Watch. The levels
     come from docs/research/VOLUME_STUDY_2026-11-24.md."""
@@ -99,6 +114,7 @@ class DeskConfig:
     option_roll_days: int = 3
     delivery: DeliveryCfg = field(default_factory=DeliveryCfg)
     volume: VolumeCfg = field(default_factory=VolumeCfg)
+    wide: WideCfg = field(default_factory=WideCfg)
 
     def _owner_order(self) -> tuple[str, ...]:
         """desk.yaml `primary_strategies` in the owner's order, then every other configured
@@ -260,7 +276,37 @@ def load_desk_config(path: str | Path | None = None) -> DeskConfig:
         int(raw.get("option_roll_days", 3)),
         _delivery(raw.get("delivery")),
         _volume(raw.get("volume")),
+        _wide(raw),
     )
+
+
+def _wide(raw: dict) -> WideCfg:
+    """US-099: the wide list's keys on the delivery slot (`defaults.stock_strategies`, or a
+    stock's own `strategies`), from the first delivery slot that has any of them. A bad value
+    is an error, never silently ignored; no such key: the wide list is off."""
+    slots = list((raw.get("defaults") or {}).get("stock_strategies") or [])
+    for e in raw.get("stocks") or []:
+        slots += list((e or {}).get("strategies") or [])
+    for r in slots:
+        if not isinstance(r, dict) or r.get("product") != "delivery":
+            continue
+        if not any(k in r for k in WIDE_KEYS):
+            continue
+        cap = r.get("cap_open", 10)
+        if isinstance(cap, bool) or not isinstance(cap, int) or cap < 0:
+            raise ValueError(
+                f"desk.yaml slot key cap_open must be a whole number >= 0, not {cap!r}"
+            )
+        universe = r.get("universe", WideCfg.universe)
+        if not isinstance(universe, str) or not universe.strip():
+            raise ValueError(f"desk.yaml slot key universe must be a file path, not {universe!r}")
+        return WideCfg(
+            on=_flag(r.get("wide", False), "wide"),
+            cap_open=cap,
+            evening_round=_flag(r.get("evening_round", True), "evening_round"),
+            universe=universe.strip(),
+        )
+    return WideCfg()
 
 
 def _delivery(raw: object) -> DeliveryCfg:

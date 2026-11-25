@@ -32,6 +32,7 @@ import threading
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -126,6 +127,7 @@ class DeliveryDesk:
         top_up: TopUp | None = None,
         data_api_active: Callable[[], bool] | None = None,
         background: bool = True,
+        wide_fetch: Any = None,
     ) -> None:
         self.engine = engine
         self.cfg = desk_cfg.delivery
@@ -183,6 +185,78 @@ class DeliveryDesk:
         self._record_warned: set[tuple[str, dt.date]] = set()
         self._rebuilt_on: tuple[Any, ...] | None = None
         self.calls: Counter[str] = Counter()  # join_live, rebuild, untold: for the tests
+        # US-099: the wide list's paper test, None with `wide: false` (the desk as before)
+        self.wide: Any = None
+        if desk_cfg.wide.on and self.stocks:
+            try:
+                self.wide = self._build_wide(desk_cfg, costs, wide_fetch)
+            except Exception:  # noqa: BLE001 - the desk 18 run whatever this does
+                log.exception("delivery: the wide list could not be built; it is off")
+                self.wide = None
+
+    # ── US-099: the wide list (its own book and round, never the desk 18's) ──────────
+    def _build_wide(self, desk_cfg: DeskConfig, costs: CostConfig, fetch: Any) -> Any:
+        from ..settings import PROJECT_ROOT
+        from .universe import load_universe
+        from .wide import WideDesk, desk_active_count
+
+        w = desk_cfg.wide
+        path = Path(w.universe)
+        universe = load_universe(path if path.is_absolute() else PROJECT_ROOT / path)
+        first = next(iter(self.stocks.values()))
+        bt = universe.backtest
+        evidence = (
+            f"Backtest on the {len(universe.stocks)} stocks: {bt.get('trades')} trades, "
+            f"{bt.get('net_pct')}% a trade after costs. Not proven: this is the paper test."
+            if bt
+            else ""
+        )
+        return WideDesk(
+            self.engine,
+            universe.delivery_only(k.key for k in desk_cfg.instruments),
+            first.params,
+            delivery_model(costs),
+            depository_paise(costs),
+            self.calendar,
+            self.clock,
+            cap_open=w.cap_open,
+            evening_round=w.evening_round,
+            min_bars=self.cfg.min_bars,
+            notifier=self.notifier,
+            fetch=fetch,
+            data_api_active=self._data_api_active,
+            nifty=self._wide_nifty,
+            desk_active=lambda: desk_active_count(self.engine),
+            protected=[i.key for i in desk_cfg.instruments],
+            backtest=bt,
+            evidence=evidence,
+            background=self._background,
+        )
+
+    def _wide_nifty(self, now: dt.datetime) -> tuple[list[dt.date], np.ndarray] | None:
+        """NIFTY's completed sessions as the desk 18 read them (the last join of its stored
+        and live days), for the wide list's R1(b)."""
+        hit = self._hist.get(self.nifty_key)
+        if hit is None:
+            return None
+        h = hit[1]
+        done = self._complete(h, now.astimezone(IST))
+        frame = h.days[[done(d) for d in h.days.index]]
+        return list(frame.index), frame["close"].to_numpy(float)
+
+    def wide_step(self, now: dt.datetime) -> None:
+        """Outside the desk lock, each poll: the evening round when due (on its own thread) and
+        the wide list's alerts. A failure here never reaches the desk 18 or the poll."""
+        if self.wide is None:
+            return
+        try:
+            self.wide.maybe_round(now)
+        except Exception:  # noqa: BLE001
+            log.exception("delivery: the wide list's round could not start")
+        try:
+            self.wide.tell(now.astimezone(IST))
+        except Exception:  # noqa: BLE001
+            log.exception("delivery: the wide list's alerts could not be sent")
 
     @property
     def series(self) -> list[str]:
@@ -903,7 +977,14 @@ class DeliveryDesk:
         return self._cards.get(series_key)
 
     def view(self) -> dict[str, Any]:
-        return dict(self._view)
+        out = dict(self._view)
+        if self.wide is not None:  # US-099: absent with `wide: false`
+            try:
+                out["wide"] = self.wide.summary()
+            except Exception:  # noqa: BLE001 - the desk 18's view stands
+                log.exception("delivery: the wide list's summary could not be read")
+                out["wide"] = {"enabled": True, "note": "the wide list could not be read"}
+        return out
 
     def alerts(self, since: dt.datetime) -> list[dict[str, Any]]:
         """Delivery alerts for the archive (D2): every trade created or changed since `since`."""

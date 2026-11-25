@@ -611,6 +611,7 @@ class Desk:
                 names=names,
                 top_up=self._top_up_bars,
                 data_api_active=lambda: bool(self._data_api_active()),
+                wide_fetch=self._fetch_daily_bars,  # US-099: the wide list's evening round
             )
             delivery.also_top_up = list(self.trackers)  # all 23: the indices' 4h rungs too
             delivery.context_top_up = {VIX_KEY: ("1d", "1m")}  # what _top_up_bars writes
@@ -652,6 +653,32 @@ class Desk:
         except Exception:  # noqa: BLE001 - never stops the poll
             self.hook_errors += 1
             log.exception("delivery: loading the daily history failed")
+        # US-099: the wide list's evening round and alerts, in a guard of their own
+        try:
+            step = getattr(self.delivery, "wide_step", None)
+            if step is not None:
+                step(now)
+        except Exception:  # noqa: BLE001 - never stops the poll
+            self.hook_errors += 1
+            log.exception("delivery: the wide list step failed")
+
+    def _fetch_daily_bars(self, stock: Any, start: dt.date, end: dt.date) -> pd.DataFrame:
+        """US-099: one wide-list stock's daily bars from Dhan, `start` to `end`, through the
+        desk's own adapter (a read of the broker's history, never an order)."""
+        from ..broker.base import Contract
+        from ..data.providers.dhan import _frame
+
+        adapter = self._adapter_getter()
+        if adapter is None:
+            raise RuntimeError("no Dhan adapter")
+        contract = Contract(
+            security_id=str(stock.security_id),
+            exchange_segment=str(stock.segment),
+            symbol=str(stock.key),
+            underlying=str(stock.key),
+            instrument_type="EQUITY",
+        )
+        return _frame(adapter.historical_daily(contract, start, end + dt.timedelta(days=1)), True)
 
     def _step_delivery(self, now: dt.datetime) -> None:
         if self.delivery is None:

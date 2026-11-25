@@ -71,6 +71,15 @@ defaults:
       params: {depth: 0.08, high_lookback: 20, trend_sma: 200, exit_sma: 20, max_sessions: 30,
                stop: 0.15, slippage: 0.0003, unit_inr: 10000,
                evidence: "Backtest: +1.2% to +1.4% a trade after charges, about 7 winners in 10, two samples. Not proven: this is the paper test."}
+      # US-099 (owner's yes of 2026-11-25): the same rule as a PAPER test on the wide list of
+      # 222 stocks. The 204 that are not desk instruments are read from daily bars in an
+      # evening round (after 15:35, never between 09:00 and 15:35); every signal is recorded,
+      # at most cap_open trades are open "within the cap" (the desk 18 count toward it) and
+      # only those are alerted. wide: false = the desk exactly as before.
+      wide: true
+      cap_open: 10
+      evening_round: true
+      universe: config/delivery_universe.yaml
 
 indices:
   - {key: BANKNIFTY,  tracked: BANKNIFTY_OPT}

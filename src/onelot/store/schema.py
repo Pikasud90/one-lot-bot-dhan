@@ -737,6 +737,70 @@ delivery_evaluations = Table(
     Column("evaluated_at", TZDateTime, nullable=False),
 )
 
+# ── US-099: the pullback rule's wide list, a PAPER test on daily bars (never an order) ──────
+# Its own tables on purpose: the desk 18's `delivery_trades` (the owner's live record) is
+# never written by the evening round. One row per (stock, signal date); a trade keeps its tier
+# for life: "cap" (within the cap of open trades, alerted) or "test" (recorded, not alerted).
+wide_trades = Table(
+    "wide_trades",
+    METADATA,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("series_key", String(32), nullable=False),
+    Column("grp", String(8), nullable=False),  # desk | alpha | new (config/delivery_universe.yaml)
+    Column("signal_date", String(10), nullable=False),
+    Column("signal_close", Float, nullable=False),
+    Column("depth_pct", Float),  # how far the close was below the 20-session high
+    Column("qty", Integer, nullable=False),  # whole shares nearest unit_inr, as for the desk 18
+    Column("tier", String(4), nullable=False),  # cap | test
+    Column("late", Boolean, nullable=False),  # read in a later round (catch-up): never alerted
+    Column("status", String(16), nullable=False),  # PENDING_ENTRY OPEN EXIT_PENDING CLOSED
+    Column("note", Text),
+    Column("created_at", TZDateTime, nullable=False),
+    Column("entry_told_at", TZDateTime),
+    Column("entry_session", String(10)),
+    Column("entry_paise", BigInteger),
+    Column("exit_signal_date", String(10)),
+    Column("exit_reason", String(48)),  # R3 reasons, comma-separated in R3's order
+    Column("sessions_held", Integer),
+    Column("exit_told_at", TZDateTime),
+    Column("exit_session", String(10)),
+    Column("exit_paise", BigInteger),
+    Column("gross_paise", BigInteger),
+    Column("charges_paise", BigInteger),
+    Column("dp_paise", BigInteger),
+    Column("net_paise", BigInteger),
+    Column("net_pct", Float),
+    Column("plan", JSON, nullable=False),
+    Column("updated_at", TZDateTime, nullable=False),
+    UniqueConstraint("series_key", "signal_date", name="uq_wide_trades_stock_signal"),
+    Index("ix_wide_trades_status", "status"),
+)
+
+# One row per wide-list stock: the last session the round evaluated (a round run twice does
+# nothing twice, a restart resumes), the last session fetched, and why it is stale or skipped.
+wide_state = Table(
+    "wide_state",
+    METADATA,
+    Column("series_key", String(32), primary_key=True),
+    Column("last_session", String(10)),
+    Column("fetched_for", String(10)),
+    Column("stale", Boolean, nullable=False),
+    Column("note", Text),
+    Column("reading", JSON),  # the rule's reading of the last session (the "closest" table)
+    Column("updated_at", TZDateTime, nullable=False),
+)
+
+# One row per evening round (per finished session): what it scanned and found.
+wide_rounds = Table(
+    "wide_rounds",
+    METADATA,
+    Column("session_date", String(10), primary_key=True),
+    Column("started_at", TZDateTime, nullable=False),
+    Column("finished_at", TZDateTime),
+    Column("tries", Integer, nullable=False),
+    Column("summary", JSON, nullable=False),
+)
+
 # US-071: the owner's "market snapshot" button: every tracked price at one moment, kept to compare by hand.
 market_snapshots = Table(
     "market_snapshots",
