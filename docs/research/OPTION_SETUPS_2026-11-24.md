@@ -182,10 +182,10 @@ NIFTY and BANKNIFTY; both legs are their OWN real prints of the strike bought, a
 | POOL 09:20 15:20 ALL | 2444 | −2.61 (−5.2) | 26% | −1.77 / −4.44 / −3.30 | −1.15 same trades, −0.94 all | REJECTED |
 | NIFTY 09:20 15:20 ALL | 1229 | −2.06 (−3.8) | 27% | −1.30 / −3.15 / −3.26 | −0.57 | REJECTED |
 | BANKNIFTY 09:20 15:20 ALL | 1215 | −3.17 (−5.2) | 24% | −2.25 / −5.72 / −3.35 | −1.30 | AVOID |
-| POOL 09:20 15:20 ACTIVE-EXP | 740 | −3.46 (−6.1) | 25% | −2.53 / −4.74 / −4.94 | −1.52 | AVOID |
-| POOL 09:20 15:20 CALM-EXP | 761 | −1.79 (−2.3) | 26% | −1.04 / −4.15 / −1.70 | −0.37 | REJECTED |
-| POOL 09:20 15:20 VIX-UP | 174 | −3.60 (−2.9) | 29% | −3.15 / −6.40 / −2.98 | −2.63 | REJECTED |
-| POOL 09:20 15:20 VIX-DOWN | 154 | −3.36 (−3.9) | 25% | −2.86 / −6.93 / −2.80 | −1.27 | AVOID |
+| POOL 09:20 15:20 ACTIVE-EXP | 1205 | −3.46 (−6.1) | 25% | −2.53 / −4.74 / −4.94 | −1.52 | AVOID |
+| POOL 09:20 15:20 CALM-EXP | 1239 | −1.79 (−2.3) | 26% | −1.04 / −4.15 / −1.70 | −0.37 | REJECTED |
+| POOL 09:20 15:20 VIX-UP | 346 | −3.60 (−2.9) | 29% | −3.15 / −6.40 / −2.98 | −2.63 | REJECTED |
+| POOL 09:20 15:20 VIX-DOWN | 301 | −3.36 (−3.9) | 25% | −2.86 / −6.93 / −2.80 | −1.27 | AVOID |
 | POOL 09:20 15:20 EXPIRY | 116 | −5.70 (−0.7) | 35% | +10.38 / −31.18 / −25.80 | +2.27 | REJECTED |
 | POOL 09:20 12:00 ALL | 2463 | −2.09 (−7.3) | 25% | −1.69 / −2.28 / −3.10 | −1.57 | AVOID |
 | POOL 09:20 stop ALL | 2446 | −2.82 (−8.0) | 25% | −2.44 / −3.59 / −3.17 | −1.84 | AVOID |
@@ -221,7 +221,7 @@ stop trigger; the model's spread and charges, not measured spreads.
 | NIFTY and BANKNIFTY, pool | option pair same-day | S3 long straddle 09:20 | 1m | any day type | 15:20 | 490 | −1.77 / −4.44 / −3.30 (−5.2) | both legs real (25 Nov); parity read −0.94 | REJECTED | two lots; pays on every day type, worst after an active day |
 | NIFTY and BANKNIFTY, pool | option pair same-day | S3 long straddle 09:45 | 1m | any | 12:00 | 490 | −1.93 / −2.67 / −2.48 (−9.6) | both legs real | AVOID | morning IV fall costs the most |
 | NIFTY and BANKNIFTY, pool | option pair same-day | S3 long straddle 09:20 | 1m | any | −30% / +60%, 15:20 | 490 | −2.44 / −3.59 / −3.17 (−8.0) | fills real, trigger 81% real | AVOID | the stop locks in the IV fall |
-| NIFTY and BANKNIFTY, pool | option pair same-day | S3 long straddle 09:20 | 1m | VIX-UP | 12:00 | 35 | −3.15 / −4.05 / −3.13 (−4.7) | both legs real | AVOID | after a VIX jump IV keeps falling |
+| NIFTY and BANKNIFTY, pool | option pair same-day | S3 long straddle 09:20 | 1m | VIX-UP | 12:00 | 70 | −3.15 / −4.05 / −3.13 (−4.7) | both legs real | AVOID | after a VIX jump IV keeps falling |
 | NIFTY and BANKNIFTY, pool | option same-day | at-the-money call alone 09:20 | 1m | any | 15:20 | 490 | −1.56 / −4.31 / −6.37 (−2.7) | real, one lot | REJECTED | a buyer without a view pays about 3% a day |
 | NIFTY and BANKNIFTY, pool | option same-day | at-the-money put alone 09:20 | 1m | any | 15:20 | 490 | −2.32 / −4.39 / +0.51 (−1.6) | real, one lot | REJECTED | about 2% a day |
 | 4 indices, pool | option same-day | S4 expiry afternoon 14:30, 0.25 ATR | 1m | monthly EXPIRY | 15:15 or −40% | 30 | real +2.70 / +109.6 / −16.7 (+0.7) | model unusable on expiry day | REJECTED | few days, carried by a few winners |
