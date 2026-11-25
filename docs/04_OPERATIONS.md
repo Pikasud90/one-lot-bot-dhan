@@ -25,8 +25,9 @@
 
 **During the session**
 
-The engine is hands-off. When a signal fires you get a toast and the dashboard
-card, with 75 seconds to act.
+The engine is hands-off. When a Live Desk alert fires you get a toast and the dashboard
+card, with `signal_valid_minutes` (10 in `config/desk.yaml`) to act: after that it expires.
+The older Bank Nifty engine's card still lasts `signal.ttl_seconds` (75 in `config/config.yaml`).
 
 1. Execute on your Dhan terminal.
 2. Enter the price you **actually filled at** and click **Trade taken**.
