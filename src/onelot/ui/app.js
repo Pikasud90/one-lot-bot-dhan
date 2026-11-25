@@ -17,6 +17,8 @@ const pct = (v, d = 1) => (v === null || v === undefined || Number.isNaN(Number(
 const spct = (v, d = 2) => (v === null || v === undefined || Number.isNaN(Number(v))) ? "–" : (Number(v) > 0 ? "+" : "") + Number(v).toFixed(d) + "%";
 // A stamp as "YYYY-MM-DD HH:mm". One that carries a zone (Z, +hh:mm, -hh:mm) is shown in India time; one without stays as it is.
 const tsf = (s) => { if (!s) return "–"; const t = String(s); if (/T.*(Z|[+-]\d\d:?\d\d)$/.test(t)) { const d = new Date(t); if (!Number.isNaN(d.getTime())) { const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).formatToParts(d).map((x) => [x.type, x.value])); return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`; } } return t.replace("T", " ").slice(0, 16); };
+// A code such as GAP_THROUGH_STOP as words: every underscore becomes a space.
+const spaced = (v) => String(v ?? "").replaceAll("_", " ");
 const hhmm = (s) => s ? String(s).slice(11, 16) : "–";
 const hms = (s) => s ? String(s).slice(11, 19) : "–";
 const tile = (l, v, i = "", c = "") => `<div class="tile"><small>${l}</small><b class="${c}">${v}</b><i>${i}</i></div>`;
@@ -344,12 +346,12 @@ function outcomeCell(s) {
   if (s.exit) return exitCell(s.exit) + (s.trade ? ` <span class="dim">· yours ${rup(s.trade.net_pnl)}</span>` : "");
   if (s.status === "TAKEN") return s.trade ? `<span class="outc ${s.trade.net_pnl >= 0 ? "TARGET" : "STOP"}">CLOSED ${rup(s.trade.net_pnl)}</span>` : `<span class="outc OPEN">MONITORING</span>`;
   if (!o || !o.outcome || o.outcome === "NO_DATA") return `<span class="dim">awaiting its exit</span>`;
-  return `<span class="outc ${esc(o.outcome)}">${esc(o.outcome.replace("_", " "))}</span> <span class="${cls(o.r_now)}" style="font-family:var(--mono)">${fmt(o.r_now, 2)}R</span> <span class="dim">${esc(auditNote(s))}</span>`;
+  return `<span class="outc ${esc(o.outcome)}">${esc(spaced(o.outcome))}</span> <span class="${cls(o.r_now)}" style="font-family:var(--mono)">${fmt(o.r_now, 2)}R</span> <span class="dim">${esc(auditNote(s))}</span>`;
 }
 function alertRow(s) {
   const e = s.economics || {}, o = s.option || e.option || {}, out = s.outcome || {}, c = s.confidence || {};
   const sell = s.direction === "short";
-  const what = s.kind === "INDEX" ? `${esc(s.side.replace("_", " "))} ${esc(s.label)} ${o.strike ? fmt(o.strike, 0) + " " + esc(o.opt_type) : ""}` : `${sell ? "SELL" : "BUY"} ${esc(s.label)}`;
+  const what = s.kind === "INDEX" ? `${esc(spaced(s.side))} ${esc(s.label)} ${o.strike ? fmt(o.strike, 0) + " " + esc(o.opt_type) : ""}` : `${sell ? "SELL" : "BUY"} ${esc(s.label)}`;
   const parts = c.parts || {};
   const body = `
     <div class="grid3">
@@ -360,7 +362,7 @@ function alertRow(s) {
         ${kv(s.kind === "INDEX" ? "Premium at target" : "Target", e.target_price != null ? rup2(e.target_price) : "trail", "pos")}${kv("Risk ₹ (incl. charges)", rup(e.risk_inr), "neg")}${kv("Net reward ₹", e.reward_inr != null ? rup(e.reward_inr) : "–", "pos")}${kv("Net R/R", fmt(e.rr_net))}
         ${s.kind === "INDEX" ? kv("Underlying entry / stop / target", `${fmt(e.underlying_entry, 0)} / ${fmt(e.underlying_stop, 0)} / ${e.underlying_target != null ? fmt(e.underlying_target, 0) : "–"}`) : ""}${e.synthetic ? `<div class="hint warn">premium synthetic (Black-76) — no live chain at alert time</div>` : (o.spread_pct != null ? kv("Chain spread", pct(o.spread_pct)) : "")}</div>
       <div><h4>Confidence ${fmt(confShown(c.score), 0)} <span class="dim">${esc(c.label || "")}</span></h4>
-        ${["signal_strength", "backtest_evidence", "live_record", "regime_fit"].map(k => `<div class="kv"><span>${k.replace("_", " ")}</span><span>${fmt(parts[k], 0)}</span></div><div class="conf-bar"><i style="width:${Math.max(0, Math.min(100, parts[k] || 0))}%"></i></div>`).join("")}
+        ${["signal_strength", "backtest_evidence", "live_record", "regime_fit"].map(k => `<div class="kv"><span>${spaced(k)}</span><span>${fmt(parts[k], 0)}</span></div><div class="conf-bar"><i style="width:${Math.max(0, Math.min(100, parts[k] || 0))}%"></i></div>`).join("")}
         <div class="hint">${esc(parts.backtest_note || "")}<br>${esc(parts.live_note || "")}</div>
         <h4>Audit at the alerted levels</h4>${out.outcome ? kv("Result", outcomeCell(s)) + kv("Best / worst excursion", `${fmt(out.mfe_r, 2)}R / −${fmt(out.mae_r, 2)}R`) + kv("Est. P&L (1 unit)", rup(out.pnl_est), cls(out.pnl_est)) + kv("Resolved", out.exit_ts ? tsf(out.exit_ts) : "–") : `<div class="muted">audited once the next bars arrive</div>`}</div>
     </div>
@@ -679,7 +681,7 @@ function positionsTable(ps) {
     <th class="n">R now</th><th class="n">Unrealised</th><th>Exit</th><th class="n">Held</th><th>Your prices <span class="dim">(optional)</span></th></tr></thead><tbody>` +
     ps.map(p => { const [ex, exCls] = positionExit(p); return `<tr><td>${tsf(positionAlertAt(p))}</td><td>${tsf(p.opened_at)}</td>
       <td><b>${esc(p.label)}</b> <span class="dim">${esc(p.strategy)} ${esc(p.timeframe)}${p.option && p.option.strike ? ` · ${fmt(p.option.strike, 0)} ${esc(p.option.opt_type)}` : ""}</span></td>
-      <td>${esc(p.side.replace("_", " "))}</td><td class="n">${fmt(p.alert_entry_price != null ? p.alert_entry_price : p.entry_price)}</td>
+      <td>${esc(spaced(p.side))}</td><td class="n">${fmt(p.alert_entry_price != null ? p.alert_entry_price : p.entry_price)}</td>
       <td class="n">${p.user_entry_price != null ? fmt(p.user_entry_price) : "<span class='dim'>–</span>"}</td><td class="n">${fmt(p.last_underlying)}</td>
       <td class="n">${fmt(p.stop_underlying)}${positionLevels(p)}</td><td class="n">${p.target_underlying != null ? fmt(p.target_underlying) : "–"}</td>
       <td class="n ${cls(p.r_now)}">${fmt(p.r_now, 2)}R</td><td class="n ${cls(p.unrealized)}">${rup(p.unrealized)}</td>
@@ -1046,8 +1048,8 @@ function renderFocus(d) {
     <h4>Strategies</h4><div class="tbl">${table([{ l: "Strategy", f: s => `<b>${esc(s.label)}</b>` }, { l: "TF", k: "timeframe" }, { l: "Bar", f: s => hhmm(s.last_bar_ts) },
       { l: "Verdict", f: s => `<span class="schip ${s.verdict !== "none" ? s.verdict : ""}">${esc(s.verdict)}</span>` }, { l: "Why", f: s => esc(s.error || s.reason || "") }, { l: "Trail", f: slotTrail, c: () => "nw" }], r.strategies || [])}</div>
     ${(r.strategies || []).map(s => slotTrailNote(s, r.kind)).join("")}
-    ${r.signal ? `<div class="notice mt"><b>Pending alert:</b> ${esc(r.signal.side.replace("_", " "))} · ${esc(r.signal.strategy)} ${esc(r.signal.timeframe)} · conf ${fmt(confShown((r.signal.confidence || {}).score), 0)} — act on it from <a href="#home">Home</a>.</div>` : ""}
-    ${r.position ? `<div class="notice mt"><b>Monitoring:</b> ${esc(r.position.side.replace("_", " "))} from ${fmt(r.position.entry_price)} · ${fmt(r.position.r_now, 2)}R · ${esc(r.position.hold_check || "")}${r.position.exit_advice ? ` · <b class="neg">EXIT: ${esc(r.position.exit_advice)}</b>` : ""}</div>` : ""}`;
+    ${r.signal ? `<div class="notice mt"><b>Pending alert:</b> ${esc(spaced(r.signal.side))} · ${esc(r.signal.strategy)} ${esc(r.signal.timeframe)} · conf ${fmt(confShown((r.signal.confidence || {}).score), 0)} — act on it from <a href="#home">Home</a>.</div>` : ""}
+    ${r.position ? `<div class="notice mt"><b>Monitoring:</b> ${esc(spaced(r.position.side))} from ${fmt(r.position.entry_price)} · ${fmt(r.position.r_now, 2)}R · ${esc(r.position.hold_check || "")}${r.position.exit_advice ? ` · <b class="neg">EXIT: ${esc(r.position.exit_advice)}</b>` : ""}</div>` : ""}`;
   const tf = $("focus-tf").value;
   if (focus.lastKey !== r.key || focus.lastTf !== tf || Date.now() - focus.lastAt > 55000) {
     focus.lastKey = r.key; focus.lastTf = tf; focus.lastAt = Date.now();

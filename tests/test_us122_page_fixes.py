@@ -52,3 +52,14 @@ def test_a1_tsf_converts_zoned_times_to_india_time() -> None:
 @needs_node
 def test_a1_tsf_unzoned_text_is_cut_as_before() -> None:
     assert js(["tsf"], 'tsf("2026-11-25T20:05:59")') == "2026-11-25 20:05"
+
+
+def test_a2_no_first_only_underscore_replace_remains() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+    assert not re.findall(r'\.replace\(\s*"_"', source)
+
+
+@needs_node
+def test_a2_spaced_replaces_every_underscore() -> None:
+    assert js(["spaced"], 'spaced("GAP_THROUGH_STOP")') == "GAP THROUGH STOP"
+    assert js(["spaced"], "spaced(null)") == ""
