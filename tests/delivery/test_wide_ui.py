@@ -195,3 +195,16 @@ def test_a_round_waiting_for_the_broker_shows_not_finished_and_its_note(tmp_path
     html = js("wideRound(P)", w.summary()["last_round"])
     assert "not finished" in html and note in html
     assert note in js("wideBlock(P, true)", w.summary())
+
+
+@needs_node
+def test_the_dormant_line_is_shown_only_when_the_setting_is_above_zero():
+    dormant = [{"series_key": "AAA", "name": "AAA", "last_bar": "2026-11-10"}]
+    texts = [
+        js("wideBlock(P, true)", {**VIEW, "dormant": dormant, "dormant_after": after})
+        for after in (0, 10, None)
+    ]
+    off, ten, unset = texts
+    assert "No daily price for" not in off and "for 0 trading days" not in off
+    assert "No daily price for 10 trading days or more" in ten
+    assert "No daily price for 10 trading days or more" in unset  # the page's default of 10
