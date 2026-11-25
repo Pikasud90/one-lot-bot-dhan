@@ -15,7 +15,8 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<
 const kv = (k, v, c = "") => `<div class="kv"><span>${esc(k)}</span><span class="${c}">${v}</span></div>`;
 const pct = (v, d = 1) => (v === null || v === undefined || Number.isNaN(Number(v))) ? "–" : Number(v).toFixed(d) + "%";
 const spct = (v, d = 2) => (v === null || v === undefined || Number.isNaN(Number(v))) ? "–" : (Number(v) > 0 ? "+" : "") + Number(v).toFixed(d) + "%";
-const tsf = (s) => s ? String(s).replace("T", " ").slice(0, 16) : "–";
+// A stamp as "YYYY-MM-DD HH:mm". One that carries a zone (Z, +hh:mm, -hh:mm) is shown in India time; one without stays as it is.
+const tsf = (s) => { if (!s) return "–"; const t = String(s); if (/T.*(Z|[+-]\d\d:?\d\d)$/.test(t)) { const d = new Date(t); if (!Number.isNaN(d.getTime())) { const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).formatToParts(d).map((x) => [x.type, x.value])); return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`; } } return t.replace("T", " ").slice(0, 16); };
 const hhmm = (s) => s ? String(s).slice(11, 16) : "–";
 const hms = (s) => s ? String(s).slice(11, 19) : "–";
 const tile = (l, v, i = "", c = "") => `<div class="tile"><small>${l}</small><b class="${c}">${v}</b><i>${i}</i></div>`;
