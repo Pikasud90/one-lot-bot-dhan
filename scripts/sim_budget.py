@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
-import statistics
 import sys
 import tempfile
 import threading
@@ -161,21 +160,23 @@ def measure(
                 m = manager()
                 found["options cold"].append(_ms(m.options)[0])
                 found["options warm"].append(min(_ms(m.options)[0] for _ in range(3)))
-                for inst, strategy, tf in todo:
+                for inst, _strategy, tf in todo:
                     until = starts[inst]
-                    t, _ = _ms(lambda inst=inst, tf=tf, until=until: m.candles(inst, tf, until, 300))
-                    found["candles cold"].append(t)
-                    found["candles warm"].append(
-                        min(_ms(lambda inst=inst, tf=tf, u=until: m.candles(inst, tf, u, 300))[0]
-                            for _ in range(3))
-                    )  # fmt: skip
+
+                    def candles(
+                        m: SimManager = m, i: str = inst, t: str = tf, u: str = until
+                    ) -> Any:
+                        return m.candles(i, t, u, 300)
+
+                    found["candles cold"].append(_ms(candles)[0])
+                    found["candles warm"].append(min(_ms(candles)[0] for _ in range(3)))
                 for inst, strategy, tf in todo:
                     body = {"instrument": inst, "strategy": strategy, "timeframe": tf,
                             "mode": "past", "start": starts[inst], "params": {}}  # fmt: skip
                     c0 = time.process_time()
                     t0 = time.perf_counter()
                     ticker.on = True
-                    t_answer, made = _ms(lambda body=body: m.create(body))
+                    t_answer, made = _ms(lambda m=m, body=body: m.create(body))
                     sid = made["session"]["id"]
                     while True:
                         st = m.entry(sid).state_status
@@ -192,7 +193,7 @@ def measure(
                     found["create answer"].append(t_answer)
                     found["RUNNING cold"].append(running)
                     t0 = time.perf_counter()
-                    t_answer2, again = _ms(lambda body=body: m.create(body))
+                    t_answer2, again = _ms(lambda m=m, body=body: m.create(body))
                     sid2 = again["session"]["id"]
                     while m.entry(sid2).state_status == "BUILDING":
                         time.sleep(0.005)
@@ -201,7 +202,9 @@ def measure(
                     one, thirty = [], []
                     for k in range(advances):
                         n = 1 if k % 2 == 0 else 30
-                        t, r = _ms(lambda sid=sid, n=n: m.act(sid, lambda s: s.advance(n, None)))
+                        t, r = _ms(
+                            lambda m=m, sid=sid, n=n: m.act(sid, lambda s: s.advance(n, None))
+                        )
                         (one if n == 1 else thirty).append(t)
                         if r["over"]:
                             break

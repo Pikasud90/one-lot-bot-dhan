@@ -114,7 +114,7 @@ def plot_specs(name: str, params: Any = None) -> list[dict[str, str]]:
     """The contract's `plots` of a strategy: [{"id", "label", "pane"}] (default parameters
     when `params` is None)."""
     if params is None and name in REGISTRY:
-        params = REGISTRY[name].Params()
+        params = REGISTRY[name].Params.model_validate({})
     return [{"id": p.id, "label": _label(p, params), "pane": p.pane} for p in PLOTS.get(name, ())]
 
 
