@@ -212,3 +212,42 @@ def test_the_desk_18_book_the_same_trades_with_the_wide_list_on(monkeypatch, cap
         row = got[(r.stock, r.signal_date)]
         assert row["entry_session"] == r.entry_date and row["status"] == "CLOSED"
         assert row["exit_ts"].astimezone(IST).date().isoformat() == r.exit_date
+
+
+# ── every new step is guarded ───────────────────────────────────────────────
+def test_a_failing_wide_list_never_stops_the_poll_or_the_desk_18(cfg, tmp_path):
+    import sys
+    from types import SimpleNamespace
+
+    sys.path.insert(0, str(ROOT / "tests" / "desk"))
+    from desk_harness import new_desk
+
+    from onelot.store import init_database
+
+    desk, _, _ = new_desk(cfg, init_database(f"sqlite:///{tmp_path / 'd.db'}"))
+    calls: list[str] = []
+
+    def boom(now):  # noqa: ANN001
+        raise RuntimeError("wide list broken")
+
+    desk.delivery = SimpleNamespace(
+        load_history=lambda now: calls.append("history"),
+        maybe_top_up=lambda now: calls.append("top-up"),
+        wide_step=boom,
+    )
+    before = desk.hook_errors
+    desk._delivery_history(dt.datetime(2026, 11, 20, 18, 0, tzinfo=IST))
+    assert calls == ["history", "top-up"] and desk.hook_errors == before + 1
+
+    # inside the delivery desk: a round that cannot start and alerts that cannot be sent
+    on = DeliveryDesk(
+        create_engine("sqlite://"), load_desk_config(), COSTS, SessionCfg(), CAL, Quiet(),
+        dt.datetime(2026, 1, 1, tzinfo=IST), background=False,
+    )  # fmt: skip
+    told: list[str] = []
+    on.wide.maybe_round = boom
+    on.wide.tell = lambda now: told.append("tell")
+    on.wide_step(dt.datetime(2026, 11, 20, 18, 0, tzinfo=IST))
+    assert told == ["tell"]
+    on.wide.summary = lambda: boom(None)
+    assert on.view()["wide"]["note"] == "the wide list could not be read"

@@ -48,7 +48,7 @@ def closes(path: Sequence[tuple[int, float]], n: int, rise: float = 0.003) -> np
     session of -0.10 followed by another change)."""
     c = np.empty(n)
     c[0] = 100.0
-    step = {i: g for i, g in path}
+    step = dict(path)
     g = rise
     for i in range(1, n):
         if i in step:
