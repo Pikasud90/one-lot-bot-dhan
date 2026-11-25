@@ -208,6 +208,11 @@ class WideBook:
             self._active = {t.series_key: t for t in self._select(wide_trades.c.status.in_(ACTIVE))}
         return dict(self._active)
 
+    def active_now(self) -> list[WideTrade]:
+        """The active trades read afresh, never through the round's cache: what the page and
+        the API read from other threads while a round may be writing."""
+        return self._select(wide_trades.c.status.in_(ACTIVE))
+
     def cap_open(self) -> int:
         return sum(1 for t in self.active().values() if t.tier == CAP)
 
@@ -626,6 +631,12 @@ class WideDesk:
             self.note = summary["note"]
             return RoundResult(s, False, summary)
         self._evaluate(s, days, nifty, states, now, summary)
+        if row is not None:  # a resumed round: what the earlier tries found stays in its record
+            prev = dict(row["summary"] or {})
+            for k in ("signals", "alerted", "recorded", "late", "exits", "fetched", "scanned"):
+                summary[k] += int(prev.get(k) or 0)  # each stock is read once a session
+            for k in ("refetched", "errors"):
+                summary[k] = [*list(prev.get(k) or []), *summary[k]][-50:]
         waiting = [
             k for k, d in days.items() if d.index_of(s) is None and k not in summary["stale"]
         ]
@@ -1006,7 +1017,7 @@ class WideDesk:
         hit = self._summary
         if hit is not None and hit[0] == (self.book.version, desk):
             return dict(hit[1])
-        active = list(self.book.active().values())
+        active = self.book.active_now()
         last = self.book.last_round()
         out = {
             "enabled": True,
@@ -1044,7 +1055,7 @@ class WideDesk:
         """Everything `GET /api/delivery/wide` answers: the summary, the open trades of both
         tiers, the latest closed trades, the stale stocks and the stocks closest to a signal."""
         out = self.summary()
-        active = sorted(self.book.active().values(), key=lambda t: (t.tier, t.signal_date))
+        active = sorted(self.book.active_now(), key=lambda t: (t.tier, t.signal_date))
         out["open"] = [{**t.as_dict(), "name": self._name(t.series_key)} for t in active]
         out["closed"] = [
             {**t.as_dict(), "name": self._name(t.series_key)} for t in self.book.closed(closed)

@@ -253,3 +253,23 @@ def test_stock_days_reads_the_store_frame_as_the_desk_18_do():
     # a bad price is left out (session 3's close, and session 4's open, which is that close)
     assert sd.dates == [DATES[0], DATES[1], DATES[4]] and set(sd.hist.bad) == {DATES[2], DATES[3]}
     assert sd.index_of(DATES[2]) is None and sd.last_at_or_before(DATES[3]) == 1
+
+
+def test_a_resumed_round_keeps_what_its_earlier_try_found(tmp_path):
+    frames = three_exits()
+    eng = store(tmp_path)
+    broker = Broker(frames)
+    w = wide_desk(
+        [stock(k) for k in frames], DATES, engine=eng, fetch=broker.fetch,
+        data_api_active=lambda: True, sleep=lambda s: None,
+    )  # fmt: skip
+    broker.published = DATES[SIG - 1]
+    w.run_round(at(DATES[SIG - 1]), DATES[SIG - 1])
+    broker.fail = lambda key, start: key == "CCC"
+    broker.published = DATES[SIG]
+    first = w.run_round(at(DATES[SIG]), DATES[SIG]).summary
+    assert (first["scanned"], first["signals"]) == (2, 2)
+    broker.fail = lambda key, start: False
+    again = w.run_round(at(DATES[SIG], "19:00"), DATES[SIG]).summary
+    assert (again["scanned"], again["signals"], again["fetched"]) == (3, 3, 3)
+    assert any(e.startswith("CCC") for e in again["errors"])
