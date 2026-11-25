@@ -287,3 +287,7 @@ def test_index_choice_and_options(shared):
     with pytest.raises(VolumeError) as e:
         shared.body(DAYS[-2].isoformat(), "RELIANCE")
     assert e.value.status == 400 and "MIDCPNIFTY" in e.value.message
+
+
+def test_settings_name_the_rule_in_use(shared):
+    assert shared.body(DAYS[40].isoformat())["settings"]["rule"] == shared.cfg.rule

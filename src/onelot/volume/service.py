@@ -911,7 +911,8 @@ class VolumeWatch:
     def settings(self) -> dict[str, Any]:
         c = self.cfg
         return {"z_alert": c.z_alert, "stock_z_alert": c.stock_z_alert,
-                "cooldown_min": c.cooldown_min, "alerts_on": c.alerts_on, "notify": c.notify}  # fmt: skip
+                "cooldown_min": c.cooldown_min, "alerts_on": c.alerts_on, "notify": c.notify,
+                "rule": c.rule}  # fmt: skip
 
     def book_view(self) -> dict[str, Any] | None:
         b = self.book_last

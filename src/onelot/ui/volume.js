@@ -191,12 +191,18 @@ function notesHtml(notes) {
 const LEGEND = [
   ["Turnover", "Rupees traded: the number of shares times their price. Rupees can be added across stocks, shares cannot."],
   ["Volume against normal (relative volume)", "How much was traded compared with the usual for this same minute of the day, taken from the last 20 full sessions. 1.0 times is usual, 2.0 times is double."],
-  ["Buyers' share", "Each one-minute bar's turnover is split by where it closed between its low and high: a close near the high counts as buying. It is an estimate from one-minute bars, not a count of buyers."],
+  ["Buyers' share", ""],
   ["Spike", "The last 5 minutes are far above what the last 60 sessions had at this time of day. It says unusual, not up or down."],
   ["Pressure on an index", "The net buying or selling of the stocks that move the index, weighted by how much each moves it, in units of normal volume. Above zero is net buying, below zero net selling."],
   ["Order book", "Orders waiting at the best five price steps. It shows intentions, which can be pulled at any moment, so treat it as a hint only."],
 ];
-const legendHtml = () => `<dl class="vol-legend">${LEGEND.map(([t, x]) => `<dt>${esc(t)}</dt><dd>${esc(x)}</dd>`).join("")}</dl><p class="vol-warn">${esc(WATCH_NOT_ALERT)}</p>`;
+const SPLIT_TEXT = {
+  bvc: "Each one-minute bar's turnover is split by the minute's price move against the usual size of recent minute moves: a move well above the usual counts mostly as buying, a fall mostly as selling. It is an estimate from one-minute bars, not a count of buyers.",
+  clv: "Each one-minute bar's turnover is split by where it closed between its low and high: a close near the high counts as buying. It is an estimate from one-minute bars, not a count of buyers.",
+  tick: "Each one-minute bar's turnover counts as buying when the minute closed above where it opened, as selling when it closed below, and half and half when unchanged. It is an estimate from one-minute bars, not a count of buyers.",
+};
+const splitText = (rule) => SPLIT_TEXT[rule] || "Each one-minute bar's turnover is split into buying and selling by its price move. It is an estimate from one-minute bars, not a count of buyers.";
+const legendHtml = (rule) => `<dl class="vol-legend">${LEGEND.map(([t, x]) => `<dt>${esc(t)}</dt><dd>${esc(t === "Buyers' share" ? splitText(rule) : x)}</dd>`).join("")}</dl><p class="vol-warn">${esc(WATCH_NOT_ALERT)}</p>`;
 const demoHtml = () => `<div class="card vol-demo"><b>Demo data, not market data.</b> This tab is running on a built-in fake of the engine (?volfake=1).</div>`;
 const errorText = (e, have) => `${have ? "Could not refresh: " : "The volume watch is not answering: "}${String((e && e.message) || e).replace(/\.+$/, "")}${have ? ". Showing the last picture." : "."}`;
 const indexOptions = (d, sel) => {
@@ -357,6 +363,7 @@ function render() {
   const h = sectionsHtml(d, S.sort, S.date);
   set("vol-banner", h.banner); $("vol-status").innerHTML = h.status; set("vol-headline", h.headline); set("vol-tiles", h.tiles);
   set("vol-stocks", h.stocks); set("vol-indices", h.indices); set("vol-book", h.book); set("vol-alerts", h.alerts); set("vol-notes", h.notes);
+  set("vol-legend", legendHtml(d.settings && d.settings.rule));
   drawMain();
   if (S.prof && S.profToday) { S.profToday.setData(todayPoints()); S.profToday.applyOptions({ title: S.date ? "this day" : "today" }); } else if (S.profile) drawProfile();
 }
