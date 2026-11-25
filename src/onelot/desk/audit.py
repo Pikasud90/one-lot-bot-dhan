@@ -226,7 +226,7 @@ def confidence(
     if live and live.get("n", 0) >= 5:
         hr = float(live.get("hit_rate") or 0)
         avg_r = float(live.get("avg_r") or 0)
-        parts["live_record"] = round(max(0, min(100, hr * 0.6 + 50 + avg_r * 50)), 1)
+        parts["live_record"] = round(max(0.0, min(100.0, 50 + 0.6 * (hr - 50) + 50 * avg_r)), 1)
         parts["live_note"] = f"{live['n']} archived alerts, {hr:.0f}% positive, avg {avg_r:+.2f}R"
     else:
         parts["live_record"] = 50.0
