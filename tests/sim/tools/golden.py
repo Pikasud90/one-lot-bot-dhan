@@ -91,12 +91,17 @@ def drive(
     minutes: int = MINUTES,
     chunks: tuple[int, ...] = CHUNKS,
     act: Any = None,
+    until: str | None = None,
+    close_every: int = 3,
 ) -> dict[str, Any]:
     """Drive a `SimSession` (or anything with its `advance`, `take` and `close`) and record
-    what it showed. `act(session, kind, *args)` replaces the direct calls (the API tests pass
-    one that goes through HTTP)."""
+    what it showed. `act(session, kind, *args)` replaces the direct calls (a test passes one
+    that rebuilds the session on the way). `until` is passed to every advance (the engine
+    before US-095 had none); `close_every=0` never closes by hand."""
 
     def call(kind: str, *args: Any) -> dict[str, Any]:
+        if kind == "advance" and until is not None:
+            args = (*args, until)
         if act is not None:
             return act(session, kind, *args)
         return getattr(session, kind)(*args)
@@ -121,7 +126,12 @@ def drive(
             got = call("take", a["id"])
             rec["events"].extend(_clean(e) for e in got["events"])
             taken += 1
-        elif r["trade"] is not None and r["trade"]["status"] == "OPEN" and taken % 3 == 0:
+        elif (
+            close_every
+            and r["trade"] is not None
+            and r["trade"]["status"] == "OPEN"
+            and taken % close_every == 0
+        ):
             got = call("close")
             rec["events"].extend(_clean(e) for e in got["events"])
     final = call("end")
