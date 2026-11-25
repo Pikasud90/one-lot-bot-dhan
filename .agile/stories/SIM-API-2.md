@@ -194,3 +194,10 @@ page (US-094) and the join (a third agent) can rely on these.
     (MANUAL, SIGNAL_EXIT, SESSION_END at the exit time, a GAP_ exit) carry the start of that
     minute; a SESSION_END or MANUAL close at the day's or the data's last close carries that
     close. The audit's "11:42" for a fill at the 11:43 open was the page's printing.
+15. (the join on real bars) A manual `close` answers with the trade still OPEN: it fills at the
+    next minute's open. A page that is paused then reveals that one minute itself (an `advance`
+    of 1), so the close is seen at once; a playing page lets the clock reveal it. No change on
+    the server.
+16. (the join on real bars) An `overlays` series is drawn with a gap wherever points are left out
+    (rule 10's opening range, a warm-up): the page never joins two points across a missing
+    candle, except a line that goes on at the next day's first candle. No change on the server.
