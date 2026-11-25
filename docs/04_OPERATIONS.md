@@ -150,11 +150,21 @@ places an order, and the desk 18 keep working exactly as above.
   rule on each stock with the desk 18's own code. A signal on a close is a paper trade filled
   at the next session's open, taken from that session's daily bar in the next round; open
   trades are managed on the daily bars with the rule's own exits. Up to four tries a session,
-  30 minutes apart; a round waits for NIFTY's session to be complete.
+  30 minutes apart; a round waits for NIFTY's session to be complete (a wait is not a try).
+  With the Data API off (a token expired) no round runs: it runs when the API is back.
 - Adjustments: when the fetched closes differ from the stored ones by more than 0.5% on the
   overlap (a split, a bonus, a demerger), the stock's whole history is fetched again and
   replaces the stored one, and the round says so. If that refetch fails, the stock is stale:
-  it is not read until a later round agrees or refetches.
+  it is not read until a later round agrees or refetches. An active trade of a re-based stock
+  is put on the new basis (signal close and entry fill rescaled, the share count of a filled
+  trade by the inverse), so its stop is read on the same basis as the closes; the trade's note
+  says so. A stock whose stored history is shorter than 201 sessions is fetched whole once only.
+- Unadjusted actions: a one-session fall of more than 15% (the close or the open against the
+  close before) may be a split or bonus the broker left unadjusted. Within the 20 sessions of
+  the rule's high it blocks the entry ("a split or bonus not adjusted?"); since a trade's
+  entry it holds that trade's exit for the owner (the note says "exit held for review"; the
+  round lists it as held). A held trade keeps its place until the history is re-based or the
+  owner decides. A rise is never blocked.
 - Two tiers. Every signal is a paper trade (tier "all"). At most `cap_open` trades are open
   within the cap at a time, the desk 18's active trades counted. A signal of the round's own
   session takes a free place, the desk group first, then the deepest pullback first; a trade
