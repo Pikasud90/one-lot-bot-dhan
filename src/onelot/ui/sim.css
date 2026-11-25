@@ -135,8 +135,8 @@
 #sim-root .sim-src.modelled{color:var(--warn-ink);border-color:var(--warn);background:var(--warn-bg)}
 #sim-root .sim-plan{padding:8px 10px;background:var(--panel2);border:1px solid var(--line)}
 #sim-root .sim-buy{font:700 21px/1.2 var(--mono);margin-bottom:4px}
-#sim-root .sim-pair{display:grid;grid-template-columns:1fr 1fr;gap:0 10px;font:600 15px/1.5 var(--mono)}
-#sim-root .sim-pair>span{white-space:nowrap}
+#sim-root .sim-pair{display:flex;flex-wrap:wrap;gap:0 10px;font:600 15px/1.5 var(--mono)}
+#sim-root .sim-pair>span{white-space:nowrap;flex:1 0 calc(50% - 5px)}   /* two per row; a long pair (real rupees) wraps instead of being cut */
 #sim-root .sim-pair b{font-weight:700}
 #sim-root .sim-pair.sim-quiet{font-size:14px}
 #sim-root .sim-trig{margin-top:8px;font:500 14px/1.4 var(--mono);color:var(--muted)}

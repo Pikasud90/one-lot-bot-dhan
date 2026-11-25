@@ -894,3 +894,23 @@ class TestStatic:
             load.index("S.chart.reset()") < first_await
             and load.index("veil(`Loading") < first_await
         )
+
+
+# ══ found on real bars (the join of US-094 and US-095, 25 Nov) ═══════════════════════════════
+class TestOnRealBars:
+    def test_a_resumed_open_trade_gets_its_levels_and_zones_back(self):
+        js = SIM_JS.read_text("utf-8")
+        body = re.search(r"async function running\(st, r, resumed\) \{.*?\n\}", js, re.S).group(0)
+        assert body.index("takeState(st, true)") < body.index("syncChart()")
+
+    def test_a_close_while_paused_reveals_the_minute_whose_open_fills_it(self):
+        js = SIM_JS.read_text("utf-8")
+        body = re.search(r"async function act\(kind\) \{.*?\n\}", js, re.S).group(0)
+        assert (
+            'kind === "close" && tradeOpen() && !S.playing' in body and "forward(1, null)" in body
+        )
+
+    def test_a_pair_of_rupee_amounts_wraps_instead_of_being_cut(self):
+        css = SIM_CSS.read_text("utf-8")
+        rule = re.search(r"#sim-root \.sim-pair\{[^}]*\}", css).group(0)
+        assert "flex-wrap:wrap" in rule

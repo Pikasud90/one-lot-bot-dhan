@@ -509,6 +509,7 @@ async function running(st, r, resumed) {
   Object.keys(ov).forEach(k => { S.overlays[k] = (ov[k] || []).filter(p => p[0] + S.sess.session.tf_minutes * 60 <= S.drawn + 60); });
   S.chart.setOverlayDefs(S.sess.plots);
   resetLegendLines(); drawOverlays();
+  syncChart();   // a resumed alert or open trade gets its levels and zones back at once
   const marks = r.marks || st.marks || [];
   S.mark = marks.length ? marks[marks.length - 1] : null;
   S.over = s.status === "ENDED";
@@ -744,6 +745,8 @@ async function act(kind) {
   if (kind === "end" && !S.over && !(await confirm("End this practice session? An open trade closes at the next minute's open, and the replay of this session stops.", "End it", "Keep going"))) return;
   S.acting = true;
   try { await actNow(kind); } finally { S.acting = false; renderAll(); }
+  // A close fills at the next minute's open (SIM-API close). Paused, that minute would never come: reveal it at once.
+  if (kind === "close" && tradeOpen() && !S.playing && !S.over && !live()) await forward(1, null);
 }
 async function actNow(kind) {
   const wasPlaying = S.playing || S.pausedByAlert;
@@ -975,7 +978,8 @@ async function loadTab() {
   if (S.booted) { renderAll(); if (S.chart && !S.hover) renderLegend(); return; }
   S.booted = true;
   ensureChart();
-  if (S.fake) { set("sim-banner", "Demo data, not market data"); show("sim-banner", true); window.SimPage = { chart: () => S.chart, state: () => S, forget() { dropSession(); S.chart.reset(); renderAll(); }, offerResume }; }   // for the browser checks: a page that lost its session, then the offer
+  window.SimPage = { chart: () => S.chart, state: () => S };   // for the browser checks: read the chart and the state
+  if (S.fake) { set("sim-banner", "Demo data, not market data"); show("sim-banner", true); Object.assign(window.SimPage, { forget() { dropSession(); S.chart.reset(); renderAll(); }, offerResume }); }   // a page that lost its session, then the offer
   buildSpeeds(); renderSpeeds(); showPanelTab(S.view.ptab || "trades"); renderPanelOpen();
   setChecks();
   renderAll();
