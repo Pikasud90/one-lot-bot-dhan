@@ -49,6 +49,14 @@ def halved(f: pd.DataFrame) -> pd.DataFrame:
     return g
 
 
+def unadjusted(f: pd.DataFrame, i: int, factor: float) -> pd.DataFrame:
+    """The raw bars of a split or bonus the broker left unadjusted: every bar from session `i`
+    on (open, high, low, close) on the new basis, the earlier ones as they were."""
+    g = f.copy()
+    g.iloc[i:, :4] = g.iloc[i:, :4].to_numpy() * factor
+    return g
+
+
 def desk(frames, rec=None, **kw):
     broker = Broker(frames)
     w = wide_desk(
@@ -107,11 +115,10 @@ def test_a_pending_entry_across_a_rebased_history_fills_on_the_basis_of_its_sign
 
 
 def test_an_unadjusted_bonus_raises_no_false_pullback_signal():
-    c = closes([], N, 0.006)
     d = BASE + 10
-    c[d:] *= 0.8  # an unadjusted 1:4 bonus: the raw price 20% lower overnight
+    raw = unadjusted(frame(DATES, closes([], N, 0.006)), d, 0.8)  # a 1:4 bonus left unadjusted
     rec = Recorder()
-    w, broker = desk({"BBB": frame(DATES, c)}, rec)
+    w, broker = desk({"BBB": raw}, rec)
     for i in range(d - 2, d + 3):
         r = go(w, broker, i)
         if i == d:
@@ -122,10 +129,9 @@ def test_an_unadjusted_bonus_raises_no_false_pullback_signal():
 
 
 def test_an_unadjusted_split_holds_an_open_trades_exit_for_review():
-    c = drop_then(SIG, 0.10, 0.001, N)
-    c[SIG + 5 :] *= 0.5  # a 1:1 split left unadjusted, five sessions after the signal
+    raw = unadjusted(frame(DATES, drop_then(SIG, 0.10, 0.001, N)), SIG + 5, 0.5)  # a 1:1 split
     rec = Recorder()
-    w, broker = desk({"AAA": frame(DATES, c)}, rec)
+    w, broker = desk({"AAA": raw}, rec)
     for i in range(SIG - 2, SIG + 8):
         r = go(w, broker, i)
         if i >= SIG + 5:
@@ -135,13 +141,18 @@ def test_an_unadjusted_split_holds_an_open_trades_exit_for_review():
     assert [x for x in rec.titles() if "SELL" in x] == []
 
 
-def test_a_real_rise_is_not_a_jump():
+def test_a_rise_or_a_crash_within_the_session_is_not_a_jump():
     c = drop_then(SIG, 0.10, 0.001, N)
-    c[SIG - 10 :] *= 1.3  # a 30% rise ten sessions before the drop: a pullback all the same
-    w, broker = desk({"AAA": frame(DATES, c)})
+    c[SIG - 10 :] *= 1.3  # a 30% rise ten sessions before the drop
+    rise = frame(DATES, c)
+    crash = frame(DATES, drop_then(SIG, 0.20, 0.001, N))  # opens at the close before, falls 20%
+    w, broker = desk({"AAA": rise, "CCC": crash})
     for i in range(SIG - 2, SIG + 1):
         go(w, broker, i)
-    assert [t.signal_date for t in w.book.all()] == [DATES[SIG]]
+    assert sorted((t.series_key, t.signal_date) for t in w.book.all()) == [
+        ("AAA", DATES[SIG]),
+        ("CCC", DATES[SIG]),
+    ]
 
 
 def test_with_the_data_api_off_the_round_waits_and_runs_when_it_returns():

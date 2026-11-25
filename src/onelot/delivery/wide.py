@@ -80,7 +80,7 @@ REQUEST_GAP_S = 0.5
 FETCH_DAYS = 45
 #: a fetched close this far from the stored one on the overlap means a re-based history
 ADJUST_LIMIT = 0.005
-#: one session's fall (the close or the open against the close before) beyond this reads as a
+#: a session traded wholly this far below the close before (its high under it) reads as a
 #: corporate action the broker may have left unadjusted (a 1:4 bonus is -20%, a 1:1 split -50%)
 JUMP_LIMIT = 0.15
 #: where a whole-history refetch starts (the study's first day)
@@ -424,18 +424,20 @@ class StockDays:
     ords: np.ndarray
     open: np.ndarray
     close: np.ndarray
+    high: np.ndarray  # the open or the close where a bar has no usable high
 
     @classmethod
     def of(cls, key: str, frame: pd.DataFrame) -> StockDays:
         h = join_live(key, frame, {}, None)
         dates = list(h.days.index)
+        o = h.days["open"].to_numpy(float)
+        c = h.days["close"].to_numpy(float)
+        top = np.maximum(o, c)
+        if "high" in h.days.columns:
+            hi = pd.to_numeric(h.days["high"], errors="coerce").to_numpy(float)
+            top = np.where(np.isfinite(hi) & (hi >= top), hi, top)
         return cls(
-            key,
-            h,
-            dates,
-            np.array([d.toordinal() for d in dates], dtype=np.int64),
-            h.days["open"].to_numpy(float),
-            h.days["close"].to_numpy(float),
+            key, h, dates, np.array([d.toordinal() for d in dates], dtype=np.int64), o, c, top
         )
 
     def last_at_or_before(self, day: dt.date) -> int:
@@ -1223,21 +1225,21 @@ def _round_view(row: Mapping[str, Any] | None) -> dict[str, Any] | None:
 
 
 def _jump(sd: StockDays, lo: int, hi: int) -> tuple[dt.date, float] | None:
-    """The deepest one-session FALL beyond `JUMP_LIMIT` on sessions lo to hi (the lower of the
-    close and the open against the close before), as (session, change), or None. Only a fall:
-    a split or a bonus left unadjusted lowers the price, and a rise is never a false pullback."""
+    """A session among lo to hi whose WHOLE bar lies more than `JUMP_LIMIT` below the close
+    before (its high under that level), as (session, close change), or None: what a split or a
+    bonus the broker left unadjusted looks like. A fall during the session from near the close
+    before (a real crash: the high near it) is not one, and a rise never is."""
     lo = max(1, lo)
     if hi < lo:
         return None
     prev = sd.close[lo - 1 : hi]
-    low = np.minimum(sd.close[lo : hi + 1], sd.open[lo : hi + 1])
     with np.errstate(divide="ignore", invalid="ignore"):
-        moves = low / prev - 1.0
-    moves = np.where(np.isfinite(moves) & (prev > 0), moves, 0.0)
-    k = int(np.argmin(moves))
-    if moves[k] >= -JUMP_LIMIT:
+        top = sd.high[lo : hi + 1] / prev - 1.0
+    top = np.where(np.isfinite(top) & (prev > 0), top, 0.0)
+    k = int(np.argmin(top))
+    if top[k] >= -JUMP_LIMIT:
         return None
-    return sd.dates[lo + k], float(moves[k])
+    return sd.dates[lo + k], float(sd.close[lo + k] / prev[k] - 1.0)
 
 
 def _utc(t: Any) -> dt.datetime:
