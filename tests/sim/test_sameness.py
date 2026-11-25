@@ -11,42 +11,22 @@ bar again; writing bars to a series drops what was kept for it; the caps hold.
 
 from __future__ import annotations
 
-import datetime as dt
 import json
 import sys
 from pathlib import Path
 
 import pandas as pd
 import pytest
-from sqlalchemy import insert
 
 from onelot.clock import IST
-from onelot.data.schema import bars as bars_table
 from onelot.data.store import save_bars
 from onelot.sim.bars import StoreBars
 from onelot.store import init_database
 
-from .conftest import make_manager
+from .conftest import make_manager, store_frames
 
 sys.path.insert(0, str(Path(__file__).parent / "tools"))
 import golden as G  # noqa: E402
-
-UTC = dt.timezone.utc
-
-
-def store_frames(engine, frames: dict[str, pd.DataFrame]) -> None:
-    """The fixture bars into the store in one insert per series (save_bars takes ~14 s)."""
-    for key, df in frames.items():
-        idx = pd.DatetimeIndex(df.index).tz_convert(UTC)
-        rows = [
-            {"ts": t.to_pydatetime(), "series_key": key, "resolution": "1m", "open": o,
-             "high": h, "low": lo, "close": c, "volume": v, "oi": None, "source": "test"}
-            for t, o, h, lo, c, v in zip(
-                idx, df["open"], df["high"], df["low"], df["close"], df["volume"], strict=True
-            )
-        ]  # fmt: skip
-        with engine.begin() as conn:
-            conn.execute(insert(bars_table), rows)
 
 
 @pytest.fixture(scope="module")

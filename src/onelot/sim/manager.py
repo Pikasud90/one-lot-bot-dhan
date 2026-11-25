@@ -336,8 +336,11 @@ class SimManager:
         if until in (None, ""):
             u = rng[1]
         else:
+            text = str(until)
+            if " " in text and "T" in text:
+                text = text.replace(" ", "+")  # an offset whose "+" a query string turned to " "
             try:
-                u = _ts(until)
+                u = _ts(text)
             except (TypeError, ValueError):
                 raise SimError(400, "until is not a date and time.") from None
             if u < rng[0]:

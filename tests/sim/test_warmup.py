@@ -57,10 +57,10 @@ def test_the_shorter_history_gives_the_same_signals(bars, name):
     w = E.window_at(name, int(start.value))
     long_lo = w.lo_strategy - pd.Timedelta(days=E.HISTORY_DAYS - E.warmup_days(name))
     assert w.lo is not None and w.lo <= long_lo  # the minutes reach back 120 days
+    m = bars.frames[key]
     for tf in sorted({default, "60m"} & set(tfs) | {default}):
-        m = bars.frames[key]
 
-        def signals(lo: pd.Timestamp) -> pd.DataFrame:
+        def signals(lo: pd.Timestamp, tf: str = tf) -> pd.DataFrame:
             cut = m[(m.index >= lo) & (m.index < stop)]
             strat = get_strategy(name, {**sp, "timeframe": tf})
             f, _ = E.build_signals(strat, spec, key, tf, cut, bars, series[key])
