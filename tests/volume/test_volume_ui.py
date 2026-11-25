@@ -453,7 +453,11 @@ class TestLegendFollowsTheRule:
         assert "low and high" in out[1]
         assert "opened" in out[2]
         assert len({out[0], out[1], out[2]}) == 3
-        assert out[3] == out[4] and "low and high" not in out[3] and "recent minute moves" not in out[3]
+        assert (
+            out[3] == out[4]
+            and "low and high" not in out[3]
+            and "recent minute moves" not in out[3]
+        )
 
     def test_the_legend_shows_the_active_rule_only(self):
         bvc = run("return legendHtml('bvc');")
