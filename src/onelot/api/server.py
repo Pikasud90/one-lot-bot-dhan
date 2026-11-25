@@ -429,6 +429,19 @@ def create_app(engine, api_token: str) -> FastAPI:
             out["charges"] = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
         return out
 
+    @app.get("/api/desk/uptime")
+    def desk_uptime_view(days: int = Query(30, ge=1, le=366)) -> dict:
+        """US-097: per trading day, from when to when the desk ran inside market hours and the
+        share of the session it covered (a heartbeat at most every five minutes). Read from
+        the store, so it answers while the desk is not running."""
+        from ..desk.uptime import coverage
+
+        now = dt.datetime.now(IST)
+        rows = coverage(
+            engine.db.engine, engine.session_clock, engine.calendar.is_trading_day, now, days
+        )
+        return {"as_of": now.isoformat(timespec="seconds"), "days": [r.as_dict() for r in rows]}
+
     @app.get("/api/desk/journal")
     def desk_journal(limit: int = Query(200, ge=1, le=2000)) -> dict:
         return {"trades": _desk().journal(limit)}

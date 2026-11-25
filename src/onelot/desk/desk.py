@@ -42,6 +42,7 @@ from ..data.universe import load_specs
 from ..indicators import mtf
 from ..lab.real_options import premium_in_minute
 from ..notify.base import Notification, NotificationLevel, shown_confidence
+from . import clean_bars
 from .audit import audit_signal, confidence, strategy_scoreboard
 from .config import DeskConfig, load_desk_config
 from .data import CompositeBars, build_source, is_delayed_source
@@ -52,14 +53,15 @@ from .economics import (
     index_option_economics_from_chain,
     stock_economics,
 )
-from .fillcost import FillCostRecorder, Watched, charges_check
+from .fillcost import FillCostRecorder, Watched, charges_check, half_spread_pct
 from .history import daily_history, minute_history
 from .rules import pick_expiry
-from .tracker import InstrumentTracker, StrategySlot, Verdict
+from .tracker import InstrumentTracker, StrategySlot, Verdict, needs_one_minute
 
 if TYPE_CHECKING:  # annotation only: the paper package is never imported by the desk
     from ..paper.book import PaperBook
 
+REFILL_EVERY = dt.timedelta(minutes=5)  # how often the live source is asked to refill a day
 log = logging.getLogger(__name__)
 
 # Leads the title of a SIGNAL notification built on delayed (Yahoo) bars, so a truncated
@@ -77,6 +79,17 @@ UNREADABLE = object()
 MAX_REPORTED_PRICE = 1e7
 #: the context series the nightly top-up adds to the trackers (the option pricer reads its close)
 VIX_KEY = "INDIAVIX"
+#: US-097: an option alert names its spread from a quote at most this old, and says so in a
+#: line when half the spread is at least WIDE_SPREAD_PCT of the mid
+SPREAD_QUOTE_AGE_S = 60.0
+WIDE_SPREAD_PCT = 1.0
+
+
+def wide_spread_line(pct: float) -> str:
+    """'Wide spread now: about 1.8% a side' (half the bid-ask spread, in % of the mid)."""
+    return f"Wide spread now: about {pct:.1f}% a side"
+
+
 # The stored daily bars of the trend ladder are read once a calendar day. A read that failed
 # is tried again after the first delay, a store with no history for the series after the second.
 HISTORY_RETRY = dt.timedelta(minutes=10)
@@ -204,6 +217,7 @@ class Desk:
         # notification or the poll. Its failures are counted here (Manager decision 5).
         self.paper = paper
         self.hook_errors = 0
+        self._refill_at: dict[str, dt.datetime] = {}  # review F1 of US-097
         self._training_logged: set[str] = set()
         self.app_cfg = cfg_app
         self.notifier = notifier
@@ -496,6 +510,7 @@ class Desk:
         self._delivery_history(now)
         specs = self._all_specs()
         since = {k: t.bars.index[-1] for k, t in self.trackers.items() if not t.bars.empty}
+        self._refill_unclean(since, now)
         got = self.source.fetch(specs, self.cfg.history_days, since)
         self.last_fetch_at = now
         self.last_error = self.source.last_error
@@ -505,6 +520,7 @@ class Desk:
             for k, df in got.items():
                 if k in self.trackers:
                     self.trackers[k].update_bars(df)
+                    self._note_bar_source(self.trackers[k], df, now)
                 else:
                     self.context_bars[k] = df
                 if k in self.trackers and k in (c.key for c in self.cfg.context):
@@ -516,6 +532,7 @@ class Desk:
             window = self.session_clock.current_window(now)
             entries_ok = bool(window and window.entries_allowed(now))
             market_ok = bool(window and window.is_open(now))
+            self._refresh_clean_notes(now, market_ok)
             nifty = self.trackers.get("NIFTY")
             market_bars = nifty.bars if nifty is not None else self.context_bars.get("NIFTY")
             self._expire_signals(now)
@@ -596,6 +613,7 @@ class Desk:
                 data_api_active=lambda: bool(self._data_api_active()),
             )
             delivery.also_top_up = list(self.trackers)  # all 23: the indices' 4h rungs too
+            delivery.context_top_up = {VIX_KEY: ("1d", "1m")}  # what _top_up_bars writes
             return delivery
         except Exception:  # noqa: BLE001 - the intraday desk runs whatever this does
             log.exception("delivery: the delivery desk could not be built; it is off")
@@ -828,10 +846,83 @@ class Desk:
         for t in self.trackers.values():
             t.fine_minutes = self.fine_minutes
             t.bars = pd.DataFrame()
+            t.unclean_bars, t.clean_note = {}, None
             t.live_quote = None
             for s in t.slots:
                 s.last_bar_ts = None
         self.context_bars = {}
+
+    # ── clean one-minute bars for the micro-trend rule (US-097) ──────────────
+    def _note_bar_source(self, t: InstrumentTracker, df: pd.DataFrame, now: dt.datetime) -> None:
+        """Remember which of today's bars of `t` did not come as one-minute bars of the live
+        source. Only trackers with a slot that needs them; a failure is counted, never raised."""
+        if not any(needs_one_minute(s) for s in t.slots):
+            return
+        try:
+            src = self._served_by(t.cfg.key)
+            delayed = is_delayed_source(src)
+            clean = not delayed and self.fine_minutes == 1
+            width = self.fine_minutes
+            if delayed:
+                fallback = getattr(self.source, "fallback", None)
+                width = int(str(getattr(fallback, "resolution", "2m"))[:-1] or 2)
+            t.unclean_bars = clean_bars.note_frame(
+                t.unclean_bars, df, now.astimezone(IST).date(), clean, width
+            )
+        except Exception:  # noqa: BLE001 - a record for the gate, never stops the poll
+            self.hook_errors += 1
+            log.exception("desk: the bar source of %s could not be noted", t.cfg.key)
+
+    def _refill_unclean(self, since: dict[str, pd.Timestamp], now: dt.datetime) -> None:
+        """Review F1 of US-097: one poll served by the delayed feed (one REST error) marks the
+        whole day of an instrument unclean, and the next live polls ask only from their last
+        bar, so the marks would hold the micro-trend rule until the close. While the source
+        serves live one-minute bars, ask the live source again from the first unclean bar of
+        today (at most once every `REFILL_EVERY` per instrument): the live bars then replace
+        the delayed ones and clear their marks. A failure changes nothing."""
+        try:
+            if getattr(self.source, "delayed", False) or self.fine_minutes != 1:
+                return
+            day = now.astimezone(IST).date()
+            for k, t in self.trackers.items():
+                if not t.unclean_bars or k not in since:
+                    continue
+                last = self._refill_at.get(k)
+                if last is not None and now - last < REFILL_EVERY:
+                    continue
+                marks = [clean_bars._ist(x) for x in t.unclean_bars]
+                marks = [x for x in marks if x.date() == day]
+                if not marks:
+                    continue
+                self._refill_at[k] = now
+                # a source asks from `since` minus 5 minutes (DhanBars): from the first mark on
+                since[k] = min(clean_bars._ist(since[k]), min(marks) + pd.Timedelta(minutes=5))
+        except Exception:  # noqa: BLE001 - a refill for the gate, never stops the poll
+            self.hook_errors += 1
+            log.exception("desk: the refill of unclean bars could not be planned")
+
+    def _unclean(self, t: InstrumentTracker, until: pd.Timestamp) -> clean_bars.Unclean | None:
+        now = until.tz_convert(IST) if until.tzinfo is not None else until.tz_localize(IST)
+        opens = str(t.series.session_times.get("open", "09:15"))
+        h, m = (int(x) for x in opens.split(":"))
+        return clean_bars.problem(t.bars, t.unclean_bars, now.date(), until, dt.time(h, m))
+
+    def _refresh_clean_notes(self, now: dt.datetime, open_: bool) -> None:
+        """The card's note (US-097): why the micro-trend rule waits, for each tracker with
+        such a slot, while the market is open. A failure leaves no note and is counted."""
+        for t in self.trackers.values():
+            if not any(needs_one_minute(s) for s in t.slots):
+                continue
+            if not open_ or t.bars.empty:
+                t.clean_note = None
+                continue
+            try:
+                u = self._unclean(t, pd.Timestamp(now))
+                t.clean_note = u.text() if u is not None else None
+            except Exception:  # noqa: BLE001 - a note for the card, never stops the poll
+                self.hook_errors += 1
+                t.clean_note = None
+                log.exception("desk: the clean-bars note of %s failed", t.cfg.key)
 
     def _served_by(self, key: str) -> str:
         """The source that served `key` on the last poll (e.g. "yahoo" when Dhan had no bars),
@@ -888,6 +979,20 @@ class Desk:
                 busy,
             )
             return
+        if needs_one_minute(slot):
+            held = self._clean_bars_hold(t, slot, v)
+            if held is not None:
+                slot.last_verdict = Verdict(
+                    "none", held, v.bar_ts, None, v.close, v.strength, [], v.fresh
+                )
+                log.info(
+                    "desk: %s %s %s not alerted: %s",
+                    t.cfg.key,
+                    slot.cfg.name,
+                    slot.cfg.timeframe,
+                    held,
+                )
+                return
         rset = rlive.settings_of(getattr(slot.strategy, "p", None))
         risk: float | None = None
         if rset is not None:  # US-079: the first stop is the stop and trail rule's
@@ -926,6 +1031,9 @@ class Desk:
         )
         if rset is not None:
             text += "\n" + rlive.managed_line(rset.extend)
+        spread = self._alert_spread(t, eco, now)  # US-097: from a quote at hand, never waits
+        if spread is not None and spread >= WIDE_SPREAD_PCT:
+            text += "\n" + wide_spread_line(spread)
         regime_now = (slot.last_features or {}).get("regime")
         regime_ok = (regime_now in getattr(slot.strategy, "regimes", ())) if regime_now else None
         conf = confidence(
@@ -1013,6 +1121,8 @@ class Desk:
             "outcome": None,
             "manage": manage,
         }
+        if spread is not None:
+            sig["spread_pct"] = round(spread, 2)
         slot.signals_today += 1
         self.signals[sid] = sig
         self.archive.insert(0, sig)
@@ -1069,6 +1179,60 @@ class Desk:
             dedup_key=f"desk:{sid}",
         )
         self.version += 1
+
+    def _alert_spread(self, t: InstrumentTracker, eco: Any, now: dt.datetime) -> float | None:
+        """Half the bid-ask spread of an option alert's contract in % of the mid, from a quote
+        at hand that is at most `SPREAD_QUOTE_AGE_S` old: the fill-cost recorder's last quote
+        of it, or the option chain the economics just read. None without one. Never waits for
+        a quote, and a failure here is counted and gives None: the alert goes out as before."""
+        try:
+            option = getattr(eco, "option", None)
+            if getattr(eco, "kind", None) != "INDEX" or not isinstance(option, dict):
+                return None
+            sid = option.get("security_id")
+            if not sid:
+                return None
+            best: tuple[dt.datetime, float | None, float | None] | None = None
+            recorder = getattr(self, "fillcost", None)
+            if recorder is not None:
+                best = recorder.recent_quote(str(sid), now, SPREAD_QUOTE_AGE_S)
+            hit = self._chain_cache.get(t.cfg.key)
+            if hit is not None and hit[1] is not None:
+                at = hit[0]
+                age = (now - at).total_seconds()
+                if 0 <= age <= SPREAD_QUOTE_AGE_S and (best is None or at > best[0]):
+                    row = next(
+                        (r for r in getattr(hit[1], "rows", []) if str(r.security_id) == str(sid)),
+                        None,
+                    )
+                    if row is not None:
+                        best = (at, row.bid, row.ask)
+            if best is None:
+                return None
+            pct = half_spread_pct(best[1], best[2])
+            return float(pct) if pct is not None and math.isfinite(pct) else None
+        except Exception:  # noqa: BLE001 - a line on the alert, never a reason to stop it
+            self.hook_errors += 1
+            log.exception("desk: the spread of the alert on %s could not be read", t.cfg.key)
+            return None
+
+    def _clean_bars_hold(self, t: InstrumentTracker, slot: StrategySlot, v: Verdict) -> str | None:
+        """Why a micro-trend verdict is not alerted for want of clean one-minute bars today
+        (US-097), or None. A check that fails holds nothing: it never stops an alert that
+        the desk raised before this story."""
+        if v.bar_ts is None:
+            return None
+        try:
+            until = pd.Timestamp(v.bar_ts) + pd.Timedelta(minutes=slot.tf_min)
+            u = self._unclean(t, until)
+        except Exception:  # noqa: BLE001
+            self.hook_errors += 1
+            log.exception("desk: the clean-bars check of %s failed", t.cfg.key)
+            return None
+        if u is None:
+            return None
+        t.clean_note = u.text()
+        return u.text()
 
     def _busy_reason(
         self, instrument_key: str, strategy: str, timeframe: str, v: Verdict

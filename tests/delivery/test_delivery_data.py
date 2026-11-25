@@ -20,6 +20,7 @@ from onelot.clock import IST, SessionClock, TradingCalendar  # noqa: E402
 from onelot.config import CostConfig, SessionCfg  # noqa: E402
 from onelot.data.hygiene import clean_intraday, consistent_daily  # noqa: E402
 from onelot.data.store import save_bars  # noqa: E402
+from onelot.delivery import runner as runner_mod  # noqa: E402
 from onelot.delivery.data import RuleHistory, join_live, problem, session_complete  # noqa: E402
 from onelot.delivery.runner import DeliveryDesk  # noqa: E402
 from onelot.desk.config import DeliveryCfg, DeskConfig, DeskInstrumentCfg, StrategySlotCfg  # noqa: E402
@@ -262,6 +263,69 @@ def test_a_store_that_is_up_to_date_is_not_topped_up(tmp_path):
     d = delivery_desk(db.engine, top)
     d.load_history(at(DAY, "16:00"))
     d.maybe_top_up(at(DAY, "16:00"))
+    assert top.calls == []
+
+
+def _fresh_store(tmp_path, name):
+    db = init_database(f"sqlite:///{tmp_path / name}")
+    for key in ("SBIN", "NIFTY"):
+        save_bars(db.engine, key, "1m", session_bars(DAY, 1.0, 2.0), "t")
+    return db
+
+
+def test_india_vix_behind_alone_starts_the_top_up(tmp_path):
+    """US-097 point 6: the delivery series are fresh, only INDIAVIX ends a session early."""
+    db = _fresh_store(tmp_path, "v.db")
+    before = DAY - dt.timedelta(days=1)
+    save_bars(db.engine, "INDIAVIX", "1m", session_bars(before, 14.0, 15.0), "t")
+    save_bars(db.engine, "INDIAVIX", "1d", daily([before]), "t")
+    top = TopUp()
+    d = delivery_desk(db.engine, top)
+    d.context_top_up = {"INDIAVIX": ("1d", "1m")}
+    d.load_history(at(DAY, "16:00"))
+    d.maybe_top_up(at(DAY, "16:00"))
+    assert top.calls == [["SBIN", "NIFTY"]]  # the same call: _top_up_bars adds VIX itself
+
+
+def test_a_tracker_behind_alone_starts_the_top_up(tmp_path):
+    db = _fresh_store(tmp_path, "k.db")
+    save_bars(db.engine, "FINNIFTY", "1m", session_bars(DAY - dt.timedelta(days=1), 1, 2), "t")
+    top = TopUp()
+    d = delivery_desk(db.engine, top)
+    d.also_top_up = ["SBIN", "NIFTY", "FINNIFTY"]
+    d.load_history(at(DAY, "16:00"))
+    d.maybe_top_up(at(DAY, "16:00"))
+    assert top.calls == [["SBIN", "NIFTY", "FINNIFTY"]]
+
+
+def test_nothing_behind_starts_nothing_with_vix_and_trackers_fresh(tmp_path):
+    db = _fresh_store(tmp_path, "n.db")
+    save_bars(db.engine, "INDIAVIX", "1m", session_bars(DAY, 14.0, 15.0), "t")
+    save_bars(db.engine, "INDIAVIX", "1d", daily([DAY]), "t")
+    save_bars(db.engine, "FINNIFTY", "1m", session_bars(DAY, 1.0, 2.0), "t")
+    top = TopUp()
+    d = delivery_desk(db.engine, top)
+    d.also_top_up = ["SBIN", "NIFTY", "FINNIFTY", "MIDCPNIFTY"]  # MIDCPNIFTY: nothing stored
+    d.context_top_up = {"INDIAVIX": ("1d", "1m")}
+    d.load_history(at(DAY, "16:00"))
+    d.maybe_top_up(at(DAY, "16:00"))
+    assert top.calls == []
+
+
+def test_the_other_series_are_read_at_most_every_ten_minutes_while_fresh(tmp_path, monkeypatch):
+    """Review F6: with nothing behind, the spans of the other series are not read every poll."""
+    db = _fresh_store(tmp_path, "t.db")
+    save_bars(db.engine, "INDIAVIX", "1m", session_bars(DAY, 14.0, 15.0), "t")
+    top = TopUp()
+    d = delivery_desk(db.engine, top)
+    d.context_top_up = {"INDIAVIX": ("1m",)}
+    d.load_history(at(DAY, "16:00"))
+    reads: list[str] = []
+    real = runner_mod.series_spans
+    monkeypatch.setattr(runner_mod, "series_spans", lambda e, k: reads.append(k) or real(e, k))
+    for hhmm in ("16:00", "16:02", "16:08", "16:11"):
+        d.maybe_top_up(at(DAY, hhmm))
+    assert reads == ["INDIAVIX", "INDIAVIX"]  # 16:00 and 16:11
     assert top.calls == []
 
 

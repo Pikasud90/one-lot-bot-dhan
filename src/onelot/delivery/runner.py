@@ -40,6 +40,7 @@ from sqlalchemy import Engine
 
 from ..clock import IST, SessionClock, TradingCalendar, parse_hhmm
 from ..config import CostConfig, SessionCfg
+from ..data.store import series_spans
 from ..desk.config import DeskConfig
 from ..desk.history import rule_daily
 from ..notify.base import Notification, NotificationLevel
@@ -75,6 +76,8 @@ NO_TOP_UP = (dt.time(9, 0), dt.time(15, 35))
 #: the top-up: at most this many tries in a window, this far apart (lead's ruling)
 TOP_UP_TRIES = 3
 TOP_UP_GAP = dt.timedelta(minutes=20)
+#: the other series the top-up writes are read at most this often while none is behind
+OTHERS_EVERY = dt.timedelta(minutes=10)
 #: an alert no channel accepted is tried again after this long
 RETELL = dt.timedelta(minutes=5)
 REASON_WORDS = {
@@ -155,6 +158,7 @@ class DeliveryDesk:
         self._reload = threading.Event()
         self._loader: threading.Thread | None = None
         self._top_up_tries: list[dt.datetime] = []
+        self._others_fresh_at: tuple[dt.datetime, dt.date | None] | None = None
         self._top_up_thread: threading.Thread | None = None
         self.top_up_note: str | None = None
         self.notes: dict[str, str] = {}  # series key -> why an entry cannot be read now
@@ -165,6 +169,8 @@ class DeliveryDesk:
         self.errors = 0
         #: other series the desk tracks, topped up with these (set by the desk)
         self.also_top_up: list[str] = []
+        #: context series the top-up also writes, with their resolutions (India VIX, US-097)
+        self.context_top_up: dict[str, tuple[str, ...]] = {}
         # in memory between polls (cost of a poll, reviewer 4)
         self._hist: dict[str, tuple[tuple[Any, ...], RuleHistory]] = {}
         self._last_eval: dict[str, dt.date | None] = {}
@@ -241,6 +247,14 @@ class DeliveryDesk:
             if (to := self._stored_to(k)) is None or (last is not None and to < last)
         ]
         if not behind:
+            # review F6 of US-097: the other series (about 24) are read at most once every
+            # `OTHERS_EVERY` while none of them is behind, not on every poll of the night
+            fresh_at = self._others_fresh_at
+            if fresh_at is not None and fresh_at[1] == last and now - fresh_at[0] < OTHERS_EVERY:
+                return
+            behind = self._others_behind(last)
+            self._others_fresh_at = None if behind else (now, last)
+        if not behind:
             return
         self._top_up_tries = [*tries, now]
         keys = self.top_up_series
@@ -276,6 +290,29 @@ class DeliveryDesk:
             self._top_up_thread.start()
         else:
             run()
+
+    def _others_behind(self, last: dt.date | None) -> list[str]:
+        """The other series the top-up writes (the desk's trackers at one minute, India VIX at
+        one day and one minute) whose stored bars end before the last finished session (US-097:
+        a gap in INDIAVIX alone starts the top-up). A series with no stored bar of a resolution
+        is left alone: the top-up only extends what is there. A failed read is no reason."""
+        if last is None:
+            return []
+        wanted: dict[str, tuple[str, ...]] = {
+            k: ("1m",) for k in self.also_top_up if k not in self.series
+        }
+        wanted.update(self.context_top_up)
+        out: list[str] = []
+        for key, resolutions in wanted.items():
+            try:
+                spans = series_spans(self.engine, key)
+            except Exception:  # noqa: BLE001 - a read that fails never starts or stops it
+                log.debug("delivery: the stored span of %s could not be read", key)
+                continue
+            ends = [spans[r][1].date() for r in resolutions if r in spans]
+            if ends and min(ends) < last:
+                out.append(key)
+        return out
 
     @staticmethod
     def _wall() -> dt.datetime:

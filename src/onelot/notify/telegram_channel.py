@@ -31,8 +31,9 @@ _PHONE_LEVELS = frozenset(
     (NotificationLevel.SIGNAL, NotificationLevel.EXIT, NotificationLevel.CRITICAL)
 )
 # US-087: a WARNING reaches the phone only when it is one of these kinds (the Dhan token
-# reminders, the Volume Watch and the "move your stop" notes of a taken position). Any other WARNING stays on the page and the computer.
-PHONE_WARNING_KINDS = frozenset(("token", "volume", "stop"))
+# reminders, the Volume Watch and the "move your stop" notes of a taken position; US-097: the
+# desk's start and 09:05 messages). Any other WARNING stays on the page and the computer.
+PHONE_WARNING_KINDS = frozenset(("token", "volume", "stop", "desk"))
 
 
 @dataclass
@@ -266,7 +267,8 @@ class TelegramChannel:
             payload={"title": n.title, "body": n.body},
             alert_created_at=n.created_at or now,
             expires_at=expires,
-            silent=False if n.kind == "token" else self._silent(n, now),  # token: always a sound
+            # token and desk (is it running?): always a sound
+            silent=False if n.kind in ("token", "desk") else self._silent(n, now),
         )
 
     def _send_critical(self, n: Notification) -> bool:

@@ -650,12 +650,13 @@ class VolumeWatch:
                 s: view.win(view.t[s], col) - float(view.exp[s]["5m"][col]) for s in view.keys
             }
             leaders = sorted(excess, key=lambda k: -excess[k])[:2]
-            score = {
-                k: sum(base.weights.get(k, ({}, None))[0].get(s, 0.0) for s in leaders)
-                for k, trade in self.index_cfg
-                if trade
-            }
-            likely = [k for k in sorted(score, key=lambda k: -score[k]) if score[k] > 0][:2]
+            net5 = {s: view.win(2 * view.buy[s] - view.t[s], col) for s in view.keys}
+            exp5 = {s: float(view.exp[s]["5m"][col]) for s in view.keys}
+            likely = ind.likely_indices(
+                {k: base.weights.get(k, ({}, None))[0] for k, trade in self.index_cfg if trade},
+                net5,
+                exp5,
+            )
         else:
             s = c.key
             a5, e5 = view.win(view.t[s], col), float(view.exp[s]["5m"][col])
@@ -822,9 +823,11 @@ class VolumeWatch:
             if requested:
                 raise self._unknown(day)
             return self._empty_body(index, [f"No one-minute bars of the basket on {day}."], day)
-        base = self.baselines(day, wait=True)
+        base = self.baselines(day, wait=False)  # never inside the request (US-097)
         if base is None:
-            return self._empty_body(index, [self._build_note(day)], day)
+            if day in self._build_errors:
+                return self._empty_body(index, [self._build_note(day)], day)
+            return self._building_body(index, day, "stored")
         view = compute_view(day, {k: v for k, v in bars.items() if v is not None}, base,
                             self.basket, self.cfg.rule)  # fmt: skip
         if view is None:
@@ -855,7 +858,9 @@ class VolumeWatch:
     def _live_body(self, day: dt.date, index: str) -> dict[str, Any]:
         base = self.baselines(day, wait=False)
         if base is None:
-            return self._empty_body(index, [self._build_note(day)], session=day, source="live")
+            if day in self._build_errors:
+                return self._empty_body(index, [self._build_note(day)], day, "live")
+            return self._building_body(index, day, "live")
         view = self._view(day, base, live=True)
         if view is None:
             return self._empty_body(
@@ -865,6 +870,13 @@ class VolumeWatch:
         idx_bars = _day_of(self._desk_bars(index), day)
         body = self._assemble(view, base, index, idx_bars, alerts, source="live")
         return self._with_runtime(body, live=True)
+
+    def _building_body(self, index: str, day: dt.date, source: str) -> dict[str, Any]:
+        """While a background thread builds the session's baselines: an empty body that says
+        so, `building` true; the page asks again every 2 seconds (US-097)."""
+        body = self._empty_body(index, ["Preparing this session…"], day, source)
+        body["building"] = True
+        return body
 
     def _build_note(self, day: dt.date) -> str:
         err = self._build_errors.get(day)
@@ -876,6 +888,7 @@ class VolumeWatch:
         """The parts of a body that change with the clock: market flag, book, settings, notes
         about failures."""
         body = dict(body)
+        body.setdefault("building", False)
         open_ = self._market_open()
         body["market_open"] = open_
         body["book"] = self.book_view() if (live and open_ and self.cfg.book) else None

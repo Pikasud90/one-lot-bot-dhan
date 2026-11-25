@@ -20,7 +20,8 @@ NOW_KEYS = {"minute", "turnover_1m", "expected_1m", "rvol_1m", "rvol_5m", "rvol_
             "state", "flow_share_5m", "flow_share_day", "turnover_day", "expected_day",
             "net_flow_day", "up", "down", "flat", "text"}  # fmt: skip
 TOP_KEYS = {"as_of", "session", "market_open", "source", "basket", "now", "minutes", "index",
-            "stocks", "indices", "alerts", "book", "settings", "notes", "index_options"}  # fmt: skip
+            "stocks", "indices", "alerts", "book", "settings", "notes", "index_options",
+            "building"}  # fmt: skip
 ALERT_KEYS = {"id", "ts", "scope", "key", "rvol", "z", "flow_share", "direction", "leaders",
               "indices", "title", "text", "evidence"}  # fmt: skip
 

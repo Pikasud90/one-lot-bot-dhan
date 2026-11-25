@@ -86,6 +86,15 @@ changes it alone: if it is wrong, say so in your report and keep to it.
 - Added 25 Nov: the body also carries `"index_options": [{"key": "NIFTY", "label": "NIFTY
   50"}]`, the indices `?index=` accepts (an unknown key is a 400). `now` is null when no
   minute of the shown session has closed yet. An alert's `evidence` may be absent.
+- Added 25 Nov (US-097): `"building": true` while a background thread prepares the shown
+  session's baselines (the first view of a session, live or a past date). The body then has
+  `now` null, empty `minutes`, `stocks`, `indices` and `alerts`, and the note "Preparing this
+  session…"; the page asks again every 2 seconds while `building` is true. Otherwise
+  `building` is false. A request never waits for the baselines; a failed build says so in
+  `notes` with `building` false.
+- "Likely to move" of a MARKET alert (`indices`, US-097): an index is named only when its own
+  PRESSURE in the spike (influence x net flow of the 5 minutes / expected turnover, summed over
+  ALL the basket's stocks) is among the two largest in size and at least 0.05.
 - `source`: `live` (today's session from the running desk's bars), `stored` (a session read
   from the store: a past date, or the last stored session while the market is closed or the
   desk has no bars yet). `market_open` is the desk's own session flag.

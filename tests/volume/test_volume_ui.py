@@ -26,6 +26,8 @@ VOL_JS, VOL_CSS, VOL_FAKE, APP_JS, INDEX = (
 APP_ONE_LINERS = ["esc", "fmt"]
 VOL_ONE_LINERS = [
     "IST",
+    "REASK_MS",
+    "reaskAfter",
     "NO_BOOK",
     "CLOSED_TEXT",
     "WATCH_NOT_ALERT",
@@ -607,6 +609,53 @@ def test_the_whole_script_renders_the_contract_example_in_a_stubbed_page():
     assert "HDFC Bank" in out["stocks"]
     assert "first half hour" in out["profile"] and "1.7 times" in out["study"]
     assert out["err"] == ""
+
+
+@needs_node
+def test_the_helper_re_asks_after_2_seconds_only_while_building():
+    """US-097: the decision does not look at the date, so a past date is asked again too."""
+    out = run(
+        "return [reaskAfter({building: true, session: '2026-11-20', source: 'stored'}), reaskAfter({building: false}), reaskAfter({}), reaskAfter(null)];"
+    )
+    assert out == [2000, 0, 0, 0]
+
+
+@needs_node
+def test_the_page_asks_again_every_2_seconds_while_building_then_stops():
+    building = dict(EXAMPLE, building=True, now=None, minutes=[], stocks=[], indices=[], alerts=[],
+                    notes=["Preparing this session\u2026"])  # fmt: skip
+    smoke = (
+        SMOKE.replace("%BODY%", json.dumps(EXAMPLE))
+        .replace("%PROFILE%", json.dumps(PROFILE))
+        .replace("%STUDY%", json.dumps(STUDY))
+        .replace("%SCRIPT%", VOL_JS.read_text("utf-8"))
+    )
+    head = (
+        f"const BUILDING = {json.dumps(building)}; let left = 2; const waits = [];\n"
+        "const realTimeout = setTimeout;\n"
+        "globalThis.setTimeout = (fn, ms) => { if (ms === 2000) { waits.push(ms); return realTimeout(fn, 0); } return realTimeout(fn, ms); };\n"
+    )
+    smoke = smoke.replace(
+        ": BODY; return { ok: true",
+        ": (left-- > 0 ? BUILDING : BODY); return { ok: true",
+    ).replace("console.log(JSON.stringify({ asked,", "console.log(JSON.stringify({ waits, asked,")
+    smoke = smoke.replace("await new Promise((r) => setTimeout(r, 50));",
+                          "await new Promise((r) => realTimeout(r, 200));")  # fmt: skip
+    done = subprocess.run(
+        ["node", "-e", head + smoke], capture_output=True, text=True, timeout=30, check=False
+    )
+    assert done.returncode == 0, done.stderr
+    out = json.loads(done.stdout.strip().splitlines()[-1])
+    volume_asks = [a for a in out["asked"] if a.startswith("/api/volume?")]
+    assert out["waits"] == [2000, 2000]  # asked again twice while building, then stopped
+    assert len(volume_asks) == 3
+    assert out["status"] == "Live now, last closed minute 11:41"
+
+
+def test_the_re_ask_is_not_tied_to_today():
+    code = VOL_JS.read_text("utf-8")
+    line = next(x for x in code.splitlines() if "S.reask = setTimeout" in x)
+    assert "S.date" not in line
 
 
 @needs_node

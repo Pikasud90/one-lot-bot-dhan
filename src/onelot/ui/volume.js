@@ -9,6 +9,7 @@ if (!OL) return;
 const { $, esc, store, tabShown } = OL;
 const IST = 19800;                 // seconds: the chart reads Indian time
 const POLL_MS = 20000;
+const REASK_MS = 2000;             // while the engine prepares a session (`building`), live or a past date
 const NO_BOOK = "The order book is not shown now: it is switched off, the market is closed, or the broker sent no quotes.";
 const CLOSED_TEXT = "The market is closed. This is the last session. The watch starts again at 09:15.";
 const WATCH_NOT_ALERT = "A watch alert is not a trade alert: it tells you where unusual volume is, not what to buy.";
@@ -42,6 +43,7 @@ const statusLine = (d) => {
   const last = d.now && d.now.minute ? `last closed minute ${d.now.minute}` : "no closed minute yet";
   return `${when}, ${last}`;
 };
+const reaskAfter = (d) => (d && d.building === true) ? REASK_MS : 0;
 const sideOfMinute = (row) => num(row[3]) !== null && num(row[4]) !== null && row[3] >= row[4] ? "buy" : "sell";
 function sortStocks(list, key, dir) {
   const sign = dir === "asc" ? 1 : -1, rows = (list || []).slice();
@@ -214,7 +216,7 @@ function sectionsHtml(d, sort, date) {
 }
 
 /* ── state ──────────────────────────────────────────────────────────── */
-const S = { data: null, profile: null, study: null, earlier: null, fake: null, busy: false, err: "", date: "", index: store.get("volume.index", "NIFTY") || "NIFTY",
+const S = { reask: 0, data: null, profile: null, study: null, earlier: null, fake: null, busy: false, err: "", date: "", index: store.get("volume.index", "NIFTY") || "NIFTY",
   sort: { key: "turnover_day", dir: "desc" }, chart: null, profToday: null, series: null, prof: null, rows: new Map(), idx: new Map(), profAt: 0, ready: false };
 const cssv = (n) => (window.Charts && window.Charts.cssVar ? window.Charts.cssVar(n) : getComputedStyle(document.documentElement).getPropertyValue(n).trim());
 const today = () => new Date(Date.now() + IST * 1000).toISOString().slice(0, 10);
@@ -372,6 +374,9 @@ async function load() {
     if (!d || typeof d !== "object") throw new Error("an empty answer");
     S.data = d; S.err = "";
     render();
+    clearTimeout(S.reask);
+    const wait = reaskAfter(d);
+    if (wait) S.reask = setTimeout(() => { if (tabShown("volume") && !document.hidden) load(); }, wait);
   } catch (e) {
     S.err = errorText(e, !!S.data);
     if (!S.data) set("vol-headline", `<div class="neg">${esc(S.err)}</div>`);
