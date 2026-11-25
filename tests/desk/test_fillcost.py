@@ -185,16 +185,21 @@ class FakeAdapter:
         return ChainSnapshot(NOW, underlying, expiry, 45210.0, list(got))
 
 
+def live(strike, opt, sid, delta, ltp=300.0) -> ChainRow:
+    """A row that trades (US-104): a two-sided quote and open interest."""
+    return ChainRow(strike, opt, sid, ltp=ltp, bid=ltp - 1.0, ask=ltp + 1.0, oi=1000.0, delta=delta)
+
+
 def chain_rows() -> list[ChainRow]:
     return [
-        ChainRow(44800.0, "CE", "70001", delta=0.82),
-        ChainRow(45000.0, "CE", "70002", delta=0.66),  # the call nearest 0.65
-        ChainRow(45200.0, "CE", "70003", delta=0.51),
-        ChainRow(45400.0, "PE", "70011", delta=-0.30),
-        ChainRow(45500.0, "PE", "70012", delta=-0.64),  # the put nearest 0.65 (|delta|)
-        ChainRow(45700.0, "PE", "70013", delta=-0.80),
-        ChainRow(45100.0, "CE", None, delta=0.65),  # no id: unusable
-        ChainRow(45150.0, "PE", "70099", delta=None),  # no delta: unusable
+        live(44800.0, "CE", "70001", 0.82),
+        live(45000.0, "CE", "70002", 0.66),  # the call nearest 0.65
+        live(45200.0, "CE", "70003", 0.51),
+        live(45400.0, "PE", "70011", -0.30),
+        live(45500.0, "PE", "70012", -0.64),  # the put nearest 0.65 (|delta|)
+        live(45700.0, "PE", "70013", -0.80),
+        live(45100.0, "CE", None, 0.65),  # no id: unusable
+        live(45150.0, "PE", "70099", None),  # no delta: unusable
     ]
 
 

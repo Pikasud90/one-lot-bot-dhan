@@ -378,6 +378,10 @@ class BacktestCfg(Strict):
     option_iv_mult: float = 1.15  # Bank Nifty ATM IV runs ~1.1-1.3x India VIX
     option_iv_constant: float = 0.15
     option_target_delta: float = 0.65  # sufficiently ITM, like the live engine
+    # US-104: a live index alert names the contract nearest the target delta AMONG CONTRACTS
+    # THAT TRADE: open interest, a two-sided quote, and a spread (ask - bid) / ask of at most
+    # this many per cent (1 to 50). The model's pricing (Lab, Simulator) does not read it.
+    option_max_spread_pct: float = 10.0
     option_expiry_weekday: int = 1  # 0=Mon .. 4=Fri; NSE monthly index expiry (verify)
     option_min_days_to_expiry: int = 3  # roll to the next month inside this window
     option_spread_pct: float = 0.006  # half-spread as a fraction of premium (synthetic fills)
@@ -387,6 +391,8 @@ class BacktestCfg(Strict):
     def _sane(self):
         if not 0.3 <= self.option_target_delta <= 0.9:
             raise ValueError("option_target_delta must be between 0.30 and 0.90")
+        if not 1.0 <= self.option_max_spread_pct <= 50.0:
+            raise ValueError("option_max_spread_pct must be between 1 and 50")
         if self.reference_capital_inr <= 0:
             raise ValueError("reference_capital_inr must be positive")
         return self

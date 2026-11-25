@@ -33,6 +33,7 @@ from sqlalchemy import Engine, insert, select
 from ..broker.base import Contract
 from ..clock import IST, now_ist
 from ..store.schema import METADATA, desk_positions, desk_signals, fill_quotes
+from .option_pick import choose, tradeable_rows
 from .rules import pick_expiry
 
 log = logging.getLogger(__name__)
@@ -103,6 +104,7 @@ class FillCostRecorder:
         chain_every: int = 1800,
         roll_days: int = 3,
         target_delta: float = 0.65,
+        max_spread_pct: float = 10.0,
         clock: Callable[[], dt.datetime] = now_ist,
     ) -> None:
         self.engine = engine
@@ -115,6 +117,7 @@ class FillCostRecorder:
         self.chain_every = chain_every
         self.roll_days = roll_days
         self.target_delta = target_delta
+        self.max_spread_pct = max_spread_pct
         self.clock = clock
         self._alerts: deque[dict] = deque(maxlen=200)
         self._follow: list[tuple[dt.datetime, dict, Watched, int]] = []
@@ -275,14 +278,16 @@ class FillCostRecorder:
                 log.debug("fill costs: no chain for %s: %s", key, exc)
                 continue
             for opt in ("CE", "PE"):
+                # US-104: the alert's own pick, among the contracts that trade; a row without
+                # a delta or an id is never watched
                 rows = [
                     r
-                    for r in getattr(chain, "rows", [])
-                    if r.opt_type == opt and r.delta is not None and r.security_id
+                    for r in tradeable_rows(getattr(chain, "rows", []), opt, self.max_spread_pct)
+                    if r.delta is not None and r.security_id
                 ]
-                if not rows:
+                best = choose(rows, opt, None, self.target_delta)
+                if best is None:
                     continue
-                best = min(rows, key=lambda r: abs(abs(r.delta) - self.target_delta))
                 found[str(best.security_id)] = Watched(
                     inst,
                     str(best.security_id),

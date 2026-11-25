@@ -214,7 +214,8 @@ a chart (any timeframe) with every alert raised on it marked. The accordion rows
 * The engine switches from the synthetic market to the Dhan feed **in place** (Save credentials,
   or Settings → Go live); the desk switches to **Dhan 1-minute bars + WebSocket ticks** for all
   watchlist instruments on the engine's socket (one connection, 5000-instrument capacity).
-* Index alerts price the option from the **live option chain** (nearest expiry, strike nearest
-  the target delta, bought at the ask, spread shown) instead of the Black-76 model; the alert
-  says which.
+* Index alerts price the option from the **live option chain** (the monthly contract nearest
+  delta 0.65 among contracts that trade: open interest, a two-sided quote, a spread of at most
+  10%; bought at its own ask, spread shown) instead of the Black-76 model; the alert says
+  which. With no such contract in the chain the model prices it and says so first (US-104).
 * The market pulse adds the NIFTY put/call ratio.
