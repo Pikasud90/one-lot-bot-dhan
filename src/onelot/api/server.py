@@ -33,6 +33,7 @@ from ..config import TELEGRAM_TOKEN_SHAPE
 from ..desk.snapshots import NoPrices, list_snapshots, take_snapshot
 from ..notify.telegram import _CHAT_SHAPE
 from ..sim.routes import register as register_sim
+from ..volume.routes import register as register_volume
 
 log = logging.getLogger(__name__)
 
@@ -1055,6 +1056,7 @@ def create_app(engine, api_token: str) -> FastAPI:
         return {"received": True}
 
     register_sim(app, engine, require_token)
+    register_volume(app, engine)
     # ── Machine Learning Lab (read-only statistical forecasts; never an alert) ──
     mllab: dict[str, Any] = {}  # the MlLab of the running desk, built on first use
 
