@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from onelot.clock import IST
+
 
 def make_intraday(
     days: int = 5,
@@ -20,7 +22,7 @@ def make_intraday(
     """Synthetic NSE-session OHLCV bars (09:15-15:30 IST) as a random walk."""
     rng = np.random.default_rng(seed)
     idx = []
-    day = pd.Timestamp(start, tz="Asia/Kolkata")
+    day = pd.Timestamp(start, tz=IST)
     while len({d.date() for d in idx}) < days:
         if day.weekday() < 5:
             idx.extend(

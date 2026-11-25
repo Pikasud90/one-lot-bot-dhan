@@ -1,0 +1,20 @@
+{
+ "as_of": "2026-11-24",
+ "note": "docs/research/VOLUME_STUDY_2026-11-24.md",
+ "facts": [
+  {
+   "id": "size_after_market_spike",
+   "text": "After a market-wide spike NIFTY's next 15 minutes were 1.5, 1.5 and 1.5 times as large as usual (TUNE, CHOOSE, TEST): a size effect.",
+   "value": 1.48
+  },
+  {
+   "id": "direction_after_market_spike",
+   "text": "The next 15 minutes went the way of the flow 48% of the time (+0.2 basis points, t −1.2): no edge after an option buyer's costs.",
+   "value": 0.48
+  }
+ ],
+ "alerts_per_day": {
+  "market": 1.3,
+  "stock": 2.6
+ }
+}

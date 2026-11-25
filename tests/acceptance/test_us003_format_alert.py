@@ -499,7 +499,7 @@ def test_formatting_is_deterministic_for_the_same_alert_and_now():
 def test_the_deadline_strings_in_the_fixtures_are_what_the_goldens_assume():
     assert (EXPIRES[11:16], CREATED[11:16]) == ("10:37", "10:27")
     assert NOW.utcoffset() == dt.timedelta(hours=5, minutes=30)
-    assert str(IST) == "Asia/Kolkata"
+    assert IST.utcoffset(None) == dt.timedelta(hours=5, minutes=30)  # US-096: fixed offset
 
 
 # ==========================================================================================

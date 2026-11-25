@@ -507,6 +507,8 @@ class MockBroker:
                     else 0.0,
                     source="rest",
                 )
+            elif c.instrument_type == "EQUITY":
+                out[c.security_id] = _mock_equity_quote(c, stamp, self.market.index_price(ts_now))
             else:
                 r = by_id.get(c.security_id)
                 if r:
@@ -591,3 +593,19 @@ class MockBroker:
             self._on_tick(q)
             sent += 1
         return sent
+
+
+def _mock_equity_quote(c: Contract, stamp: dt.datetime, index_price: float) -> QuoteSnapshot:
+    """A synthetic share's quote with five steps a side (US-089's order book in mock mode):
+    the price follows the mock index, the sizes are fixed per security, nothing is real."""
+    seed = sum(ord(ch) for ch in str(c.security_id)) % 97
+    mid = round(500.0 + seed * 20.0 + (index_price % 50.0), 1)
+    tick = 0.05
+    bids = tuple((round(mid - tick * (i + 1), 2), 1000 * (seed % 7 + 1) + 300 * i, 5 + i)
+                 for i in range(5))  # fmt: skip
+    asks = tuple((round(mid + tick * (i + 1), 2), 1000 * (seed % 5 + 1) + 250 * i, 4 + i)
+                 for i in range(5))  # fmt: skip
+    return QuoteSnapshot(
+        c.security_id, stamp, ltp=mid, bid=bids[0][0], ask=asks[0][0], bid_qty=bids[0][1],
+        ask_qty=asks[0][1], volume=None, source="rest", bids=bids, asks=asks,
+    )  # fmt: skip

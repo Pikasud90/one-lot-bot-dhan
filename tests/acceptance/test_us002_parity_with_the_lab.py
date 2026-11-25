@@ -25,6 +25,7 @@ import pytest
 import us001_helpers as H
 import us002_helpers as U
 
+from onelot.clock import IST
 from onelot.lab.simulator import simulate
 from onelot.strategies.base import StrategyParams
 
@@ -58,7 +59,7 @@ def _offline(monkeypatch):
 
 def lab_frame(rows, start="2026-10-29 10:00"):
     """The Lab simulator's input frame (indicator columns pinned: atr = atr_trail = 1.0)."""
-    idx = pd.date_range(start, periods=len(rows), freq="1min", tz="Asia/Kolkata")
+    idx = pd.date_range(start, periods=len(rows), freq="1min", tz=IST)
     df = pd.DataFrame(rows, columns=["open", "high", "low", "close"], index=idx, dtype=float)
     df["volume"] = 1000.0
     df["atr"] = 1.0

@@ -24,6 +24,7 @@ from pydantic import ValidationError
 from sqlalchemy import BigInteger
 from sqlalchemy import inspect as sa_inspect
 
+from onelot.clock import IST
 from onelot.config import AppConfig, CostConfig, PaperCfg
 from onelot.store.schema import METADATA, TZDateTime
 
@@ -295,7 +296,7 @@ class TestPerformanceProxies:
                     day + pd.Timedelta(hours=9, minutes=15),
                     periods=375,
                     freq="min",
-                    tz="Asia/Kolkata",
+                    tz=IST,
                 )
             )
         assert len(stamps) == 30_000

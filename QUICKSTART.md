@@ -64,6 +64,13 @@ endpoints your token can reach. Then start without `--mock`:
 .venv/bin/python -m onelot run --port 8787
 ```
 
+### Alerts and token reminders on your phone
+
+Settings tab, card **Telegram on your phone**: five steps (BotFather, paste the token, press
+Start in your bot, Find my chat id, Send a test message). The desk then sends its trade alerts
+and warns you 60, 30, 15 and 5 minutes before the Dhan token ends. Details and what does not
+arrive: `docs/04_OPERATIONS.md`, section "Telegram on the phone".
+
 ## 4. Stop and update
 
 ```bash

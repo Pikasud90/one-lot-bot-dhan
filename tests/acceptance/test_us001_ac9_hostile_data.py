@@ -24,6 +24,8 @@ import us001_helpers as H
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from onelot.clock import IST
+
 PROP = settings(
     max_examples=30,
     deadline=None,
@@ -74,7 +76,7 @@ class TestNoneAndEmptyFrames:
             None,
             pd.DataFrame(),
             pd.DataFrame(columns=["open", "high", "low", "close", "volume"]),
-            pd.DataFrame(index=pd.DatetimeIndex([], tz="Asia/Kolkata")),
+            pd.DataFrame(index=pd.DatetimeIndex([], tz=IST)),
             H.standard_bars().drop(columns=["open"]),
             H.standard_bars().iloc[0:0],
         ],

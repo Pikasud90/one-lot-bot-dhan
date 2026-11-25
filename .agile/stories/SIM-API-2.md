@@ -135,3 +135,62 @@ Gain:
 11. Caches never change an answer: a session built from warm caches equals one built cold,
     minute for minute and event for event (a test proves it), and a cache is dropped when
     bars are written to its series.
+
+## Clarifications of 25 Nov
+Written by US-095 (the server side) where this file left room; nothing above is changed. The
+page (US-094) and the join (a third agent) can rely on these.
+
+1. `build` and `detail`. The create answer carries `build` (BUILDING) or `detail` (FAILED) at
+   its top level AND inside `state`; `GET /api/sim/sessions/{id}` carries them at its top level
+   (its body is the state). A FAILED read has `detail` and no `build`; a RUNNING one has neither.
+2. The create answer's `events`, `overlays` and `marks` are at its top level and inside `state`.
+   For `take`, `skip`, `close` and `end`, `events` stays what SIM-API.md says (the events the
+   action produced, not the last 200); `marks` is added (rows only for minutes `end` revealed).
+3. "Prepared or used before" means the same instrument, strategy, strategy timeframe AND a
+   start in the same block of 30 IST calendar days: the signals are built per block window
+   (from the block's first day, minus the strategy's history, to the end of the next block).
+   Another day in the same block is warm (RUNNING in the create answer itself); a day in
+   another block builds its signals again (the bars are kept, so it is faster than cold).
+4. A newer create takes the waiting place of a build: a session whose build was still WAITING
+   then turns FAILED with "A newer choice replaced this session before it was ready." A build
+   that is RUNNING is never stopped. Two creates of the same block window join one build.
+5. `GET /api/sim/prepare`: `start` may be left out (the last stored minute then). When the
+   waiting place holds a session's build, a prepare is not queued: it answers
+   `"status": "building"` and the page asks again (it polls every second). `ms` is the time so
+   far while building, the build's own time once ready. A bad instrument, strategy or timeframe
+   is a 400, as for a create. It writes nothing.
+6. A session that is not in memory (a restart, or it left memory: four built ones are kept) is read
+   from its stored row at once: status BUILDING with its stored trades, summary and last
+   events and the candles to its stored cursor, while it is rebuilt; RUNNING as soon as the
+   rebuild is done (in the same answer when its frames are kept). Actions on it are a 409 until
+   then. `GET /api/sim/options` never touches a session.
+7. Resume: the cursor is saved on every event, on take, skip, close and end, and at least every
+   30 revealed minutes. After a restart `session.cursor` of the read is the cursor it resumed at,
+   at most 29 minutes before the last minute the page drew, never before the last event; the
+   page redraws from there.
+8. `GET /api/sim/candles`: a `count` that is not a whole number from 50 to 1000 is a 400 (not
+   clamped). `until` names a minute (seconds dropped); in a hole of the store the candles end at
+   the last stored minute before it; `until` in the answer is the minute asked for, or the first
+   or last stored minute when it was clamped (then `note` says so). An offset whose `+` a query
+   string turned into a space is read as `+`. The candles equal the session's own candles at
+   the same cursor (a test proves it).
+9. `GET /api/sim/days`: mock sessions (weekend dates that were not real trading, per
+   `data/hygiene.py`) are left out; `first` and `last` are the first and last stored minute.
+10. `marks` and `overlays` values are rounded to two decimals. A mark row exists for every minute
+    at whose close the trade was OPEN, from the fill's minute on. On a read, `marks` are the
+    last 400 rows of the open trade. The opening range's high and low (`orb`) are sent only
+    from the first candle after the range is complete (before that a later bar could change
+    them).
+11. New trade fields: `minutes_in_trade` counts the stored one-minute bars from the fill's minute
+    to the cursor's (0 while PENDING_FILL); `open_r` is null while not OPEN; `stop_price` and
+    `target_price` of an option are the model premium of the trade's curve at the next minute.
+    Closed trades in `trades` (and `/api/sim/trades`) carry `lot`, `unit`, `risk_inr`,
+    `minutes_in_trade` and the traded stop and target at the close; `open_r` is null. Rows
+    stored before US-095 have null in these.
+12. `alert.expires_in_min` is `10` minus the minutes revealed since the alert (never below 0).
+13. `chart.tick` (and the options' `tick`) is the instrument's tick size in
+    `config/universe.yaml`: for an index that is its options' tick (0.05).
+14. Event times, as above and as the engine already did: FILLED and a CLOSED at an open
+    (MANUAL, SIGNAL_EXIT, SESSION_END at the exit time, a GAP_ exit) carry the start of that
+    minute; a SESSION_END or MANUAL close at the day's or the data's last close carries that
+    close. The audit's "11:42" for a fill at the 11:43 open was the page's printing.

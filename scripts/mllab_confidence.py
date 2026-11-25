@@ -35,13 +35,15 @@ import pandas as pd
 sys.path[:] = [x for x in sys.path if Path(x or ".").resolve() != Path(__file__).resolve().parent]
 import mtf_bruteforce as h  # noqa: E402
 
+from onelot.clock import IST, as_ist  # noqa: E402  (the one zone object, US-096)
+
 assert Path(h.__file__).resolve().parents[1] == Path.cwd().resolve(), h.__file__
 
 OUT = Path.cwd() / "data" / "research" / "mllab_2026-11-13"
 DIR_MODELS = ("arima", "sarima", "garch", "empirical")
 TFS = {"15m": 3000, "30m": 3000, "60m": 2500, "4h": 1200, "1d": 1200}
 WARM = 300
-CUTOFF = pd.Timestamp("2026-11-13", tz="Asia/Kolkata")  # bars before today only: all complete
+CUTOFF = pd.Timestamp("2026-11-13", tz=IST)  # bars before today only: all complete
 HORIZONS = (1, 3, 5)
 
 
@@ -212,7 +214,7 @@ def main() -> None:
     if os.environ.get("QUICK"):
         insts = insts[:1]
     if raw.exists() and not os.environ.get("QUICK"):
-        all_df = pd.read_pickle(raw)
+        all_df = as_ist(pd.read_pickle(raw))  # a cache from before US-096: one zone object
     else:
         tasks = [(i, tf) for tf in TFS for i in insts]
         with ProcessPoolExecutor(max_workers=7, initializer=h._init_worker) as pool:

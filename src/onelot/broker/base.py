@@ -125,6 +125,10 @@ class QuoteSnapshot:
     volume: float | None = None
     oi: float | None = None
     source: str = "ws"  # ws | rest
+    # US-089: the order book's best five steps a side as (price, quantity, orders), best first;
+    # empty when the source gave none. bid/ask/bid_qty/ask_qty above stay the best step.
+    bids: tuple[tuple[float, int, int], ...] = ()
+    asks: tuple[tuple[float, int, int], ...] = ()
 
     def age_seconds(self, now: dt.datetime) -> float:
         return (now - self.ts).total_seconds()

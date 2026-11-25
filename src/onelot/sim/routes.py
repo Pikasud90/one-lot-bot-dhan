@@ -67,6 +67,30 @@ def register(
     def sim_options() -> Response:
         return run(lambda: manager().options())
 
+    @app.get("/api/sim/days")
+    def sim_days(instrument: str = Query("")) -> Response:
+        return run(lambda: manager().days(instrument))
+
+    @app.get("/api/sim/candles")
+    def sim_candles(
+        instrument: str = Query(""),
+        timeframe: str = Query("3m"),
+        until: str | None = Query(None),
+        count: str | None = Query(None),
+    ) -> Response:
+        return run(lambda: manager().candles(instrument, timeframe, until, count))
+
+    @app.get("/api/sim/prepare")
+    def sim_prepare(
+        instrument: str = Query(""),
+        strategy: str = Query(""),
+        timeframe: str | None = Query(None),
+        start: str | None = Query(None),
+    ) -> Response:
+        query = {"instrument": instrument, "strategy": strategy, "timeframe": timeframe,
+                 "start": start}  # fmt: skip
+        return run(lambda: manager().prepare(query))
+
     @app.post("/api/sim/sessions", dependencies=[Depends(require_token)])
     def sim_create(payload: Any = _BODY) -> Response:
         body = _body(payload)
@@ -76,23 +100,11 @@ def register(
     @app.get("/api/sim/sessions/{sid}")
     def sim_get(sid: str) -> Response:
         m = manager()
-
-        def go() -> dict[str, Any]:
-            s = m.get(sid)
-            with m.lock:
-                return {**s.state(), "candles": s.candles_view()}
-
-        return run(go)
+        return run(lambda: m.read(sid))
 
     def action(sid: str, fn: Callable[[Any], Any]) -> Response:
         m = manager()
-
-        def go() -> Any:
-            s = m.get(sid)
-            with m.lock:
-                return fn(s)
-
-        return run(go)
+        return run(lambda: m.act(sid, fn))
 
     @app.post("/api/sim/sessions/{sid}/advance", dependencies=[Depends(require_token)])
     def sim_advance(sid: str, payload: Any = _BODY) -> Response:
@@ -104,7 +116,10 @@ def register(
         if not whole or not 1 <= raw <= 390:
             raise HTTPException(400, "minutes must be a whole number from 1 to 390.")
         n = int(raw)
-        return action(sid, lambda s: s.advance(n))
+        until = body.get("until")
+        if until not in (None, "event", "alert"):
+            raise HTTPException(400, 'until must be null, "event" or "alert".')
+        return action(sid, lambda s: s.advance(n, until))
 
     @app.post("/api/sim/sessions/{sid}/take", dependencies=[Depends(require_token)])
     def sim_take(sid: str, payload: Any = _BODY) -> Response:

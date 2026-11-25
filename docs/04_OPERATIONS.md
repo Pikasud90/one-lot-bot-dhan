@@ -241,3 +241,110 @@ writes to the paper test: its trades are in their own tables.
 - Storage: `sim_sessions` (a session, its cursor and settings), `sim_trades` and `sim_events`.
   A session not in memory is rebuilt from them at its cursor. `GET /api/sim/trades` and
   `/api/sim/trades.csv` list the closed simulator trades of every session.
+
+## Telegram on the phone (US-087)
+
+The desk also sends its alerts to the Telegram app on your phone, and warns you before the
+Dhan token runs out. It sends only: it never takes an order or a command from Telegram.
+
+**Setup, without a terminal** (Settings tab, "Telegram on your phone" card)
+
+1. In Telegram open **@BotFather** and send `/newbot`. Copy the token it gives you.
+2. Paste the token in the card and press **Save**. The card then says "set", "not set" or
+   "wrong shape", never the token. It is written to `.env` (mode 0600) and the phone channel
+   is switched on in place: no restart.
+3. Open your new bot in Telegram and press **Start**.
+4. Press **Find my chat id**. The desk asks Telegram which chats have written to the bot and
+   lists them (id and first name or title only). Press **Use this chat**. With no message
+   yet it says "send any message to your bot first"; with a bad token, "the token was refused".
+5. Press **Send a test message**. The card says "sent", or the plain reason it was not.
+
+Keys by hand are still possible: `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`
+(see `.env.example`), read at start. `notify.telegram: false` in `config/config.yaml` switches
+the whole channel off; the card then says so.
+
+**What arrives on the phone** (one automated test per row)
+
+| What | Level and kind | Rule |
+|---|---|---|
+| A trade alert | SIGNAL | instrument, side, the contract (expiry, strike, CE or PE), entry, stop, target, the "Managed:" line (how the stop and trail rule manages it), strategy, confidence, valid until. Muted (no sound) outside the session and when risk-blocked. Sent at most 8 at once, the best by confidence; the rest are one digest. An alert still queued when its valid-until passes is skipped and you get one "Missed" note. |
+| "Move your stop" | WARNING, kind `stop` | one message per move of a taken position (the key is the position and the new levels). Not repeated. Muted outside the session. |
+| The exit signal | EXIT | ONE per alert: the desk raises it once (the alert's paper trade closing, or a taken position's own advice with a stored flag). The channel adds no second exit message for it. (The old Bank Nifty engine raises an exit again every poll; for that one the channel keeps its existing budget: the first message, then at most three reminders five minutes apart.) |
+| Critical desk states | CRITICAL | token expired at start, feed dead, index disagreement, halt. Always with sound. The same title is not sent again within 30 minutes of the last one sent. |
+| Dhan token reminders | WARNING, kind `token` | the ladder below. Always with sound. A stage reminder is dropped if it could not be delivered before the token ran out. |
+| Volume Watch | WARNING, kind `volume` | each note under its own key; a repeat of the same key is held back, a new key never. Muted outside the session. |
+
+Everything else (INFO, other warnings) stays on the page and the computer. Every message is a
+row in `telegram_outbox` before it is a request, sent in order (exit and critical first),
+one request per second, retried after an outage, and a row is never sent twice on purpose
+(a restart in the middle of a send may repeat one, marked "resend").
+
+**The token reminder ladder**
+
+The expiry time is read from your Dhan profile. The desk looks about once a minute (inside
+the housekeeping loop; only when Dhan credentials exist) and sends, once per token:
+
+- 60, 30, 15 and 5 minutes before it ends ("Dhan token: 23 minutes left", with the time in
+  IST and "Settings, Dhan card: Renew, or paste a new token."; when the desk can renew by
+  itself it says it will try);
+- "Dhan token expired" when it ends;
+- while it is still expired: one reminder at 08:30 IST on each trading day, before 09:15;
+- "Dhan token renewed: valid until 21:31 on 25 Nov" when the expiry moves forward; the ladder
+  is armed again.
+
+A start inside a window sends only the nearest stage not yet sent, with the true time left (at
+23 minutes left: "23 minutes left", then 15, 5, expired), never a burst of older stages. What
+was sent is remembered in the database (`token_reminder_state`), so a restart repeats nothing.
+When the desk cannot read the expiry it says so once ("Cannot read when the Dhan token
+expires") and still reports an expired token. The same messages show as a toast on the page
+and on the computer; the page shows the time left in the header chip, the Today strip and the
+Settings card.
+
+**What does NOT arrive**: nothing is sent while the laptop sleeps, is offline or the desk is
+stopped. The reminders are sent by the running desk: a token that ends overnight while the
+desk is stopped is told at the next start ("expired"), not before.
+
+**Status** (no secret): `GET /api/notify/status` says for Telegram whether it is configured and
+in use, when the last message was confirmed, the class of the last error ("HTTP 403") and how
+many messages are waiting.
+
+**Development only**: the environment variable `TELEGRAM_API_BASE` points the client at a fake
+on this machine. It is accepted only when its host is `127.0.0.1` or `localhost`; anything else
+is ignored with one warning. It cannot be set from the page.
+
+## Volume Watch (US-089)
+Index bars carry no volume, so the watch reads the market's volume from the 18 desk stocks (the
+basket, `volume.basket` in `config/desk.yaml`). It runs inside the desk for as long as the desk
+runs; outside 09:15 to 15:30 on trading days there is no volume, and the page shows the last
+session and the day's profile.
+- What it reads: the one-minute bars the desk already holds for today, and the store's bars for
+  the sessions before (read queries only; it asks the broker for no bars of its own). Turnover is
+  volume x close in rupees; a minute's buying part comes from the `bvc` rule (the study's choice).
+- Baselines: the expected turnover of a window (one minute, the last 5 minutes, the day so far)
+  is the median of that same window's turnover over the previous 20 full sessions, for a stock
+  or for the basket as a whole, so an ordinary day reads about 1.0. The spike score compares
+  the last 5 minutes with the previous 60 full sessions at the same minute. A session with fewer than 300 one-minute bars is never a baseline.
+  They are built once a session on their own thread; until then the page says so in its notes.
+- The words: quiet below 0.7 times normal over the last 5 minutes, busy from 1.5 (the study's
+  15th and 85th percentiles).
+- When it alerts: a market spike score of 2.5 or more (about 1.3 a day), a single stock at 4.0
+  or more (about 2.6 a day), never twice for the same market or stock inside 15 minutes, at most
+  12 a day, and only for the last three closed minutes (in time or not at all). Each alert is
+  stored once in `volume_alerts` (a restart repeats none) and goes through the Notifier as a
+  WARNING of kind `volume`: the page's toasts, the computer's notifications and Telegram.
+- A watch alert is not a trade alert: it never opens a paper trade and never says buy or sell.
+  The study found a size effect (the index's next 5 to 60 minutes about 1.5 times as large as
+  usual) and no direction: the flow's side was right about half the time.
+- Order book: one quote request a minute for the basket while the market is open and the Data
+  API is on, the best five price steps a side, stored in `volume_book` (60 days kept). After 3
+  failed reads in a row it stops until the next session.
+- How to switch it off: in `config/desk.yaml`, `volume.alerts_on: false` (no alerts at all),
+  `volume.notify: false` (alerts stored and shown, never sent), `volume.book: false` (no quote
+  requests); then "Reload desk config" in Settings or a restart. A failure inside the watch is
+  caught, counted and shown in the page's notes; the desk's other work goes on.
+- Not studied yet: what follows a single-stock spike, and the order book (recorded, not tested).
+- Routes: `GET /api/volume` (`?date=YYYY-MM-DD` for a stored session, `?index=KEY` for the price
+  line), `/api/volume/profile`, `/api/volume/alerts?limit=100`, `/api/volume/study`.
+- Checking a day by hand: `PYTHONPATH=src .venv/bin/python scripts/volume_replay.py --store
+  data/onelot.db --date 2026-11-20` opens the store read-only, prints the day and recomputes the
+  newest minute straight from the bars.

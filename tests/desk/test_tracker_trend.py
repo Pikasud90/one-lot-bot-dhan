@@ -16,6 +16,7 @@ import pandas as pd
 import pytest
 from tests.lab.conftest import make_intraday
 
+from onelot.clock import IST
 from onelot.data.hygiene import consistent_daily
 from onelot.data.resample import resample_bars
 from onelot.data.universe import load_specs
@@ -28,7 +29,6 @@ from onelot.strategies import mtf_support as ms
 from onelot.strategies.base import Context
 from onelot.strategies.registry import get_strategy
 
-IST = "Asia/Kolkata"
 FIRST_DAY = "2026-10-01"  # a Thursday; the sessions are 1, 2, 5-9 and 12-16 October
 MTF = StrategySlotCfg("supertrend_mtf", "5m", {})  # the strategy's own defaults
 LADDER = ["1m", "5m", "15m", "30m", "60m", "1d"]

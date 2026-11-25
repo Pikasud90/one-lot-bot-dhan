@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import threading
 import time
+import weakref
 
 import pandas as pd
 from sqlalchemy import Engine, String, and_, func, select, type_coerce
@@ -30,12 +31,24 @@ _coverage_lock = threading.Lock()
 _coverage_cache: dict[str, tuple[float, int, pd.DataFrame]] = {}
 _coverage_scan_lock = threading.Lock()
 _bars_generation = 0
+#: series -> how many times bars were written to it in this process (the data version of a
+#: series for every cache built on its bars: `series_generation`)
+_series_generations: dict[str, int] = {}
 
 
-def _bars_written() -> None:
+def _bars_written(series_key: str | None = None) -> None:
     global _bars_generation
     with _coverage_lock:
         _bars_generation += 1
+        if series_key is not None:
+            _series_generations[series_key] = _series_generations.get(series_key, 0) + 1
+
+
+def series_generation(series_key: str) -> int:
+    """How many times `save_bars` wrote bars of `series_key` in this process. A cache of
+    anything built on the series' bars keeps this number and is stale once it moves."""
+    with _coverage_lock:
+        return _series_generations.get(series_key, 0)
 
 
 def save_bars(
@@ -68,7 +81,7 @@ def save_bars(
         )
     # idempotent rows: commit per batch so a 5-year load never blocks the desk's writes
     written = upsert(engine, bars, rows, ["ts", "series_key", "resolution"], per_chunk=True)
-    _bars_written()
+    _bars_written(series_key)
     return written
 
 
@@ -155,13 +168,59 @@ def available_resolutions(
     return out
 
 
+# The first and last stored bar of a series per resolution, WITHOUT the count.
+# available_resolutions() counts every bar of the series (about 470,000 index entries: 0.4 to 6 s
+# on the owner's 15 GB store), and load_bars, the Lab and the Simulator asked for it several times
+# for one run (the Simulator's list of instruments: 23 times, 20 s cold). The spans alone are two
+# index seeks a resolution. One answer per engine and series is kept until a bar of THAT series
+# is written through save_bars (its generation moves) or SPANS_TTL_S passes (another process
+# may write).
+SPANS_TTL_S = 120.0
+_spans_lock = threading.Lock()
+_spans_cache: weakref.WeakKeyDictionary[
+    Engine, dict[str, tuple[float, int, dict[str, tuple[dt.datetime, dt.datetime]]]]
+] = weakref.WeakKeyDictionary()
+
+
+def _ist_stamp(value) -> dt.datetime:
+    ts = pd.Timestamp(value)
+    ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts
+    return ts.tz_convert(IST).to_pydatetime()
+
+
+def series_spans(engine: Engine, series_key: str) -> dict[str, tuple[dt.datetime, dt.datetime]]:
+    """{resolution: (first bar, last bar)} of a series, in IST: what `available_resolutions`
+    gives without its count, by index seeks. A resolution with no bar is absent."""
+    now = time.monotonic()
+    generation = series_generation(series_key)
+    with _spans_lock:
+        hit = (_spans_cache.get(engine) or {}).get(series_key)
+        if hit is not None and hit[1] == generation and now - hit[0] < SPANS_TTL_S:
+            return dict(hit[2])
+    out: dict[str, tuple[dt.datetime, dt.datetime]] = {}
+    with engine.connect() as conn:
+        for res in RESOLUTION_ORDER:
+            where = and_(bars.c.series_key == series_key, bars.c.resolution == res)
+            lo, hi = conn.execute(
+                select(
+                    select(func.min(bars.c.ts)).where(where).scalar_subquery(),
+                    select(func.max(bars.c.ts)).where(where).scalar_subquery(),
+                )
+            ).one()
+            if lo is not None and hi is not None:
+                out[res] = (_ist_stamp(lo), _ist_stamp(hi))
+    with _spans_lock:
+        _spans_cache.setdefault(engine, {})[series_key] = (now, generation, out)
+    return dict(out)
+
+
 def load_bars(
     engine: Engine, series_key: str, resolution: str, start=None, end=None
 ) -> pd.DataFrame:
     """Bars at `resolution`, derived from the finest stored resolution that can
     produce it, preferring the finer source where both exist."""
     resolution = normalize_resolution(resolution)
-    avail = available_resolutions(engine, series_key)
+    avail = series_spans(engine, series_key)
     direct = (
         _read_bars(engine, series_key, resolution, start, end)
         if resolution in avail

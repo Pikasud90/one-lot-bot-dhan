@@ -22,11 +22,13 @@ changes it alone: if it is wrong, say so in your report and keep to it.
   JSON does not change.
 - NET FLOW: buying minus selling. FLOW SHARE: buying / (buying + selling) over a window
   (0.50 is balanced; shown as "buyers 58%").
-- EXPECTED turnover of a stock at a minute of the day: the median of that minute's turnover
-  over the previous 20 full sessions (sessions before the shown one; a session with fewer
-  than 300 one-minute bars is not full). The basket's expected turnover is the sum.
-- RELATIVE VOLUME (rvol): actual / expected, for the last minute, the last 5 minutes (sums)
-  and the day so far (sums).
+- EXPECTED turnover of a WINDOW (one minute, the last 5 minutes, or the day so far) is the
+  median, over the previous 20 full sessions, of the turnover of that same window: the same
+  minutes of the day, the same stock, or the basket taken as a whole (a median of sums, never a
+  sum of per-stock or per-minute medians). A session with fewer than 300 one-minute bars is
+  not full.
+- RELATIVE VOLUME is actual over expected for the same window, so about 1.0 is an ordinary day
+  by construction.
 - SPIKE SCORE z: (ln(basket turnover of the last 5 minutes) - m) / s, where m and s are the
   mean and sd of the same quantity ending at the same minute of the day over the previous 60
   full sessions. Per stock the same with the stock's own turnover.

@@ -10,9 +10,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import pytest
+from sqlalchemy import insert
 
 from onelot.clock import IST
+from onelot.data.schema import bars as bars_table
 from onelot.sim import engine as sim_engine
+from onelot.sim import manager as sim_manager
 from onelot.sim.manager import SimManager, default_deps
 
 MIN = pd.Timedelta(minutes=1)
@@ -100,6 +103,13 @@ class MemBars:
         return pd.Timestamp(df.index[0]), pd.Timestamp(df.index[-1])
 
 
+@pytest.fixture(autouse=True)
+def inline_builds(monkeypatch):
+    """Sessions are built in the request in these tests (the app builds them in its worker;
+    `tests/sim/test_async_build.py` tests that path with `build="thread"`)."""
+    monkeypatch.setattr(sim_manager, "BUILD_MODE", "inline")
+
+
 @pytest.fixture
 def db_engine(tmp_path: Path):
     from onelot.store import init_database
@@ -144,3 +154,18 @@ def force(monkeypatch):
         monkeypatch.setattr(sim_engine, "build_signals", fake)
 
     return apply
+
+
+def store_frames(engine, frames: dict[str, pd.DataFrame]) -> None:
+    """The fixture bars into the store in one insert per series (save_bars takes ~14 s)."""
+    for key, df in frames.items():
+        idx = pd.DatetimeIndex(df.index).tz_convert(dt.timezone.utc)
+        rows = [
+            {"ts": t.to_pydatetime(), "series_key": key, "resolution": "1m", "open": o,
+             "high": h, "low": lo, "close": c, "volume": v, "oi": None, "source": "test"}
+            for t, o, h, lo, c, v in zip(
+                idx, df["open"], df["high"], df["low"], df["close"], df["volume"], strict=True
+            )
+        ]  # fmt: skip
+        with engine.begin() as conn:
+            conn.execute(insert(bars_table), rows)

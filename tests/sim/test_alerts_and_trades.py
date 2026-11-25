@@ -86,7 +86,9 @@ def test_take_fills_at_the_next_open_with_slippage(db_engine, tmp_path, force):
     st = s.take(s.alert["id"])
     assert st["trade"]["status"] == "PENDING_FILL" and st["alert"] is None
     assert st["trade"]["stage"] == "FIRST_STOP"
-    assert set(st) == {"session", "alert", "trade", "summary", "trades", "events", "minutes"}
+    # SIM-API-2: the action's answer also carries the `marks` of the minutes it revealed
+    assert set(st) == {"session", "alert", "trade", "summary", "trades", "events", "minutes",
+                       "marks"}  # fmt: skip
     r = s.advance(1)
     filled = [e for e in r["events"] if e["kind"] == "FILLED"]
     assert len(filled) == 1 and filled[0]["ts"] == T("10:15").isoformat()

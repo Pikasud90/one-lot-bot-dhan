@@ -34,6 +34,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import cross_retune as cr  # noqa: E402
 from expired_options_fetch import INDEX_OPTIONS, STORE_PATH, research_adapter, underlyings  # noqa: E402
 
+from onelot.clock import IST  # noqa: E402
 from onelot.config import CostConfig  # noqa: E402
 from onelot.costs import CostModel, round_to_tick  # noqa: E402
 from onelot.data.expired_options import OptionBarStore  # noqa: E402
@@ -65,8 +66,8 @@ PRIORITY = [
     ("mean_reversion", "30m"),
     ("intraday_momentum", "15m"),
 ]
-EDGES = [pd.Timestamp(x, tz="Asia/Kolkata") for x in (cr.T0, cr.TRAIN_END, cr.VALID_END, cr.T_END)]
-YEAR_EDGES = [pd.Timestamp(x, tz="Asia/Kolkata") for x in (cr.T0, "2022-11-08", "2023-11-08")]
+EDGES = [pd.Timestamp(x, tz=IST) for x in (cr.T0, cr.TRAIN_END, cr.VALID_END, cr.T_END)]
+YEAR_EDGES = [pd.Timestamp(x, tz=IST) for x in (cr.T0, "2022-11-08", "2023-11-08")]
 
 
 def period_of(ts: pd.Timestamp) -> str | None:

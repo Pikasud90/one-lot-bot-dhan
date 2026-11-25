@@ -35,6 +35,9 @@ import numpy as np
 import pandas as pd
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from onelot.clock import IST, as_ist  # noqa: E402  (the one zone object, US-096)
+
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "data" / "research" / "mtf_2026-11-11" / "deep"
 
@@ -205,7 +208,7 @@ def run(workers: int, only: list[str] | None) -> None:
 
 
 def year_index(ts: pd.Series) -> np.ndarray:
-    edges = pd.to_datetime(YEAR_STARTS).tz_localize("Asia/Kolkata").tz_convert("UTC").as_unit("ns")
+    edges = pd.to_datetime(YEAR_STARTS).tz_localize(IST).tz_convert("UTC").as_unit("ns")
     return np.searchsorted(edges.asi8, ts.astype("int64").to_numpy(), side="right") - 1
 
 
@@ -217,7 +220,7 @@ def stats(df: pd.DataFrame) -> dict:
     r = df["ret_pct"].to_numpy(float)
     net = df["net_pnl"].to_numpy(float)
     mean = r.mean()
-    day = df["entry_ts"].dt.tz_convert("Asia/Kolkata").dt.date.to_numpy()
+    day = df["entry_ts"].dt.tz_convert(IST).dt.date.to_numpy()
     dev = pd.Series(r - mean).groupby(day).sum().to_numpy()
     se = np.sqrt((dev**2).sum()) / n if n > 1 else np.nan
     pos, neg = net[net > 0].sum(), -net[net < 0].sum()
@@ -273,7 +276,7 @@ def market_context() -> pd.DataFrame:
 
     cache = DataCache()
     d = cache.bars("NIFTY", "1d")
-    ctx = pd.DataFrame(index=d.index.tz_convert("Asia/Kolkata").date)
+    ctx = pd.DataFrame(index=d.index.tz_convert(IST).date)
     c = d["close"].to_numpy(float)
     sma50 = pd.Series(c).rolling(50).mean().to_numpy()
     prev_c, prev_sma = np.roll(c, 1), np.roll(sma50, 1)
@@ -310,7 +313,7 @@ def report() -> None:
         f = OUT / f"runs_{slot_id}.pkl"
         if not f.exists():
             continue
-        blob = pickle.loads(f.read_bytes())
+        blob = as_ist(pickle.loads(f.read_bytes()))  # a cache from before US-096: one zone
         slot, per_inst = blob["slot"], blob["runs"]
         unit = "% of premium" if slot_id == "index" else "% of price"
         w("=" * 100)
@@ -367,7 +370,7 @@ def report() -> None:
 
         if base.empty:
             continue
-        ist = base["entry_ts"].dt.tz_convert("Asia/Kolkata")
+        ist = base["entry_ts"].dt.tz_convert(IST)
         table("4. Exit reason", base["exit_reason"])
         table("5. Entry time (bar the trade was filled on)", ist.dt.strftime("%H:%M"))
         table("6. Weekday", ist.dt.day_name())

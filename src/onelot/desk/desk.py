@@ -274,6 +274,11 @@ class Desk:
 
         self.pulse = MarketPulse(engine, self, self._adapter_getter, self._data_api_active)
         # what a one-unit fill costs: read-only quotes on its own thread (owner, 2026-11-07)
+        # US-089: the Volume Watch (a failure to build it leaves the desk running without it)
+        self.volume: Any = None
+        self.volume_errors = 0
+        self.volume_last_error: str | None = None
+        self._build_volume()
         self.fillcost = FillCostRecorder(
             engine,
             self._adapter_getter,
@@ -359,6 +364,7 @@ class Desk:
                     t.daily_history, t.history_note = old[k].daily_history, old[k].history_note
                     t.minute_history = old[k].minute_history
             self._history_retry.clear()
+            self._build_volume()
             self._tell_paper_tracked()
             self._wake.set()
         return {"instruments": len(self.trackers), "path": self.cfg.path}
@@ -532,6 +538,31 @@ class Desk:
             self.pulse.maybe_record(now, market_ok)
         except Exception:  # noqa: BLE001
             log.exception("pulse failed")
+        self._step_volume(now, market_ok)
+
+    # ── the Volume Watch (US-089) ──────────────────────────────────────────
+    def _build_volume(self) -> None:
+        try:
+            from ..volume.service import VolumeWatch
+
+            self.volume = VolumeWatch(self.engine, self, self.notifier, self.cfg.volume, self.cfg)
+        except Exception as exc:  # noqa: BLE001 - the desk runs without the watch
+            self.volume = None
+            self.volume_errors += 1
+            self.volume_last_error = type(exc).__name__
+            log.exception("volume: the watch could not be built")
+
+    def _step_volume(self, now: dt.datetime, market_ok: bool) -> None:
+        """Outside the desk lock, in one guard: whatever the watch does, the poll goes on."""
+        try:
+            if self.volume is None:
+                return
+            self.volume.on_poll(now, market_ok)
+        except Exception as exc:  # noqa: BLE001 - counted, logged by class, shown in notes
+            self.hook_errors += 1
+            self.volume_errors += 1
+            self.volume_last_error = type(exc).__name__
+            log.warning("volume: the poll step failed (%s)", type(exc).__name__, exc_info=True)
 
     # ── the delivery pullback trades (US-067) ──────────────────────────────
     def _build_delivery(self) -> Any:
@@ -1514,6 +1545,8 @@ class Desk:
                 body=body,
                 level=NotificationLevel.WARNING,
                 position_id=pid,
+                kind="stop",  # US-087: the phone gets "move your stop"; one row per move
+                dedup_key=f"desk:ratchet:{pid}:{st.stop:.4f}:{st.target:.4f}",
             ),
             dedup_key=f"desk:ratchet:{pid}:{st.stop:.4f}:{st.target:.4f}",
         )
