@@ -31,6 +31,8 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from scipy.special import ndtr  # noqa: E402
 
+from onelot.clock import IST as IST_ZONE  # noqa: E402
+
 assert Path(h.__file__).resolve().parents[1] == Path.cwd().resolve(), "run from the main checkout"
 
 ROOT = h.ROOT
@@ -547,7 +549,7 @@ def stage_expiry() -> None:
         print(f"{inst}: months {len(g)}, from the store {len(st)} (mine agree {agree}), filled "
               f"{len(filled)}: {', '.join(filled['month'])}")  # fmt: skip
         p = h.prepare(inst, tfs=("60m",), iv_lag="prev")
-        hset = {pd.Timestamp(int(e), tz="UTC").tz_convert("Asia/Kolkata").date()
+        hset = {pd.Timestamp(int(e), tz="UTC").tz_convert(IST_ZONE).date()
                 for e in set(p.exp_ns.tolist())}  # fmt: skip
         print(f"  harness expiry dates (one weekday rule) that are a store expiry: "
               f"{sum(r.day in hset for r in st.itertuples())} of {len(st)}; that equal the "

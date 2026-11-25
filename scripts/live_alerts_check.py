@@ -21,9 +21,11 @@ from urllib.parse import quote
 import numpy as np
 import pandas as pd
 
+from onelot.clock import IST as APP_IST
+
 ROOT = Path.cwd()
 DB = ROOT / "data" / "onelot.db"
-IST = "Asia/Kolkata"
+IST = APP_IST  # the app's one zone object (a fixed +05:30 offset since US-096)
 CUT = dt.date(2026, 11, 13)
 
 

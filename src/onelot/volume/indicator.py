@@ -26,7 +26,12 @@ from typing import Any
 import numpy as np
 import pandas as pd  # type: ignore[import-untyped]
 
-IST = "Asia/Kolkata"
+try:  # the app's one zone object (US-096: a fixed +05:30 offset, which pandas handles fast)
+    from ..clock import IST
+except ImportError:  # loaded by file path (the study): the same fixed offset
+    import datetime as _dt
+
+    IST = _dt.timezone(_dt.timedelta(hours=5, minutes=30), "IST")
 OPEN_MINUTE = 9 * 60 + 15  # 09:15, column 0 of a day matrix
 SESSION_MINUTES = 375  # 09:15 to 15:29
 FULL_MIN_BARS = 300  # a session with fewer one-minute bars is not full (Muhurat, half days)

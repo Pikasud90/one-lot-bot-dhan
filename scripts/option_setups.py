@@ -56,6 +56,7 @@ from scipy.special import ndtr  # noqa: E402
 
 assert Path(h.__file__).resolve().parents[1] == Path.cwd().resolve(), "run from the main checkout"
 
+from onelot.clock import IST  # noqa: E402
 from onelot.data.expired_options import _unpack  # noqa: E402
 from onelot.lab.real_options import atm_rel, interpolate  # noqa: E402
 
@@ -723,7 +724,7 @@ class Near:
         dd = days[days.inst == inst]
         near = dict(zip(dd["date"], dd["expiry"], strict=True))
         exp_ns = np.array([
-            pd.Timestamp(dt.datetime.combine(near[d], dt.time(15, 30)), tz="Asia/Kolkata").value
+            pd.Timestamp(dt.datetime.combine(near[d], dt.time(15, 30)), tz=IST).value
             if d in near else -1 for d in p.sess_dates
         ], dtype=np.int64)  # fmt: skip
         self.exp_ns = exp_ns
