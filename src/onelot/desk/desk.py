@@ -53,7 +53,7 @@ from .economics import (
     index_option_economics_from_chain,
     stock_economics,
 )
-from .fillcost import FillCostRecorder, Watched, charges_check
+from .fillcost import FillCostRecorder, Watched, charges_check, half_spread_pct
 from .history import daily_history, minute_history
 from .rules import pick_expiry
 from .tracker import InstrumentTracker, StrategySlot, Verdict, needs_one_minute
@@ -78,6 +78,17 @@ UNREADABLE = object()
 MAX_REPORTED_PRICE = 1e7
 #: the context series the nightly top-up adds to the trackers (the option pricer reads its close)
 VIX_KEY = "INDIAVIX"
+#: US-097: an option alert names its spread from a quote at most this old, and says so in a
+#: line when half the spread is at least WIDE_SPREAD_PCT of the mid
+SPREAD_QUOTE_AGE_S = 60.0
+WIDE_SPREAD_PCT = 1.0
+
+
+def wide_spread_line(pct: float) -> str:
+    """'Wide spread now: about 1.8% a side' (half the bid-ask spread, in % of the mid)."""
+    return f"Wide spread now: about {pct:.1f}% a side"
+
+
 # The stored daily bars of the trend ladder are read once a calendar day. A read that failed
 # is tried again after the first delay, a store with no history for the series after the second.
 HISTORY_RETRY = dt.timedelta(minutes=10)
@@ -989,6 +1000,9 @@ class Desk:
         )
         if rset is not None:
             text += "\n" + rlive.managed_line(rset.extend)
+        spread = self._alert_spread(t, eco, now)  # US-097: from a quote at hand, never waits
+        if spread is not None and spread >= WIDE_SPREAD_PCT:
+            text += "\n" + wide_spread_line(spread)
         regime_now = (slot.last_features or {}).get("regime")
         regime_ok = (regime_now in getattr(slot.strategy, "regimes", ())) if regime_now else None
         conf = confidence(
@@ -1076,6 +1090,8 @@ class Desk:
             "outcome": None,
             "manage": manage,
         }
+        if spread is not None:
+            sig["spread_pct"] = round(spread, 2)
         slot.signals_today += 1
         self.signals[sid] = sig
         self.archive.insert(0, sig)
@@ -1132,6 +1148,42 @@ class Desk:
             dedup_key=f"desk:{sid}",
         )
         self.version += 1
+
+    def _alert_spread(self, t: InstrumentTracker, eco: Any, now: dt.datetime) -> float | None:
+        """Half the bid-ask spread of an option alert's contract in % of the mid, from a quote
+        at hand that is at most `SPREAD_QUOTE_AGE_S` old: the fill-cost recorder's last quote
+        of it, or the option chain the economics just read. None without one. Never waits for
+        a quote, and a failure here is counted and gives None: the alert goes out as before."""
+        try:
+            option = getattr(eco, "option", None)
+            if getattr(eco, "kind", None) != "INDEX" or not isinstance(option, dict):
+                return None
+            sid = option.get("security_id")
+            if not sid:
+                return None
+            best: tuple[dt.datetime, float | None, float | None] | None = None
+            recorder = getattr(self, "fillcost", None)
+            if recorder is not None:
+                best = recorder.recent_quote(str(sid), now, SPREAD_QUOTE_AGE_S)
+            hit = self._chain_cache.get(t.cfg.key)
+            if hit is not None and hit[1] is not None:
+                at = hit[0]
+                age = (now - at).total_seconds()
+                if 0 <= age <= SPREAD_QUOTE_AGE_S and (best is None or at > best[0]):
+                    row = next(
+                        (r for r in getattr(hit[1], "rows", []) if str(r.security_id) == str(sid)),
+                        None,
+                    )
+                    if row is not None:
+                        best = (at, row.bid, row.ask)
+            if best is None:
+                return None
+            pct = half_spread_pct(best[1], best[2])
+            return float(pct) if pct is not None and math.isfinite(pct) else None
+        except Exception:  # noqa: BLE001 - a line on the alert, never a reason to stop it
+            self.hook_errors += 1
+            log.exception("desk: the spread of the alert on %s could not be read", t.cfg.key)
+            return None
 
     def _clean_bars_hold(self, t: InstrumentTracker, slot: StrategySlot, v: Verdict) -> str | None:
         """Why a micro-trend verdict is not alerted for want of clean one-minute bars today

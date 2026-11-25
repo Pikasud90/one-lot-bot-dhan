@@ -63,6 +63,7 @@ NA = "n/a"
 DELAYED_TAG = "delayed ~15m"
 BLOCKED_PREFIX = "[BLOCKED by risk] "  # the same words as the desk notification title
 ID_CHARS = 6
+WIDE_SPREAD_PCT = Decimal("1")  # US-097: an option alert's half spread from here gets a line
 # English and upper case from a table: strftime("%b") follows the process locale.
 _MONTHS = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
 
@@ -292,6 +293,9 @@ def format_alert(alert: Mapping[str, Any], now: dt.datetime) -> str:
         f"<b>{blocked}{_header(alert)}</b>",
         f"Entry {_num(economics.get('entry_price'))} {entry_tag}",
     ]
+    spread = _decimal(alert.get("spread_pct"))
+    if index and spread is not None and spread >= WIDE_SPREAD_PCT:  # US-097
+        lines.append(f"Wide spread now: about {float(spread):.1f}% a side")
     if index:
         lines.append(
             _levels(

@@ -125,6 +125,9 @@ class FillCostRecorder:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.errors = 0
+        #: the last quote of each security id (when, bid, ask), for the alert's spread line
+        #: (US-097). One assignment per entry and a plain read: a reader never waits.
+        self._recent: dict[str, tuple[dt.datetime, float | None, float | None]] = {}
         METADATA.create_all(engine, tables=[fill_quotes])
 
     # ── lifecycle ─────────────────────────────────────────────────────────
@@ -151,6 +154,17 @@ class FillCostRecorder:
         """Queue an alert's instrument for an immediate quote and the follow-ups."""
         with self._lock:
             self._alerts.append(dict(sig))
+
+    def recent_quote(
+        self, security_id: str, now: dt.datetime, max_age_s: float = 60.0
+    ) -> tuple[dt.datetime, float | None, float | None] | None:
+        """(when, bid, ask) of the last quote of `security_id` when it is at most `max_age_s`
+        old, else None. Never waits: no lock, no request."""
+        hit = self._recent.get(str(security_id))
+        if hit is None:
+            return None
+        age = (now - hit[0]).total_seconds()
+        return hit if 0 <= age <= max_age_s else None
 
     # ── one tick ──────────────────────────────────────────────────────────
     def tick(self, now: dt.datetime) -> int:
@@ -200,6 +214,7 @@ class FillCostRecorder:
             q = quotes.get(str(w.security_id))
             if q is None:
                 continue
+            self._recent[str(w.security_id)] = (now, q.bid, q.ask)
             rows.append(
                 {
                     "ts": now,
