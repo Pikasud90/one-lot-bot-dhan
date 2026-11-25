@@ -104,6 +104,8 @@ class Legs:
 
     def __init__(self) -> None:
         self.dbs = [ro(p) for p in (MINE, APP) if p.is_file()]
+        self.dropped = 0
+        self.seen = 0
 
     def day(self, und: str, day: dt.date, opt: str) -> dict[str, np.ndarray]:
         parts = []
@@ -119,6 +121,13 @@ class Legs:
                                              "rel")}  # fmt: skip
         z = {k: np.concatenate([p[k] for p in parts]) for k in parts[0]}
         z["minute"] = ((z["ts"] + 19800) % 86400) // 60
+        # a few bars carry another index's spot and strikes (BANKNIFTY minutes at 21,150 on
+        # 2024-04-02): a spot more than 5% from the day's median is a bad print, dropped
+        med = float(np.median(z["spot"]))
+        ok = np.abs(z["spot"] / med - 1) <= 0.05
+        self.dropped += int((~ok).sum())
+        self.seen += len(ok)
+        z = {k: v[ok] for k, v in z.items()}
         # one bar per minute and strike (both stores hold the same prints where they overlap)
         key = z["minute"] * 1_000_000 + z["strike"].round().astype(np.int64)
         _, first = np.unique(key, return_index=True)
@@ -379,6 +388,7 @@ def stage_trades() -> None:
         q = pd.DataFrame([r for r in rows if r["inst"] == inst])
         print(f"{inst}: {len(q)} rows, both legs real "
               f"{q.groupby('variant')['both'].mean().round(2).to_dict()}", flush=True)  # fmt: skip
+    print(f"bars with another index's spot, dropped: {legs.dropped} of {legs.seen}")
     pd.DataFrame(rows).to_csv(OUT / "trades.csv", index=False)
     pd.DataFrame(singles).to_csv(OUT / "singles.csv", index=False)
     nd = pd.DataFrame(needs, columns=["underlying", "opt", "rel", "day"]).drop_duplicates()
