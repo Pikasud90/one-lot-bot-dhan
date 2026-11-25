@@ -1,5 +1,5 @@
 # Board
-_Generated 2026-11-25T23:41+05:30 by agile_board.py; do not edit by hand._
+_Generated 2026-11-25T23:54+05:30 by agile_board.py; do not edit by hand._
 
 ## backlog — 50 stories, 183 pts
 | ID | Title | Pts | Priority | Sprint | Protocol |
@@ -60,7 +60,7 @@ _Generated 2026-11-25T23:41+05:30 by agile_board.py; do not edit by hand._
 |---|---|---|---|---|---|
 | US-106 | the wide list reads each session the same evening from Dhan's quote answer | ? | Must | 4 | ping-pong-tdd |
 
-## done — 21 stories, 55 pts
+## done — 22 stories, 60 pts
 | ID | Title | Pts | Priority | Sprint | Protocol |
 |---|---|---|---|---|---|
 | US-000 | Quality gate baseline is green: format, pins, mypy ratchet, repo hygiene | 3 | Must | 0 | driver-navigator |
@@ -81,8 +81,9 @@ _Generated 2026-11-25T23:41+05:30 by agile_board.py; do not edit by hand._
 | US-104 | an option alert never names a dead contract | ? | Must | 4 | ping-pong-tdd |
 | US-105 | a paper trade on a contract that was not tradeable is marked and left out of the score | ? | Must | 4 | ping-pong-tdd |
 | US-120 | A cheat sheet in every tab, with how far each tab can be trusted | 3 | Must | 4 | driver-navigator |
+| US-122 | Fixes from the validity check of 25 Nov 2026 | 5 | Must | 4 | driver-navigator |
 | US-098 | real put prices, and the long-volatility question settled (study) | ? | Should | 4 | ping-pong-tdd |
 | US-100 | the capped pullback book against the index (study) | ? | Should | 4 | ping-pong-tdd |
 | US-101 | the pullback rule by market condition (study) | ? | Should | 4 | ping-pong-tdd |
 
-**Total:** 72 stories, 55/238 points done
+**Total:** 73 stories, 60/243 points done

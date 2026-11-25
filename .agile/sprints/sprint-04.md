@@ -1,21 +1,26 @@
 # Sprint 04: the owner's requests of 24 and 25 November (alpha, watchdog, wide list)
 
-## Read this first to resume (state at the end of 25 Nov 2026)
-- GitHub `main` is `fe14a03`: the last VERIFIED version (full gate 9,064 passed, 1 skipped;
-  secret scan exit 0). The owner's desk runs it since 21:00 on 25 Nov, on port 8787.
-- The sprint branch `sprint-04-alpha-and-watchdog` is `fe14a03` plus documents only (this note
-  and the story US-106).
+## Read this first to resume (state at the end of 25 Nov 2026, late evening)
+- The verified version is the head of `sprint-04-alpha-and-watchdog`, and GitHub `main` points
+  to it once the full gate has passed on it (see the last line of this section). It holds
+  everything listed under "Shipped" below.
+- The owner's desk still RUNS the earlier verified commit `fe14a03` until it is restarted on
+  the new one. After a restart, reload the browser tab (from the new version on, an open tab
+  shows a bar asking for the reload).
 - How work is done here: a git worktree beside the live folder for every change, never an edit
-  in the live folder while the desk runs; the full gate (`bash scripts/gate.sh`, about 26
-  minutes) in the gate worktree; the secret scan as its own command before every push
+  in the live folder while the desk runs; the full gate (`bash scripts/gate.sh`, about 20 to
+  26 minutes on a quiet machine: run it when no other test run shares the machine) in a gate
+  worktree; the secret scan as its own command before every push
   (`scripts/secret_scan.py --env-root <the live folder>`, exit 0); `main` only fast-forwards
   to a commit that passed the gate; the app never places an order.
 - To put a new verified commit on the desk: `bash scripts/stop_mac.sh`, then
   `git merge --ff-only <commit>` in the live folder, then
-  `nohup .venv/bin/python -m onelot run --port 8787 > logs/app.out 2>&1 &`, then reload the
-  browser tab (an open tab keeps the old page script).
+  `nohup .venv/bin/python -m onelot run --port 8787 > logs/app.out 2>&1 &`.
+- The board (`.agile/board.md`, made by the board tool) lists every story: 50 in the backlog,
+  US-106 ready, the rest done. Stories for future reviews: US-106 to US-126 and the studies
+  SP-003 to SP-009.
 
-## Shipped on 25 Nov (all in `fe14a03`)
+## Shipped on 25 Nov (the first six rows are in `fe14a03`, all rows in the branch head)
 | Story | What it does | Proof |
 |---|---|---|
 | US-102 | The wide list's round waits for Dhan's daily bars; a look is not a try | live check on a private store |
@@ -24,6 +29,9 @@
 | 14px type | No text under 14px on any tab; phone layouts fit | measured on a private desk: nine tabs, three widths, Day and Night |
 | US-098 | Long volatility settled on real puts of NIFTY and BANKNIFTY: it loses 2.61% a pair a day | independent re-computation: 2.65% |
 | Telegram | Set up and in use; a blocked network is named in plain words | the desk's own queue sent the token reminders |
+| US-103 | A wide-list stock that stops trading frees its place; a release for review books no money | three reviews, a fix round, two more reviews; 47 tests |
+| US-120 | A cheat sheet in every tab with how far the tab can be trusted | about 70 statements checked against the code; nine tabs measured on a private desk |
+| US-122 | The defects of the validity check fixed one by one (Volume texts, News times, the reload bar, the price source of a paper trade, the confidence formula, the guides) | two reviews; a test an issue |
 
 Data changed in the live folder, both approved by the owner and done after market hours:
 - `data/onelot.db`: the daily history of the 204 delivery-only stocks (757,835 bars).
@@ -34,40 +42,24 @@ Data changed in the live folder, both approved by the owner and done after marke
   (ids 81, 151, 153, 155, 156). The trades themselves are untouched.
 
 ## Open, in the order to take it
-1. US-103, a stock that stops trading frees its place. Branch `story/US-103-wide-no-data`,
-   head `d416f23`, rebased on `fe14a03`, local only (not pushed). Three reviews asked for
-   changes; the builder reports every point done, 1,435 focused tests passed and 42 broken
-   variants of the new code each caught by a test (the story file on that branch has the
-   list under "State on 25 Nov, 21:40"). NOT yet verified by the lead and NOT merged. To
-   do: an independent check of the fix round (commits `b329f97` and `d8cb12c`), the money
-   and rule points first: a release for review books no money; a release on a later try of
-   the evening gives the place to that session's signal; an evening counts toward the
-   confirmation only once the missing sessions reach the threshold (the release then falls
-   on the round of the 12th session); a stock the try never asked is not counted. Then merge
-   into the sprint branch (it sits on `fe14a03`, so no conflict is expected beyond this note
-   and the US-106 story), the full gate, the push. The full gate already PASSES on `d416f23`
-   as it stands (9,108 passed, 1 skipped, run by the lead on 25 Nov at 21:05): what is
-   missing is the independent check, not the tests. Three choices of the builder go beyond
-   the lead's list and need a judgement: an exit held for review is released on the same
-   count as a silent stock (the round of the 12th held session); the owner's note on a
-   release opens in the page's words ("no daily price for N trading days after ..."); a
-   release can fall on the round of a day that is not a market session.
-2. US-106, the wide list reads each day the same evening from Dhan's quote answer. The owner
-   approved it on 25 Nov. Contract: `.agile/stories/US-106.md`. Its first step is a data
-   check that needs no code change. Build it after US-103 (both change the same file), with
-   the usual pipeline: one developer, three independent reviews, a fix round, the full gate.
-   Until it ships the wide list reads a day only once Dhan has added it (the next day, before
-   09:00), and not at all if Dhan adds it later than 09:00.
+1. US-106, the wide list reads each day the same evening from Dhan's quote answer (approved
+   by the owner, status ready). Its first step is a data check that needs no code change:
+   compare `data/research/quote_vs_daily_2026-11-25/quote_1938.json` (in the live folder) with
+   Dhan's official daily bars of 25 Nov. Until it ships the wide list reads a day only once
+   Dhan has added it (the next day, before 09:00), and not at all if that is after 09:00.
+2. US-121, the desk stocks' day close is the exchange's closing price. Measured on 25 Nov:
+   the stored close of a stock is the 15:14 price, up to 0.60% off the exchange's close.
+   Build it after US-106 (same quote answer).
 3. The hour at which Dhan adds a day to its daily history: read `wide_rounds` of the live
    store for the session 2026-11-25 (`finished_at`) and write it into
    `docs/04_OPERATIONS.md` under "Waiting for the broker's bars".
-4. Real puts of FINNIFTY and SENSEX and the weekly contracts: `scripts/real_puts_fetch.py`
-   (resumable, after 15:40 only, one request a second), then `scripts/merge_option_bars.py`
-   with a dry run first.
-5. The owner's feedback after testing `fe14a03`.
-6. Housekeeping: the worktrees of merged stories (US-098, US-104, US-105 and the 14px
-   branch) can be removed; `data/research/real_puts_2026-11-25/expired_options_copy.db` is a
-   proof copy and can be deleted.
+4. US-117, the 2027 holiday list (the file holds 4 dates for 2027): before 1 January 2027.
+5. The rest of the board by priority; the studies SP-003 to SP-009 follow
+   `.agile/stories/RESEARCH-RULES.md`.
+6. Housekeeping: the worktrees `wt-fix-*`, `wt-cheats`, `wt-backlog` and the side sessions'
+   worktrees are merged and can be removed; `data/research/real_puts_2026-11-25/
+   expired_options_copy.db` and `data/backups/expired_options_before_puts_2026-11-25.db` can
+   be deleted when no longer wanted.
 
 ## Facts found on 25 Nov that change how things work
 - Dhan's daily history ends at the previous trading day (its support page says so; the day's
